@@ -1,0 +1,195 @@
+groups:
+  - name: bugspotter-api
+    rules:
+      - alert: HighErrorRate
+        expr: >
+          (
+            sum(rate(http_requests_total{job="bugspotter-api", status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="bugspotter-api"}[5m]))
+            > 0.05
+          )
+          and
+          sum(rate(http_requests_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High API error rate
+          description: 'More than 5% of requests are returning 5xx errors for the last 5 minutes.'
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High API latency
+          description: 'P95 request latency exceeds 2 seconds for the last 10 minutes.'
+
+      - alert: APIInstanceDown
+        expr: up{job="bugspotter-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: API instance is down
+          description: 'BugSpotter API target has been unreachable for more than 1 minute.'
+
+  - name: bugspotter-workers
+    rules:
+      - alert: WorkerInstanceDown
+        expr: up{job="bugspotter-worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Worker instance is down
+          description: 'BugSpotter Worker target has been unreachable for more than 1 minute.'
+
+      - alert: QueueBacklog
+        expr: sum(queue_depth) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Large queue backlog
+          description: 'More than 100 jobs waiting across all queues for the last 10 minutes.'
+
+      - alert: HighJobFailureRate
+        expr: >
+          (
+            sum(rate(queue_jobs_processed_total{status="failed"}[10m]))
+            /
+            sum(rate(queue_jobs_processed_total[10m]))
+            > 0.1
+          )
+          and
+          sum(rate(queue_jobs_processed_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High job failure rate
+          description: 'More than 10% of queue jobs are failing for the last 10 minutes.'
+
+  - name: infrastructure
+    rules:
+      - alert: DatabasePoolExhausted
+        expr: >
+          db_connection_pool_size{state="waiting"} > 0
+          and
+          db_connection_pool_size{state="idle"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database connection pool exhausted
+          description: 'All database connections are in use with clients waiting for the last 5 minutes.'
+
+      - alert: DatabaseDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: PostgreSQL is down
+          description: 'PostgreSQL exporter reports the database is unreachable.'
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis is down
+          description: 'Redis exporter reports Redis is unreachable.'
+
+      - alert: RedisHighMemoryUsage
+        expr: >
+          (redis_memory_used_bytes / redis_memory_max_bytes > 0.9)
+          and
+          redis_memory_max_bytes > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis memory usage above 90%
+          description: 'Redis is using more than 90% of its maxmemory limit.'
+
+      - alert: HighDiskUsage
+        expr: (node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_avail_bytes{mountpoint="/"}) / node_filesystem_size_bytes{mountpoint="/"} > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High disk usage
+          description: 'Root filesystem usage exceeds 85% for the last 10 minutes.'
+
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage
+          description: 'System memory usage exceeds 90% for the last 5 minutes.'
+
+  - name: bugspotter-intelligence
+    rules:
+      - alert: IntelligenceServiceDown
+        # Catches both cases:
+        # - Container stopped (DNS target gone → absent)
+        # - Container running but unhealthy (up == 0)
+        # The max_over_time guard avoids false alerts when intelligence
+        # profile is not deployed (target was never seen)
+        expr: >
+          (
+            absent(up{job="intelligence"})
+            and on()
+            (sum(max_over_time(up{job="intelligence"}[7d])) > 0)
+          )
+          or
+          (up{job="intelligence"} == 0)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Intelligence service is down
+          description: 'Intelligence service has been unreachable for 5 minutes. Check container and Ollama.'
+
+      - alert: IntelligenceHighErrorRate
+        expr: >
+          (
+            sum(rate(http_requests_total{job="intelligence", status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="intelligence"}[5m]))
+            > 0.15
+          )
+          and
+          sum(rate(http_requests_total{job="intelligence"}[5m])) > 0
+
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Intelligence service high error rate
+          description: 'More than 15% of intelligence service requests are failing (5xx).'
+
+      - alert: IntelligenceQueueBacklog
+        expr: max(queue_depth{queue_name="intelligence"}) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Intelligence queue backlog
+          description: 'Intelligence job queue has more than 20 pending jobs for 10 minutes.'
+
+      - alert: IntelligenceJobsFailing
+        expr: sum(increase(queue_jobs_processed_total{queue_name="intelligence",status="failed"}[30m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Intelligence jobs moving to failed queue
+          description: 'More than 5 intelligence jobs have failed in the last 30 minutes. Check worker logs and Ollama health.'

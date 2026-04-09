@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# TypeScript
+# Compiled output in source directories (prevent accidental tsc compilation)
+# These should only exist in dist/ folders
+**/*.js
+**/*.d.ts
+*.tsbuildinfo
+
+# Allow essential config files and type declarations
+!**/types/**/*.d.ts
+!*.config.js
+!*.config.ts
+!vite.config.js
+!vitest.config.js
+!playwright.config.js
+!eslint.config.js
+!tailwind.config.js
+!postcss.config.js
+
+# Environment files (wildcard catches all variants)
+.env*
+!.env*.example
+
+# Session files and browser profiles
+*.session.json
+.jira-session.json
+.pw-extension-profile/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Test coverage
+coverage/
+html/
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Credentials and secrets (never commit these!)
+*credentials*.json
+*secrets*.json
+*password*.txt
+sa-key*.json
+
+# Private documentation
+.private-docs/
+.archive/
+
+# Generated files
+packages/sdk/src/version.ts
+
+# Claude AI settings
+.claude/settings.local.json
+
+
+apps/admin/src/tests/demos/*.*
+apps/admin/demo-recording-staff.zip
+bugspotter-docs.zip
+bugspotter-docs/

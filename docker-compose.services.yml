@@ -1,0 +1,240 @@
+# ============================================================================
+# BugSpotter - Services Only (connects to existing dev dependencies)
+# ============================================================================
+# Run API and Admin in Docker, connecting to existing postgres/redis/minio
+# Prerequisites: docker-compose.dev.yml dependencies must be running
+#
+# SECURITY: This file requires environment variables from .env file.
+# Copy .env.example to .env and configure before using this compose file.
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # BugSpotter API Server
+  # ==========================================================================
+  api:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+      target: production
+    container_name: bugspotter-api-services
+    restart: unless-stopped
+    environment:
+      # Database (connects to existing dev postgres)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set in .env file}@bugspotter-postgres-dev:5432/${POSTGRES_DB:-bugspotter}
+      DB_POOL_MIN: ${DB_POOL_MIN:-2}
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+
+      # Server (container port is fixed — host binding is at ports: below)
+      PORT: '3000'
+      NODE_ENV: ${NODE_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+
+      # Security (REQUIRED - no defaults for secrets)
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - set in .env file}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required - set in .env file}
+
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:5173}
+
+      # Storage (connects to existing dev minio with least-privilege credentials)
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://bugspotter-minio-dev:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${MINIO_APP_ACCESS_KEY:-bugspotter-app}
+      S3_SECRET_KEY: ${MINIO_APP_SECRET_KEY:?MINIO_APP_SECRET_KEY is required - set in .env file}
+      S3_BUCKET: ${MINIO_BUCKET:-bugspotter}
+      S3_FORCE_PATH_STYLE: true
+
+      # Redis (connects to existing dev redis)
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required - set in .env file}@bugspotter-redis-dev:6379
+
+      # Retention
+      DEFAULT_RETENTION_DAYS: ${DEFAULT_RETENTION_DAYS:-90}
+      SCREENSHOT_RETENTION_DAYS: ${SCREENSHOT_RETENTION_DAYS:-60}
+      REPLAY_RETENTION_DAYS: ${REPLAY_RETENTION_DAYS:-30}
+      RETENTION_SCHEDULER_ENABLED: ${RETENTION_SCHEDULER_ENABLED:-true}
+
+      # Workers
+      WORKER_SCREENSHOT_ENABLED: ${WORKER_SCREENSHOT_ENABLED:-true}
+      WORKER_REPLAY_ENABLED: ${WORKER_REPLAY_ENABLED:-true}
+      WORKER_INTEGRATION_ENABLED: ${WORKER_INTEGRATION_ENABLED:-true}
+      WORKER_NOTIFICATION_ENABLED: ${WORKER_NOTIFICATION_ENABLED:-true}
+
+      # Rate Limiting
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-1000}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+    ports:
+      - '3000:3000'
+    networks:
+      - bugspotter_default
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:3000/ready']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # BugSpotter Admin Panel
+  # ==========================================================================
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        NGINX_CONFIG: nginx.dev.conf
+    container_name: bugspotter-admin-services
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      VITE_API_URL: /api
+    ports:
+      - '3001:80'
+    networks:
+      - bugspotter_default
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:80/']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # ==========================================================================
+  # BugSpotter Background Worker
+  # ==========================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+      target: production
+    container_name: bugspotter-worker-services
+    restart: unless-stopped
+    command: ['docker-entrypoint.sh', 'worker']
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      # Database (connects to existing dev postgres)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set in .env file}@bugspotter-postgres-dev:5432/${POSTGRES_DB:-bugspotter}
+      DB_POOL_MIN: ${DB_POOL_MIN:-2}
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+
+      # Server
+      NODE_ENV: ${NODE_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+
+      # Security (REQUIRED - no defaults for secrets)
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required - set in .env file}
+
+      # Storage (connects to existing dev minio with least-privilege credentials)
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://bugspotter-minio-dev:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${MINIO_APP_ACCESS_KEY:-bugspotter-app}
+      S3_SECRET_KEY: ${MINIO_APP_SECRET_KEY:?MINIO_APP_SECRET_KEY is required - set in .env file}
+      S3_BUCKET: ${MINIO_BUCKET:-bugspotter}
+      S3_FORCE_PATH_STYLE: true
+
+      # Redis (connects to existing dev redis)
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required - set in .env file}@bugspotter-redis-dev:6379
+
+      # Worker config
+      WORKER_SCREENSHOT_ENABLED: ${WORKER_SCREENSHOT_ENABLED:-true}
+      WORKER_REPLAY_ENABLED: ${WORKER_REPLAY_ENABLED:-true}
+      WORKER_INTEGRATION_ENABLED: ${WORKER_INTEGRATION_ENABLED:-true}
+      WORKER_NOTIFICATION_ENABLED: ${WORKER_NOTIFICATION_ENABLED:-true}
+      WORKER_SCREENSHOT_CONCURRENCY: ${WORKER_SCREENSHOT_CONCURRENCY:-5}
+      WORKER_REPLAY_CONCURRENCY: ${WORKER_REPLAY_CONCURRENCY:-3}
+      WORKER_INTEGRATION_CONCURRENCY: ${WORKER_INTEGRATION_CONCURRENCY:-10}
+      WORKER_NOTIFICATION_CONCURRENCY: ${WORKER_NOTIFICATION_CONCURRENCY:-5}
+
+      # Job config
+      JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-7}
+      MAX_JOB_RETRIES: ${MAX_JOB_RETRIES:-3}
+    networks:
+      - bugspotter_default
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:3001/ready']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # BugSpotter Payment Service
+  # ==========================================================================
+  payment-service:
+    build:
+      context: .
+      dockerfile: packages/payment-service/Dockerfile
+    container_name: bugspotter-payment-service
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required - set in .env file}@bugspotter-redis-dev:6379
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-kaspi}
+      PAYMENT_SERVICE_PORT: '3002'
+      KASPI_API_KEY: ${KASPI_API_KEY:-}
+      KASPI_DEVICE_TOKEN: ${KASPI_DEVICE_TOKEN:-}
+      KASPI_ORG_BIN: ${KASPI_ORG_BIN:-}
+      KASPI_API_URL: ${KASPI_API_URL:-https://qrapi-cert-ip.kaspi.kz}
+      YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+      YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_STARTER: ${STRIPE_PRICE_STARTER:-}
+      STRIPE_PRICE_PROFESSIONAL: ${STRIPE_PRICE_PROFESSIONAL:-}
+      STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
+    ports:
+      - '${PAYMENT_SERVICE_PORT:-3002}:3002'
+    networks:
+      - bugspotter_default
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:3002/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+# ============================================================================
+# Networks - Use existing network from docker-compose.dev.yml
+# ============================================================================
+networks:
+  bugspotter_default:
+    external: true

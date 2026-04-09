@@ -1,0 +1,23 @@
+# act configuration for running GitHub Actions locally
+# https://github.com/nektos/act
+
+# Use the medium-sized runner image (includes Docker)
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+
+# Bind Docker socket for docker-compose commands
+--container-daemon-socket -
+
+# Use .env.act for secrets (don't commit sensitive values)
+--env-file .env.act
+
+# Verbose output
+--verbose
+
+# Keep containers after run for debugging (comment out for cleanup)
+# --rm=false
+
+# Reuse existing containers to speed up runs
+--reuse
+
+# Artifacts directory
+--artifact-server-path /tmp/act-artifacts

@@ -1,0 +1,358 @@
+name: Deploy Admin UI
+
+# Workflow for independent Admin UI deployments
+# Triggers only when admin-specific files change, enabling faster deployments
+# without requiring full backend CI to pass.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/admin/**'
+      - 'packages/types/**' # Types are required by admin
+      - '.github/workflows/deploy-admin.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      skip_tests:
+        description: 'Skip E2E tests (faster deploy)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/admin
+
+jobs:
+  # ==========================================================================
+  # Lint Admin UI
+  # ==========================================================================
+  lint:
+    name: Lint Admin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint admin code
+        run: pnpm --filter @bugspotter/admin lint
+
+      - name: Check formatting
+        run: pnpm format:check
+
+  # ==========================================================================
+  # Build Admin UI
+  # ==========================================================================
+  build:
+    name: Build Admin
+    runs-on: ubuntu-latest
+    needs: [lint]
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/admin/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Note: VITE_API_URL is intentionally not set here
+          # Use runtime API_URL env var in container to configure API URL
+          # For same-domain: Leave API_URL empty (nginx proxies /api/*)
+          # For cross-origin: Set API_URL=https://api.example.com at runtime
+
+  # ==========================================================================
+  # Test Admin UI
+  # ==========================================================================
+  test:
+    name: Unit & E2E Tests
+    runs-on: ubuntu-latest
+    needs: [lint]
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages (required by backend for E2E)
+        run: |
+          pnpm --filter @bugspotter/types build
+          pnpm --filter @bugspotter/utils build
+          pnpm --filter @bugspotter/message-broker build
+          pnpm --filter @bugspotter/billing build
+
+      - name: Run admin unit tests
+        run: pnpm --filter @bugspotter/admin test
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @bugspotter/admin exec playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: pnpm --filter @bugspotter/admin test:e2e:ci
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: apps/admin/test-results/
+          retention-days: 7
+
+  # ==========================================================================
+  # Deploy to Staging
+  # ==========================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.ref == 'refs/heads/main' || 
+       github.event.inputs.environment == 'staging' ||
+       github.event.inputs.environment == 'production')
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_ADMIN_URL }}
+
+    steps:
+      - name: Deploy notification
+        run: |
+          echo "🚀 Deploying Admin UI to staging"
+          echo "Image: ${{ needs.build.outputs.image_tag }}"
+          echo "Digest: ${{ needs.build.outputs.image_digest }}"
+
+      # ⚠️ REQUIRED: Add your actual deployment steps here
+      # The workflow builds and pushes Docker images, but YOU must deploy them.
+      # Without deployment steps, the health check below verifies the OLD deployment!
+      #
+      # Example deployment steps:
+      #
+      # - Railway:
+      #   - name: Deploy to Railway
+      #     run: |
+      #       railway service update bugspotter-admin \
+      #         --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+      #     env:
+      #       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      #
+      # - Kubernetes (Yandex Managed Kubernetes):
+      #   - name: Deploy to Kubernetes
+      #     run: |
+      #       # Configure kubectl
+      #       yc managed-kubernetes cluster get-credentials --id ${{ secrets.K8S_CLUSTER_ID }}
+      #       # Update deployment
+      #       kubectl set image deployment/admin \
+      #         admin=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
+      #         --namespace=staging
+      #       # Verify rollout
+      #       kubectl rollout status deployment/admin --namespace=staging
+      #     env:
+      #       YC_TOKEN: ${{ secrets.YC_TOKEN }}
+      #
+      # - Docker Swarm:
+      #   - name: Deploy to Swarm
+      #     run: |
+      #       docker service update \
+      #         --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
+      #         bugspotter_admin
+      #
+      # - Yandex Compute Instance (SSH):
+      #   - name: Setup SSH
+      #     run: |
+      #       # Configure SSH with private key
+      #       mkdir -p ~/.ssh
+      #       echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+      #       chmod 600 ~/.ssh/deploy_key
+      #       
+      #       # Add host key to known_hosts (secure - prevents MITM attacks)
+      #       ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
+      #       
+      #       # Alternative: Use pre-verified host key from secrets
+      #       # echo "${{ secrets.STAGING_HOST_KEY }}" >> ~/.ssh/known_hosts
+      #
+      #   - name: Deploy to Yandex Cloud VM
+      #     run: |
+      #       # SSH to VM and pull new image (host key verified via known_hosts)
+      #       ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.STAGING_HOST }} \
+      #         "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} && \
+      #          docker-compose -f /opt/bugspotter/docker-compose.yml up -d admin"
+
+      - name: ⚠️ Deployment Step Missing
+        run: |
+          echo "::warning::No deployment step configured - health check will verify existing deployment"
+          echo "::warning::Add deployment steps above this step to deploy the new Docker image"
+          echo "::warning::See comments above for platform-specific examples"
+
+      - name: Verify deployment health
+        if: vars.STAGING_ADMIN_URL != ''
+        run: |
+          echo "Checking staging health..."
+          for i in {1..10}; do
+            if curl -sf "${{ vars.STAGING_ADMIN_URL }}" > /dev/null 2>&1; then
+              echo "✅ Staging deployment healthy"
+              exit 0
+            fi
+            echo "Waiting for deployment... ($i/10)"
+            sleep 10
+          done
+          echo "❌ Health check timed out - deployment failed or not responding"
+          exit 1
+
+  # ==========================================================================
+  # Deploy to Production
+  # ==========================================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, test, deploy-staging]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      needs.deploy-staging.result == 'success' &&
+      github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_ADMIN_URL }}
+
+    steps:
+      - name: Deploy notification
+        run: |
+          echo "🚀 Deploying Admin UI to production"
+          echo "Image: ${{ needs.build.outputs.image_tag }}"
+          echo "Digest: ${{ needs.build.outputs.image_digest }}"
+
+      # ⚠️ REQUIRED: Add your actual deployment steps here
+      # Should mirror staging deployment with production credentials/namespace.
+      # See staging deployment section above for platform-specific examples.
+      #
+      # IMPORTANT: Production deployments should use:
+      # - Managed PostgreSQL (not Docker postgres)
+      # - Managed Redis (or Redis with persistence)
+      # - Object Storage (S3/Yandex Object Storage, not local MinIO)
+      # - Load balancer with multiple API instances
+      #
+      # See MANAGED_DATABASE_GUIDE.md for database migration
+      # See DEPLOYMENT_PATTERNS.md for complete deployment guide
+
+      - name: ⚠️ Deployment Step Missing
+        run: |
+          echo "::warning::No deployment step configured - health check will verify existing deployment"
+          echo "::warning::Add deployment steps above this step to deploy the new Docker image"
+          echo "::warning::Use production credentials/namespace (not staging)"
+
+      - name: Verify deployment health
+        if: vars.PRODUCTION_ADMIN_URL != ''
+        run: |
+          echo "Checking production health..."
+          for i in {1..10}; do
+            if curl -sf "${{ vars.PRODUCTION_ADMIN_URL }}" > /dev/null 2>&1; then
+              echo "✅ Production deployment healthy"
+              exit 0
+            fi
+            echo "Waiting for deployment... ($i/10)"
+            sleep 10
+          done
+          echo "❌ Health check timed out - deployment failed or not responding"
+          exit 1
+
+  # ==========================================================================
+  # Summary
+  # ==========================================================================
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [lint, build, test, deploy-staging, deploy-production]
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## Admin UI Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result == 'success' && '✅' || '❌' }} ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test.result == 'success' && '✅' || needs.test.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging | ${{ needs.deploy-staging.result == 'success' && '✅' || needs.deploy-staging.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.deploy-staging.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Production | ${{ needs.deploy-production.result == 'success' && '✅' || needs.deploy-production.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.deploy-production.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build.outputs.image_digest }}" != "" ]; then
+            echo "### Image Details" >> $GITHUB_STEP_SUMMARY
+            echo "- **Digest**: \`${{ needs.build.outputs.image_digest }}\`" >> $GITHUB_STEP_SUMMARY
+          fi

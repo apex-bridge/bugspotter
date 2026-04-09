@@ -1,0 +1,107 @@
+name: Test Workflows
+
+# Tests workflow files for syntax errors and basic validation
+# Runs on PR and push to main/develop
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  push:
+    branches: [main, develop]
+    paths:
+      - '.github/workflows/**'
+
+jobs:
+  validate-workflows:
+    name: Validate Workflow Syntax
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install action validator
+        run: npm install -g @action-validator/cli
+
+      - name: Validate all workflow files
+        run: |
+          echo "🔍 Validating GitHub Actions workflows..."
+
+          WORKFLOW_DIR=".github/workflows"
+          ERRORS=0
+
+          for workflow in ${WORKFLOW_DIR}/*.yml ${WORKFLOW_DIR}/*.yaml; do
+            if [ -f "$workflow" ]; then
+              echo ""
+              echo "📄 Validating: $workflow"
+              
+              # Basic YAML syntax check
+              if ! python3 -c "import yaml; yaml.safe_load(open('$workflow'))" 2>/dev/null; then
+                echo "❌ YAML syntax error in $workflow"
+                ERRORS=$((ERRORS + 1))
+                continue
+              fi
+              
+              # Check for required fields
+              if ! grep -q "^name:" "$workflow"; then
+                echo "⚠️  Warning: Missing 'name' field in $workflow"
+              fi
+              
+              if ! grep -q "^on:" "$workflow"; then
+                echo "❌ Missing 'on' trigger in $workflow"
+                ERRORS=$((ERRORS + 1))
+                continue
+              fi
+              
+              if ! grep -q "^jobs:" "$workflow"; then
+                echo "❌ Missing 'jobs' section in $workflow"
+                ERRORS=$((ERRORS + 1))
+                continue
+              fi
+              
+              echo "✅ Valid: $workflow"
+            fi
+          done
+
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "❌ Found $ERRORS workflow validation error(s)"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All workflows are valid!"
+
+  summary:
+    name: Workflow Tests Summary
+    runs-on: ubuntu-latest
+    needs: [validate-workflows]
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          echo "# 🧪 Workflow Tests Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.validate-workflows.result }}" == "success" ]; then
+            echo "✅ Workflow validation: **PASSED**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Workflow validation: **FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Fail if workflow validation failed
+          if [ "${{ needs.validate-workflows.result }}" != "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Workflow validation failed!**" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **All workflow tests passed!**" >> $GITHUB_STEP_SUMMARY

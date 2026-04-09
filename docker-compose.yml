@@ -1,0 +1,981 @@
+# ============================================================================
+# BugSpotter - Docker Compose Configuration
+# ============================================================================
+# Services:
+# - api, worker, payment-service: Always start (no profile required)
+# - postgres, redis, minio: Development only (profile: dev)
+# - intelligence, intelligence-db, ollama: AI features (profile: intelligence)
+# - prometheus, grafana, etc.: Monitoring only (profile: monitoring)
+#
+# Development:
+#   .env.example sets COMPOSE_PROFILES=dev so `docker compose up` starts local
+#   infrastructure automatically. Copy .env.example to .env to get this default.
+#   Alternatively: docker compose --profile dev up -d
+#
+# Production:
+#   Do NOT set COMPOSE_PROFILES — managed services replace local infrastructure.
+#   Only api, worker, and payment-service start with `docker compose up -d`.
+#
+# SECURITY - Port Binding Model:
+# ============================================================================
+# This base configuration does NOT expose infrastructure ports (postgres, redis,
+# minio, payment-service) to prevent accidental public exposure in production.
+#
+# - Development: docker-compose.override.yml (auto-loaded) binds ports to
+#   127.0.0.1 for local access while preventing external network access
+#
+# - Production: Infrastructure services communicate via internal Docker network.
+#   Only the API port (3000) is exposed. For payment webhooks, use reverse proxy
+#   or create a production-specific override file with proper security groups
+#
+# See docker-compose.override.yml for development port bindings
+# ============================================================================
+#
+# Logging Configuration:
+# ============================================================================
+# All containers use log rotation to prevent disk exhaustion.
+# Each container limited to 50MB (10MB × 5 files) for a total of ~350MB across
+# all services. This prevents the most common self-hosted support issue: full disks.
+# ============================================================================
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+# Resource Limits:
+# All containers have memory and CPU limits configured to prevent resource
+# exhaustion. For Kubernetes deployments, use equivalent resource specs:
+#
+# NOTE: Docker Compose uses binary units (1G = 1024³ bytes = 1Gi in K8s).
+# Kubernetes distinguishes between binary (Gi/Mi) and decimal (G/M) units.
+# Always use binary units (Gi/Mi) in K8s to match Docker Compose values.
+#
+#   resources:
+#     limits:
+#       memory: "1Gi"    # Binary unit: 1Gi = 1024³ bytes (matches Docker 1G)
+#       cpu: "1000m"     # 1.0 CPU = 1000 millicores
+#     requests:
+#       memory: "256Mi"  # Binary unit: 256Mi = 256 × 1024² bytes (matches Docker 256M)
+#       cpu: "250m"      # 0.25 CPU = 250 millicores
+#
+# Recommended K8s limits per service:
+#   postgres: limits 1Gi/1000m, requests 256Mi/250m
+#   redis:    limits 512Mi/500m, requests 256Mi/100m
+#   minio:    limits 1Gi/1000m, requests 256Mi/250m
+#   api:      limits 1Gi/1000m, requests 256Mi/250m
+#   worker:   limits 1Gi/1000m, requests 256Mi/250m
+#   admin:    limits 256Mi/500m, requests 64Mi/100m
+# ============================================================================
+
+# Shared environment variables
+x-common-env: &common-env
+  # ============================================================================
+  # Database Configuration
+  # ============================================================================
+  # Set DATABASE_URL in .env to override the default Docker PostgreSQL connection.
+  #
+  # Development (default - Docker PostgreSQL):
+  #   Leave DATABASE_URL unset or empty in .env
+  #
+  # Production (Yandex Managed PostgreSQL):
+  #   DATABASE_URL=postgresql://bugspotter:password@<cluster-id>.mdb.yandexcloud.net:6432/bugspotter?sslmode=require
+  #
+  # See MANAGED_DATABASE_GUIDE.md for migration instructions
+  # ============================================================================
+  DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-bugspotter}}
+  DB_POOL_MIN: ${DB_POOL_MIN:-2}
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
+
+  # Database connectivity (set SKIP_DB_CHECK=true to skip PostgreSQL/Redis wait)
+  SKIP_DB_CHECK: ${SKIP_DB_CHECK:-false}
+
+  # Server
+  NODE_ENV: ${NODE_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-selfhosted}
+  ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+  REQUIRE_INVITATION_TO_REGISTER: ${REQUIRE_INVITATION_TO_REGISTER:-true}
+
+  # Rate Limiting (increased for E2E tests)
+  RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-1000}
+  RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+
+  # Storage — production reads S3_* from .env; dev falls back to MinIO defaults
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-${MINIO_APP_ACCESS_KEY:-bugspotter-app-user}}
+  S3_BUCKET: ${S3_BUCKET:-${MINIO_BUCKET:-bugspotter}}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+
+  # TLS CA certificate — production sets this to the Yandex Cloud CA bundle
+  NODE_EXTRA_CA_CERTS: ${NODE_EXTRA_CA_CERTS:-}
+
+  # Redis/Queues — production sets REDIS_URL in .env; dev builds from REDIS_PASSWORD
+  REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-}@${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
+  # Managed Redis may use a private CA not in Node's default trust store.
+  # Preferred: keep true and supply the CA via NODE_EXTRA_CA_CERTS so TLS verification stays enabled.
+  # Only set to false as a last-resort workaround on a trusted/private network.
+  REDIS_TLS_REJECT_UNAUTHORIZED: ${REDIS_TLS_REJECT_UNAUTHORIZED:-true}
+
+  # Note: S3_SECRET_KEY and ENCRYPTION_KEY are per-service (not shared here)
+  # because they differ per service or require :? validation
+
+  # Monitoring — optional bearer token for /metrics endpoints.
+  # When set, Prometheus must send the same token (see prometheus.yml bearer_token_file).
+  METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+
+  # Data Residency (disable strict validation for testing/CI)
+  DISABLE_STRICT_RESIDENCY_VALIDATION: ${DISABLE_STRICT_RESIDENCY_VALIDATION:-true}
+
+  # Intelligence Service — AI-powered bug analysis, dedup, enrichment
+  # See docs/INTELLIGENCE_INTEGRATION_GUIDE.md for setup
+  INTELLIGENCE_ENABLED: ${INTELLIGENCE_ENABLED:-false}
+  INTELLIGENCE_API_URL: ${INTELLIGENCE_API_URL:-http://intelligence:8000}
+  INTELLIGENCE_API_KEY: ${INTELLIGENCE_API_KEY:-}
+  # LLM inference on CPU takes 30-60s. Default must exceed that to avoid
+  # circuit breaker tripping on every Suggest Fix / Smart Search call.
+  INTELLIGENCE_TIMEOUT_MS: ${INTELLIGENCE_TIMEOUT_MS:-120000}
+  INTELLIGENCE_MAX_RETRIES: ${INTELLIGENCE_MAX_RETRIES:-3}
+  INTELLIGENCE_BACKOFF_DELAY_MS: ${INTELLIGENCE_BACKOFF_DELAY_MS:-1000}
+  INTELLIGENCE_CB_FAILURE_THRESHOLD: ${INTELLIGENCE_CB_FAILURE_THRESHOLD:-5}
+  INTELLIGENCE_CB_RESET_TIMEOUT_MS: ${INTELLIGENCE_CB_RESET_TIMEOUT_MS:-30000}
+
+services:
+  # ==========================================================================
+  # PostgreSQL Database (Development Only)
+  # ==========================================================================
+  # For production deployments, use Yandex Managed PostgreSQL instead.
+  # This service can be commented out when using managed database.
+  #
+  # To switch to managed PostgreSQL:
+  # 1. Add DATABASE_URL to .env with your managed PostgreSQL connection string:
+  #    DATABASE_URL=postgresql://bugspotter:password@<cluster-id>.mdb.yandexcloud.net:6432/bugspotter?sslmode=require
+  # 2. Optional: Comment out this entire postgres service to free resources
+  # 3. Optional: Remove postgres from depends_on sections in api/worker services
+  # 4. Run: docker compose down && docker compose up -d
+  #
+  # See MANAGED_DATABASE_GUIDE.md for complete migration guide
+  # ==========================================================================
+  postgres:
+    <<: *default-logging
+    profiles: [dev]
+    image: postgres:16-alpine
+    container_name: bugspotter-postgres
+    restart: unless-stopped
+    shm_size: 256m
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bugspotter}
+      POSTGRES_USER: ${POSTGRES_USER:-bugspotter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_INITDB_ARGS: '-E UTF8 --locale=en_US.UTF-8'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bugspotter
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-bugspotter} -d ${POSTGRES_DB:-bugspotter}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # Redis Cache & Queue
+  # CRITICAL: Uses 'noeviction' policy (required for BullMQ job queue)
+  # - BullMQ stores job state, delayed jobs, and metadata as Redis keys
+  # - With allkeys-lru, Redis would silently evict jobs when memory is full
+  # - noeviction returns errors when full, allowing backpressure handling
+  # - If you need caching + queues, use separate Redis instances
+  # ==========================================================================
+  redis:
+    <<: *default-logging
+    profiles: [dev]
+    image: redis:7-alpine
+    container_name: bugspotter-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD-SHELL', 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+
+  # ==========================================================================
+  # MinIO S3-Compatible Storage
+  # ==========================================================================
+  minio:
+    <<: *default-logging
+    profiles: [dev]
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: bugspotter-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio-secret}
+    volumes:
+      - minio_data:/data
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # MinIO Client - Create Bucket and Service Account on Startup
+  # ==========================================================================
+  minio-init:
+    <<: *default-logging
+    profiles: [dev]
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    container_name: bugspotter-minio-init
+    restart: on-failure
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-bugspotter}
+      # Service account credentials (least-privilege access)
+      MINIO_APP_ACCESS_KEY: ${MINIO_APP_ACCESS_KEY:-bugspotter-app-user}
+      MINIO_APP_SECRET_KEY: ${MINIO_APP_SECRET_KEY:-}
+    volumes:
+      - ./scripts/init-minio.sh:/init-minio.sh:ro
+    networks:
+      - bugspotter
+    entrypoint: ['/bin/sh', '/init-minio.sh']
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+        delay: 10s
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # BugSpotter API Server
+  # ==========================================================================
+  api:
+    <<: *default-logging
+    image: ${API_IMAGE:-bugspotter-api:latest}
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+      target: production
+    container_name: bugspotter-api
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      # API-specific
+      PORT: '3000'
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - set in .env file}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      # CRITICAL: Must set your actual frontend domain in production
+      # Development: http://localhost:3000,http://localhost:5173
+      # Production: https://yourdomain.com,https://app.yourdomain.com
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required - set in .env file with your frontend domain(s)}
+
+      # Security (required - application will not start without these)
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_APP_SECRET_KEY:-}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required - set in .env file}
+
+      # Retention
+      DEFAULT_RETENTION_DAYS: ${DEFAULT_RETENTION_DAYS:-90}
+      SCREENSHOT_RETENTION_DAYS: ${SCREENSHOT_RETENTION_DAYS:-60}
+      REPLAY_RETENTION_DAYS: ${REPLAY_RETENTION_DAYS:-30}
+      RETENTION_SCHEDULER_ENABLED: ${RETENTION_SCHEDULER_ENABLED:-true}
+
+      # Email (invitation emails)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_TLS_REJECT_UNAUTHORIZED: ${SMTP_TLS_REJECT_UNAUTHORIZED:-true}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@bugspotter.io}
+      FRONTEND_URL: ${FRONTEND_URL:-}
+
+      # Workers
+      WORKER_SCREENSHOT_ENABLED: ${WORKER_SCREENSHOT_ENABLED:-true}
+      WORKER_REPLAY_ENABLED: ${WORKER_REPLAY_ENABLED:-true}
+      WORKER_INTEGRATION_ENABLED: ${WORKER_INTEGRATION_ENABLED:-true}
+      WORKER_NOTIFICATION_ENABLED: ${WORKER_NOTIFICATION_ENABLED:-true}
+
+      # Intelligence admin (only api needs this; not exposed to worker)
+      INTELLIGENCE_MASTER_API_KEY: ${INTELLIGENCE_MASTER_API_KEY:-}
+    # TLS CA cert is mounted via docker-compose.monitoring.yml (production)
+    ports:
+      # Container always listens on 3000; only the host binding is configurable.
+      # Prometheus scrapes api:3000 — do NOT change the container port.
+      - '${API_HOST_PORT:-3000}:3000'
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'sh', '-c', 'curl -f http://127.0.0.1:3000/ready']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # BugSpotter Admin Panel
+  # ==========================================================================
+  admin:
+    image: ${ADMIN_IMAGE:-bugspotter-admin:latest}
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        # API URL used at build time (baked into JavaScript bundle)
+        # For same-domain deployment with nginx proxy: empty or /api
+        # For separate API domain: https://demo.api.bugspotter.io
+        VITE_API_URL: ${VITE_API_URL:-}
+    container_name: bugspotter-admin
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      # Runtime API URL configuration (injected into /config.js)
+      # For cross-origin: API_URL=https://demo.api.bugspotter.io
+      # For same-domain with nginx proxy: Leave empty (default)
+      API_URL: ${API_URL:-}
+      # Git commit hash for version display (injected at runtime)
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    ports:
+      - '${ADMIN_PORT:-3001}:80'
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:80/']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+  # ==========================================================================
+  # BugSpotter Demo App (static site served by nginx)
+  # ==========================================================================
+  # Interactive SDK demo + Chrome Extension showcase.
+  # Requires DEMO_API_KEY — run scripts/seed-demo-data.sh after first deploy
+  # to create demo projects and get the API key.
+  # ==========================================================================
+  demo:
+    <<: *default-logging
+    image: ${DEMO_IMAGE:-bugspotter-demo:latest}
+    build:
+      context: apps/demo
+      dockerfile: Dockerfile
+    container_name: bugspotter-demo
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      DEMO_API_URL: ${DEMO_API_URL:-}
+      DEMO_API_KEY: ${DEMO_API_KEY:-}
+      DEMO_ADMIN_URL: ${DEMO_ADMIN_URL:-}
+      DEMO_EXTENSION_URL: ${DEMO_EXTENSION_URL:-}
+      DEMO_VIEWER_EMAIL: ${DEMO_VIEWER_EMAIL:-}
+      DEMO_VIEWER_PASSWORD: ${DEMO_VIEWER_PASSWORD:-}
+      DEMO_MAGIC_TOKEN: ${DEMO_MAGIC_TOKEN:-}
+    ports:
+      - '${DEMO_PORT:-3003}:80'
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:80/']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+        reservations:
+          memory: 16M
+          cpus: '0.05'
+
+  # ==========================================================================
+  # BugSpotter Background Worker
+  # ==========================================================================
+  worker:
+    <<: *default-logging
+    image: ${WORKER_IMAGE:-bugspotter-api:latest}
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+      target: production
+    container_name: bugspotter-worker
+    restart: unless-stopped
+    command: ['docker-entrypoint.sh', 'worker']
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      # Worker health port is fixed at 3001 (default). Do NOT set WORKER_HEALTH_PORT —
+      # Prometheus scrapes worker:3001 and the healthcheck below assumes port 3001.
+      # Worker-specific
+      WORKER_SCREENSHOT_ENABLED: ${WORKER_SCREENSHOT_ENABLED:-true}
+      WORKER_REPLAY_ENABLED: ${WORKER_REPLAY_ENABLED:-true}
+      WORKER_INTEGRATION_ENABLED: ${WORKER_INTEGRATION_ENABLED:-true}
+      WORKER_NOTIFICATION_ENABLED: ${WORKER_NOTIFICATION_ENABLED:-true}
+      WORKER_SCREENSHOT_CONCURRENCY: ${WORKER_SCREENSHOT_CONCURRENCY:-5}
+      WORKER_REPLAY_CONCURRENCY: ${WORKER_REPLAY_CONCURRENCY:-3}
+      WORKER_INTEGRATION_CONCURRENCY: ${WORKER_INTEGRATION_CONCURRENCY:-10}
+      WORKER_NOTIFICATION_CONCURRENCY: ${WORKER_NOTIFICATION_CONCURRENCY:-5}
+      WORKER_PAYMENT_EVENT_ENABLED: ${WORKER_PAYMENT_EVENT_ENABLED:-true}
+      WORKER_PAYMENT_EVENT_CONCURRENCY: ${WORKER_PAYMENT_EVENT_CONCURRENCY:-5}
+      WORKER_INTELLIGENCE_ENABLED: ${WORKER_INTELLIGENCE_ENABLED:-false}
+      # CPU-only Ollama can only handle 1 concurrent inference request.
+      # Increase to 2-3 if using GPU-accelerated Ollama.
+      WORKER_INTELLIGENCE_CONCURRENCY: ${WORKER_INTELLIGENCE_CONCURRENCY:-1}
+
+      # Security (required - application will not start without these)
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - set in .env file}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_APP_SECRET_KEY:-}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required - set in .env file}
+
+      # Frontend (required for notification links)
+      FRONTEND_URL: ${FRONTEND_URL:-}
+
+      # Job Configuration
+      JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-7}
+      MAX_JOB_RETRIES: ${MAX_JOB_RETRIES:-3}
+    # TLS CA cert is mounted via docker-compose.monitoring.yml (production)
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:3001/ready']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  payment-service:
+    <<: *default-logging
+    image: ${PAYMENT_IMAGE:-bugspotter-payment:latest}
+    build:
+      context: .
+      dockerfile: packages/payment-service/Dockerfile
+    container_name: bugspotter-payment-service
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-}@${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-kaspi}
+      PAYMENT_SERVICE_PORT: '3002'
+      # Kaspi Pay (KZ)
+      KASPI_API_KEY: ${KASPI_API_KEY:-}
+      KASPI_DEVICE_TOKEN: ${KASPI_DEVICE_TOKEN:-}
+      KASPI_ORG_BIN: ${KASPI_ORG_BIN:-}
+      KASPI_API_URL: ${KASPI_API_URL:-https://qrapi-cert-ip.kaspi.kz}
+      # YooKassa (RF)
+      YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+      YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
+      # Stripe (International)
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_STARTER: ${STRIPE_PRICE_STARTER:-}
+      STRIPE_PRICE_PROFESSIONAL: ${STRIPE_PRICE_PROFESSIONAL:-}
+      STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:3002/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # ==========================================================================
+  # Monitoring Stack (opt-in via Docker Compose profiles)
+  #
+  #   docker compose --profile monitoring up -d
+  #       Starts Prometheus, Grafana, Alertmanager, and DB/Redis exporters.
+  #       Works on Linux and Docker Desktop (macOS/Windows).
+  #
+  #   docker compose --profile monitoring --profile host-metrics up -d
+  #       Also starts node-exporter (requires pid:host and /:/host bind mount).
+  #       Linux only — will fail on Docker Desktop.
+  # ==========================================================================
+
+  prometheus:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: prom/prometheus:v2.49.1
+    container_name: bugspotter-prometheus
+    restart: unless-stopped
+    # Write METRICS_AUTH_TOKEN to a file that bearer_token_file can read,
+    # then exec Prometheus. When the token is empty the file is empty and
+    # Prometheus sends no Authorization header (bearer_token_file ignores
+    # empty files), so unauthenticated scraping still works in dev.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        printf '%s' "$${METRICS_AUTH_TOKEN}" > /etc/prometheus/metrics_token
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=90d \
+          --web.enable-lifecycle
+    environment:
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - bugspotter
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9090/-/healthy']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  grafana:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: grafana/grafana:10.3.1
+    container_name: bugspotter-grafana
+    restart: unless-stopped
+    environment:
+      # :? can't be used here — Docker Compose evaluates variable substitutions
+      # at parse time, even for services behind profiles that won't start.
+      # The deploy workflow only enables --profile monitoring when the secret is set.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3004}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - bugspotter
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:3000/api/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  alertmanager:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: prom/alertmanager:v0.26.0
+    container_name: bugspotter-alertmanager
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9093/-/healthy']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
+  node-exporter:
+    <<: *default-logging
+    profiles: [host-metrics]
+    image: prom/node-exporter:v1.7.0
+    container_name: bugspotter-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - bugspotter
+    pid: host
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9100/metrics']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.05'
+
+  postgres-exporter:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: bugspotter-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-bugspotter}?sslmode=prefer
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9187/metrics']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
+  redis-exporter:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: oliver006/redis_exporter:v1.58.0-alpine
+    container_name: bugspotter-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9121/metrics']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.05'
+
+  # ==========================================================================
+  # Dozzle — Real-time Docker Log Viewer
+  # ==========================================================================
+  # Lightweight web UI for viewing container logs. Access via SSH tunnel:
+  #   ssh -L 9999:127.0.0.1:9999 user@host
+  #   http://localhost:9999
+  # ==========================================================================
+  dozzle:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: amir20/dozzle:v10.0.3
+    container_name: bugspotter-dozzle
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', '/dozzle', 'healthcheck']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.05'
+
+  # ==========================================================================
+  # Intelligence Service — AI Bug Analysis (profile: intelligence)
+  # ==========================================================================
+  # Requires: pgvector (vector DB), ollama (local LLM), redis (already shared)
+  # Enable with: COMPOSE_PROFILES=intelligence or --profile intelligence
+  # See docs/INTELLIGENCE_INTEGRATION_GUIDE.md for full setup
+  # ==========================================================================
+
+  # PostgreSQL with pgvector extension (separate from main DB)
+  # IMPORTANT: Set INTELLIGENCE_DB_PASSWORD in .env before starting this profile
+  intelligence-db:
+    <<: *default-logging
+    profiles: [intelligence]
+    image: pgvector/pgvector:pg16
+    container_name: bugspotter-intelligence-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${INTELLIGENCE_DB_NAME:-bugspotter_intelligence}
+      POSTGRES_USER: ${INTELLIGENCE_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${INTELLIGENCE_DB_PASSWORD:-}
+    volumes:
+      - intelligence_db_data:/var/lib/postgresql/data
+      - ./docker/intelligence/postgres/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${INTELLIGENCE_DB_USER:-postgres} -d ${INTELLIGENCE_DB_NAME:-bugspotter_intelligence}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # Ollama — local LLM inference
+  ollama:
+    <<: *default-logging
+    profiles: [intelligence]
+    image: ollama/ollama:latest
+    container_name: bugspotter-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.1:8b}
+      # Keep model loaded permanently — prevents eviction after idle timeout.
+      # Without this, Ollama unloads the model after 5 minutes of inactivity,
+      # and reloading requires enough free host memory (not container memory),
+      # which often fails when Linux page cache fills up.
+      OLLAMA_KEEP_ALIVE: '-1'
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./docker/intelligence/ollama/ollama-init.sh:/ollama-init.sh:ro
+    entrypoint: ['/bin/bash', '/ollama-init.sh']
+    # Healthcheck: exposes status to depends_on and monitoring.
+    # Docker does NOT auto-restart on unhealthy — only on process exit.
+    # For stuck-but-alive cases, rely on Prometheus alerts + manual intervention.
+    healthcheck:
+      test: ['CMD', 'ollama', 'list']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - bugspotter
+    deploy:
+      resources:
+        limits:
+          # llama3.1:8b requires ~4.8 GB. Set to 10G to leave headroom for
+          # Ollama overhead, model loading, and concurrent requests.
+          memory: 10G
+          cpus: '2.0'
+        reservations:
+          memory: 6G
+          cpus: '1.0'
+
+  # Intelligence API service
+  # Image is built and pushed by bugspotter-intelligence repo's CI/CD pipeline.
+  # For local dev: docker build -t bugspotter-intelligence ../bugspotter-intelligence
+  intelligence:
+    <<: *default-logging
+    profiles: [intelligence]
+    image: ${INTELLIGENCE_IMAGE:-bugspotter-intelligence:latest}
+    container_name: bugspotter-intelligence
+    restart: unless-stopped
+    depends_on:
+      intelligence-db:
+        condition: service_healthy
+    environment:
+      # Database (pgvector)
+      DATABASE_HOST: intelligence-db
+      DATABASE_PORT: '5432'
+      DATABASE_NAME: ${INTELLIGENCE_DB_NAME:-bugspotter_intelligence}
+      DATABASE_USER: ${INTELLIGENCE_DB_USER:-postgres}
+      DATABASE_PASSWORD: ${INTELLIGENCE_DB_PASSWORD:-}
+      # Authentication (set INTELLIGENCE_AUTH_ENABLED=false for initial API key bootstrap)
+      AUTH_ENABLED: ${INTELLIGENCE_AUTH_ENABLED:-false}
+      API_KEY_PREFIX: bsi_
+      MASTER_API_KEY: ${INTELLIGENCE_MASTER_API_KEY:-}
+      # LLM
+      LLM_PROVIDER: ${INTELLIGENCE_LLM_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_TIMEOUT: ${INTELLIGENCE_OLLAMA_TIMEOUT:-120}
+      # Claude (optional, if using Claude instead of Ollama)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-20250514}
+      # Embedding
+      EMBEDDING_PROVIDER: local
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      # Similarity
+      SIMILARITY_THRESHOLD: ${INTELLIGENCE_SIMILARITY_THRESHOLD:-0.75}
+      DUPLICATE_THRESHOLD: ${INTELLIGENCE_DUPLICATE_THRESHOLD:-0.90}
+      MAX_SIMILAR_BUGS: ${INTELLIGENCE_MAX_SIMILAR_BUGS:-5}
+      # Redis (shared with main app)
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: '6379'
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: '1'
+      # Rate limiting
+      RATE_LIMIT_ENABLED: 'true'
+      RATE_LIMIT_DEFAULT_RPM: '120'
+      # CORS — intelligence service is internal (api→intelligence), no browser CORS needed
+      # Defaults to FRONTEND_URL for any direct access scenarios; must be valid JSON array
+      CORS_ALLOWED_ORIGINS: '["${FRONTEND_URL:-http://localhost:3001}"]'
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEBUG: 'false'
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:8000/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+# ============================================================================
+# Named Volumes
+# ============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+  intelligence_db_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  bugspotter:
+    driver: bridge

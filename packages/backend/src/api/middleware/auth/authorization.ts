@@ -1,0 +1,206 @@
+/**
+ * Authorization middleware functions
+ * Role-based and permission-based access control
+ */
+
+import type { FastifyRequest, FastifyReply } from 'fastify';
+import type { ProjectRole } from '../../../types/project-roles.js';
+import type { DatabaseClient } from '../../../db/client.js';
+import { hasPermissionLevel } from '../../../types/project-roles.js';
+import { sendUnauthorized, sendForbidden } from './responses.js';
+import { isPlatformAdmin } from './assertions.js';
+
+/**
+ * Role-based authorization middleware factory
+ * Requires JWT authentication and checks user role
+ * @deprecated Use requirePlatformAdmin() or org-level checks instead
+ */
+export function requireRole(...allowedRoles: Array<'admin' | 'user' | 'viewer'>) {
+  return async function roleMiddleware(request: FastifyRequest, reply: FastifyReply) {
+    if (!request.authUser) {
+      return sendUnauthorized(reply, 'User authentication required');
+    }
+
+    if (!allowedRoles.includes(request.authUser.role)) {
+      return sendForbidden(
+        reply,
+        `Insufficient permissions. Required role: ${allowedRoles.join(' or ')}`
+      );
+    }
+  };
+}
+
+/**
+ * Platform admin authorization middleware.
+ * Checks security.is_platform_admin (with legacy role fallback).
+ * Use this for SaaS-operator-only routes (system health, global user mgmt, etc.)
+ */
+export function requirePlatformAdmin() {
+  return async function platformAdminMiddleware(request: FastifyRequest, reply: FastifyReply) {
+    if (!request.authUser) {
+      return sendUnauthorized(reply, 'User authentication required');
+    }
+
+    if (!isPlatformAdmin(request)) {
+      return sendForbidden(reply, 'Platform admin access required');
+    }
+  };
+}
+
+/**
+ * Require project authentication (API key)
+ * Supports both legacy project API keys and new API keys with allowed_projects
+ */
+export async function requireProject(request: FastifyRequest, reply: FastifyReply) {
+  // Check legacy project authentication
+  if (request.authProject) {
+    return;
+  }
+
+  // Check new API key system with allowed_projects
+  if (
+    request.apiKey &&
+    request.apiKey.allowed_projects &&
+    request.apiKey.allowed_projects.length > 0
+  ) {
+    return;
+  }
+
+  // No project access
+  return sendUnauthorized(reply, 'Project API key required (X-API-Key header)');
+}
+
+/**
+ * Require user authentication (JWT)
+ */
+export async function requireUser(request: FastifyRequest, reply: FastifyReply) {
+  if (!request.authUser) {
+    return sendUnauthorized(reply, 'User authentication required (Authorization Bearer token)');
+  }
+}
+
+/**
+ * Require API key authentication (not user JWT)
+ */
+export async function requireApiKey(request: FastifyRequest, reply: FastifyReply) {
+  if (!request.apiKey) {
+    return sendUnauthorized(reply, 'API key required (X-API-Key header)');
+  }
+}
+
+/**
+ * Require any authentication (API key OR JWT user)
+ * Use this for routes that should work with both SDK clients and dashboard users.
+ * Full-scope API keys (no allowed_projects restriction) are accepted — project-level
+ * access is enforced downstream by requireProjectAccess middleware.
+ */
+export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
+  if (request.authProject || request.apiKey || request.authUser) {
+    return;
+  }
+
+  // No valid authentication
+  return sendUnauthorized(
+    reply,
+    'Authentication required (X-API-Key header or Authorization Bearer token)'
+  );
+}
+
+/**
+ * Project role-based authorization middleware factory.
+ * Must be used AFTER requireProjectAccess in the preHandler chain.
+ *
+ * - System admins bypass the project role check.
+ * - API key requests (no authUser) bypass the role check — API keys authenticate
+ *   as machines, not project members. Project-level access is already validated
+ *   by requireProjectAccess middleware.
+ *
+ * @param minRole - Minimum project role required (uses role hierarchy: owner > admin > member > viewer)
+ *
+ * @example
+ * ```typescript
+ * // JWT-only route
+ * fastify.delete('/api/v1/projects/:id', {
+ *   preHandler: [requireUser, requireProjectAccess(db), requireProjectRole('owner')],
+ * }, handler);
+ *
+ * // Route accepting both JWT and API keys
+ * fastify.post('/api/v1/integrations/:platform/:projectId', {
+ *   preHandler: [requireAuth, requireProjectAccess(db, { paramName: 'projectId' }), requireProjectRole('admin')],
+ * }, handler);
+ * ```
+ */
+/**
+ * System-level permission check middleware factory.
+ * Queries the `permissions` table to verify the user's system role is allowed
+ * to perform the given action on the given resource.
+ *
+ * - System admins always pass (bypass).
+ * - API key requests (no authUser) bypass the check — API keys are machine
+ *   credentials and don't have system roles.
+ * - Must be used AFTER an auth middleware (requireUser or requireAuth).
+ *
+ * @param db - Database client for querying the permissions table
+ * @param resource - Resource name (e.g., 'integration_rules')
+ * @param action - Action name (e.g., 'create', 'read', 'update', 'delete')
+ */
+export function requirePermission(db: DatabaseClient, resource: string, action: string) {
+  return async function permissionMiddleware(request: FastifyRequest, reply: FastifyReply) {
+    // API key requests bypass system permission checks — API keys are machine
+    // credentials, not system users. Their access is validated by requireProjectAccess.
+    if (!request.authUser && (request.authProject || request.apiKey)) {
+      return;
+    }
+
+    if (!request.authUser) {
+      return sendUnauthorized(reply, 'User authentication required');
+    }
+
+    // Platform admins always have permission
+    if (isPlatformAdmin(request)) {
+      return;
+    }
+
+    // Check permission in database
+    const hasPermission = await db.query(
+      'SELECT 1 FROM permissions WHERE role = $1 AND resource = $2 AND action = $3',
+      [request.authUser.role, resource, action]
+    );
+
+    if (hasPermission.rows.length === 0) {
+      return sendForbidden(reply, `Insufficient permissions to ${action} ${resource}`);
+    }
+  };
+}
+
+export function requireProjectRole(minRole: ProjectRole) {
+  return async function projectRoleMiddleware(request: FastifyRequest, reply: FastifyReply) {
+    // API key requests bypass project role checks — API keys are machine credentials,
+    // not project members. Their project access is validated by requireProjectAccess.
+    // This matches the existing behavior in checkProjectAccess() where API keys bypass minProjectRole.
+    if (!request.authUser && (request.authProject || request.apiKey)) {
+      return;
+    }
+
+    if (!request.authUser) {
+      return sendUnauthorized(reply, 'User authentication required');
+    }
+
+    // Platform admins bypass project role checks
+    if (isPlatformAdmin(request)) {
+      return;
+    }
+
+    // projectRole is set by requireProjectAccess middleware
+    if (!request.projectRole) {
+      return sendForbidden(reply, 'You do not have a role in this project');
+    }
+
+    if (!hasPermissionLevel(request.projectRole, minRole)) {
+      return sendForbidden(
+        reply,
+        `Insufficient project permissions. Required: ${minRole} or higher`
+      );
+    }
+  };
+}

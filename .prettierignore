@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+pnpm-lock.yaml
+
+# Build outputs
+dist
+build
+coverage
+*.min.js
+
+# Generated files
+*.d.ts
+CHANGELOG.md
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Misc
+.DS_Store
+*.swp
+*.swo
+
+# Data files (can get very large)
+packages/backend-mock/db.json
+packages/backend-mock/bug-reports/*.json
+
+apps/admin/Dockerfile

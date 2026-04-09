@@ -1,0 +1,18 @@
+# Nixpacks Configuration for Railway Deployment
+# Ensures native Node.js modules (isolated-vm) build correctly
+
+[phases.setup]
+# Install build dependencies required for native modules
+nixPkgs = ['python3', 'gcc', 'gnumake', 'pkg-config', 'nodejs_22']
+
+[phases.install]
+# Install dependencies with pnpm
+cmds = ['pnpm install --frozen-lockfile']
+
+[phases.build]
+# Build the application
+cmds = ['pnpm build']
+
+[start]
+# Start command (Railway will override based on service type)
+cmd = 'pnpm --filter @bugspotter/backend start'

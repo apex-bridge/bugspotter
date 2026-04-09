@@ -1,0 +1,19 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+playwright-report
+test-results
+e2e-debug
+
+# Debug files
+debug-*.png
+*.screenshot.png
+
+# Environment files
+.env
+.env.local
+.env.e2e
+.test-env
+.e2e-state.json

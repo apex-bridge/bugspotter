@@ -1,0 +1,752 @@
+name: CI
+
+# This workflow runs CI checks for the BugSpotter monorepo
+# Structure: pnpm workspace with packages/ and apps/ directories
+# Packages: @bugspotter/backend, @bugspotter/types, @bugspotter/backend-mock, @bugspotter/utils
+#
+# OPTIMIZATION OPPORTUNITIES (Future):
+# 1. Build Caching: Create shared setup job that builds types/utils/message-broker
+#    once and uploads as artifact, then download in each test job. This would
+#    eliminate ~10-15 minutes of redundant build time per CI run.
+#
+# 2. Test Coverage Strategy: Currently runs all tests twice (once in test-backend-*
+#    jobs, again in test-coverage with instrumentation). Consider either:
+#    a) Run with coverage enabled the first time (merge split jobs)
+#    b) Move coverage to scheduled workflow (nightly) instead of every push
+#
+# 3. Playwright E2E Isolation: Currently spins up full Docker Compose stack but
+#    Playwright starts its own dev server with testcontainers. Either:
+#    a) Set BASE_URL=http://localhost:3001 to test against Docker Compose
+#    b) Remove Docker Compose setup and use testcontainers exclusively
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Cancel in-progress runs when new commits are pushed
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run linter
+        run: pnpm run lint
+
+      - name: Check formatting
+        run: pnpm run format:check
+
+  test-backend-db:
+    name: Backend Database Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: ${{ matrix.node-version }}
+          pnpm-version: '9.14.4'
+
+      - name: Build types package
+        run: pnpm --filter @bugspotter/types run build
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Run database tests
+        run: pnpm --filter @bugspotter/backend test -- tests/db
+
+  test-backend-api:
+    name: Backend API Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: ${{ matrix.node-version }}
+          pnpm-version: '9.14.4'
+
+      - name: Build types package
+        run: pnpm --filter @bugspotter/types run build
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Run API tests
+        run: pnpm --filter @bugspotter/backend test -- tests/api
+
+  test-backend-services:
+    name: Backend Services Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: ${{ matrix.node-version }}
+          pnpm-version: '9.14.4'
+
+      - name: Verify isolated-vm installation
+        run: |
+          echo "Checking isolated-vm installation..."
+          if [ ! -d "packages/backend/node_modules/isolated-vm" ]; then
+            echo "❌ isolated-vm directory not found"
+            exit 1
+          fi
+          echo "✅ isolated-vm directory exists"
+
+          if [ ! -d "packages/backend/node_modules/isolated-vm/out" ]; then
+            echo "❌ Build artifacts missing"
+            exit 1
+          fi
+          echo "✅ Build artifacts found"
+
+          cd packages/backend
+          node -e "const ivm = require('isolated-vm'); console.log('✅ Module loads successfully, version:', ivm.version);" || exit 1
+          cd ../..
+
+      - name: Build types package
+        run: pnpm --filter @bugspotter/types run build
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Run services tests
+        run: pnpm --filter @bugspotter/backend test -- tests/services tests/queue tests/retention tests/integrations tests/saas
+
+  test-backend-other:
+    name: Backend Other Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: ${{ matrix.node-version }}
+          pnpm-version: '9.14.4'
+
+      - name: Build types package
+        run: pnpm --filter @bugspotter/types run build
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Run other tests
+        run: pnpm --filter @bugspotter/backend test -- tests/storage tests/config tests/security tests/integration tests/utils tests/*.test.ts
+
+  playwright-admin:
+    name: Admin E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # Prevent indefinite hangs (Docker + E2E tests)
+    needs: [test-backend-db, test-backend-api, test-backend-services, test-backend-other]
+    env:
+      CI: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Create .env file
+        run: |
+          # Generate secure credentials that meet API validation requirements
+          # S3_ACCESS_KEY must be at least 16 characters
+          # S3_SECRET_KEY must be at least 32 characters
+          MINIO_ROOT_KEY=$(openssl rand -hex 16)  # 32 chars (hex encoded)
+          MINIO_ROOT_SECRET=$(openssl rand -hex 32)  # 64 chars (hex encoded)
+          MINIO_APP_SECRET=$(openssl rand -hex 32)  # 64 chars (hex encoded)
+          REDIS_PASS=$(openssl rand -hex 32)  # 64 chars (hex encoded)
+
+          # Create .env file using echo to avoid heredoc YAML indentation issues
+          {
+            echo "# Database"
+            echo "POSTGRES_DB=bugspotter"
+            echo "POSTGRES_USER=bugspotter"
+            echo "POSTGRES_PASSWORD=bugspotter_ci_password"
+            echo "DATABASE_URL=postgresql://bugspotter:bugspotter_ci_password@postgres:5432/bugspotter"
+            echo ""
+            echo "# Redis"
+            echo "REDIS_PASSWORD=${REDIS_PASS}"
+            echo "REDIS_URL=redis://:${REDIS_PASS}@redis:6379"
+            echo ""
+            echo "# MinIO - Root credentials (administrative access)"
+            echo "MINIO_ROOT_USER=${MINIO_ROOT_KEY}"
+            echo "MINIO_ROOT_PASSWORD=${MINIO_ROOT_SECRET}"
+            echo "MINIO_BUCKET=bugspotter"
+            echo ""
+            echo "# MinIO - Service account credentials (least-privilege app access)"
+            echo "MINIO_APP_ACCESS_KEY=bugspotter-app-ci"
+            echo "MINIO_APP_SECRET_KEY=${MINIO_APP_SECRET}"
+            echo ""
+            echo "# S3 - API credentials (uses service account, not root)"
+            echo "S3_ENDPOINT=http://minio:9000"
+            echo "S3_ACCESS_KEY=bugspotter-app-ci"
+            echo "S3_SECRET_KEY=${MINIO_APP_SECRET}"
+            echo "S3_BUCKET=bugspotter"
+            echo "S3_REGION=us-east-1"
+            echo "STORAGE_BACKEND=s3"
+            echo ""
+            echo "# Security"
+            echo "JWT_SECRET=ci_jwt_secret_key_for_testing_only_not_production"
+            echo "ENCRYPTION_KEY=ci_encryption_key_for_testing_only_32bytes"
+            echo ""
+            echo "# Environment"
+            echo "NODE_ENV=test"
+            echo "LOG_LEVEL=info"
+            echo "CORS_ORIGINS=http://localhost:3001"
+            echo ""
+            echo "# Docker Compose profiles – start local infra (postgres, redis, minio)"
+            echo "COMPOSE_PROFILES=dev"
+          } > .env
+
+      - name: Pre-pull Docker images with retry
+        run: |
+          # Pre-pull images with retry logic to handle Docker Hub timeouts
+          MAX_RETRIES=3
+          RETRY_DELAY=15
+
+          pull_image() {
+            IMAGE=$1
+            RETRY_COUNT=0
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              echo "Pulling $IMAGE (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
+              
+              if docker pull $IMAGE; then
+                echo "✅ Successfully pulled $IMAGE"
+                return 0
+              else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                  echo "⚠️  Failed to pull $IMAGE, retrying in ${RETRY_DELAY}s..."
+                  sleep $RETRY_DELAY
+                else
+                  echo "❌ Failed to pull $IMAGE after $MAX_RETRIES attempts"
+                  return 1
+                fi
+              fi
+            done
+          }
+
+          # Pull all required images (use exact versions from docker-compose.yml)
+          pull_image "postgres:16-alpine" || exit 1
+          pull_image "redis:7-alpine" || exit 1
+          pull_image "minio/minio:RELEASE.2024-10-13T13-34-11Z" || exit 1
+          pull_image "minio/mc:RELEASE.2024-10-08T09-37-26Z" || exit 1
+          pull_image "node:22-alpine" || exit 1
+
+          echo "✅ All Docker images pre-pulled successfully"
+
+      - name: Start Docker services
+        run: |
+          # Add retry logic for Docker Hub rate limits/timeouts
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES to start Docker services..."
+            
+            # Use only base docker-compose.yml (skip override for CI)
+            if docker compose -f docker-compose.yml up -d; then
+              echo "✅ Docker services started successfully"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️  Failed to start services, retrying in 10 seconds..."
+                sleep 10
+              else
+                echo "❌ Failed to start services after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
+
+          # Wait for services to be ready
+          echo "Waiting for services to start..."
+          sleep 10
+
+          # Check service status
+          echo "Checking service health..."
+          docker compose ps
+
+          # Show API logs before health check
+          echo "=== API Container Logs (last 50 lines) ==="
+          docker compose logs api --tail=50
+
+          # Verify key services are running (minio-init exits after init, which is OK)
+          if ! docker compose ps | grep -q "bugspotter-api.*Up"; then
+            echo "❌ API service not running"
+            docker compose logs api --tail=100
+            exit 1
+          fi
+
+          if ! docker compose ps | grep -q "bugspotter-admin.*Up"; then
+            echo "❌ Admin service not running"
+            docker compose logs admin --tail=50
+            exit 1
+          fi
+
+          if ! docker compose ps | grep -q "bugspotter-postgres.*Up"; then
+            echo "❌ Postgres service not running"
+            docker compose logs postgres --tail=50
+            exit 1
+          fi
+
+          # minio-init container exit(0) is expected - it's a one-time init job
+          if docker compose ps | grep -q "bugspotter-minio-init.*Exited (0)"; then
+            echo "✓ MinIO initialization completed"
+          fi
+
+          echo "✅ Core services are running"
+
+      - name: Verify services health
+        run: |
+          echo "Checking service health..."
+          docker compose ps
+
+          # Wait for API to be fully ready
+          API_READY=false
+          for i in {1..30}; do
+            echo "Attempt $i/30: Checking API health..."
+            
+            # Check if container is running
+            if ! docker compose ps | grep -q "bugspotter-api.*Up"; then
+              echo "❌ API container not running!"
+              docker compose logs api --tail=100
+              exit 1
+            fi
+            
+            # Try to curl the ready endpoint
+            if curl -sf http://localhost:3000/ready > /dev/null 2>&1; then
+              echo "✅ API is ready"
+              API_READY=true
+              break
+            else
+              echo "API not ready yet, checking container health..."
+              docker inspect bugspotter-api --format='{{.State.Health.Status}}' || echo "No health status"
+              docker compose ps bugspotter-api
+            fi
+            
+            sleep 2
+          done
+
+          if [ "$API_READY" = false ]; then
+            echo "❌ API failed to become ready"
+            echo ""
+            echo "=== Final API Logs ==="
+            docker compose logs api
+            echo ""
+            echo "=== API Container Inspect ==="
+            docker inspect bugspotter-api
+            exit 1
+          fi
+
+          # Verify admin panel
+          if curl -sf http://localhost:3001/ > /dev/null 2>&1; then
+            echo "✅ Admin panel is accessible"
+          else
+            echo "❌ Admin panel not accessible"
+            docker compose logs admin
+            exit 1
+          fi
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: |
+          echo "Installing dependencies..."
+          pnpm install --frozen-lockfile
+          echo "✅ Dependencies installed"
+
+      - name: Build types package
+        run: |
+          echo "Building @bugspotter/types (required by admin)..."
+          pnpm --filter @bugspotter/types run build
+          echo "✅ Types package built"
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Build admin app
+        run: |
+          echo "Building admin app (TypeScript compilation)..."
+          pnpm --filter @bugspotter/admin run build
+          echo "✅ Admin app built"
+
+      - name: Setup admin user
+        run: |
+          echo "Setting up admin user..."
+          chmod +x ./setup-admin.sh
+          ./setup-admin.sh
+          echo "✅ Admin user created"
+
+      - name: Install Playwright browsers for admin
+        run: |
+          echo "Installing Playwright browsers..."
+          # Install Chromium with dependencies
+          pnpm --filter @bugspotter/admin exec playwright install --with-deps chromium
+          echo "✅ Playwright browsers installed"
+
+      - name: Seed test data
+        run: |
+          echo "Seeding test data for E2E tests..."
+          node scripts/seed-test-data.mjs
+          echo "✅ Test data seeded"
+
+      - name: Run admin E2E tests
+        run: |
+          # Run only audit-logs E2E tests
+          # Bug reports E2E tests are skipped - page implementation incomplete
+          # Note: BASE_URL is not set - Playwright will start its own admin dev server
+          # connected to the testcontainer backend, not the Docker Compose services
+          pnpm --filter @bugspotter/admin run test:e2e --project=chromium --grep "Audit Logs"
+
+      - name: Upload admin E2E report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-admin
+          path: apps/admin/playwright-report/
+          retention-days: 7
+
+      - name: Collect Docker logs on failure
+        if: failure()
+        run: |
+          echo "=== API Logs ==="
+          docker compose logs api --tail=100
+          echo "=== Admin Logs ==="
+          docker compose logs admin --tail=100
+          echo "=== Postgres Logs ==="
+          docker compose logs postgres --tail=50
+
+      - name: Stop Docker services
+        if: always()
+        run: docker compose down -v
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, playwright-admin]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify monorepo structure
+        run: |
+          echo "Verifying monorepo structure..."
+          if [ ! -d "packages" ]; then
+            echo "❌ Error: 'packages' directory not found"
+            echo "This workflow requires a pnpm workspace with packages/ directory"
+            exit 1
+          fi
+          echo "✅ packages/ directory exists"
+
+      - name: Build packages
+        run: |
+          # Build types first, then other packages
+          # This ensures @bugspotter/types is available for backend
+          pnpm --filter @bugspotter/types run build
+          pnpm --recursive --filter "./packages/**" --filter "!@bugspotter/types" run build
+
+
+  test-coverage:
+    name: Test Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # Prevent indefinite hangs
+    needs: [test-backend-db, test-backend-api, test-backend-services, test-backend-other]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: '22'
+          pnpm-version: '9.14.4'
+
+      - name: Build types package
+        run: |
+          # Build @bugspotter/types first (required by backend)
+          pnpm --filter @bugspotter/types run build
+
+      - name: Build utils package
+        run: |
+          # Build @bugspotter/utils (required by backend)
+          pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Run backend tests with coverage
+        run: |
+          # Testcontainers will automatically start PostgreSQL
+          pnpm --filter @bugspotter/backend run test:coverage
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./packages/*/coverage/coverage-final.json
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # Summary job for Railway deployment trigger
+  # Railway "Wait for CI" will wait for this single status check
+  validate-compose:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate base compose
+        run: docker compose -f docker-compose.yml config --quiet
+        env:
+          # Provide required vars so compose doesn't fail on :? validation
+          JWT_SECRET: test
+          CORS_ORIGINS: http://localhost:3000
+          ENCRYPTION_KEY: test-key-at-least-32-characters-long
+
+      - name: Validate compose with monitoring override
+        run: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --quiet
+        env:
+          JWT_SECRET: test
+          CORS_ORIGINS: http://localhost:3000
+          ENCRYPTION_KEY: test-key-at-least-32-characters-long
+          POSTGRES_HOST: localhost
+          POSTGRES_PASSWORD: test
+          REDIS_HOST: localhost
+          REDIS_PASSWORD: test
+          GRAFANA_ADMIN_PASSWORD: test
+
+      - name: Validate compose with intelligence profile
+        run: docker compose -f docker-compose.yml --profile intelligence config --quiet
+        env:
+          JWT_SECRET: test
+          CORS_ORIGINS: http://localhost:3000
+          ENCRYPTION_KEY: test-key-at-least-32-characters-long
+
+      - name: Check for duplicate volume mounts
+        run: |
+          # Ensure no service has duplicate mount targets within the same service
+          # when both compose files are merged. Cross-service sharing of the same
+          # target path (e.g. cert files) is expected and not a problem.
+          config=$(docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config 2>/dev/null)
+          echo "$config" | python3 -c "
+          import yaml, sys
+          config = yaml.safe_load(sys.stdin.read())
+          found_dup = False
+          for svc_name, svc in (config.get('services') or {}).items():
+              targets = []
+              for v in (svc.get('volumes') or []):
+                  if isinstance(v, dict):
+                      targets.append(v.get('target', ''))
+                  elif isinstance(v, str):
+                      parts = v.split(':')
+                      targets.append(parts[1] if len(parts) >= 2 else v)
+              seen = set()
+              for t in targets:
+                  if t in seen:
+                      print(f'DUPLICATE in {svc_name}: {t}')
+                      found_dup = True
+                  seen.add(t)
+          if found_dup:
+              sys.exit(1)
+          print('No duplicate volume mounts per service')
+          "
+          echo "✅ No duplicate volume mounts"
+        env:
+          JWT_SECRET: test
+          CORS_ORIGINS: http://localhost:3000
+          ENCRYPTION_KEY: test-key-at-least-32-characters-long
+          POSTGRES_HOST: localhost
+          POSTGRES_PASSWORD: test
+          REDIS_HOST: localhost
+          REDIS_PASSWORD: test
+          GRAFANA_ADMIN_PASSWORD: test
+
+  ci-success:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, playwright-admin, build, test-coverage, validate-compose]
+    if: always()
+    steps:
+      - name: Check all jobs succeeded
+        run: |
+          # Check if any required job failed
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "❌ Lint job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-backend-db.result }}" != "success" ]]; then
+            echo "❌ Backend Database Tests job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-backend-api.result }}" != "success" ]]; then
+            echo "❌ Backend API Tests job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-backend-services.result }}" != "success" ]]; then
+            echo "❌ Backend Services Tests job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-backend-other.result }}" != "success" ]]; then
+            echo "❌ Backend Other Tests job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.playwright-admin.result }}" != "success" ]]; then
+            echo "❌ Admin E2E Tests job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.build.result }}" != "success" ]]; then
+            echo "❌ Build job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-coverage.result }}" != "success" ]]; then
+            echo "❌ Test Coverage job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.validate-compose.result }}" != "success" ]]; then
+            echo "❌ Validate Docker Compose job failed"
+            exit 1
+          fi
+
+          echo "✅ All CI checks passed successfully"

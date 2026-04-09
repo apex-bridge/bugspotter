@@ -1,0 +1,13 @@
+# Bug reports directory (keep structure but ignore JSON files)
+bug-reports/*.json
+!bug-reports/.gitkeep
+
+# Node modules
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+
+db.json

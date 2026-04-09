@@ -1,0 +1,111 @@
+# Map to validate and set CORS origin for bugspotter.io domains
+# Supports multi-level subdomains (e.g., acme-corp.kz.saas.bugspotter.io)
+map $http_origin $cors_origin {
+    default "";
+    "~^https?://([a-z0-9-]+\.)*bugspotter\.io$" $http_origin;
+}
+
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Enable gzip compression (CDN-optimized settings)
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 256;
+    gzip_comp_level 6;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/json
+        application/xml
+        application/xml+rss
+        application/wasm
+        image/svg+xml;
+        # Note: font/woff and font/woff2 excluded - already compressed (WOFF uses zlib, WOFF2 uses Brotli)
+        # Gzipping provides <1% reduction while consuming CPU cycles
+
+    # Security headers (DRY: extracted to reusable snippets)
+    include /etc/nginx/snippets/security-headers-common.conf;
+    include /etc/nginx/snippets/security-headers-hsts.conf;
+    include /etc/nginx/snippets/security-headers-permissions.conf;
+    
+    # Content Security Policy - Dynamically configured
+    # API_DOMAIN_CSP is set by entrypoint script based on API_DOMAIN env var
+    # If API_DOMAIN is empty, only 'self' is allowed (same-domain deployment)
+    # If API_DOMAIN is set, it's added to connect-src with proper spacing
+    # Note: React/Vite requires 'unsafe-inline' for dynamic styles
+    # img-src includes https://*.r2.cloudflarestorage.com for screenshot/replay uploads
+    # font-src includes https://*.demo.bugspotter.io for Next.js optimized fonts
+    # connect-src includes R2 for fetching replay JSON files and *.demo.bugspotter.io for external app data
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io https://secure.gravatar.com https://*.atl-paas.net; font-src 'self' data: https://*.demo.bugspotter.io; connect-src 'self' https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+
+    # API proxy (for same-domain deployments)
+    # In Docker Compose: proxies /api/* to backend container
+    # In cross-origin deployments: unused (admin connects directly to API_DOMAIN)
+    location /api/ {
+        proxy_pass http://api:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Explicitly serve SPA routes (prevent confusion with backend /health endpoint)
+    # These are React Router routes that must serve index.html
+    location ~ ^/(system-health|dashboard|projects|settings|bug-reports|users|audit-logs|integrations|notifications)(/.*)?$ {
+        try_files $uri /index.html;
+    }
+
+    # SPA routing - serve index.html for all non-file requests
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Never cache runtime configuration (regenerated on container start)
+    location = /config.js {
+        expires -1;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+    }
+
+    # Cache static assets (CDN-optimized)
+    # Vite generates content-hashed filenames (e.g., index-abc123.js)
+    # so these can be cached indefinitely with immutable directive
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|webp|avif)$ {
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        # Enable ETag for CDN validation
+        etag on;
+        # Restrict CORS to *.bugspotter.io domains only (more secure than wildcard *)
+        add_header Access-Control-Allow-Origin $cors_origin always;
+        # CRITICAL: Tell CDN to cache separately per origin to prevent serving wrong CORS headers
+        add_header Vary Origin always;
+    }
+
+    # Cache HTML with short TTL (for SPA navigation)
+    location ~* \.html$ {
+        expires 5m;
+        add_header Cache-Control "public, max-age=300, must-revalidate";
+        etag on;
+    }
+
+    # Disable access to hidden files
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+}

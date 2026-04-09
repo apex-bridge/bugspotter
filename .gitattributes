@@ -1,0 +1,33 @@
+# Default to auto line-ending conversion for text files
+* text=auto
+
+# Force LF line endings for files that will be executed in Unix/Linux environments
+Dockerfile text eol=lf
+apps/*/Dockerfile text eol=lf
+packages/*/Dockerfile text eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+docker-entrypoint.sh text eol=lf
+*.mjs text eol=lf
+
+# Explicitly declare text files
+*.js text
+*.ts text
+*.json text
+*.md text
+*.yml text
+*.yaml text
+*.css text
+*.html text
+*.sql text
+
+# Denote binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary

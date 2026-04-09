@@ -1,0 +1,446 @@
+/**
+ * Tests for Admin Integration Management Routes
+ */
+
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { createTestDatabase } from '../setup.integration.js';
+import type { DatabaseClient } from '../../src/db/client.js';
+
+describe('Admin Integrations API', () => {
+  let db: DatabaseClient;
+  const createdIds: string[] = [];
+
+  // Helper to track created integration IDs for cleanup
+  const track = <T extends { id: string }>(integration: T): T => {
+    createdIds.push(integration.id);
+    return integration;
+  };
+
+  beforeAll(async () => {
+    db = createTestDatabase();
+  });
+
+  afterAll(async () => {
+    // Clean up all created integrations by ID
+    for (const id of createdIds) {
+      try {
+        await db.query('DELETE FROM integration_sync_logs WHERE integration_id = $1', [id]);
+        await db.query('DELETE FROM integrations WHERE id = $1', [id]);
+      } catch (error) {
+        // Ignore errors if integration doesn't exist
+      }
+    }
+  });
+
+  describe('POST /v1/admin/integrations', () => {
+    it('should create integration with valid data', async () => {
+      const integrationData = {
+        type: 'custom_ticketing',
+        name: 'Custom Ticketing System',
+        description: 'Internal ticketing integration',
+        is_custom: true,
+        plugin_source: 'generic_http' as const,
+        custom_config: {
+          baseUrl: 'https://tickets.example.com',
+          authType: 'bearer',
+        },
+      };
+
+      const integration = track(await db.integrations.create(integrationData);
+
+      expect(integration).toBeDefined();
+      expect(integration.type).toBe('custom_ticketing');
+      expect(integration.name).toBe('Custom Ticketing System');
+      expect(integration.is_custom).toBe(true);
+      expect(integration.plugin_source).toBe('generic_http');
+      expect(integration.status).toBe('not_configured');
+    });
+
+    it('should validate integration type format', async () => {
+      const invalidTypes = [
+        'InvalidCamelCase',
+        'invalid-kebab-case',
+        'invalid.dots',
+        'invalid spaces',
+        'INVALID_UPPERCASE',
+      ];
+
+      for (const type of invalidTypes) {
+        await expect(
+          db.integrations.create({
+            type,
+            name: 'Test Integration',
+          })
+        ).rejects.toThrow();
+      }
+    });
+
+    it('should accept valid integration type formats', async () => {
+      const validTypes = ['jira', 'github_enterprise', 'custom_system_123', 'test_integration'];
+
+      for (const type of validTypes) {
+        const integration = track(await db.integrations.create({
+          type,
+          name: `Test ${type}`,
+        });
+
+        expect(integration.type).toBe(type);
+      }
+    });
+
+    it('should reject duplicate integration types', async () => {
+      const type = uniqueType('jira');
+      track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+      });
+
+      await expect(
+        db.integrations.create({
+          type,
+          name: 'Jira Server',
+        })
+      ).rejects.toThrow();
+    });
+
+    it('should validate and store plugin code with hash', async () => {
+      const pluginCode = `
+        const axios = require('axios');
+        
+        export const factory = (context) => {
+          return {
+            createIssue: async (data) => {
+              return await axios.post('/api/issues', data);
+            }
+          };
+        };
+      `;
+
+      const integration = track(await db.integrations.create({
+        type: 'custom_with_code',
+        name: 'Custom Integration',
+        plugin_code: pluginCode,
+        allow_code_execution: false,
+      }));
+
+      expect(integration.plugin_code).toBe(pluginCode);
+      expect(integration.code_hash).toBeDefined();
+      expect(integration.code_hash).toHaveLength(64); // SHA-256
+      expect(integration.allow_code_execution).toBe(false);
+    });
+
+    it('should reject unsafe plugin code', async () => {
+      const unsafeCode = `
+        const fs = require('fs');
+        fs.readFileSync('/etc/passwd');
+      `;
+
+      // This would be rejected by the API route, but let's test storage
+      const integration = track(await db.integrations.create({
+        type: 'unsafe_integration',
+        name: 'Unsafe Integration',
+        plugin_code: unsafeCode,
+        allow_code_execution: false,
+      }));
+
+      // Code is stored, but allow_code_execution prevents execution
+      expect(integration.plugin_code).toBeDefined();
+      expect(integration.allow_code_execution).toBe(false);
+    });
+  });
+
+  describe('GET /v1/admin/integrations', () => {
+    beforeAll(async () => {
+      // Create test integrations once for all tests in this block
+      track(await db.integrations.create({
+        type: trackIntegration('test_list_jira'),
+        name: 'Jira Cloud',
+        status: 'configured',
+      });
+
+      track(await db.integrations.create({
+        type: trackIntegration('test_list_github'),
+        name: 'GitHub Issues',
+        status: 'not_configured',
+      });
+
+      track(await db.integrations.create({
+        type: trackIntegration('test_list_linear'),
+        name: 'Linear',
+        status: 'configured',
+      });
+    });
+
+    it('should list all integrations', async () => {
+      const result = await db.integrations.list({}, { page: 1, limit: 10 });
+
+      expect(result.data).toHaveLength(3);
+      expect(result.pagination.total).toBe(3);
+    });
+
+    it('should filter by status', async () => {
+      const result = await db.integrations.list({ status: 'active' }, { page: 1, limit: 10 });
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].type).toBe('jira');
+    });
+
+    it('should paginate results', async () => {
+      const page1 = await db.integrations.list({}, { page: 1, limit: 2 });
+      const page2 = await db.integrations.list({}, { page: 2, limit: 2 });
+
+      expect(page1.data).toHaveLength(2);
+      expect(page2.data).toHaveLength(1);
+      expect(page1.pagination.page).toBe(1);
+      expect(page2.pagination.page).toBe(2);
+    });
+  });
+
+  describe('GET /v1/admin/integrations/:type/config', () => {
+    it('should retrieve integration configuration', async () => {
+      const type = uniqueType('jira');
+      const integration = track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+        status: 'active',
+        config: {
+          baseUrl: 'https://example.atlassian.net',
+          projectKey: 'BUG',
+        },
+        field_mappings: {
+          title: 'summary',
+          description: 'description',
+        },
+      });
+
+      const retrieved = await db.integrations.findByType(type);
+
+      expect(retrieved).toBeDefined();
+      expect(retrieved?.config).toEqual(integration.config);
+      expect(retrieved?.field_mappings).toEqual(integration.field_mappings);
+    });
+
+    it('should return null for non-existent integration', async () => {
+      const result = await db.integrations.findByType('nonexistent');
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('PUT /v1/admin/integrations/:type/config', () => {
+    it('should update integration configuration', async () => {
+      const type = uniqueType('jira');
+      track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+        status: 'not_configured',
+      });
+
+      const integration = await db.integrations.findByType(type);
+      const updated = await db.integrations.update(integration!.id, {
+        status: 'active',
+        config: {
+          baseUrl: 'https://example.atlassian.net',
+        },
+      });
+
+      expect(updated?.status).toBe('configured');
+      expect(updated?.config).toEqual({ baseUrl: 'https://example.atlassian.net' });
+    });
+
+    it('should update last_sync_at timestamp', async () => {
+      const type = uniqueType('jira');
+      const integration = track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+      });
+
+      const syncTime = new Date();
+      const updated = await db.integrations.update(integration.id, {
+        last_sync_at: syncTime,
+      });
+
+      expect(updated?.last_sync_at).toBeDefined();
+    });
+  });
+
+  describe('DELETE /v1/admin/integrations/:type/config', () => {
+    it('should reset integration to not_configured', async () => {
+      const type = uniqueType('jira');
+      const integration = track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+        status: 'active',
+        config: { baseUrl: 'https://example.com' },
+        oauth_tokens: { access_token: 'secret' },
+      });
+
+      const reset = await db.integrations.update(integration.id, {
+        status: 'not_configured',
+        config: undefined,
+        oauth_tokens: undefined,
+      });
+
+      expect(reset?.status).toBe('not_configured');
+      expect(reset?.config).toBeNull();
+      expect(reset?.oauth_tokens).toBeNull();
+    });
+  });
+
+  describe('POST /v1/admin/integrations/:type/toggle-code-execution', () => {
+    it('should enable code execution for integration with plugin_code', async () => {
+      const integration = track(await db.integrations.create({
+        type: trackIntegration('test_enable_custom'),
+        name: 'Custom Integration',
+        plugin_code: 'const test = true;',
+        code_hash: 'abc123',
+        allow_code_execution: false,
+      });
+
+      const updated = await db.integrations.update(integration.id, {
+        allow_code_execution: true,
+      });
+
+      expect(updated?.allow_code_execution).toBe(true);
+    });
+
+    it('should disable code execution', async () => {
+      const type = uniqueType('custom3');
+      const integration = track(await db.integrations.create({
+        type,
+        name: 'Custom Integration',
+        plugin_code: 'const test = true;',
+        allow_code_execution: true,
+      });
+
+      const updated = await db.integrations.update(integration.id, {
+        allow_code_execution: false,
+      });
+
+      expect(updated?.allow_code_execution).toBe(false);
+    });
+
+    it('should handle integration without plugin_code', async () => {
+      const integration = track(await db.integrations.create({
+        type: 'generic',
+        name: 'Generic Integration',
+        plugin_source: 'generic_http',
+      });
+
+      // Should still allow toggling (even if no code)
+      const updated = await db.integrations.update(integration.id, {
+        allow_code_execution: true,
+      });
+
+      expect(updated?.allow_code_execution).toBe(true);
+    });
+  });
+
+  describe('Integration Sync Logs', () => {
+    it('should log test actions', async () => {
+      const type = uniqueType('jira');
+      const integration = track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+      });
+
+      const log = await db.integrationSyncLogs.create({
+        integration_type: type,
+        action: 'test',
+        status: 'success',
+        duration_ms: 150,
+      });
+
+      expect(log).toBeDefined();
+      expect(log.action).toBe('test');
+      expect(log.status).toBe('success');
+    });
+
+    it('should track sync statistics', async () => {
+      const type = uniqueType('jira');
+      track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+      });
+
+      // Create multiple logs
+      await db.integrationSyncLogs.create({
+        integration_type: type,
+        action: 'sync',
+        status: 'success',
+        duration_ms: 100,
+      });
+
+      await db.integrationSyncLogs.create({
+        integration_type: type,
+        action: 'sync',
+        status: 'success',
+        duration_ms: 200,
+      });
+
+      await db.integrationSyncLogs.create({
+        integration_type: type,
+        action: 'sync',
+        status: 'failed',
+        error: 'Connection timeout',
+        duration_ms: 5000,
+      });
+
+      const stats = await db.integrationSyncLogs.getStats(type);
+
+      expect(stats.total).toBe(3);
+      expect(stats.success).toBe(2);
+      expect(stats.failed).toBe(1);
+      expect(stats.avg_duration_ms).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Trust Levels', () => {
+    it('should set trust_level to custom for user-created integrations', async () => {
+      const type = trackIntegration('test_trust_custom');
+      const integration = track(await db.integrations.create({
+        type,
+        name: 'Custom Integration',
+        is_custom: true,
+        trust_level: 'custom',
+      });
+
+      expect(integration.trust_level).toBe('custom');
+    });
+
+    it('should set trust_level to builtin for filesystem plugins', async () => {
+      const type = trackIntegration('test_trust_builtin');
+      const integration = track(await db.integrations.create({
+        type,
+        name: 'Jira Cloud',
+        is_custom: false,
+        plugin_source: 'builtin',
+        trust_level: 'builtin',
+      });
+
+      expect(integration.trust_level).toBe('builtin');
+      expect(integration.plugin_source).toBe('builtin');
+    });
+  });
+
+  describe('Plugin Source Types', () => {
+    it('should support all plugin source types', async () => {
+      const sources: Array<'builtin' | 'npm' | 'filesystem' | 'generic_http'> = [
+        'builtin',
+        'npm',
+        'filesystem',
+        'generic_http',
+      ];
+
+      for (const source of sources) {
+        const integration = track(await db.integrations.create({
+          type: trackIntegration(`test_source_${source}`),
+          name: `Test ${source}`,
+          plugin_source: source,
+        });
+
+        expect(integration.plugin_source).toBe(source);
+      }
+    });
+  });
+});
+

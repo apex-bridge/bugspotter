@@ -1,0 +1,584 @@
+name: Deploy to Yandex Cloud
+
+# This workflow builds Docker images, pushes to Yandex Container Registry,
+# and deploys to the production VM via SSH.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/backend/**'
+      - 'packages/types/**'
+      - 'packages/utils/**'
+      - 'packages/message-broker/**'
+      - 'packages/billing/**'
+      - 'packages/payment-service/**'
+      - 'apps/admin/**'
+      - 'apps/demo/**'
+      - 'scripts/seed-demo-data.sh'
+      - 'scripts/reset-demo-data.sh'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - '.github/workflows/deploy-yandex.yml'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests (faster deploy, use with caution)'
+        required: false
+        default: false
+        type: boolean
+      services:
+        description: 'Which services to deploy'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - api-only
+          - admin-only
+          - demo-only
+          - payment-only
+
+# Only one deploy at a time — cancel old runs if new code is pushed
+concurrency:
+  group: deploy-yandex-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  YC_REGISTRY: cr.yandexcloud.kz
+  NODE_VERSION: '22'
+  PNPM_VERSION: '9.14.4'
+
+jobs:
+  # ================================================================
+  # Step 1: Run tests to make sure code is safe to deploy
+  # ================================================================
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+
+      - name: Build shared packages
+        run: |
+          pnpm --filter @bugspotter/types build
+          pnpm --filter @bugspotter/utils build
+          pnpm --filter @bugspotter/message-broker build
+          pnpm --filter @bugspotter/billing build
+
+      - name: Run backend tests
+        run: pnpm --filter @bugspotter/backend test
+
+  # ================================================================
+  # Step 2: Build Docker images and push to Yandex Container Registry
+  # ================================================================
+  build-and-push:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
+    outputs:
+      image_tag: sha-${{ github.sha }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Authenticate with Yandex Container Registry
+        run: |
+          echo '${{ secrets.YC_SA_KEY }}' | docker login \
+            --username json_key \
+            --password-stdin \
+            ${{ env.YC_REGISTRY }}
+
+      - name: Build and push API image
+        if: >-
+          github.event.inputs.services == 'all' ||
+          github.event.inputs.services == 'api-only' ||
+          github.event.inputs.services == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/backend/Dockerfile
+          target: production
+          push: true
+          tags: |
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-api:sha-${{ github.sha }}
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-api:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push Admin image
+        if: >-
+          github.event.inputs.services == 'all' ||
+          github.event.inputs.services == 'admin-only' ||
+          github.event.inputs.services == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/admin/Dockerfile
+          push: true
+          tags: |
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-admin:sha-${{ github.sha }}
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-admin:latest
+          cache-from: type=gha,scope=admin
+          cache-to: type=gha,mode=max,scope=admin
+
+      - name: Build and push Demo image
+        if: >-
+          github.event.inputs.services == 'all' ||
+          github.event.inputs.services == 'demo-only' ||
+          github.event.inputs.services == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/demo
+          file: apps/demo/Dockerfile
+          push: true
+          tags: |
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-demo:sha-${{ github.sha }}
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-demo:latest
+          cache-from: type=gha,scope=demo
+          cache-to: type=gha,mode=max,scope=demo
+
+      - name: Build and push Payment image
+        if: >-
+          github.event.inputs.services == 'all' ||
+          github.event.inputs.services == 'payment-only' ||
+          github.event.inputs.services == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/payment-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-payment:sha-${{ github.sha }}
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-payment:latest
+          cache-from: type=gha,scope=payment
+          cache-to: type=gha,mode=max,scope=payment
+
+  # ================================================================
+  # Step 3: Deploy to VM via SSH
+  # ================================================================
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: needs.build-and-push.result == 'success'
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_API_URL }}
+
+    steps:
+      - name: Setup SSH connection
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Use a pre-stored host key instead of ssh-keyscan to prevent MITM.
+          # Generate with: ssh-keyscan -H <host> (once, from a trusted network)
+          # then store the output as the SSH_KNOWN_HOSTS secret.
+          if [ -n "${{ secrets.SSH_KNOWN_HOSTS }}" ]; then
+            echo "${{ secrets.SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          else
+            echo "⚠️ SSH_KNOWN_HOSTS secret not set — falling back to ssh-keyscan (TOFU)"
+            ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            docker-compose.yml
+            docker-compose.monitoring.yml
+            docker/intelligence
+            monitoring
+            scripts
+          sparse-checkout-cone-mode: true
+
+      - name: Generate .env file
+        run: |
+          # Generate .env from GitHub secrets + environment variables.
+          # This is the SINGLE SOURCE OF TRUTH for production config.
+          # Secrets are masked in logs by GitHub Actions automatically.
+          #
+          # To add/change a variable:
+          #   1. Add it as a Secret or Variable in GitHub Settings > Environments > production
+          #   2. Reference it below with ${{ secrets.NAME }} or ${{ vars.NAME }}
+          #   3. Push — next deploy will update the VM's .env automatically
+          cat > /tmp/deploy.env << 'ENVEOF'
+          # === Auto-generated by deploy-yandex.yml ===
+          # Do NOT edit manually on the VM — changes will be overwritten on next deploy.
+          # To update: change GitHub Settings > Environments > production > Secrets/Variables
+          # Backup of previous .env is at .env.backup on the VM.
+
+          # Yandex Container Registry
+          REGISTRY_ID=${{ secrets.YC_REGISTRY_ID }}
+
+          # Docker images (pre-built, pulled from registry)
+          API_IMAGE=${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-api:latest
+          ADMIN_IMAGE=${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-admin:latest
+          WORKER_IMAGE=${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-api:latest
+          PAYMENT_IMAGE=${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-payment:latest
+          DEMO_IMAGE=${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-demo:latest
+
+          # TLS — Yandex Cloud KZ private CA (cert downloaded during VM setup)
+          NODE_EXTRA_CA_CERTS=/app/certs/yandex-ca.pem
+
+          # PostgreSQL (Managed - Yandex Cloud KZ)
+          POSTGRES_HOST=${{ vars.POSTGRES_HOST }}
+          POSTGRES_DB=${{ vars.POSTGRES_DB || 'bugspotter' }}
+          POSTGRES_USER=${{ vars.POSTGRES_USER || 'bugspotter' }}
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_PORT=${{ vars.POSTGRES_PORT || '6432' }}
+          DATABASE_URL=${{ secrets.DATABASE_URL || format('postgresql://{0}:{1}@{2}:{3}/{4}', vars.POSTGRES_USER || 'bugspotter', secrets.POSTGRES_PASSWORD, vars.POSTGRES_HOST, vars.POSTGRES_PORT || '6432', vars.POSTGRES_DB || 'bugspotter') }}
+          DB_POOL_MIN=${{ vars.DB_POOL_MIN || '5' }}
+          DB_POOL_MAX=${{ vars.DB_POOL_MAX || '20' }}
+
+          # Redis/Valkey (Managed - Yandex Cloud KZ)
+          REDIS_HOST=${{ vars.REDIS_HOST }}
+          REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+          REDIS_PORT=${{ vars.REDIS_PORT || '6380' }}
+          REDIS_URL=${{ secrets.REDIS_URL || format('rediss://:{0}@{1}:{2}', secrets.REDIS_PASSWORD, vars.REDIS_HOST, vars.REDIS_PORT || '6380') }}
+          REDIS_TLS_REJECT_UNAUTHORIZED=${{ vars.REDIS_TLS_REJECT_UNAUTHORIZED || 'true' }}
+
+          # S3 Storage (Yandex Object Storage)
+          STORAGE_BACKEND=${{ vars.STORAGE_BACKEND || 's3' }}
+          S3_ENDPOINT=${{ vars.S3_ENDPOINT || 'https://storage.yandexcloud.kz' }}
+          S3_ACCESS_KEY=${{ secrets.S3_ACCESS_KEY }}
+          S3_SECRET_KEY=${{ secrets.S3_SECRET_KEY }}
+          S3_BUCKET=${{ vars.S3_BUCKET || 'bugspotter' }}
+          S3_REGION=${{ vars.S3_REGION || 'ru-central1' }}
+          S3_FORCE_PATH_STYLE=${{ vars.S3_FORCE_PATH_STYLE || 'true' }}
+          SIGNED_URL_EXPIRATION_SECONDS=${{ vars.SIGNED_URL_EXPIRATION_SECONDS || '2592000' }}
+
+          # API Server
+          # Container always listens on port 3000 internally (hardcoded in docker-compose.yml).
+          # API_HOST_PORT only controls the host port binding.
+          API_HOST_PORT=${{ vars.API_HOST_PORT || '3000' }}
+          ADMIN_PORT=${{ vars.ADMIN_PORT || '3001' }}
+          NODE_ENV=${{ vars.NODE_ENV || 'production' }}
+          LOG_LEVEL=${{ vars.LOG_LEVEL || 'warn' }}
+          DEPLOYMENT_MODE=${{ vars.DEPLOYMENT_MODE || 'saas' }}
+
+          # Security
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
+          JWT_EXPIRES_IN=${{ vars.JWT_EXPIRES_IN || '24h' }}
+          JWT_REFRESH_EXPIRES_IN=${{ vars.JWT_REFRESH_EXPIRES_IN || '7d' }}
+          # IMPORTANT: Include https://demo.kz.bugspotter.io in CORS_ORIGINS
+          # so the demo app can submit bug reports to the API.
+          CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
+          DISABLE_STRICT_RESIDENCY_VALIDATION=${{ vars.DISABLE_STRICT_RESIDENCY_VALIDATION || 'true' }}
+
+          # URLs
+          FRONTEND_URL=${{ vars.FRONTEND_URL }}
+          API_URL=${{ vars.API_URL }}
+          VITE_API_URL=${{ vars.VITE_API_URL }}
+          API_DOMAIN=${{ vars.API_DOMAIN }}
+
+          # Email (SMTP)
+          SMTP_HOST=${{ vars.SMTP_HOST }}
+          SMTP_PORT=${{ vars.SMTP_PORT || '465' }}
+          SMTP_USER=${{ vars.SMTP_USER }}
+          SMTP_PASS=${{ secrets.SMTP_PASS }}
+          EMAIL_FROM_ADDRESS=${{ vars.EMAIL_FROM_ADDRESS || 'noreply@bugspotter.io' }}
+
+          # Kaspi Pay (Kazakhstan)
+          PAYMENT_PROVIDER=${{ vars.PAYMENT_PROVIDER || 'kaspi' }}
+          PAYMENT_SERVICE_PORT=${{ vars.PAYMENT_SERVICE_PORT || '3002' }}
+          KASPI_API_KEY=${{ secrets.KASPI_API_KEY }}
+          KASPI_DEVICE_TOKEN=${{ secrets.KASPI_DEVICE_TOKEN }}
+          KASPI_ORG_BIN=${{ secrets.KASPI_ORG_BIN }}
+          KASPI_API_URL=${{ vars.KASPI_API_URL }}
+
+          # Retention
+          DEFAULT_RETENTION_DAYS=${{ vars.DEFAULT_RETENTION_DAYS || '90' }}
+          SCREENSHOT_RETENTION_DAYS=${{ vars.SCREENSHOT_RETENTION_DAYS || '60' }}
+          REPLAY_RETENTION_DAYS=${{ vars.REPLAY_RETENTION_DAYS || '30' }}
+          RETENTION_SCHEDULER_ENABLED=${{ vars.RETENTION_SCHEDULER_ENABLED || 'true' }}
+
+          # Workers
+          WORKER_SCREENSHOT_ENABLED=${{ vars.WORKER_SCREENSHOT_ENABLED || 'true' }}
+          WORKER_REPLAY_ENABLED=${{ vars.WORKER_REPLAY_ENABLED || 'true' }}
+          WORKER_INTEGRATION_ENABLED=${{ vars.WORKER_INTEGRATION_ENABLED || 'true' }}
+          WORKER_NOTIFICATION_ENABLED=${{ vars.WORKER_NOTIFICATION_ENABLED || 'true' }}
+
+          # Demo App
+          DEMO_PORT=${{ vars.DEMO_PORT || '3003' }}
+          DEMO_API_URL=${{ vars.DEMO_API_URL }}
+          DEMO_API_KEY=${{ secrets.DEMO_API_KEY }}
+          DEMO_ADMIN_URL=${{ vars.DEMO_ADMIN_URL }}
+          DEMO_EXTENSION_URL=${{ vars.DEMO_EXTENSION_URL }}
+          DEMO_VIEWER_EMAIL=${{ vars.DEMO_VIEWER_EMAIL }}
+          DEMO_VIEWER_PASSWORD=${{ secrets.DEMO_VIEWER_PASSWORD }}
+          DEMO_MAGIC_TOKEN=${{ vars.DEMO_MAGIC_TOKEN }}
+
+          # Monitoring
+          GRAFANA_ADMIN_PASSWORD=${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          METRICS_AUTH_TOKEN=${{ secrets.METRICS_AUTH_TOKEN }}
+          YC_PROMETHEUS_WRITE_URL=${{ vars.YC_PROMETHEUS_WRITE_URL }}
+          YC_PROMETHEUS_API_KEY=${{ secrets.YC_PROMETHEUS_API_KEY }}
+
+          # Intelligence Service (optional — AI bug analysis)
+          INTELLIGENCE_ENABLED=${{ vars.INTELLIGENCE_ENABLED || 'false' }}
+          INTELLIGENCE_API_URL=${{ vars.INTELLIGENCE_API_URL || 'http://intelligence:8000' }}
+          INTELLIGENCE_API_KEY=${{ secrets.INTELLIGENCE_API_KEY }}
+          INTELLIGENCE_TIMEOUT_MS=${{ vars.INTELLIGENCE_TIMEOUT_MS || '120000' }}
+          INTELLIGENCE_MAX_RETRIES=${{ vars.INTELLIGENCE_MAX_RETRIES || '3' }}
+          INTELLIGENCE_BACKOFF_DELAY_MS=${{ vars.INTELLIGENCE_BACKOFF_DELAY_MS || '1000' }}
+          INTELLIGENCE_CB_FAILURE_THRESHOLD=${{ vars.INTELLIGENCE_CB_FAILURE_THRESHOLD || '5' }}
+          INTELLIGENCE_CB_RESET_TIMEOUT_MS=${{ vars.INTELLIGENCE_CB_RESET_TIMEOUT_MS || '30000' }}
+          WORKER_INTELLIGENCE_ENABLED=${{ vars.WORKER_INTELLIGENCE_ENABLED || 'false' }}
+          WORKER_INTELLIGENCE_CONCURRENCY=${{ vars.WORKER_INTELLIGENCE_CONCURRENCY || '5' }}
+          INTELLIGENCE_IMAGE=${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-intelligence:latest
+          INTELLIGENCE_DB_PASSWORD=${{ secrets.INTELLIGENCE_DB_PASSWORD }}
+          INTELLIGENCE_DB_NAME=${{ vars.INTELLIGENCE_DB_NAME || 'bugspotter_intelligence' }}
+          INTELLIGENCE_DB_USER=${{ vars.INTELLIGENCE_DB_USER || 'postgres' }}
+          INTELLIGENCE_AUTH_ENABLED=${{ vars.INTELLIGENCE_AUTH_ENABLED || 'false' }}
+          INTELLIGENCE_MASTER_API_KEY=${{ secrets.INTELLIGENCE_MASTER_API_KEY }}
+          INTELLIGENCE_LLM_PROVIDER=${{ vars.INTELLIGENCE_LLM_PROVIDER || 'ollama' }}
+          INTELLIGENCE_OLLAMA_MODEL=${{ vars.INTELLIGENCE_OLLAMA_MODEL || 'llama3.1:8b' }}
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          ENVEOF
+
+          # Strip leading whitespace from heredoc indentation
+          sed -i 's/^          //' /tmp/deploy.env
+
+          echo "✅ Generated .env with $(wc -l < /tmp/deploy.env) lines"
+
+      - name: Upload .env and deploy
+        run: |
+          # Backup existing .env and ensure monitoring dir exists
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            'if [ -f /opt/bugspotter/.env ]; then cp /opt/bugspotter/.env /opt/bugspotter/.env.backup; echo "✅ Backed up existing .env to .env.backup"; fi && mkdir -p /opt/bugspotter/monitoring /opt/bugspotter/scripts'
+
+          # Upload .env, compose files, and config files
+          scp -i ~/.ssh/deploy_key /tmp/deploy.env \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/.env
+          scp -i ~/.ssh/deploy_key docker-compose.yml \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker-compose.yml
+          scp -i ~/.ssh/deploy_key docker-compose.monitoring.yml \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker-compose.monitoring.yml
+          scp -r -i ~/.ssh/deploy_key monitoring/. \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring
+          scp -i ~/.ssh/deploy_key scripts/seed-demo-data.sh scripts/reset-demo-data.sh \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/scripts/
+
+          # Upload intelligence docker config files (pgvector init, ollama init)
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            'mkdir -p /opt/bugspotter/docker/intelligence/postgres /opt/bugspotter/docker/intelligence/ollama'
+          scp -r -i ~/.ssh/deploy_key docker/intelligence/. \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker/intelligence/
+
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'DEPLOY_SCRIPT'
+
+          set -e
+          echo "=== Starting deployment ==="
+          cd /opt/bugspotter
+
+          # Secure the .env file
+          chmod 600 .env
+
+          # Ensure jq is available (needed by seed/reset scripts)
+          if ! command -v jq &> /dev/null; then
+            echo "Installing jq..."
+            sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          fi
+
+          # Make demo scripts executable
+          chmod +x scripts/seed-demo-data.sh scripts/reset-demo-data.sh 2>/dev/null || true
+
+          # Authenticate with Yandex Container Registry
+          echo '${{ secrets.YC_SA_KEY }}' | docker login \
+            --username json_key \
+            --password-stdin \
+            cr.yandexcloud.kz
+
+          # Always include the monitoring override so compose knows about all
+          # services. This prevents --remove-orphans from killing monitoring
+          # containers and ensures monitoring images are pulled alongside app images.
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.monitoring.yml"
+
+          # Pull new images (app + monitoring)
+          echo "Pulling latest images..."
+          $COMPOSE --profile monitoring --profile host-metrics pull
+
+          # Restart monitoring stack first (if active) to pick up port changes
+          # before core services try to bind their ports.
+          if grep -qE '^GRAFANA_ADMIN_PASSWORD=.+' .env 2>/dev/null; then
+            echo "Updating monitoring stack..."
+            $COMPOSE --profile monitoring --profile host-metrics up -d --no-build
+          fi
+
+          # Restart core services (profiled services won't start without --profile)
+          echo "Restarting services..."
+          $COMPOSE up -d --no-build --remove-orphans
+
+          # Start intelligence stack when explicitly enabled and configured
+          if grep -qE '^INTELLIGENCE_ENABLED=true' .env 2>/dev/null \
+            && grep -qE '^INTELLIGENCE_DB_PASSWORD=.+' .env 2>/dev/null; then
+            echo "Starting intelligence stack..."
+            $COMPOSE --profile intelligence pull || {
+              echo "⚠️ Failed to pull intelligence images; continuing with existing" >&2
+            }
+            $COMPOSE --profile intelligence up -d --no-build
+          else
+            echo "⏭️ Skipping intelligence (requires INTELLIGENCE_ENABLED=true and INTELLIGENCE_DB_PASSWORD)"
+          fi
+
+          # Ensure monitoring stack is running when GRAFANA_ADMIN_PASSWORD is configured.
+          # Note: .env is read by docker compose automatically, but is NOT
+          # loaded into this shell session — check the file directly.
+          if grep -qE '^GRAFANA_ADMIN_PASSWORD=.+' .env 2>/dev/null; then
+            echo "Starting monitoring stack..."
+            $COMPOSE --profile monitoring --profile host-metrics up -d --no-build
+          else
+            echo "⏭️ Skipping monitoring (GRAFANA_ADMIN_PASSWORD not set in .env)"
+          fi
+
+          # Wait for API to become healthy
+          echo "Waiting for API health check..."
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/ready > /dev/null 2>&1; then
+              echo "✅ API is healthy"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ API health check timed out"
+              $COMPOSE logs --tail=50 api
+              exit 1
+            fi
+            echo "  Waiting... ($i/30)"
+            sleep 5
+          done
+
+          # Verify all containers are running
+          echo ""
+          echo "=== Container Status ==="
+          $COMPOSE --profile monitoring --profile host-metrics ps
+
+          # Clean up old unused images (saves disk space)
+          docker image prune -f --filter "until=168h"
+
+          echo ""
+          echo "=== Deployment complete ==="
+          DEPLOY_SCRIPT
+
+      - name: Cleanup sensitive files
+        if: always()
+        run: |
+          rm -f /tmp/deploy.env
+          rm -f ~/.ssh/deploy_key
+
+      - name: Verify external health
+        if: vars.PRODUCTION_API_URL != ''
+        run: |
+          echo "Verifying external access..."
+          for i in $(seq 1 10); do
+            if curl -sf "${{ vars.PRODUCTION_API_URL }}/ready" > /dev/null 2>&1; then
+              echo "✅ External health check passed"
+              exit 0
+            fi
+            echo "  Waiting... ($i/10)"
+            sleep 10
+          done
+          echo "⚠️ External health check timed out (may be DNS/SSL issue)"
+          exit 1
+
+  # ================================================================
+  # Step 4: Run database migrations (if needed)
+  # ================================================================
+  migrate:
+    name: Run Migrations
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: needs.deploy.result == 'success'
+
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${{ secrets.SSH_KNOWN_HOSTS }}" ]; then
+            echo "${{ secrets.SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Run migrations
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'MIGRATE_SCRIPT'
+
+          set -e
+          cd /opt/bugspotter
+
+          echo "Checking if migrations are needed..."
+          # Run migrations (safe to run even if no pending migrations)
+          # Migrations also run automatically on API startup
+          docker compose exec -T -w /app/packages/backend api node dist/cli/migrate.js 2>&1 || {
+            echo "❌ Migration failed"
+            echo "Check logs: docker compose logs api"
+            exit 1
+          }
+          echo "✅ Migrations complete"
+          MIGRATE_SCRIPT
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+  # ================================================================
+  # Summary
+  # ================================================================
+  summary:
+    name: Deploy Summary
+    runs-on: ubuntu-latest
+    needs: [test, build-and-push, deploy, migrate]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## Yandex Cloud Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test.result == 'success' && '✅' || needs.test.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Push | ${{ needs.build-and-push.result == 'success' && '✅' || '❌' }} ${{ needs.build-and-push.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result == 'success' && '✅' || needs.deploy.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Migrations | ${{ needs.migrate.result == 'success' && '✅' || needs.migrate.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.migrate.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image tag:** \`sha-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

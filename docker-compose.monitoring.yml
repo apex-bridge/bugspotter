@@ -1,0 +1,274 @@
+# ============================================================================
+# BugSpotter - Monitoring Stack (Production Override)
+# ============================================================================
+# This file is synced to the production VM by the deploy workflow and merged
+# with the production docker-compose.yml using:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
+#     --profile monitoring --profile host-metrics up -d
+#
+# It adds Prometheus, Grafana, Alertmanager, and exporters on top of the
+# production compose file. All services are behind profiles — they only
+# start when explicitly requested.
+#
+# For local development, use docker-compose.yml directly (which already
+# includes these services).
+# ============================================================================
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  prometheus:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: prom/prometheus:v2.49.1
+    container_name: bugspotter-prometheus
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        printf '%s' "$${METRICS_AUTH_TOKEN}" > /etc/prometheus/metrics_token
+        cp /etc/prometheus/prometheus.yml /tmp/prometheus.yml
+        if [ -n "$${YC_PROMETHEUS_WRITE_URL}" ]; then
+          printf '%s' "$${YC_PROMETHEUS_API_KEY}" > /tmp/yc_api_key
+          cat >> /tmp/prometheus.yml <<REMOTE
+        remote_write:
+          - url: $${YC_PROMETHEUS_WRITE_URL}
+            bearer_token_file: /tmp/yc_api_key
+            queue_config:
+              max_samples_per_send: 2000
+              capacity: 10000
+        REMOTE
+        fi
+        exec /bin/prometheus \
+          --config.file=/tmp/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=90d \
+          --web.enable-lifecycle
+    environment:
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+      YC_PROMETHEUS_WRITE_URL: ${YC_PROMETHEUS_WRITE_URL:-}
+      YC_PROMETHEUS_API_KEY: ${YC_PROMETHEUS_API_KEY:-}
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - bugspotter
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9090/-/healthy']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  grafana:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: grafana/grafana:10.3.1
+    container_name: bugspotter-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3004}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - bugspotter
+    ports:
+      - '127.0.0.1:3004:3000'
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:3000/api/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  alertmanager:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: prom/alertmanager:v0.26.0
+    container_name: bugspotter-alertmanager
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9093/-/healthy']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
+  node-exporter:
+    <<: *default-logging
+    profiles: [host-metrics]
+    image: prom/node-exporter:v1.7.0
+    container_name: bugspotter-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - bugspotter
+    pid: host
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9100/metrics']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.05'
+
+  postgres-exporter:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: bugspotter-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@${POSTGRES_HOST:?POSTGRES_HOST is required}:6432/${POSTGRES_DB:-bugspotter}?sslmode=verify-full&sslrootcert=/etc/ssl/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/etc/ssl/certs/yandex-ca.pem:ro
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9187/metrics']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
+  redis-exporter:
+    <<: *default-logging
+    profiles: [monitoring]
+    image: oliver006/redis_exporter:v1.58.0-alpine
+    container_name: bugspotter-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: rediss://${REDIS_HOST:?REDIS_HOST is required}:6380
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      REDIS_EXPORTER_TLS_CA_CERT_FILE: /etc/ssl/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/etc/ssl/certs/yandex-ca.pem:ro
+    networks:
+      - bugspotter
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9121/metrics']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.05'
+
+  # ==========================================================================
+  # Application services — mount Yandex Cloud KZ CA certificate
+  # ==========================================================================
+  # NODE_EXTRA_CA_CERTS tells Node.js to trust the Yandex Cloud KZ private CA
+  # for all TLS connections (PostgreSQL, Redis/Valkey, S3, SMTP).
+  # The cert file is downloaded during VM setup (see YANDEX_CLOUD_DEPLOYMENT_GUIDE.md §11.3).
+  api:
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
+
+  worker:
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
+
+  payment-service:
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
+
+  # Dozzle — Real-time Docker Log Viewer
+  # The full definition lives in docker-compose.yml (base). This override only
+  # adds the production port binding. Keep this minimal — Docker Compose merges
+  # arrays (cap_drop, security_opt) by appending, so duplicating them here would
+  # cause a "must be unique" validation error.
+  dozzle:
+    ports:
+      - '127.0.0.1:9999:8080'
+
+volumes:
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+
+# Note: the bugspotter network is defined in the base docker-compose.yml.
+# Docker Compose merges top-level sections from all -f files, so services
+# here can reference networks: [bugspotter] without redefining it.

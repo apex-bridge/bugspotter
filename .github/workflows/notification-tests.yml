@@ -1,0 +1,87 @@
+name: Notification Integration Tests
+
+# This workflow runs integration tests for notification delivery (Email, Slack, Discord)
+# Requires GitHub secrets to be configured for each service
+# Only runs on protected branches to keep secrets secure
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch: # Also allow manual triggers
+
+jobs:
+  notification-tests:
+    name: Notification Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build types package
+        run: |
+          # Build @bugspotter/types first (required by backend)
+          pnpm --filter @bugspotter/types run build
+
+      - name: Create .env.integration from secrets
+        run: |
+          cat > packages/backend/.env.integration << EOF
+          # Enable integration tests
+          RUN_INTEGRATION_TESTS=true
+
+          # Email (SMTP/Gmail) - Variable names match test expectations
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT }}
+          SMTP_SECURE=true
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASS=${{ secrets.SMTP_PASS }}
+          EMAIL_FROM_ADDRESS=${{ secrets.SMTP_FROM }}
+          EMAIL_RECIPIENTS=${{ secrets.SMTP_TEST_RECIPIENT }}
+
+          # Slack
+          SLACK_TEST_WEBHOOK_URL=${{ secrets.SLACK_TEST_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN=${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_TEST_CHANNEL_ID=${{ secrets.SLACK_TEST_CHANNEL_ID }}
+
+          # Discord
+          DISCORD_TEST_WEBHOOK_URL=${{ secrets.DISCORD_TEST_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN=${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TEST_CHANNEL_ID=${{ secrets.DISCORD_TEST_CHANNEL_ID }}
+          EOF
+
+      - name: Run notification integration tests
+        run: |
+          # Run only the notification integration tests
+          # These tests will send actual messages to configured services
+          # Note: Must override vitest exclude pattern since tests/integration/** is excluded by default
+          pnpm --filter @bugspotter/backend exec vitest run tests/integration/email-delivery.test.ts --exclude=tests/load/**
+          pnpm --filter @bugspotter/backend exec vitest run tests/integration/slack-delivery.test.ts --exclude=tests/load/**
+          pnpm --filter @bugspotter/backend exec vitest run tests/integration/discord-delivery.test.ts --exclude=tests/load/**
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notification-test-results
+          path: packages/backend/test-results/
+          retention-days: 7
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Notification integration tests failed"
+          echo "Check test results artifact for details"

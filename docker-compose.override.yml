@@ -1,0 +1,86 @@
+# ============================================================================
+# Docker Compose Override - Development Environment
+# ============================================================================
+# This file is automatically loaded by `docker compose up` in development.
+# It exposes infrastructure ports on localhost (127.0.0.1) for local access
+# and restores depends_on ordering for local infrastructure services.
+#
+# SECURITY: These ports are NOT exposed in production docker-compose.yml
+# - Production deployments use internal Docker networking only
+# - 127.0.0.1 binding prevents external network access
+#
+# Usage:
+#   Development:  docker compose up -d  (COMPOSE_PROFILES=dev in .env activates
+#                 local infrastructure; see .env.example)
+#   Production:   docker compose -f docker-compose.yml up  (skips this file)
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # PostgreSQL - Database Access
+  # ==========================================================================
+  postgres:
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+
+  # ==========================================================================
+  # Redis - Queue & Cache Access
+  # ==========================================================================
+  redis:
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+
+  # ==========================================================================
+  # MinIO - S3-Compatible Storage
+  # ==========================================================================
+  minio:
+    ports:
+      - '127.0.0.1:${MINIO_PORT:-9000}:9000' # API port
+      - '127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001' # Console UI
+
+  # ==========================================================================
+  # App Services - Development depends_on
+  # ==========================================================================
+  # In production, managed services are used (no local postgres/redis/minio).
+  # In development, we need startup ordering for local infrastructure.
+  api:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  worker:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  payment-service:
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${PAYMENT_SERVICE_PORT:-3002}:3002'
+
+  # ==========================================================================
+  # Monitoring Stack - Development Access
+  # ==========================================================================
+  prometheus:
+    ports:
+      - '127.0.0.1:${PROMETHEUS_PORT:-9090}:9090'
+
+  grafana:
+    ports:
+      - '127.0.0.1:${GRAFANA_PORT:-3004}:3000'
+
+  dozzle:
+    ports:
+      - '127.0.0.1:${DOZZLE_PORT:-9999}:8080'

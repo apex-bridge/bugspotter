@@ -1,0 +1,30 @@
+{
+  "name": "@bugspotter/payment-service",
+  "version": "0.1.0",
+  "description": "BugSpotter payment service — provider-agnostic billing microservice",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@bugspotter/message-broker": "workspace:*",
+    "bullmq": "^5.61.0",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.6.1",
+    "ioredis": "^5.8.1",
+    "stripe": "^17.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

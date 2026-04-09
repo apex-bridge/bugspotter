@@ -1,0 +1,329 @@
+name: Deploy API
+
+# Workflow for independent Backend API deployments
+# Triggers when backend or its dependency packages change, enabling faster
+# deployments without requiring full admin CI to pass.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/backend/**'
+      - 'packages/types/**'
+      - 'packages/utils/**'
+      - 'packages/billing/**'
+      - 'packages/message-broker/**'
+      - '.github/workflows/deploy-api.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      skip_tests:
+        description: 'Skip tests (faster deploy)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/api
+
+jobs:
+  # ==========================================================================
+  # Lint Backend
+  # ==========================================================================
+  lint:
+    name: Lint Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint backend code
+        run: pnpm --filter @bugspotter/backend lint
+
+      - name: Check formatting
+        run: pnpm format:check
+
+  # ==========================================================================
+  # Test Backend
+  # ==========================================================================
+  test:
+    name: Test Backend
+    runs-on: ubuntu-latest
+    needs: [lint]
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    timeout-minutes: 15
+
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+      ENCRYPTION_KEY: ci_test_encryption_key_${{ github.run_id }}_${{ github.run_attempt }}_padding_to_ensure_min_length
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: '22'
+          pnpm-version: '9.14.4'
+
+      - name: Build types package
+        run: pnpm --filter @bugspotter/types build
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing build
+
+      - name: Run unit tests
+        run: pnpm --filter @bugspotter/backend test:unit
+
+      - name: Run API tests
+        run: pnpm --filter @bugspotter/backend test -- tests/api
+
+      - name: Run service tests
+        run: pnpm --filter @bugspotter/backend test -- tests/services
+
+      - name: Run database tests
+        run: pnpm --filter @bugspotter/backend test -- tests/db
+
+      - name: Run queue tests
+        run: pnpm --filter @bugspotter/backend test -- tests/queue
+
+      - name: Run retention tests
+        run: pnpm --filter @bugspotter/backend test -- tests/retention
+
+      - name: Run integration tests
+        run: pnpm --filter @bugspotter/backend test -- tests/integrations
+
+      - name: Run saas tests
+        run: pnpm --filter @bugspotter/backend test -- tests/saas
+
+  # ==========================================================================
+  # Build API
+  # ==========================================================================
+  build:
+    name: Build API
+    runs-on: ubuntu-latest
+    needs: [lint]
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/backend/Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==========================================================================
+  # Deploy to Staging
+  # ==========================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.ref == 'refs/heads/main' || 
+       github.event.inputs.environment == 'staging' ||
+       github.event.inputs.environment == 'production')
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_API_URL }}
+
+    steps:
+      - name: Deploy notification
+        run: |
+          echo "🚀 Deploying API to staging"
+          echo "Image: ${{ needs.build.outputs.image_tag }}"
+          echo "Digest: ${{ needs.build.outputs.image_digest }}"
+
+      # ⚠️ REQUIRED: Add your actual deployment steps here
+      # The workflow builds and pushes Docker images, but YOU must deploy them.
+      # Without deployment steps, the health check below verifies the OLD deployment!
+      #
+      # Example deployment steps:
+      #
+      # - Railway:
+      #   - name: Deploy to Railway
+      #     run: |
+      #       railway service update bugspotter-api \
+      #         --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+      #     env:
+      #       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      #
+      # - Kubernetes:
+      #   - name: Deploy to Kubernetes
+      #     run: |
+      #       kubectl set image deployment/api \
+      #         api=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
+      #         --namespace=staging
+      #
+      # - Docker Swarm:
+      #   - name: Deploy to Swarm
+      #     run: |
+      #       docker service update \
+      #         --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
+      #         bugspotter_api
+
+      - name: ⚠️ Deployment Step Missing
+        run: |
+          echo "::warning::No deployment step configured - health check will verify existing deployment"
+          echo "::warning::Add deployment steps above this step to deploy the new Docker image"
+          echo "::warning::See comments above for platform-specific examples"
+
+      - name: Verify deployment health
+        if: vars.STAGING_API_URL != ''
+        run: |
+          echo "Checking staging API health..."
+          for i in {1..15}; do
+            if curl -sf "${{ vars.STAGING_API_URL }}/ready" > /dev/null 2>&1; then
+              echo "✅ Staging API healthy"
+              exit 0
+            fi
+            echo "Waiting for API... ($i/15)"
+            sleep 10
+          done
+          echo "❌ Health check timed out - deployment failed or not responding"
+          exit 1
+
+  # ==========================================================================
+  # Deploy to Production
+  # ==========================================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, test, deploy-staging]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      needs.deploy-staging.result == 'success' &&
+      github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_API_URL }}
+
+    steps:
+      - name: Deploy notification
+        run: |
+          echo "🚀 Deploying API to production"
+          echo "Image: ${{ needs.build.outputs.image_tag }}"
+          echo "Digest: ${{ needs.build.outputs.image_digest }}"
+
+      # ⚠️ REQUIRED: Add your actual deployment steps here
+      # Should mirror staging deployment with production credentials/namespace.
+      # See staging deployment section above for platform-specific examples.
+
+      - name: ⚠️ Deployment Step Missing
+        run: |
+          echo "::warning::No deployment step configured - health check will verify existing deployment"
+          echo "::warning::Add deployment steps above this step to deploy the new Docker image"
+          echo "::warning::Use production credentials/namespace (not staging)"
+
+      - name: Verify deployment health
+        if: vars.PRODUCTION_API_URL != ''
+        run: |
+          echo "Checking production API health..."
+          for i in {1..15}; do
+            if curl -sf "${{ vars.PRODUCTION_API_URL }}/ready" > /dev/null 2>&1; then
+              echo "✅ Production API healthy"
+              exit 0
+            fi
+            echo "Waiting for API... ($i/15)"
+            sleep 10
+          done
+          echo "❌ Health check timed out - deployment failed or not responding"
+          exit 1
+
+  # ==========================================================================
+  # Summary
+  # ==========================================================================
+  summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [lint, build, test, deploy-staging, deploy-production]
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## API Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result == 'success' && '✅' || '❌' }} ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test.result == 'success' && '✅' || needs.test.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging | ${{ needs.deploy-staging.result == 'success' && '✅' || needs.deploy-staging.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.deploy-staging.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Production | ${{ needs.deploy-production.result == 'success' && '✅' || needs.deploy-production.result == 'skipped' && '⏭️' || '❌' }} ${{ needs.deploy-production.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build.outputs.image_digest }}" != "" ]; then
+            echo "### Image Details" >> $GITHUB_STEP_SUMMARY
+            echo "- **Digest**: \`${{ needs.build.outputs.image_digest }}\`" >> $GITHUB_STEP_SUMMARY
+          fi

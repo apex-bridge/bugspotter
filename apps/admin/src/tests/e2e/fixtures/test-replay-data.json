@@ -1,0 +1,205 @@
+{
+  "events": [
+    {
+      "type": 4,
+      "data": {
+        "href": "http://localhost:3000/test-page",
+        "width": 1920,
+        "height": 1080
+      },
+      "timestamp": 1700000000000
+    },
+    {
+      "type": 2,
+      "data": {
+        "node": {
+          "type": 0,
+          "childNodes": [
+            {
+              "type": 1,
+              "name": "html",
+              "publicId": "",
+              "systemId": "",
+              "id": 2
+            },
+            {
+              "type": 2,
+              "tagName": "html",
+              "attributes": {
+                "lang": "en"
+              },
+              "childNodes": [
+                {
+                  "type": 2,
+                  "tagName": "head",
+                  "attributes": {},
+                  "childNodes": [
+                    {
+                      "type": 2,
+                      "tagName": "title",
+                      "attributes": {},
+                      "childNodes": [
+                        {
+                          "type": 3,
+                          "textContent": "Test Page",
+                          "id": 6
+                        }
+                      ],
+                      "id": 5
+                    }
+                  ],
+                  "id": 4
+                },
+                {
+                  "type": 2,
+                  "tagName": "body",
+                  "attributes": {},
+                  "childNodes": [
+                    {
+                      "type": 2,
+                      "tagName": "div",
+                      "attributes": {
+                        "id": "root"
+                      },
+                      "childNodes": [
+                        {
+                          "type": 2,
+                          "tagName": "h1",
+                          "attributes": {},
+                          "childNodes": [
+                            {
+                              "type": 3,
+                              "textContent": "Welcome",
+                              "id": 10
+                            }
+                          ],
+                          "id": 9
+                        },
+                        {
+                          "type": 2,
+                          "tagName": "button",
+                          "attributes": {
+                            "id": "test-button"
+                          },
+                          "childNodes": [
+                            {
+                              "type": 3,
+                              "textContent": "Click Me",
+                              "id": 12
+                            }
+                          ],
+                          "id": 11
+                        }
+                      ],
+                      "id": 8
+                    }
+                  ],
+                  "id": 7
+                }
+              ],
+              "id": 3
+            }
+          ],
+          "id": 1
+        },
+        "initialOffset": {
+          "left": 0,
+          "top": 0
+        }
+      },
+      "timestamp": 1700000000100
+    },
+    {
+      "type": 3,
+      "data": {
+        "source": 2,
+        "type": 0,
+        "id": 11,
+        "x": 150,
+        "y": 200
+      },
+      "timestamp": 1700000001000
+    },
+    {
+      "type": 3,
+      "data": {
+        "source": 2,
+        "type": 1,
+        "id": 11,
+        "x": 150,
+        "y": 200
+      },
+      "timestamp": 1700000001100
+    },
+    {
+      "type": 3,
+      "data": {
+        "source": 2,
+        "type": 2,
+        "id": 11,
+        "x": 150,
+        "y": 200
+      },
+      "timestamp": 1700000001200
+    },
+    {
+      "type": 3,
+      "data": {
+        "source": 1,
+        "positions": [
+          {
+            "x": 100,
+            "y": 150,
+            "id": 7,
+            "timeOffset": 0
+          },
+          {
+            "x": 120,
+            "y": 170,
+            "id": 7,
+            "timeOffset": 50
+          },
+          {
+            "x": 140,
+            "y": 190,
+            "id": 7,
+            "timeOffset": 100
+          },
+          {
+            "x": 150,
+            "y": 200,
+            "id": 7,
+            "timeOffset": 150
+          }
+        ]
+      },
+      "timestamp": 1700000002000
+    },
+    {
+      "type": 3,
+      "data": {
+        "source": 3,
+        "id": 7,
+        "x": 0,
+        "y": 100
+      },
+      "timestamp": 1700000003000
+    },
+    {
+      "type": 3,
+      "data": {
+        "source": 3,
+        "id": 7,
+        "x": 0,
+        "y": 250
+      },
+      "timestamp": 1700000003500
+    }
+  ],
+  "metadata": {
+    "totalTime": 3500,
+    "width": 1920,
+    "height": 1080,
+    "url": "http://localhost:3000/test-page"
+  }
+}

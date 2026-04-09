@@ -1,0 +1,14 @@
+{
+  "name": "@bugspotter/backend-mock",
+  "version": "0.1.0",
+  "description": "Mock API server for BugSpotter testing and development",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  }
+}

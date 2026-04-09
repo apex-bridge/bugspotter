@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BugSpotter Demo - Experience Real Bugs</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="config.js"></script>
+    <style>
+      /* Buggy app specific styles */
+      .buggy-nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #1a365d;
+        color: #fff;
+        padding: 0.75rem 1.5rem;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+      .buggy-nav-brand {
+        font-weight: 700;
+        font-size: 1.1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .buggy-nav-links {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+      }
+      .buggy-nav-links a {
+        color: #bee3f8;
+        text-decoration: none;
+        font-size: 0.9rem;
+        padding: 0.4rem 0.75rem;
+        border-radius: 4px;
+        transition: background 0.15s;
+      }
+      .buggy-nav-links a:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .buggy-nav-links a.active {
+        background: rgba(255, 255, 255, 0.15);
+        color: #fff;
+      }
+
+      .buggy-page {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 1.5rem;
+      }
+      .buggy-hero {
+        text-align: center;
+        padding: 2rem 1rem;
+        margin-bottom: 1.5rem;
+        background: linear-gradient(135deg, #ebf8ff 0%, #e9d8fd 100%);
+        border-radius: 8px;
+      }
+      .buggy-hero h1 {
+        font-size: 1.8rem;
+        color: #1a365d;
+        margin: 0 0 0.5rem;
+      }
+      .buggy-hero p {
+        color: #4a5568;
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .bug-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1.25rem;
+        margin-bottom: 2rem;
+      }
+      .bug-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 1.25rem;
+        background: #fff;
+        transition: box-shadow 0.2s;
+      }
+      .bug-card:hover {
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+      }
+      .bug-card h3 {
+        margin: 0 0 0.5rem;
+        font-size: 1rem;
+        color: #2d3748;
+      }
+      .bug-card p {
+        margin: 0 0 1rem;
+        color: #718096;
+        font-size: 0.875rem;
+        line-height: 1.5;
+      }
+      .bug-card .badge {
+        display: inline-block;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+      }
+      .badge-crash {
+        background: #fed7d7;
+        color: #c53030;
+      }
+      .badge-network {
+        background: #fefcbf;
+        color: #975a16;
+      }
+      .badge-ux {
+        background: #c6f6d5;
+        color: #276749;
+      }
+      .badge-perf {
+        background: #e9d8fd;
+        color: #553c9a;
+      }
+
+      .bug-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.5rem 1rem;
+        background: #1a365d;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        transition: background 0.15s;
+      }
+      .bug-trigger:hover {
+        background: #2c5282;
+      }
+      .bug-trigger:disabled {
+        background: #a0aec0;
+        cursor: not-allowed;
+      }
+
+      /* Fake product cards for the "shop" */
+      .product-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 1rem;
+        margin: 1.5rem 0;
+      }
+      .product-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fff;
+      }
+      .product-img {
+        height: 140px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 3rem;
+        background: #f7fafc;
+      }
+      .product-info {
+        padding: 0.75rem;
+      }
+      .product-info h4 {
+        margin: 0 0 0.25rem;
+        font-size: 0.95rem;
+      }
+      .product-info .price {
+        color: #2f855a;
+        font-weight: 700;
+        margin: 0 0 0.5rem;
+      }
+
+      /* Toast notification */
+      .toast-container {
+        position: fixed;
+        bottom: 80px;
+        right: 24px;
+        z-index: 99998;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .toast {
+        background: #1a365d;
+        color: #fff;
+        padding: 0.75rem 1.25rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        font-size: 0.875rem;
+        max-width: 380px;
+        animation: toastIn 0.3s ease;
+        line-height: 1.5;
+      }
+      .toast a {
+        color: #90cdf4;
+        text-decoration: underline;
+      }
+      .toast.toast-success {
+        background: #276749;
+      }
+      .toast.toast-error {
+        background: #9b2c2c;
+      }
+      @keyframes toastIn {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      /* Checkout form */
+      .checkout-form {
+        max-width: 400px;
+        margin: 1rem 0;
+      }
+      .checkout-form input,
+      .checkout-form select {
+        width: 100%;
+        padding: 0.5rem;
+        margin-bottom: 0.75rem;
+        border: 1px solid #cbd5e0;
+        border-radius: 4px;
+        box-sizing: border-box;
+        font-size: 0.9rem;
+      }
+      .checkout-form label {
+        display: block;
+        font-size: 0.85rem;
+        color: #4a5568;
+        margin-bottom: 0.25rem;
+        font-weight: 500;
+      }
+
+      /* Broken image styling */
+      .product-img.broken {
+        background: #fff5f5;
+        color: #c53030;
+        font-size: 0.85rem;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+
+      /* Rage click target */
+      .rage-target {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.75rem 2rem;
+        background: #edf2f7;
+        border: 2px solid #e2e8f0;
+        border-radius: 6px;
+        color: #4a5568;
+        font-size: 0.9rem;
+        cursor: pointer;
+        user-select: none;
+        transition: background 0.1s;
+      }
+      .rage-target:active {
+        background: #e2e8f0;
+      }
+
+      /* Slow loading overlay */
+      .slow-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(255, 255, 255, 0.9);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      }
+      .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid #e2e8f0;
+        border-top-color: #1a365d;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .back-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        color: #fff;
+        text-decoration: none;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.12);
+        padding: 0.4rem 0.85rem;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        margin-left: 0.5rem;
+      }
+      .back-link:hover {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.22);
+      }
+
+      .section-title {
+        font-size: 1.25rem;
+        color: #1a365d;
+        margin: 2rem 0 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e2e8f0;
+      }
+
+      .how-it-works {
+        background: #f7fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 1.25rem;
+        margin-bottom: 2rem;
+      }
+      .how-it-works h3 {
+        margin: 0 0 0.75rem;
+        color: #2d3748;
+      }
+      .how-it-works ol {
+        margin: 0;
+        padding-left: 1.25rem;
+        color: #4a5568;
+        line-height: 1.8;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="buggy-nav">
+      <div class="buggy-nav-brand">
+        <span>ShopDemo</span>
+        <span style="font-size: 0.75rem; opacity: 0.6; font-weight: 400">
+          (powered by BugSpotter)
+        </span>
+      </div>
+      <div class="buggy-nav-links">
+        <a href="#" class="active" onclick="return false">Products</a>
+        <a href="#" id="nav-orders" onclick="triggerSlowPage(); return false">Orders</a>
+        <a href="#" onclick="return false">Account</a>
+        <a class="back-link" href="index.html">&larr; SDK Demo</a>
+      </div>
+    </nav>
+
+    <div class="buggy-page">
+      <!-- Hero -->
+      <div class="buggy-hero">
+        <h1>Experience Real-World Bugs</h1>
+        <p>
+          This fake e-commerce page has intentionally planted bugs. Trigger them and watch
+          BugSpotter capture everything automatically &mdash; then check the
+          <a
+            id="hero-admin-link"
+            href="https://app.kz.bugspotter.io/login"
+            target="_blank"
+            rel="noopener noreferrer"
+            style="color: #2c5282; font-weight: 600"
+            >Admin Panel</a
+          >
+          to see the full report.
+        </p>
+      </div>
+
+      <!-- How it works -->
+      <div class="how-it-works">
+        <h3>How this demo works</h3>
+        <ol>
+          <li>Click a <strong>"Trigger Bug"</strong> button below to simulate a real-world bug</li>
+          <li>
+            BugSpotter SDK <strong>automatically captures</strong> the error, console logs, network
+            requests, and session replay
+          </li>
+          <li>A bug report is submitted to the BugSpotter API</li>
+          <li>
+            Open the <strong>Admin Panel</strong> to see the full report with screenshot, replay,
+            and logs
+          </li>
+          <li>
+            If Jira is connected, a ticket is <strong>auto-created</strong> with all context
+            attached
+          </li>
+        </ol>
+      </div>
+
+      <!-- Bug Scenarios -->
+      <h2 class="section-title">Bug Scenarios</h2>
+      <div class="bug-grid">
+        <!-- 1: JS Crash -->
+        <div class="bug-card">
+          <span class="badge badge-crash">JS Crash</span>
+          <h3>Checkout Form Crash</h3>
+          <p>
+            Click "Buy Now" on a product. The checkout form has a bug that throws a TypeError when
+            processing the payment &mdash; a common production issue.
+          </p>
+          <button class="bug-trigger" onclick="triggerCheckoutCrash()">Trigger Bug</button>
+        </div>
+
+        <!-- 2: API 500 -->
+        <div class="bug-card">
+          <span class="badge badge-network">API Error</span>
+          <h3>Failed Product Load</h3>
+          <p>
+            Simulates a backend API returning 500 when fetching products. The SDK captures the
+            failed network request and the console error.
+          </p>
+          <button class="bug-trigger" onclick="triggerApi500()">Trigger Bug</button>
+        </div>
+
+        <!-- 3: Slow Page -->
+        <div class="bug-card">
+          <span class="badge badge-perf">Performance</span>
+          <h3>Slow Page Navigation</h3>
+          <p>
+            Navigate to "Orders" and experience a 4-second load. The session replay captures the
+            user waiting, and network logs show the slow request.
+          </p>
+          <button class="bug-trigger" onclick="triggerSlowPage()">Trigger Bug</button>
+        </div>
+
+        <!-- 4: Form Validation -->
+        <div class="bug-card">
+          <span class="badge badge-crash">Unhandled Error</span>
+          <h3>Form Validation Crash</h3>
+          <p>
+            Submit the checkout form with empty fields. Instead of showing a validation error, the
+            code throws an unhandled exception.
+          </p>
+          <button class="bug-trigger" onclick="triggerFormCrash()">Trigger Bug</button>
+        </div>
+
+        <!-- 5: Broken Image -->
+        <div class="bug-card">
+          <span class="badge badge-network">404 Error</span>
+          <h3>Missing Product Image</h3>
+          <p>
+            A product image fails to load (404). The broken image is visible in the session replay
+            and the failed request appears in network logs.
+          </p>
+          <button class="bug-trigger" onclick="triggerBrokenImage()">Trigger Bug</button>
+        </div>
+
+        <!-- 6: Rage Clicks -->
+        <div class="bug-card">
+          <span class="badge badge-ux">UX Issue</span>
+          <h3>Unresponsive Button (Rage Clicks)</h3>
+          <p>
+            A "Submit" button appears to do nothing. Click it rapidly to simulate user frustration
+            &mdash; the replay captures the rage click pattern.
+          </p>
+          <div style="margin-top: 0.5rem">
+            <div class="rage-target" id="rage-target">Submit Order</div>
+            <div
+              id="rage-counter"
+              style="font-size: 0.8rem; color: #a0aec0; margin-top: 0.5rem"
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fake Product Section -->
+      <h2 class="section-title">Products</h2>
+      <div class="product-grid" id="product-grid">
+        <div class="product-card">
+          <div class="product-img">&#x1F4BB;</div>
+          <div class="product-info">
+            <h4>Wireless Keyboard</h4>
+            <p class="price">$49.99</p>
+            <button class="bug-trigger" onclick="triggerCheckoutCrash()">Buy Now</button>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img">&#x1F5B1;</div>
+          <div class="product-info">
+            <h4>Ergonomic Mouse</h4>
+            <p class="price">$34.99</p>
+            <button class="bug-trigger" onclick="triggerCheckoutCrash()">Buy Now</button>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img" id="img-headphones">&#x1F3A7;</div>
+          <div class="product-info">
+            <h4>Noise Cancelling Headphones</h4>
+            <p class="price">$89.99</p>
+            <button class="bug-trigger" onclick="triggerCheckoutCrash()">Buy Now</button>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img">&#x1F4F1;</div>
+          <div class="product-info">
+            <h4>Phone Stand</h4>
+            <p class="price">$19.99</p>
+            <button class="bug-trigger" onclick="triggerCheckoutCrash()">Buy Now</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Checkout Form (hidden by default, shown on Buy Now) -->
+      <div id="checkout-section" style="display: none">
+        <h2 class="section-title">Checkout</h2>
+        <div class="checkout-form">
+          <label for="checkout-name">Full Name</label>
+          <input type="text" id="checkout-name" placeholder="John Doe" />
+          <label for="checkout-email">Email</label>
+          <input type="email" id="checkout-email" placeholder="john@example.com" />
+          <label for="checkout-card">Credit Card</label>
+          <input type="text" id="checkout-card" placeholder="4242 4242 4242 4242" />
+          <label for="checkout-country">Country</label>
+          <select id="checkout-country">
+            <option value="">Select country...</option>
+            <option value="us">United States</option>
+            <option value="uk">United Kingdom</option>
+            <option value="kz">Kazakhstan</option>
+          </select>
+          <br />
+          <button class="bug-trigger" onclick="triggerFormCrash()" style="margin-right: 0.5rem">
+            Submit (Buggy)
+          </button>
+          <button
+            class="bug-trigger"
+            style="background: #718096"
+            onclick="document.getElementById('checkout-section').style.display='none'"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- SDK Scripts -->
+    <script
+      src="https://cdn.bugspotter.io/sdk/bugspotter-latest.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      // ========================================================================
+      // Runtime config (same as demo.js)
+      // ========================================================================
+      const _cfg = window.__BUGSPOTTER_DEMO_CONFIG__ || {};
+      const _params = new URLSearchParams(location.search);
+
+      function isAllowedEndpoint(url) {
+        try {
+          const parsed = new URL(url);
+          return (
+            (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+            (parsed.hostname === 'localhost' ||
+              parsed.hostname === '127.0.0.1' ||
+              parsed.hostname.endsWith('.bugspotter.io'))
+          );
+        } catch {
+          return false;
+        }
+      }
+
+      const _rawEndpoint = _cfg.endpoint || _params.get('api') || 'http://localhost:4000';
+
+      // Normalize to origin — SDK v2 expects base URL, appends paths internally
+      function getBaseUrl(url) {
+        try {
+          return new URL(url).origin;
+        } catch {
+          return url;
+        }
+      }
+
+      const DEMO_CONFIG = {
+        endpoint: isAllowedEndpoint(_rawEndpoint)
+          ? getBaseUrl(_rawEndpoint)
+          : 'http://localhost:4000',
+        apiKey: _cfg.apiKey || _params.get('key') || 'demo-api-key-12345',
+        adminUrl: _cfg.adminUrl || _params.get('admin') || '',
+      };
+
+      // Build admin panel URL (with magic token if available)
+      // Falls back to hardcoded production URL if config is empty
+      var ADMIN_FALLBACK = 'https://app.kz.bugspotter.io/login';
+      function getAdminHref() {
+        if (!DEMO_CONFIG.adminUrl || !isAllowedEndpoint(DEMO_CONFIG.adminUrl))
+          return ADMIN_FALLBACK;
+        let href = DEMO_CONFIG.adminUrl;
+        if (_cfg.magicToken) {
+          try {
+            const url = new URL(href);
+            if (!url.pathname.endsWith('/login')) {
+              url.pathname = url.pathname.replace(/\/$/, '') + '/login';
+            }
+            url.searchParams.set('token', _cfg.magicToken);
+            href = url.href;
+          } catch (_) {
+            /* keep original href if URL parsing fails */
+          }
+        }
+        return href;
+      }
+
+      // Set admin panel link (use config URL if available, keep HTML default otherwise)
+      const adminLink = document.getElementById('hero-admin-link');
+      const adminHref = getAdminHref();
+      if (adminHref) {
+        adminLink.href = adminHref;
+      }
+
+      // ========================================================================
+      // Initialize BugSpotter SDK
+      // ========================================================================
+      var bugSpotterReady = BugSpotter.init({
+        endpoint: DEMO_CONFIG.endpoint,
+        apiKey: DEMO_CONFIG.apiKey,
+        showWidget: true,
+        replay: {
+          enabled: true,
+          duration: 30,
+          sampling: { mousemove: 50, scroll: 100 },
+        },
+        sanitize: {
+          enabled: true,
+          patterns: 'all', // Redacts emails, phones, credit cards, IINs, IPs
+        },
+      });
+      bugSpotterReady
+        .then(function () {
+          console.log('[BuggyApp] BugSpotter SDK initialized');
+        })
+        .catch(function (err) {
+          console.error('[BuggyApp] BugSpotter SDK init failed:', err);
+        });
+
+      // Helper: get SDK instance (awaits init if still in progress)
+      async function getSDK() {
+        return await bugSpotterReady;
+      }
+
+      // ========================================================================
+      // Toast notifications
+      // ========================================================================
+      function showToast(contentOrText, type = 'info', duration = 6000) {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (type !== 'info' ? ' toast-' + type : '');
+        if (contentOrText instanceof DocumentFragment || contentOrText instanceof HTMLElement) {
+          toast.appendChild(contentOrText);
+        } else {
+          toast.textContent = contentOrText;
+        }
+        container.appendChild(toast);
+        setTimeout(() => {
+          toast.style.opacity = '0';
+          toast.style.transition = 'opacity 0.3s';
+          setTimeout(() => toast.remove(), 300);
+        }, duration);
+      }
+
+      function bugCapturedToast(title) {
+        const frag = document.createDocumentFragment();
+        const strong = document.createElement('strong');
+        strong.textContent = 'Bug captured!';
+        frag.appendChild(strong);
+        frag.appendChild(document.createElement('br'));
+        frag.appendChild(document.createTextNode(title));
+        const href = getAdminHref();
+        if (href) {
+          const link = document.createElement('a');
+          link.href = href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = ' View in Admin Panel \u2192';
+          frag.appendChild(link);
+        }
+        showToast(frag, 'success', 8000);
+      }
+
+      // ========================================================================
+      // Submit bug report helper
+      // ========================================================================
+      async function submitReport(title, description, report) {
+        try {
+          var sdk = await getSDK();
+          await sdk.submit({ title, description, report });
+          console.log('[BuggyApp] Report submitted:', title);
+          bugCapturedToast(title);
+        } catch (err) {
+          console.error('[BuggyApp] Failed to submit report:', err);
+          showToast('Failed to submit report: ' + (err.message || String(err)), 'error');
+        }
+      }
+
+      // ========================================================================
+      // Bug 1: Checkout form crash (TypeError)
+      // ========================================================================
+      function triggerCheckoutCrash() {
+        document.getElementById('checkout-section').style.display = 'block';
+        document.getElementById('checkout-section').scrollIntoView({ behavior: 'smooth' });
+
+        // Simulate filling in the form
+        setTimeout(async () => {
+          document.getElementById('checkout-name').value = 'Jane Doe';
+          document.getElementById('checkout-email').value = 'jane@example.com';
+          document.getElementById('checkout-card').value = '4242 4242 4242 4242';
+          document.getElementById('checkout-country').value = 'us';
+
+          // Trigger the bug: call a method on undefined
+          try {
+            console.log('[Checkout] Processing payment for jane@example.com');
+            console.log('[Checkout] Billing card: 4242 4242 4242 4242');
+            console.log('[Checkout] Phone: +1 (202) 555-0199');
+            console.log('[Checkout] IIN: 990101300001');
+            const paymentProcessor = undefined;
+            // This line throws: TypeError: Cannot read properties of undefined
+            paymentProcessor.processPayment({
+              amount: 49.99,
+              card: '4242424242424242',
+            });
+          } catch (error) {
+            console.error('[Checkout] Payment crashed for jane@example.com:', error.message);
+            showToast('Payment failed: ' + error.message, 'error');
+
+            // Capture and submit
+            var sdk = await getSDK();
+            const report = await sdk.capture();
+            await submitReport(
+              'Checkout payment crash: ' + error.message,
+              'The checkout form crashed when processing payment. TypeError thrown because paymentProcessor is undefined. User was on the checkout page with a filled form.',
+              report
+            );
+          }
+        }, 500);
+      }
+
+      // ========================================================================
+      // Bug 2: API returns 500
+      // ========================================================================
+      async function triggerApi500() {
+        console.log('[Products] Fetching product list...');
+        showToast('Loading products...', 'info', 2000);
+
+        try {
+          // This will fail with a network error or 404/500
+          const resp = await fetch(DEMO_CONFIG.endpoint + '/products?limit=50', {
+            headers: { 'X-API-Key': DEMO_CONFIG.apiKey },
+          });
+
+          if (!resp.ok) {
+            throw new Error('API returned ' + resp.status + ' ' + resp.statusText);
+          }
+        } catch (error) {
+          console.error('[Products] API request failed:', error.message);
+          showToast('Product load failed: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Product API failure: ' + error.message,
+            'The /products endpoint returned an error when loading the product list. This blocks the entire product page from rendering. The user sees no products.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 3: Slow page load (4 second delay)
+      // ========================================================================
+      function triggerSlowPage() {
+        console.log('[Orders] Navigating to orders page...');
+        console.time('[Orders] Page load time');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'slow-overlay';
+        overlay.id = 'slow-overlay';
+        const spinner = document.createElement('div');
+        spinner.className = 'spinner';
+        overlay.appendChild(spinner);
+        const loadingText = document.createElement('p');
+        Object.assign(loadingText.style, { marginTop: '1rem', color: '#4a5568' });
+        loadingText.textContent = 'Loading orders...';
+        overlay.appendChild(loadingText);
+        document.body.appendChild(overlay);
+
+        // Simulate a slow API call
+        const start = performance.now();
+        setTimeout(async () => {
+          console.timeEnd('[Orders] Page load time');
+          const elapsed = Math.round(performance.now() - start);
+          console.warn('[Orders] Slow page load: ' + elapsed + 'ms (threshold: 1000ms)');
+          overlay.remove();
+          showToast('Orders loaded in ' + (elapsed / 1000).toFixed(1) + 's (very slow!)', 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Slow page load: Orders took ' + (elapsed / 1000).toFixed(1) + 's',
+            'The Orders page took over 4 seconds to load. Performance threshold is 1000ms. Users experience a blocking spinner during this time, leading to poor UX and potential abandonment.',
+            report
+          );
+        }, 4000);
+      }
+
+      // ========================================================================
+      // Bug 4: Form validation crash
+      // ========================================================================
+      async function triggerFormCrash() {
+        document.getElementById('checkout-section').style.display = 'block';
+
+        // Clear the form to trigger the validation bug
+        document.getElementById('checkout-name').value = '';
+        document.getElementById('checkout-email').value = '';
+        document.getElementById('checkout-card').value = '';
+        document.getElementById('checkout-country').value = '';
+
+        console.log('[Form] Validating form for user admin@example.com');
+        console.log('[Form] Contact phone: +7 (777) 555-0100');
+
+        try {
+          // Bug: code assumes form values are always present and calls .trim().split()
+          const name = document.getElementById('checkout-name').value;
+          const parts = name.trim().split(' ');
+          const firstName = parts[0];
+          const lastName = parts[1]; // undefined when name is empty
+          // This throws: TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+          const formatted = firstName.toUpperCase() + ' ' + lastName.toUpperCase();
+          console.log(formatted);
+        } catch (error) {
+          console.error('[Form] Validation crash:', error.message);
+          showToast('Form error: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Form validation crash: ' + error.message,
+            'Submitting the checkout form with empty fields causes an unhandled TypeError. The code assumes the name field always has a first and last name separated by a space, but crashes when it is empty.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 5: Broken product image (404)
+      // ========================================================================
+      async function triggerBrokenImage() {
+        console.log('[Products] Loading product images...');
+        const imgDiv = document.getElementById('img-headphones');
+        imgDiv.className = 'product-img broken';
+        imgDiv.textContent = '';
+
+        const img = document.createElement('img');
+        img.src = DEMO_CONFIG.endpoint + '/images/headphones.png'; // 404
+        img.alt = 'Headphones';
+        img.style.maxWidth = '100%';
+        img.onerror = async function () {
+          console.error('[Products] Image failed to load: ' + img.src);
+          imgDiv.textContent = '';
+          const warnIcon = document.createElement('span');
+          warnIcon.style.fontSize = '2rem';
+          warnIcon.textContent = '\u26A0';
+          imgDiv.appendChild(warnIcon);
+          const notFound = document.createElement('span');
+          notFound.textContent = 'Image not found';
+          imgDiv.appendChild(notFound);
+
+          showToast('Product image failed to load (404)', 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Broken product image: 404 on headphones.png',
+            'The product image for "Noise Cancelling Headphones" returns a 404 error. The broken image is visible in the page and the session replay. This degrades the shopping experience.',
+            report
+          );
+        };
+        imgDiv.appendChild(img);
+      }
+
+      // ========================================================================
+      // Bug 6: Rage clicks on unresponsive button
+      // ========================================================================
+      (function () {
+        const target = document.getElementById('rage-target');
+        const counter = document.getElementById('rage-counter');
+        let clicks = 0;
+        let reported = false;
+
+        target.addEventListener('click', async function () {
+          clicks++;
+          counter.textContent = clicks + ' click(s) — nothing happens...';
+
+          // Detect rage clicks (6+ clicks)
+          if (clicks >= 6 && !reported) {
+            reported = true;
+            console.warn('[UX] Rage clicks detected: ' + clicks + ' clicks on unresponsive button');
+            showToast('Rage clicks detected! (' + clicks + ' clicks)', 'error');
+
+            var sdk = await getSDK();
+            const report = await sdk.capture();
+            await submitReport(
+              'Rage clicks detected: user clicked "Submit Order" ' + clicks + ' times',
+              'The "Submit Order" button appears to do nothing, causing the user to click it ' +
+                clicks +
+                ' times in frustration. This is a strong signal of a UX issue. The session replay captures the rage click pattern.',
+              report
+            );
+
+            // Reset after a delay
+            setTimeout(() => {
+              clicks = 0;
+              reported = false;
+              counter.textContent = '';
+            }, 10000);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

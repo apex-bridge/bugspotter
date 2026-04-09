@@ -1,0 +1,137 @@
+# ============================================================================
+# BugSpotter - Development Dependencies
+# ============================================================================
+# Minimal setup for local development - only runs postgres, redis, and minio
+# Run backend and admin locally with: pnpm dev
+#
+# SECURITY: This file requires environment variables from .env file.
+# Copy .env.example to .env and configure before using this compose file.
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # PostgreSQL Database
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: bugspotter-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bugspotter}
+      POSTGRES_USER: ${POSTGRES_USER:-bugspotter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set in .env file}
+      POSTGRES_INITDB_ARGS: '-E UTF8 --locale=en_US.UTF-8'
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-bugspotter} -d ${POSTGRES_DB:-bugspotter}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # Redis Cache & Queue
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: bugspotter-redis-dev
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required - set in .env file}
+    volumes:
+      - redis_data_dev:/data
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD-SHELL', 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+
+  # ==========================================================================
+  # MinIO S3-Compatible Storage
+  # ==========================================================================
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: bugspotter-minio-dev
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set in .env file}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set in .env file}
+    volumes:
+      - minio_data_dev:/data
+    ports:
+      - '${MINIO_PORT:-9000}:9000' # API port
+      - '${MINIO_CONSOLE_PORT:-9001}:9001' # Console UI
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ==========================================================================
+  # MinIO Client - Create Bucket and Service Account on Startup
+  # ==========================================================================
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    container_name: bugspotter-minio-init-dev
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - set in .env file}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - set in .env file}
+      MINIO_BUCKET: ${MINIO_BUCKET:-bugspotter}
+      # Service account credentials (least-privilege access)
+      MINIO_APP_ACCESS_KEY: ${MINIO_APP_ACCESS_KEY:-bugspotter-app}
+      MINIO_APP_SECRET_KEY: ${MINIO_APP_SECRET_KEY:?MINIO_APP_SECRET_KEY is required - set in .env file}
+    volumes:
+      - ./scripts/init-minio.sh:/init-minio.sh:ro
+    entrypoint: ['/bin/sh', '/init-minio.sh']
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+
+# ============================================================================
+# Named Volumes (separate from production)
+# ============================================================================
+volumes:
+  postgres_data_dev:
+    driver: local
+  redis_data_dev:
+    driver: local
+  minio_data_dev:
+    driver: local

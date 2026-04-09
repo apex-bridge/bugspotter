@@ -1,0 +1,33 @@
+{
+  "name": "@bugspotter/utils",
+  "version": "0.1.0",
+  "description": "Shared utilities for BugSpotter SDK and backend",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "bugspotter",
+    "sanitization",
+    "redaction",
+    "pii"
+  ],
+  "author": "BugSpotter Team",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^3.2.4",
+    "@vitest/coverage-v8": "^3.2.4"
+  }
+}

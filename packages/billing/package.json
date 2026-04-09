@@ -1,0 +1,29 @@
+{
+  "name": "@bugspotter/billing",
+  "version": "0.1.0",
+  "description": "BugSpotter billing module — regional plugin-based invoice billing",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "tsc --watch",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "pdfkit": "^0.18.0"
+  },
+  "peerDependencies": {
+    "pg": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "@types/pdfkit": "^0.17.5",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

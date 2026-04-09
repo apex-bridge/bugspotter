@@ -1,0 +1,57 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/prometheus-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # BugSpotter API (Fastify + prom-client)
+  # Container port is pinned to 3000 in docker-compose.yml — do not change independently.
+  # If METRICS_AUTH_TOKEN is set, Prometheus must send the same token.
+  - job_name: bugspotter-api
+    bearer_token_file: /etc/prometheus/metrics_token
+    static_configs:
+      - targets: ['api:3000']
+
+  # BugSpotter Worker (prom-client)
+  # Worker health port defaults to 3001 — do not set WORKER_HEALTH_PORT without updating here.
+  - job_name: bugspotter-worker
+    bearer_token_file: /etc/prometheus/metrics_token
+    static_configs:
+      - targets: ['worker:3001']
+
+  # Node Exporter (host system metrics)
+  - job_name: node-exporter
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # PostgreSQL Exporter
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  # Redis Exporter
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # Intelligence Service (Python/FastAPI)
+  # Uses DNS discovery — only scrapes when intelligence profile is active
+  - job_name: intelligence
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ['intelligence']
+        type: A
+        port: 8000

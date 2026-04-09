@@ -1,0 +1,213 @@
+/**
+ * Resource utilities
+ * Common resource operations and checks
+ */
+
+import { AppError } from '../middleware/error.js';
+import { isPlatformAdmin } from '../middleware/auth.js';
+import type { User, Project, ApiKey, OrgMemberRole } from '../../db/types.js';
+import type { DatabaseClient } from '../../db/client.js';
+import type { ProjectRole } from '../../types/project-roles.js';
+import {
+  hasPermissionLevel,
+  isProjectRole,
+  getInheritedProjectRole,
+} from '../../types/project-roles.js';
+import { checkProjectPermission } from '../../services/api-key/key-permissions.js';
+
+/**
+ * Look up inherited project role from org membership.
+ * Fetches project → org → membership from DB, then maps via shared getInheritedProjectRole.
+ * Returns null if no inheritance applies (no org, not a member).
+ */
+async function lookupInheritedProjectRole(
+  projectId: string,
+  userId: string,
+  db: DatabaseClient
+): Promise<ProjectRole | null> {
+  const project = await db.projects.findById(projectId);
+  if (!project?.organization_id) {
+    return null;
+  }
+
+  const { membership } = await db.organizationMembers.checkOrganizationAccess(
+    project.organization_id,
+    userId
+  );
+  if (!membership) {
+    return null;
+  }
+
+  return getInheritedProjectRole(membership.role as OrgMemberRole);
+}
+
+/**
+ * Find a resource or throw 404 error
+ */
+export async function findOrThrow<T>(
+  findFn: () => Promise<T | null>,
+  resourceName: string
+): Promise<T> {
+  const resource = await findFn();
+
+  if (!resource) {
+    throw new AppError(`${resourceName} not found`, 404, 'NotFound');
+  }
+
+  return resource;
+}
+
+/**
+ * Check if user has permission to perform an action on a resource
+ * Uses the permissions table for fine-grained access control
+ */
+export async function checkPermission(
+  authUser: User | undefined,
+  resource: string,
+  action: string,
+  db: DatabaseClient
+): Promise<void> {
+  if (!authUser) {
+    throw new AppError('Authentication required', 401, 'Unauthorized');
+  }
+
+  // Platform admins always have permission
+  if (isPlatformAdmin(authUser)) {
+    return;
+  }
+
+  // Check permission in database
+  const hasPermission = await db.query(
+    'SELECT 1 FROM permissions WHERE role = $1 AND resource = $2 AND action = $3',
+    [authUser.role, resource, action]
+  );
+
+  if (hasPermission.rows.length === 0) {
+    throw new AppError(`Insufficient permissions to ${action} ${resource}`, 403, 'Forbidden');
+  }
+}
+
+/**
+ * Check if user has access to a project resource
+ * For JWT authenticated users, verifies project ownership or membership
+ * For API keys with allowed_projects, verifies project is in the allowed list
+ * For full-scope API keys (null/empty allowed_projects), grants unrestricted access
+ * Optionally checks permissions for specific resource/action
+ * Optionally enforces a minimum project role (e.g., 'admin' for config changes)
+ *
+ * **Authentication Precedence**: When multiple authentication methods are present:
+ * 1. JWT user authentication takes highest priority (user's project permissions are checked)
+ * 2. Project-scoped API keys (authProject) are checked next
+ * 3. Multi-project/full-scope API keys (options.apiKey without authProject) are checked last
+ *
+ * This ensures that even if a full-scope API key is provided alongside a JWT token,
+ * the user's permissions are still enforced, preventing privilege escalation.
+ */
+export async function checkProjectAccess(
+  projectId: string,
+  authUser: User | undefined,
+  authProject: Project | undefined,
+  db: DatabaseClient,
+  resourceName: string = 'Resource',
+  options?: {
+    /** Resource name for permission check (e.g., 'integration_rules') */
+    resource?: string;
+    /** Action for permission check (e.g., 'read', 'create', 'update', 'delete') */
+    action?: string;
+    /** Full-scope API key (for routes using requireAuth instead of requireProjectAccess middleware) */
+    apiKey?: ApiKey;
+    /** Minimum project role required (e.g., 'admin' for config, 'member' for data). API keys bypass this. */
+    minProjectRole?: ProjectRole;
+  }
+): Promise<void> {
+  // API key authentication without JWT user — verify project permission via API key rules
+  // This handles both full-scope keys and multi-project keys
+  // (Single-project keys set authProject and skip this branch)
+  // Note: API keys bypass minProjectRole — they authenticate as a machine, not a project member
+  if (options?.apiKey && !authUser) {
+    const permission = checkProjectPermission(options.apiKey, projectId);
+    if (!permission.allowed) {
+      throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
+    }
+    // If authProject is set (single-project key), verify it matches
+    if (authProject && authProject.id !== projectId) {
+      throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
+    }
+    return;
+  }
+
+  // Project-scoped API key authentication - project must match
+  // Note: API keys bypass minProjectRole
+  if (authProject) {
+    if (authProject.id !== projectId) {
+      throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
+    }
+    return;
+  }
+
+  // JWT authentication - check user access
+  // This takes precedence over full-scope API keys to prevent privilege escalation
+  if (authUser) {
+    // Platform admins have access to everything
+    if (isPlatformAdmin(authUser)) {
+      return;
+    }
+
+    // If resource and action specified, check system-level permissions first
+    if (options?.resource && options?.action) {
+      await checkPermission(authUser, options.resource, options.action, db);
+    }
+
+    // If minProjectRole specified, check effective role = max(explicit, inherited)
+    if (options?.minProjectRole) {
+      const explicitRole = await db.projects.getUserRole(projectId, authUser.id);
+      const inheritedRole = await lookupInheritedProjectRole(projectId, authUser.id, db);
+
+      // Pick the higher of explicit and inherited
+      let effectiveRole: ProjectRole | null = null;
+      const explicit = explicitRole && isProjectRole(explicitRole) ? explicitRole : null;
+      if (explicit && inheritedRole) {
+        effectiveRole = hasPermissionLevel(explicit, inheritedRole) ? explicit : inheritedRole;
+      } else {
+        effectiveRole = explicit ?? inheritedRole;
+      }
+
+      if (!effectiveRole) {
+        throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
+      }
+      if (!hasPermissionLevel(effectiveRole, options.minProjectRole)) {
+        throw new AppError(
+          `Insufficient project role for ${resourceName}. Requires ${options.minProjectRole} or above.`,
+          403,
+          'Forbidden'
+        );
+      }
+      return;
+    }
+
+    // Fallback: check boolean membership (backward compatible)
+    const hasAccess = await db.projects.hasAccess(projectId, authUser.id);
+    if (!hasAccess) {
+      // Check org inheritance as fallback
+      const inheritedRole = await lookupInheritedProjectRole(projectId, authUser.id, db);
+      if (!inheritedRole) {
+        throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
+      }
+    }
+    return;
+  }
+
+  // No authentication provided
+  throw new AppError('Authentication required', 401, 'Unauthorized');
+}
+
+/**
+ * Remove sensitive fields from an object
+ */
+export function omitFields<T, K extends keyof T>(obj: T, ...fields: K[]): Omit<T, K> {
+  const result = { ...obj } as T;
+  for (const field of fields) {
+    delete (result as Record<string, unknown>)[field as string];
+  }
+  return result as Omit<T, K>;
+}

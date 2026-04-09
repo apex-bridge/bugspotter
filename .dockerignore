@@ -1,0 +1,78 @@
+# Dependencies
+**/node_modules/
+**/.pnpm-store/
+
+# Build outputs
+**/dist/
+**/*.tsbuildinfo
+
+# Test files and coverage
+**/tests/
+**/test-storage/
+**/coverage/
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+**/vitest.*.config.ts
+**/playwright.config.ts
+**/test-results/
+**/playwright-report/
+
+# Documentation
+**/*.md
+!README.md
+!packages/backend/README.md
+**/docs/
+**/examples/
+
+# Development files
+**/.env
+**/.env.local
+**/.env.*.local
+**/tsconfig.typecheck.json
+
+# IDE and editor files
+**/.vscode/
+**/.idea/
+**/*.swp
+**/*.swo
+**/*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+
+# Logs
+**/logs/
+**/*.log
+**/npm-debug.log*
+**/pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Scripts (exclude by default, whitelist specific needed scripts)
+**/scripts/
+!scripts/shared/
+!scripts/unified-entrypoint.sh
+!packages/backend/scripts/copy-migrations.mjs
+
+# Archive and temp files
+**/.archive/
+**/tmp/
+**/temp/
+
+# Widget package (not needed in backend container)
+packages/widget/
+
+# Demo app (not needed in backend container)
+apps/demo/
+
+# Backend mock (not needed in production)
+packages/backend-mock/

@@ -1,0 +1,117 @@
+name: 'Setup Node with Native Build Tools'
+description: 'Install Node.js with pnpm and native build dependencies for isolated-vm'
+
+inputs:
+  node-version:
+    description: 'Node.js version to use'
+    required: false
+    default: '22'
+  pnpm-version:
+    description: 'pnpm version to use'
+    required: false
+    default: '10.17.1'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'pnpm'
+
+    - name: Install build dependencies for native modules
+      shell: bash
+      run: |
+        # Install build tools required for isolated-vm native compilation
+        sudo apt-get update
+        sudo apt-get install -y build-essential python3
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        # Try to use prebuilt binaries first (faster and avoids compilation issues)
+        pnpm install --frozen-lockfile || {
+          echo "❌ Install with prebuilts failed, attempting build from source..."
+          pnpm install --frozen-lockfile --force
+        }
+
+    - name: Rebuild native modules
+      shell: bash
+      run: |
+        # Skip rebuilding isolated-vm if prebuilt binary is already working
+        echo "🔍 Checking if isolated-vm is already functional..."
+
+        WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
+        BACKEND_DIR="$WORKSPACE/packages/backend"
+
+        cd "$BACKEND_DIR"
+
+        # Test if isolated-vm loads successfully
+        if NODE_OPTIONS="--no-node-snapshot" node -e "require('isolated-vm'); console.log('✅ isolated-vm prebuilt binary works')"; then
+          echo "✅ Using prebuilt binary, skipping rebuild"
+          exit 0
+        fi
+
+        echo "⚠️ Prebuilt binary not working, attempting rebuild from source..."
+
+        # Use GITHUB_WORKSPACE for robust path handling across different contexts
+        WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
+        BACKEND_DIR="$WORKSPACE/packages/backend"
+
+        echo "📂 Workspace: $WORKSPACE"
+        echo "📂 Backend: $BACKEND_DIR"
+
+        # Find the actual isolated-vm module path in pnpm's virtual store
+        cd "$BACKEND_DIR"
+        ISOLATED_VM_PATH=$(node -e "try { console.log(require.resolve('isolated-vm')); } catch(e) { process.exit(1); }")
+        if [ -z "$ISOLATED_VM_PATH" ]; then
+          echo "❌ Cannot resolve isolated-vm module path"
+          exit 1
+        fi
+
+        ISOLATED_VM_DIR=$(dirname "$ISOLATED_VM_PATH")
+        echo "📍 isolated-vm located at: $ISOLATED_VM_DIR"
+
+        # Navigate to the module directory and build with node-gyp directly
+        cd "$ISOLATED_VM_DIR"
+
+        # Use node-gyp from backend package's node_modules (installed as devDependency)
+        # This avoids global installation conflicts and caching issues
+        NODE_GYP="$(cd "$BACKEND_DIR" && node -e 'console.log(require.resolve("node-gyp/bin/node-gyp.js"))')"
+        if [ ! -f "$NODE_GYP" ]; then
+          echo "❌ node-gyp not found in backend node_modules - ensure it's in devDependencies"
+          exit 1
+        fi
+        echo "✅ Using node-gyp from: $NODE_GYP"
+
+        # Clean any previous build attempts
+        rm -rf build out
+
+        # Build the native module with NODE_OPTIONS for Node.js 20+ compatibility
+        echo "Running node-gyp rebuild with --no-node-snapshot..."
+        export NODE_OPTIONS="--no-node-snapshot"
+        if node "$NODE_GYP" rebuild; then
+          echo "✅ isolated-vm built successfully"
+        else
+          echo "❌ node-gyp rebuild failed"
+          exit 1
+        fi
+
+        # Verify the build artifacts exist
+        if [ ! -d "out" ]; then
+          echo "❌ Build artifacts still missing after node-gyp rebuild"
+          ls -la .
+          exit 1
+        fi
+
+        echo "✅ isolated-vm build artifacts verified"
+        ls -la out/
+
+        # Return to workspace root
+        cd "$WORKSPACE"

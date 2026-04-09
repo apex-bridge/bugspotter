@@ -1,0 +1,22 @@
+{
+  "name": "@bugspotter/message-broker",
+  "version": "0.1.0",
+  "description": "Transport-agnostic message broker interfaces with BullMQ adapter",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "bullmq": "^5.61.0",
+    "ioredis": "^5.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.18"
+  }
+}
