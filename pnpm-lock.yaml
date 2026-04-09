@@ -5,12 +5,11 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  fast-jwt: '>=5.0.7'
-  handlebars: '>=4.7.9'
-  picomatch: '>=4.0.2'
-  path-to-regexp: '>=8.0.0'
-  lodash: '>=4.17.22'
-  brace-expansion: '>=2.0.2'
+  fast-jwt: ^6.2.1
+  handlebars: ^4.7.9
+  picomatch: ^4.0.2
+  lodash: ^4.18.1
+  brace-expansion: ^2.0.2
 
 importers:
 
@@ -319,7 +318,7 @@ importers:
         specifier: ^5.1.0
         version: 5.1.0
       handlebars:
-        specifier: '>=4.7.9'
+        specifier: ^4.7.9
         version: 4.7.9
       ioredis:
         specifier: ^5.8.1
@@ -4121,8 +4120,8 @@ packages:
   fast-json-stringify@6.1.1:
     resolution: {integrity: sha512-DbgptncYEXZqDUOEl4krff4mUiVrTZZVI7BBrQR/T3BqMj/eM1flTC1Uk2uUoLcWCxjT95xKulV/Lc6hhOZsBQ==}
 
-  fast-jwt@6.0.2:
-    resolution: {integrity: sha512-dTF4bhYnuXhZYQUaxsHKqAyA5y/L/kQc4fUu0wQ0BSA0dMfcNrcv0aqR2YnVi4f7e1OnzDVU7sDsNdzl1O5EVA==}
+  fast-jwt@6.2.1:
+    resolution: {integrity: sha512-tmXFiZpaFGm18TjhWE5bIQ6OoJGFifAQzW3g2H+HhHfmpvsjSswXt8i8RpI2u4EgyBugXiOTXvBMHXrs2hOg+w==}
     engines: {node: '>=20'}
 
   fast-levenshtein@2.0.6:
@@ -4161,7 +4160,7 @@ packages:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
     peerDependencies:
-      picomatch: '>=4.0.2'
+      picomatch: ^4.0.2
     peerDependenciesMeta:
       picomatch:
         optional: true
@@ -5369,8 +5368,11 @@ packages:
     resolution: {integrity: sha512-ypGJsmGtdXUOeM5u93TyeIEfEhM6s+ljAhrk5vAvSx8uyY/02OvrZnA0YNGUrPXfpJMgI1ODd3nwz8Npx4O4cg==}
     engines: {node: 20 || >=22}
 
-  path-to-regexp@8.4.2:
-    resolution: {integrity: sha512-qRcuIdP69NPm4qbACK+aDogI5CBDMi1jKe0ry5rSQJz8JVLsC7jV8XpiJjGRLLol3N+R5ihGYcrPLTno6pAdBA==}
+  path-to-regexp@0.1.12:
+    resolution: {integrity: sha512-RA1GjUVMnvYFxuqovrEqZoxxW5NUZqbwKtYz/Tt7nXerk0LbLblQmrsgdeOxV5SFHf0UDggjS/bSeOZwt1pmEQ==}
+
+  path-to-regexp@6.3.0:
+    resolution: {integrity: sha512-Yhpw4T9C6hPpgPeA28us07OJeqZ5EzQTkbfwuhsUg0c237RomFoETJgmp2sa3F/41gfLE6G5cqcYwznmeEeOlQ==}
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
@@ -5878,6 +5880,10 @@ packages:
 
   safe-regex2@5.0.0:
     resolution: {integrity: sha512-YwJwe5a51WlK7KbOJREPdjNrpViQBI3p4T50lfwPuDhZnE3XGVTlGvi+aolc5+RvxDD6bnUmjVsU9n1eboLUYw==}
+
+  safe-regex2@5.1.0:
+    resolution: {integrity: sha512-pNHAuBW7TrcleFHsxBr5QMi/Iyp0ENjUKz7GCcX1UO7cMh+NmVK6HxQckNL1tJp1XAJVjG6B8OKIPqodqj9rtw==}
+    hasBin: true
 
   safe-stable-stringify@2.5.0:
     resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
@@ -8367,7 +8373,7 @@ snapshots:
     dependencies:
       '@fastify/error': 4.2.0
       '@lukeed/ms': 2.0.2
-      fast-jwt: 6.0.2
+      fast-jwt: 6.2.1
       fastify-plugin: 5.1.0
       steed: 1.1.3
 
@@ -11355,7 +11361,7 @@ snapshots:
       methods: 1.1.2
       on-finished: 2.4.1
       parseurl: 1.3.3
-      path-to-regexp: 8.4.2
+      path-to-regexp: 0.1.12
       proxy-addr: 2.0.7
       qs: 6.13.0
       range-parser: 1.2.1
@@ -11397,12 +11403,13 @@ snapshots:
       json-schema-ref-resolver: 3.0.0
       rfdc: 1.4.1
 
-  fast-jwt@6.0.2:
+  fast-jwt@6.2.1:
     dependencies:
       '@lukeed/ms': 2.0.2
       asn1.js: 5.4.1
       ecdsa-sig-formatter: 1.0.11
       mnemonist: 0.40.3
+      safe-regex2: 5.1.0
 
   fast-levenshtein@2.0.6: {}
 
@@ -12752,7 +12759,7 @@ snapshots:
       headers-polyfill: 4.0.3
       is-node-process: 1.2.0
       outvariant: 1.4.3
-      path-to-regexp: 8.4.2
+      path-to-regexp: 6.3.0
       picocolors: 1.1.1
       rettime: 0.7.0
       statuses: 2.0.2
@@ -12778,7 +12785,7 @@ snapshots:
       headers-polyfill: 4.0.3
       is-node-process: 1.2.0
       outvariant: 1.4.3
-      path-to-regexp: 8.4.2
+      path-to-regexp: 6.3.0
       picocolors: 1.1.1
       rettime: 0.7.0
       statuses: 2.0.2
@@ -12972,7 +12979,9 @@ snapshots:
       lru-cache: 11.2.2
       minipass: 7.1.2
 
-  path-to-regexp@8.4.2: {}
+  path-to-regexp@0.1.12: {}
+
+  path-to-regexp@6.3.0: {}
 
   pathe@2.0.3: {}
 
@@ -13543,6 +13552,10 @@ snapshots:
   safe-buffer@5.2.1: {}
 
   safe-regex2@5.0.0:
+    dependencies:
+      ret: 0.5.0
+
+  safe-regex2@5.1.0:
     dependencies:
       ret: 0.5.0
 
