@@ -360,6 +360,9 @@ importers:
       '@testcontainers/postgresql':
         specifier: ^11.7.1
         version: 11.7.1
+      '@types/babel__traverse':
+        specifier: ^7.28.0
+        version: 7.28.0
       '@types/bcrypt':
         specifier: ^5.0.2
         version: 5.0.2
@@ -10286,7 +10289,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 2.0.0
-      vitest: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.7)(@vitest/ui@3.2.4)(happy-dom@19.0.2)(jsdom@24.1.0)(msw@2.11.6(@types/node@22.19.7)(typescript@5.9.3))(terser@5.44.0)
+      vitest: 3.2.4(@types/debug@4.1.12)(@types/node@20.19.19)(@vitest/ui@3.2.4)(happy-dom@19.0.2)(jsdom@27.0.0)(msw@2.11.6(@types/node@20.19.19)(typescript@5.9.3))(terser@5.44.0)
 
   '@vitest/utils@3.2.4':
     dependencies:
