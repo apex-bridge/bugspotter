@@ -14,11 +14,14 @@ FROM nginx:alpine
 # Install curl for healthcheck, jq for config injection (before COPY for better layer caching)
 RUN apk add --no-cache curl jq
 
+# Download SDK from npm (no need to bundle in repo)
+RUN curl -fsSL "https://unpkg.com/@bugspotter/sdk@latest/dist/bugspotter.min.js" \
+    -o /usr/share/nginx/html/bugspotter.min.js
+
 # Copy static files
 COPY index.html /usr/share/nginx/html/index.html
 COPY styles.css /usr/share/nginx/html/styles.css
 COPY demo.js /usr/share/nginx/html/demo.js
-COPY bugspotter.min.js /usr/share/nginx/html/bugspotter.min.js
 COPY buggy-app.html /usr/share/nginx/html/buggy-app.html
 
 # Copy nginx config
