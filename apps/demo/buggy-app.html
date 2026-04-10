@@ -473,6 +473,99 @@
         </div>
       </div>
 
+      <!-- v2.1 Feature Demo: Sensitive Data Protection -->
+      <h2 class="section-title">
+        Sensitive Data Protection <span style="font-size: 0.7em; color: #d35400">(v2.1)</span>
+      </h2>
+      <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 1rem">
+        BugSpotter v2.1 adds <code>blockSelectors</code> to hide DOM elements from session replay,
+        and <code>data-bugspotter-exclude</code> to exclude elements from screenshots. Try
+        triggering a bug report — the blocked sections below will appear as placeholders in the
+        replay.
+      </p>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 2rem">
+        <div class="bug-card" style="border-left: 3px solid #d35400">
+          <span class="badge" style="background: #d35400; color: #fff">blockSelectors</span>
+          <h3>Portfolio (blocked from replay)</h3>
+          <div
+            class="sensitive-portfolio"
+            style="background: #1a1a2e; border-radius: 8px; padding: 1rem; margin-top: 0.5rem"
+          >
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                color: #a0aec0;
+                font-size: 0.85rem;
+                margin-bottom: 0.5rem;
+              "
+            >
+              <span>AAPL</span><span style="color: #48bb78">+2.4%</span><span>$189.50</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                color: #a0aec0;
+                font-size: 0.85rem;
+                margin-bottom: 0.5rem;
+              "
+            >
+              <span>GOOGL</span><span style="color: #fc8181">-0.8%</span><span>$142.30</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                color: #a0aec0;
+                font-size: 0.85rem;
+              "
+            >
+              <span>MSFT</span><span style="color: #48bb78">+1.2%</span><span>$415.80</span>
+            </div>
+            <div
+              style="
+                margin-top: 0.75rem;
+                padding-top: 0.5rem;
+                border-top: 1px solid #2d3748;
+                color: #fff;
+                font-size: 0.95rem;
+              "
+            >
+              Total: <strong>$12,450.00</strong>
+            </div>
+          </div>
+          <p style="font-size: 0.75rem; color: #718096; margin-top: 0.5rem">
+            This section uses <code>blockSelectors: ['.sensitive-portfolio']</code> — hidden from
+            replay
+          </p>
+        </div>
+        <div class="bug-card" style="border-left: 3px solid #2563eb">
+          <span class="badge" style="background: #2563eb; color: #fff"
+            >data-bugspotter-exclude</span
+          >
+          <h3>Account Info (excluded from screenshots)</h3>
+          <div
+            data-bugspotter-exclude
+            style="background: #1a1a2e; border-radius: 8px; padding: 1rem; margin-top: 0.5rem"
+          >
+            <div style="color: #a0aec0; font-size: 0.85rem; margin-bottom: 0.5rem">
+              Account: <strong style="color: #fff">FRH123456789</strong>
+            </div>
+            <div style="color: #a0aec0; font-size: 0.85rem; margin-bottom: 0.5rem">
+              IBAN: <strong style="color: #fff">KZ861250400601001000</strong>
+            </div>
+            <div class="bugspotter-block" style="color: #a0aec0; font-size: 0.85rem">
+              Balance: <strong style="color: #48bb78">&#8376; 2,450,000</strong>
+              <span style="font-size: 0.7rem; color: #718096">(blocked via blockClass)</span>
+            </div>
+          </div>
+          <p style="font-size: 0.75rem; color: #718096; margin-top: 0.5rem">
+            This section uses <code>data-bugspotter-exclude</code> — hidden from screenshots
+          </p>
+        </div>
+      </div>
+
       <!-- Fake Product Section -->
       <h2 class="section-title">Products</h2>
       <div class="product-grid" id="product-grid">
@@ -626,14 +719,24 @@
         endpoint: DEMO_CONFIG.endpoint,
         apiKey: DEMO_CONFIG.apiKey,
         showWidget: true,
+        // v2.1: sampleRate controls session sampling (1 = all sessions for demo)
+        // sampleRate: 1,
         replay: {
           enabled: true,
           duration: 30,
           sampling: { mousemove: 50, scroll: 100 },
+          // v2.1: blockSelectors hides sensitive DOM elements from replay
+          blockSelectors: ['.sensitive-portfolio'],
+          blockClass: 'bugspotter-block',
         },
         sanitize: {
           enabled: true,
-          patterns: 'all', // Redacts emails, phones, credit cards, IINs, IPs
+          patterns: 'all',
+          // v2.1: custom PII patterns for industry-specific data
+          customPatterns: [
+            { name: 'broker-account', regex: /FRH\d{9}/gi },
+            { name: 'iban-kz', regex: /KZ\d{18}/gi },
+          ],
         },
       });
       bugSpotterReady
