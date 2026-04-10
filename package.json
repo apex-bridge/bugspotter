@@ -32,6 +32,11 @@
   ],
   "author": "",
   "license": "FSL-1.1-Apache-2.0",
+  "pnpm": {
+    "overrides": {
+      "tar": "^7.4.0"
+    }
+  },
   "packageManager": "pnpm@9.14.4",
   "engines": {
     "node": ">=20.17"
