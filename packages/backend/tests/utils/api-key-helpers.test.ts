@@ -64,7 +64,8 @@ describe('API Key Helpers', () => {
 
       expect(result.name).toBe('Updated Key');
       expect(result.permission_scope).toBe(PERMISSION_SCOPE.FULL);
-      expect(result.permissions).toEqual(['read', 'write']);
+      // permission_scope 'full' resolves to ['*'] regardless of provided permissions
+      expect(result.permissions).toEqual(['*']);
       expect(result.allowed_projects).toEqual(['proj-1', 'proj-2']);
     });
 
