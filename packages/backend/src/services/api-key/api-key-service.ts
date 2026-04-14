@@ -407,7 +407,7 @@ export class ApiKeyService {
       // Validate non-empty permissions for custom scope
       if (
         normalizedData.permission_scope === 'custom' &&
-        normalizedData.permissions !== undefined &&
+        normalizedData.permissions != null &&
         normalizedData.permissions.length === 0
       ) {
         throw new AppError(

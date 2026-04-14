@@ -61,7 +61,7 @@ export function mapUpdateFields(body: ApiKeyUpdateBody): Partial<ApiKeyUpdate> {
     updates.permission_scope = body.permission_scope ?? undefined;
   }
   if (body.permissions !== undefined) {
-    updates.permissions = body.permissions;
+    updates.permissions = body.permissions ?? undefined;
   }
   if (body.allowed_projects !== undefined) {
     updates.allowed_projects = body.allowed_projects;
