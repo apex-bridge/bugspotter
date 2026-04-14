@@ -6,6 +6,7 @@ export interface ApiKey {
   type: ApiKeyType;
   allowed_projects: string[] | null;
   key_prefix: string;
+  permission_scope: PermissionScope;
   permissions: string[];
   status: ApiKeyStatus;
   expires_at: string | null;
@@ -36,6 +37,7 @@ export interface ApiKeyResponse {
   allowed_projects: string[] | null;
   api_key: string;
   key_prefix: string;
+  permission_scope: PermissionScope;
   permissions: string[];
   created_at: string;
 }

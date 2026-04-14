@@ -27,6 +27,7 @@ describe('ShowApiKeyDialog', () => {
     api_key: 'bgs_test1234567890abcdefghijklmnopqrstuvwxyz',
     key_prefix: 'bgs_test12',
     allowed_projects: ['proj-1'],
+    permission_scope: 'custom',
     permissions: ['reports:read', 'reports:write', 'sessions:read'],
     type: 'development',
     created_at: '2025-10-30T12:00:00Z',

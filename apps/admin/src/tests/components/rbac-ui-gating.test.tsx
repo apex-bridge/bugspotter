@@ -46,6 +46,7 @@ const mockApiKey: ApiKey = {
   name: 'Test Key',
   key_prefix: 'bgs_test',
   type: 'development',
+  permission_scope: 'custom',
   permissions: ['read', 'write'],
   allowed_projects: ['project-1'],
   status: 'active',
