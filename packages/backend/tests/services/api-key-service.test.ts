@@ -297,6 +297,7 @@ describe('ApiKeyService', () => {
       });
 
       // Second audit: new key creation
+      // newKey.permissions comes from DB mock (which returns what create stored)
       expect(mockTx.apiKeys.logAudit).toHaveBeenNthCalledWith(2, {
         api_key_id: 'new-key',
         action: 'created',
@@ -305,7 +306,7 @@ describe('ApiKeyService', () => {
           rotated_from: 'old-key',
           type: 'development',
           permission_scope: 'write',
-          permissions: ['reports:read', 'reports:write', 'sessions:read', 'sessions:write'],
+          permissions: ['bugs:write'],
         },
       });
     });
