@@ -229,20 +229,14 @@ function TableRow({
       {/* Permissions */}
       <td className="px-6 py-4">
         <div className="flex flex-wrap gap-1">
-          {apiKey.permissions.length > 0 ? (
-            apiKey.permissions.map((permission) => (
-              <span
-                key={permission}
-                className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
-              >
-                {permission}
-              </span>
-            ))
-          ) : apiKey.permission_scope ? (
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-              {apiKey.permission_scope}
+          {apiKey.permissions.map((permission) => (
+            <span
+              key={permission}
+              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
+            >
+              {permission}
             </span>
-          ) : null}
+          ))}
         </div>
       </td>
 

@@ -5,6 +5,35 @@
 
 import type { ApiKey } from '../../db/types.js';
 import { PERMISSION_SCOPE } from '../../db/types.js';
+import type { PermissionScope } from '../../db/types.js';
+
+/**
+ * Maps each permission scope to the concrete permissions it grants.
+ * Used at key creation time to resolve scope into permissions array.
+ * 'custom' maps to empty — user provides their own permissions.
+ */
+export const SCOPE_PERMISSIONS: Record<PermissionScope, string[]> = {
+  full: ['*'],
+  read: ['reports:read', 'sessions:read'],
+  write: ['reports:read', 'reports:write', 'sessions:read', 'sessions:write'],
+  custom: [],
+};
+
+/**
+ * Resolve a permission scope into concrete permissions.
+ * For 'custom' scope, returns the provided permissions array.
+ * For predefined scopes, returns the mapped permissions.
+ *
+ * @param scope - Permission scope (full, read, write, custom)
+ * @param customPermissions - Explicit permissions (used only for 'custom' scope)
+ * @returns Resolved permissions array
+ */
+export function resolvePermissions(scope: PermissionScope, customPermissions?: string[]): string[] {
+  if (scope === PERMISSION_SCOPE.CUSTOM) {
+    return customPermissions ?? [];
+  }
+  return SCOPE_PERMISSIONS[scope] ?? [];
+}
 
 /**
  * Permission check result
@@ -88,67 +117,26 @@ export function isKeyUsable(key: ApiKey, gracePeriodMs: number): boolean {
 }
 
 /**
- * Check if API key has required permission scope
+ * Check if API key has the required permission.
  *
- * Permission scopes:
- * - PERMISSION_SCOPE.FULL: Allows all operations
- * - PERMISSION_SCOPE.CUSTOM: Requires explicit permission in permissions array
- * - PERMISSION_SCOPE.READ: Allows all read operations (permissions ending with ':read')
- * - PERMISSION_SCOPE.WRITE: Allows all write operations (permissions ending with ':write')
+ * Permissions are resolved at key creation time into the `permissions` array.
+ * This function simply checks if the required permission is in that array,
+ * or if the key has wildcard access ('*').
  *
  * @param key - API key to check
- * @param requiredScope - Required permission (e.g., 'bugs:read', 'projects:write')
+ * @param requiredPermission - Required permission (e.g., 'reports:read', 'sessions:write')
  * @returns Permission check result
  */
-export function checkPermission(key: ApiKey, requiredScope: string): PermissionCheckResult {
-  // Full access keys can do anything
-  if (key.permission_scope === PERMISSION_SCOPE.FULL) {
+export function checkPermission(key: ApiKey, requiredPermission: string): PermissionCheckResult {
+  const permissions = key.permissions ?? [];
+
+  if (permissions.includes('*') || permissions.includes(requiredPermission)) {
     return { allowed: true };
-  }
-
-  // For custom scope, check if permission is in the allowed list
-  if (key.permission_scope === PERMISSION_SCOPE.CUSTOM) {
-    if (key.permissions && key.permissions.includes(requiredScope)) {
-      return { allowed: true };
-    }
-    return {
-      allowed: false,
-      reason: `Missing required permission: ${requiredScope}`,
-    };
-  }
-
-  // For read/write scopes, check if permission matches the scope pattern
-  if (
-    key.permission_scope === PERMISSION_SCOPE.READ ||
-    key.permission_scope === PERMISSION_SCOPE.WRITE
-  ) {
-    // First check explicit permissions array (if provided)
-    if (key.permissions && key.permissions.includes(requiredScope)) {
-      return { allowed: true };
-    }
-
-    // Then check if required permission matches the scope pattern
-    // E.g., permission_scope 'read' allows 'bugs:read', 'projects:read', etc.
-    // Write scope implies read access (write is a superset of read)
-    const scopePattern = `:${key.permission_scope}`;
-    if (requiredScope.endsWith(scopePattern) || requiredScope === key.permission_scope) {
-      return { allowed: true };
-    }
-
-    // Write scope also allows read operations
-    if (key.permission_scope === PERMISSION_SCOPE.WRITE && requiredScope.endsWith(':read')) {
-      return { allowed: true };
-    }
-
-    return {
-      allowed: false,
-      reason: `Required permission: ${requiredScope}, key scope: ${key.permission_scope} (allows *:${key.permission_scope})`,
-    };
   }
 
   return {
     allowed: false,
-    reason: `Unknown permission scope: ${key.permission_scope}`,
+    reason: `Missing permission: ${requiredPermission}. Key has: [${permissions.join(', ')}]`,
   };
 }
 

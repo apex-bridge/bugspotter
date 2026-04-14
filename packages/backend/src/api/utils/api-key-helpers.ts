@@ -6,6 +6,7 @@
 import type { ApiKeyUpdate, PermissionScope, ApiKey } from '../../db/types.js';
 import type { ApiKeyService } from '../../services/api-key/index.js';
 import { RATE_LIMITS } from './constants.js';
+import { resolvePermissions } from '../../services/api-key/key-permissions.js';
 
 /**
  * Update request body interface
@@ -57,8 +58,8 @@ export function mapUpdateFields(body: ApiKeyUpdateBody): Partial<ApiKeyUpdate> {
   }
   if (body.permission_scope !== undefined) {
     updates.permission_scope = body.permission_scope;
-  }
-  if (body.permissions !== undefined) {
+    updates.permissions = resolvePermissions(body.permission_scope, body.permissions);
+  } else if (body.permissions !== undefined) {
     updates.permissions = body.permissions;
   }
   if (body.allowed_projects !== undefined) {

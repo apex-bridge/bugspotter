@@ -48,6 +48,7 @@ import {
   buildRotatedKeyData,
 } from './key-lifecycle-helpers.js';
 import { formatErrorForLog } from '../../utils/error-formatter.js';
+import { resolvePermissions } from './key-permissions.js';
 
 const logger = getLogger();
 
@@ -195,6 +196,11 @@ export class ApiKeyService {
         throw new Error('Name is required');
       }
 
+      // Resolve permission scope into concrete permissions array
+      const resolvedPermissions = data.permission_scope
+        ? resolvePermissions(data.permission_scope, data.permissions)
+        : data.permissions;
+
       // Generate plaintext key and hash
       const plaintextKey = generatePlaintextKey();
       const keyHash = hashKey(plaintextKey);
@@ -206,6 +212,7 @@ export class ApiKeyService {
       const key = await this.db.apiKeys.create({
         ...data,
         name: sanitizedName,
+        permissions: resolvedPermissions,
         key_hash: keyHash,
         key_prefix: prefix,
         key_suffix: suffix,
