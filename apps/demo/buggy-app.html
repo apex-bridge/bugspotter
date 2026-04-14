@@ -351,7 +351,7 @@
       }
       .protection-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
         gap: 1rem;
         margin-bottom: 2rem;
       }
@@ -380,10 +380,9 @@
         justify-content: space-between;
         color: #a0aec0;
         font-size: 0.85rem;
-        margin-bottom: 0.5rem;
       }
-      .stock-row:last-of-type {
-        margin-bottom: 0;
+      .stock-row + .stock-row {
+        margin-top: 0.5rem;
       }
       .stock-gain {
         color: #48bb78;
@@ -943,7 +942,7 @@
           // v2.1: custom PII patterns for industry-specific data
           customPatterns: [
             { name: 'broker-account', regex: /FRH\d{9}/gi },
-            { name: 'iban-kz', regex: /KZ[A-Z0-9]{18}/gi },
+            { name: 'iban-kz', regex: /\bKZ\d{2}[A-Z0-9]{16}\b/gi },
           ],
         },
       });
