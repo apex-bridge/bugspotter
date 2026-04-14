@@ -1320,7 +1320,9 @@
       async function triggerCorsError() {
         console.log('[API] Fetching external resource...');
         try {
-          await fetch('https://httpbin.org/status/200', {
+          // google.com responds but does not send Access-Control-Allow-Origin,
+          // so the browser blocks the response with a real CORS error
+          await fetch('https://google.com', {
             mode: 'cors',
             headers: { 'X-Custom-Header': 'test' },
           });
@@ -1331,7 +1333,7 @@
           var report = await sdk.capture();
           await submitReport(
             'CORS error: cross-origin request blocked',
-            'Fetch to external API blocked by browser CORS policy. The request includes a custom header that triggers a preflight OPTIONS request, which the server does not handle.',
+            'Fetch to external API blocked by browser CORS policy. The server responded but did not include Access-Control-Allow-Origin headers, so the browser rejected the response.',
             report
           );
         }
@@ -1347,19 +1349,20 @@
           controller.abort();
         }, 2000);
         try {
-          await fetch(DEMO_CONFIG.endpoint + '/api/bugs/error/503', {
+          // Non-routable IP — will hang until AbortController fires.
+          // May fail fast on some networks; the key signal is the AbortError in console.
+          await fetch('https://10.255.255.1/api/slow-endpoint', {
             signal: controller.signal,
-            headers: { 'X-API-Key': DEMO_CONFIG.apiKey },
           });
         } catch (error) {
           clearTimeout(timeoutId);
-          console.error('[API] Request timed out:', error.message);
-          showToast('Request timeout: ' + error.message, 'error');
+          console.error('[API] Request failed:', error.name + ': ' + error.message);
+          showToast('Request failed: ' + error.message, 'error');
           var sdk = await getSDK();
           var report = await sdk.capture();
           await submitReport(
-            'Network timeout: request aborted after 2s',
-            'The API call to /api/bugs/error/503 did not respond within 2 seconds. The request was aborted via AbortController. This blocks the user from completing their action.',
+            'Network request failed: ' + error.name,
+            'The API call to a remote endpoint failed. On most networks this is an AbortController timeout after 2 seconds; on some it may fail immediately with a network error. Either way the user action is blocked.',
             report
           );
         }
@@ -1397,33 +1400,58 @@
         console.log('[API] Sending rapid requests...');
         var results = [];
         try {
-          for (var i = 0; i < 5; i++) {
-            console.log('[API] Request ' + (i + 1) + '/5');
-            var resp = await fetch(DEMO_CONFIG.endpoint + '/api/bugs/error/429', {
+          // Fire 10 rapid GET requests — non-mutating, no data created
+          for (var i = 0; i < 10; i++) {
+            console.log('[API] Request ' + (i + 1) + '/10');
+            var resp = await fetch(DEMO_CONFIG.endpoint + '/health', {
+              method: 'GET',
               headers: { 'X-API-Key': DEMO_CONFIG.apiKey },
             });
             results.push(resp.status);
           }
-          var rateLimited = results.filter(function (s) {
-            return s === 429;
+          // Check for actual rate limiting or errors
+          var failed = results.filter(function (s) {
+            return s >= 400;
           });
-          if (rateLimited.length > 0) {
+          console.error(
+            '[API] Rapid request test: ' +
+              results.length +
+              ' requests, statuses: ' +
+              results.join(', ')
+          );
+          if (failed.length > 0) {
             throw new Error(
               'Rate limited: ' +
-                rateLimited.length +
+                failed.length +
                 ' of ' +
                 results.length +
-                ' requests returned 429'
+                ' requests failed (statuses: ' +
+                results.join(', ') +
+                ')'
+            );
+          } else {
+            // No actual rate limiting — report the stress test results anyway
+            // (the network logs showing 10 rapid requests are the real signal)
+            throw new Error(
+              'Rapid request stress test: ' +
+                results.length +
+                ' requests in quick succession (statuses: ' +
+                results.join(', ') +
+                ')'
             );
           }
         } catch (error) {
-          console.error('[API] Rate limit hit:', error.message);
-          showToast('Rate limited: ' + error.message, 'error');
+          console.error('[API] Rate limit test:', error.message);
+          showToast('Rate limit test: ' + error.message, 'error');
           var sdk = await getSDK();
           var report = await sdk.capture();
           await submitReport(
-            '429 Too Many Requests: rate limit exceeded',
-            'Rapid API calls triggered server-side rate limiting. Multiple requests returned HTTP 429. The user experiences failed actions and must wait before retrying.',
+            'Rapid request stress test: ' + results.length + ' requests fired',
+            'Fired ' +
+              results.length +
+              ' rapid API requests to test rate limiting behavior. Response statuses: ' +
+              results.join(', ') +
+              '. The network logs capture the full burst pattern.',
             report
           );
         }
@@ -1506,7 +1534,12 @@
           container.appendChild(node);
         }
         var elapsed = Math.round(performance.now() - start);
-        document.querySelector('.bug-grid:last-of-type').after(container);
+        var grids = document.querySelectorAll('.bug-grid');
+        if (grids.length > 0) {
+          grids[grids.length - 1].after(container);
+        } else {
+          document.body.appendChild(container);
+        }
         console.error('[Gallery] Inserted 5000 DOM nodes in ' + elapsed + 'ms');
         console.warn('[Performance] Forced reflow detected — consider virtualization');
         showToast('5000 nodes inserted in ' + elapsed + 'ms', 'error');
