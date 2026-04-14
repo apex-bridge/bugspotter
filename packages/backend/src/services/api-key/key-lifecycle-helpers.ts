@@ -7,6 +7,7 @@ import type { DatabaseClient } from '../../db/client.js';
 import type { ApiKey, ApiKeyInsert } from '../../db/types.js';
 import { getCacheService } from '../../cache/index.js';
 import { getLogger } from '../../logger.js';
+import { resolvePermissions } from './key-permissions.js';
 
 const logger = getLogger();
 
@@ -82,11 +83,14 @@ export function buildRotatedKeyData(
   oldKey: ApiKey,
   actorId: string
 ): Omit<ApiKeyInsert, 'key_hash' | 'key_prefix' | 'key_suffix'> {
+  const effectiveScope = oldKey.permission_scope ?? 'full';
   return {
     name: `${oldKey.name} (rotated)`,
     type: oldKey.type,
-    permission_scope: oldKey.permission_scope,
-    permissions: oldKey.permissions,
+    permission_scope: effectiveScope,
+    // Re-resolve permissions to ensure rotated key is consistent,
+    // especially for pre-migration keys with stale/empty permissions
+    permissions: resolvePermissions(effectiveScope, oldKey.permissions),
     created_by: actorId,
     allowed_projects: oldKey.allowed_projects,
     allowed_origins: oldKey.allowed_origins,

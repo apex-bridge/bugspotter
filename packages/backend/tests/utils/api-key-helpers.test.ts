@@ -52,7 +52,7 @@ function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
 
 describe('API Key Helpers', () => {
   describe('mapUpdateFields', () => {
-    it('should map simple fields', () => {
+    it('should map simple fields (resolution happens in service layer)', () => {
       const body = {
         name: 'Updated Key',
         permission_scope: PERMISSION_SCOPE.FULL,
@@ -64,8 +64,8 @@ describe('API Key Helpers', () => {
 
       expect(result.name).toBe('Updated Key');
       expect(result.permission_scope).toBe(PERMISSION_SCOPE.FULL);
-      // permission_scope 'full' resolves to ['*'] regardless of provided permissions
-      expect(result.permissions).toEqual(['*']);
+      // mapUpdateFields is a passthrough — resolution happens in ApiKeyService.updateKey
+      expect(result.permissions).toEqual(['read', 'write']);
       expect(result.allowed_projects).toEqual(['proj-1', 'proj-2']);
     });
 
@@ -163,55 +163,17 @@ describe('API Key Helpers', () => {
       expect(Object.keys(result)).toHaveLength(0);
     });
 
-    it('should set permission_scope to custom when only permissions are updated', () => {
+    it('should pass through permission_scope and permissions separately', () => {
       const body = {
-        permissions: ['reports:read', 'sessions:write'],
-      };
-
-      const result = mapUpdateFields(body);
-
-      expect(result.permissions).toEqual(['reports:read', 'sessions:write']);
-      expect(result.permission_scope).toBe('custom');
-    });
-
-    it('should not clear permissions when switching to custom scope without providing permissions', () => {
-      const body = {
-        permission_scope: PERMISSION_SCOPE.CUSTOM,
-        // No permissions field — should NOT wipe existing permissions
-      };
-
-      const result = mapUpdateFields(body);
-
-      expect(result.permission_scope).toBe('custom');
-      expect(result.permissions).toBeUndefined();
-    });
-
-    it('should resolve permissions when switching to custom scope with explicit permissions', () => {
-      const body = {
-        permission_scope: PERMISSION_SCOPE.CUSTOM,
+        permission_scope: PERMISSION_SCOPE.WRITE,
         permissions: ['reports:read'],
       };
 
       const result = mapUpdateFields(body);
 
-      expect(result.permission_scope).toBe('custom');
-      expect(result.permissions).toEqual(['reports:read']);
-    });
-
-    it('should resolve write scope to read + write permissions on PATCH', () => {
-      const body = {
-        permission_scope: PERMISSION_SCOPE.WRITE,
-      };
-
-      const result = mapUpdateFields(body);
-
+      // mapUpdateFields is a passthrough — resolution/sync happens in service
       expect(result.permission_scope).toBe('write');
-      expect(result.permissions).toEqual([
-        'reports:read',
-        'reports:write',
-        'sessions:read',
-        'sessions:write',
-      ]);
+      expect(result.permissions).toEqual(['reports:read']);
     });
 
     it('should handle all fields at once', () => {

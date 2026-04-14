@@ -231,7 +231,7 @@ export class ApiKeyService {
         performed_by: data.created_by || null,
         changes: {
           type: data.type,
-          permission_scope: data.permission_scope,
+          permission_scope: effectiveScope,
         },
       });
 
@@ -376,7 +376,36 @@ export class ApiKeyService {
    */
   async updateKey(keyId: string, data: ApiKeyUpdate, actorId: string): Promise<ApiKey | null> {
     try {
-      const updated = await this.db.apiKeys.update(keyId, data);
+      // Ensure permissions stay in sync with permission_scope
+      const normalizedData = { ...data };
+      if (normalizedData.permission_scope !== undefined) {
+        if (normalizedData.permission_scope !== 'custom') {
+          normalizedData.permissions = resolvePermissions(
+            normalizedData.permission_scope,
+            normalizedData.permissions
+          );
+        }
+        // For custom scope, only update permissions if explicitly provided
+        // (don't silently clear existing custom permissions)
+      } else if (normalizedData.permissions !== undefined) {
+        // Updating permissions directly → mark as custom
+        normalizedData.permission_scope = 'custom';
+      }
+
+      // Validate non-empty permissions for custom scope
+      if (
+        normalizedData.permission_scope === 'custom' &&
+        normalizedData.permissions !== undefined &&
+        normalizedData.permissions.length === 0
+      ) {
+        throw new AppError(
+          'Permissions array cannot be empty for custom scope',
+          400,
+          'ValidationError'
+        );
+      }
+
+      const updated = await this.db.apiKeys.update(keyId, normalizedData);
 
       if (updated) {
         // Invalidate cache for updated key

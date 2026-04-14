@@ -258,12 +258,14 @@ describe('ApiKeyService', () => {
       expect(mockDb.transaction).toHaveBeenCalledWith(expect.any(Function));
 
       // Verify new key created within transaction
+      // Rotation re-resolves permissions from scope, so write scope
+      // expands to full read+write permissions
       expect(mockTx.apiKeys.create).toHaveBeenCalledWith(
         expect.objectContaining({
           name: 'Original Key (rotated)',
           type: 'development',
           permission_scope: 'write',
-          permissions: ['bugs:write'],
+          permissions: ['reports:read', 'reports:write', 'sessions:read', 'sessions:write'],
           created_by: 'user-123',
         })
       );

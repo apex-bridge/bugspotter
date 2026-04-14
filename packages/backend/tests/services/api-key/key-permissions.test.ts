@@ -271,6 +271,21 @@ describe('key-permissions', () => {
         'sessions:read',
       ]);
     });
+
+    it('should throw on unknown scope', () => {
+      expect(() => resolvePermissions('unknown' as any)).toThrow(
+        'Unknown permission scope: unknown'
+      );
+    });
+
+    it('should return defensive copies (not shared references)', () => {
+      const a = resolvePermissions('full');
+      const b = resolvePermissions('full');
+      expect(a).toEqual(b);
+      expect(a).not.toBe(b); // Different array instances
+      a.push('mutated');
+      expect(resolvePermissions('full')).toEqual(['*']); // Original unaffected
+    });
   });
 
   // ============================================================================

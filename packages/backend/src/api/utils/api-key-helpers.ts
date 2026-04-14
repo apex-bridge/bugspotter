@@ -6,7 +6,6 @@
 import type { ApiKeyUpdate, PermissionScope, ApiKey } from '../../db/types.js';
 import type { ApiKeyService } from '../../services/api-key/index.js';
 import { RATE_LIMITS } from './constants.js';
-import { resolvePermissions } from '../../services/api-key/key-permissions.js';
 
 /**
  * Update request body interface
@@ -56,20 +55,13 @@ export function mapUpdateFields(body: ApiKeyUpdateBody): Partial<ApiKeyUpdate> {
   if (body.name !== undefined) {
     updates.name = body.name;
   }
+  // Permission resolution and consistency (scope ↔ permissions sync)
+  // is handled in ApiKeyService.updateKey, not here.
   if (body.permission_scope !== undefined) {
     updates.permission_scope = body.permission_scope;
-    // For preset scopes, permissions are derived from the scope.
-    // For custom scope on PATCH, only update permissions when explicitly provided
-    // so existing custom permissions are not silently cleared.
-    if (body.permission_scope !== 'custom') {
-      updates.permissions = resolvePermissions(body.permission_scope, body.permissions);
-    } else if (body.permissions !== undefined) {
-      updates.permissions = body.permissions;
-    }
-  } else if (body.permissions !== undefined) {
-    // Updating permissions directly without changing scope → mark as custom
+  }
+  if (body.permissions !== undefined) {
     updates.permissions = body.permissions;
-    updates.permission_scope = 'custom';
   }
   if (body.allowed_projects !== undefined) {
     updates.allowed_projects = body.allowed_projects;

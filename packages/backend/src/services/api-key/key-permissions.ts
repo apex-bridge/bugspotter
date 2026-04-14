@@ -32,7 +32,11 @@ export function resolvePermissions(scope: PermissionScope, customPermissions?: s
   if (scope === PERMISSION_SCOPE.CUSTOM) {
     return customPermissions ? [...customPermissions] : [];
   }
-  return [...(SCOPE_PERMISSIONS[scope] ?? [])];
+  const permissions = SCOPE_PERMISSIONS[scope];
+  if (!permissions) {
+    throw new Error(`Unknown permission scope: ${scope}`);
+  }
+  return [...permissions];
 }
 
 /**
