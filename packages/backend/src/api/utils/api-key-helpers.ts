@@ -58,7 +58,7 @@ export function mapUpdateFields(body: ApiKeyUpdateBody): Partial<ApiKeyUpdate> {
   // Permission resolution and consistency (scope ↔ permissions sync)
   // is handled in ApiKeyService.updateKey, not here.
   if (body.permission_scope !== undefined) {
-    updates.permission_scope = body.permission_scope;
+    updates.permission_scope = body.permission_scope ?? undefined;
   }
   if (body.permissions !== undefined) {
     updates.permissions = body.permissions;

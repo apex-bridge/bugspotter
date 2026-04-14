@@ -198,7 +198,7 @@ export class ApiKeyService {
 
       // Resolve permission scope into concrete permissions array
       // Always resolve — DB defaults permission_scope to 'full' when omitted
-      const effectiveScope = data.permission_scope ?? 'full';
+      const effectiveScope = data.permission_scope || 'full';
       const resolvedPermissions = resolvePermissions(effectiveScope, data.permissions);
 
       // Generate plaintext key and hash
@@ -391,10 +391,14 @@ export class ApiKeyService {
             400,
             'ValidationError'
           );
+        } else {
+          // Defensive copy of caller-provided custom permissions
+          normalizedData.permissions = [...normalizedData.permissions];
         }
       } else if (normalizedData.permissions !== undefined) {
         // Updating permissions directly → mark as custom
         normalizedData.permission_scope = 'custom';
+        normalizedData.permissions = [...normalizedData.permissions];
       }
 
       // Validate non-empty permissions for custom scope

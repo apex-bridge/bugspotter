@@ -83,7 +83,7 @@ export function buildRotatedKeyData(
   oldKey: ApiKey,
   actorId: string
 ): Omit<ApiKeyInsert, 'key_hash' | 'key_prefix' | 'key_suffix'> {
-  const effectiveScope = oldKey.permission_scope ?? 'full';
+  const effectiveScope = oldKey.permission_scope || 'full';
   return {
     name: `${oldKey.name} (rotated)`,
     type: oldKey.type,

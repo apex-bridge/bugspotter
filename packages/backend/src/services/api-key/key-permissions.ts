@@ -12,12 +12,13 @@ import type { PermissionScope } from '../../db/types.js';
  * Used at key creation time to resolve scope into permissions array.
  * 'custom' maps to empty — user provides their own permissions.
  */
-export const SCOPE_PERMISSIONS: Record<PermissionScope, string[]> = {
-  full: ['*'],
-  read: ['reports:read', 'sessions:read'],
-  write: ['reports:read', 'reports:write', 'sessions:read', 'sessions:write'],
-  custom: [],
-};
+export const SCOPE_PERMISSIONS: Readonly<Record<PermissionScope, readonly string[]>> =
+  Object.freeze({
+    full: Object.freeze(['*']),
+    read: Object.freeze(['reports:read', 'sessions:read']),
+    write: Object.freeze(['reports:read', 'reports:write', 'sessions:read', 'sessions:write']),
+    custom: Object.freeze([]),
+  });
 
 /**
  * Resolve a permission scope into concrete permissions.
@@ -137,7 +138,11 @@ export function checkPermission(key: ApiKey, requiredPermission: string): Permis
   // Defensive fallback: if permissions array is empty but a non-custom scope is set,
   // resolve on the fly. This handles pre-migration keys and cached keys fetched
   // before the backfill migration ran.
-  if (permissions.length === 0 && key.permission_scope && key.permission_scope !== 'custom') {
+  if (
+    permissions.length === 0 &&
+    key.permission_scope &&
+    key.permission_scope !== PERMISSION_SCOPE.CUSTOM
+  ) {
     permissions = resolvePermissions(key.permission_scope);
   }
 
