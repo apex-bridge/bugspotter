@@ -235,6 +235,7 @@ export class ApiKeyService {
         changes: {
           type: data.type,
           permission_scope: effectiveScope,
+          permissions: resolvedPermissions,
         },
       });
 
