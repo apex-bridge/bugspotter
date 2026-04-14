@@ -1124,6 +1124,101 @@ describe('ApiKeyService', () => {
 
       expect(result).toBeNull();
     });
+
+    it('should resolve permissions when updating to preset scope', async () => {
+      const updatedKey = { id: 'key-123' } as ApiKey;
+      mockDb.apiKeys.update.mockResolvedValue(updatedKey);
+
+      await service.updateKey('key-123', { permission_scope: 'write' }, 'user-123');
+
+      expect(mockDb.apiKeys.update).toHaveBeenCalledWith(
+        'key-123',
+        expect.objectContaining({
+          permission_scope: 'write',
+          permissions: ['reports:read', 'reports:write', 'sessions:read', 'sessions:write'],
+        })
+      );
+    });
+
+    it('should resolve full scope to wildcard on update', async () => {
+      const updatedKey = { id: 'key-123' } as ApiKey;
+      mockDb.apiKeys.update.mockResolvedValue(updatedKey);
+
+      await service.updateKey('key-123', { permission_scope: 'full' }, 'user-123');
+
+      expect(mockDb.apiKeys.update).toHaveBeenCalledWith(
+        'key-123',
+        expect.objectContaining({
+          permissions: ['*'],
+        })
+      );
+    });
+
+    it('should pass through custom scope with explicit permissions', async () => {
+      const updatedKey = { id: 'key-123' } as ApiKey;
+      mockDb.apiKeys.update.mockResolvedValue(updatedKey);
+
+      await service.updateKey(
+        'key-123',
+        { permission_scope: 'custom', permissions: ['reports:read'] },
+        'user-123'
+      );
+
+      expect(mockDb.apiKeys.update).toHaveBeenCalledWith(
+        'key-123',
+        expect.objectContaining({
+          permission_scope: 'custom',
+          permissions: ['reports:read'],
+        })
+      );
+    });
+
+    it('should reject custom scope without permissions', async () => {
+      await expect(
+        service.updateKey('key-123', { permission_scope: 'custom' }, 'user-123')
+      ).rejects.toThrow('Permissions array is required when switching to custom scope');
+    });
+
+    it('should reject custom scope with empty permissions array', async () => {
+      await expect(
+        service.updateKey('key-123', { permission_scope: 'custom', permissions: [] }, 'user-123')
+      ).rejects.toThrow('Permissions array cannot be empty for custom scope');
+    });
+
+    it('should auto-set permission_scope to custom when only permissions are updated', async () => {
+      const updatedKey = { id: 'key-123' } as ApiKey;
+      mockDb.apiKeys.update.mockResolvedValue(updatedKey);
+
+      await service.updateKey(
+        'key-123',
+        { permissions: ['sessions:read', 'sessions:write'] },
+        'user-123'
+      );
+
+      expect(mockDb.apiKeys.update).toHaveBeenCalledWith(
+        'key-123',
+        expect.objectContaining({
+          permission_scope: 'custom',
+          permissions: ['sessions:read', 'sessions:write'],
+        })
+      );
+    });
+
+    it('should log normalized fields in audit (including implicit scope changes)', async () => {
+      const updatedKey = { id: 'key-123' } as ApiKey;
+      mockDb.apiKeys.update.mockResolvedValue(updatedKey);
+
+      await service.updateKey('key-123', { permissions: ['reports:read'] }, 'user-123');
+
+      // Audit should include permission_scope even though caller only sent permissions
+      expect(mockDb.apiKeys.logAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          changes: {
+            fields: expect.arrayContaining(['permissions', 'permission_scope']),
+          },
+        })
+      );
+    });
   });
 
   describe('deleteKey', () => {
