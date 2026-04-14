@@ -48,6 +48,7 @@ import {
   buildRotatedKeyData,
 } from './key-lifecycle-helpers.js';
 import { formatErrorForLog } from '../../utils/error-formatter.js';
+import { resolvePermissions } from './key-permissions.js';
 
 const logger = getLogger();
 
@@ -195,6 +196,13 @@ export class ApiKeyService {
         throw new Error('Name is required');
       }
 
+      // Resolve permission scope into concrete permissions array
+      // If permissions are explicitly provided without a scope, treat as 'custom'
+      // to avoid unintended privilege escalation (defaulting to 'full' would override them)
+      const effectiveScope = data.permission_scope || (data.permissions ? 'custom' : 'full');
+      this.validatePermissions(effectiveScope, data.permissions);
+      const resolvedPermissions = resolvePermissions(effectiveScope, data.permissions);
+
       // Generate plaintext key and hash
       const plaintextKey = generatePlaintextKey();
       const keyHash = hashKey(plaintextKey);
@@ -206,6 +214,8 @@ export class ApiKeyService {
       const key = await this.db.apiKeys.create({
         ...data,
         name: sanitizedName,
+        permission_scope: effectiveScope,
+        permissions: resolvedPermissions,
         key_hash: keyHash,
         key_prefix: prefix,
         key_suffix: suffix,
@@ -224,7 +234,8 @@ export class ApiKeyService {
         performed_by: data.created_by || null,
         changes: {
           type: data.type,
-          permission_scope: data.permission_scope,
+          permission_scope: effectiveScope,
+          permissions: resolvedPermissions,
         },
       });
 
@@ -304,6 +315,7 @@ export class ApiKeyService {
             rotated_from: oldKeyId,
             type: newKey.type,
             permission_scope: newKey.permission_scope,
+            permissions: newKey.permissions,
           },
         });
 
@@ -369,7 +381,45 @@ export class ApiKeyService {
    */
   async updateKey(keyId: string, data: ApiKeyUpdate, actorId: string): Promise<ApiKey | null> {
     try {
-      const updated = await this.db.apiKeys.update(keyId, data);
+      // Ensure permissions stay in sync with permission_scope
+      const normalizedData = { ...data };
+      if (normalizedData.permission_scope !== undefined) {
+        if (normalizedData.permission_scope !== 'custom') {
+          normalizedData.permissions = resolvePermissions(
+            normalizedData.permission_scope,
+            normalizedData.permissions
+          );
+        } else if (normalizedData.permissions === undefined) {
+          // Switching to custom scope requires explicit permissions
+          throw new AppError(
+            'Permissions array is required when switching to custom scope',
+            400,
+            'ValidationError'
+          );
+        } else {
+          // Defensive copy of caller-provided custom permissions
+          normalizedData.permissions = [...normalizedData.permissions];
+        }
+      } else if (normalizedData.permissions !== undefined) {
+        // Updating permissions directly → mark as custom
+        normalizedData.permission_scope = 'custom';
+        normalizedData.permissions = [...normalizedData.permissions];
+      }
+
+      // Validate non-empty permissions for custom scope
+      if (
+        normalizedData.permission_scope === 'custom' &&
+        normalizedData.permissions != null &&
+        normalizedData.permissions.length === 0
+      ) {
+        throw new AppError(
+          'Permissions array cannot be empty for custom scope',
+          400,
+          'ValidationError'
+        );
+      }
+
+      const updated = await this.db.apiKeys.update(keyId, normalizedData);
 
       if (updated) {
         // Invalidate cache for updated key
@@ -381,7 +431,7 @@ export class ApiKeyService {
           action: API_KEY_AUDIT_ACTION.UPDATED,
           performed_by: actorId,
           changes: {
-            fields: Object.keys(data),
+            fields: Object.keys(normalizedData),
           },
         });
 

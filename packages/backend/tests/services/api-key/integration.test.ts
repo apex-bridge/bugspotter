@@ -50,7 +50,7 @@ function createApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     type: 'production',
     status: 'active',
     permission_scope: 'full',
-    permissions: [],
+    permissions: ['*'],
     allowed_projects: null,
     allowed_environments: null,
     rate_limit_per_minute: 60,
@@ -325,10 +325,18 @@ describe('API Key Module Integration', () => {
     it('should check multiple rate limit windows', async () => {
       mockDb.apiKeys.incrementRateLimit.mockImplementation((_keyId: string, window: string) => {
         // Return count after increment
-        if (window === RATE_LIMIT_WINDOW.BURST) return Promise.resolve(3);
-        if (window === RATE_LIMIT_WINDOW.MINUTE) return Promise.resolve(11);
-        if (window === RATE_LIMIT_WINDOW.HOUR) return Promise.resolve(51);
-        if (window === RATE_LIMIT_WINDOW.DAY) return Promise.resolve(501);
+        if (window === RATE_LIMIT_WINDOW.BURST) {
+          return Promise.resolve(3);
+        }
+        if (window === RATE_LIMIT_WINDOW.MINUTE) {
+          return Promise.resolve(11);
+        }
+        if (window === RATE_LIMIT_WINDOW.HOUR) {
+          return Promise.resolve(51);
+        }
+        if (window === RATE_LIMIT_WINDOW.DAY) {
+          return Promise.resolve(501);
+        }
         return Promise.resolve(1);
       });
 
@@ -355,8 +363,12 @@ describe('API Key Module Integration', () => {
     it('should enforce strictest window limit', async () => {
       mockDb.apiKeys.incrementRateLimit.mockImplementation((_keyId: string, window: string) => {
         // Burst window exceeds limit after increment
-        if (window === RATE_LIMIT_WINDOW.BURST) return Promise.resolve(6); // Exceeds limit of 5
-        if (window === RATE_LIMIT_WINDOW.MINUTE) return Promise.resolve(11); // Under limit of 60
+        if (window === RATE_LIMIT_WINDOW.BURST) {
+          return Promise.resolve(6);
+        } // Exceeds limit of 5
+        if (window === RATE_LIMIT_WINDOW.MINUTE) {
+          return Promise.resolve(11);
+        } // Under limit of 60
         return Promise.resolve(1);
       });
 

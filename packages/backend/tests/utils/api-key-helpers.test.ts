@@ -52,7 +52,7 @@ function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
 
 describe('API Key Helpers', () => {
   describe('mapUpdateFields', () => {
-    it('should map simple fields', () => {
+    it('should map simple fields (resolution happens in service layer)', () => {
       const body = {
         name: 'Updated Key',
         permission_scope: PERMISSION_SCOPE.FULL,
@@ -64,6 +64,7 @@ describe('API Key Helpers', () => {
 
       expect(result.name).toBe('Updated Key');
       expect(result.permission_scope).toBe(PERMISSION_SCOPE.FULL);
+      // mapUpdateFields is a passthrough — resolution happens in ApiKeyService.updateKey
       expect(result.permissions).toEqual(['read', 'write']);
       expect(result.allowed_projects).toEqual(['proj-1', 'proj-2']);
     });
@@ -160,6 +161,19 @@ describe('API Key Helpers', () => {
       const result = mapUpdateFields(body);
 
       expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    it('should pass through permission_scope and permissions separately', () => {
+      const body = {
+        permission_scope: PERMISSION_SCOPE.WRITE,
+        permissions: ['reports:read'],
+      };
+
+      const result = mapUpdateFields(body);
+
+      // mapUpdateFields is a passthrough — resolution/sync happens in service
+      expect(result.permission_scope).toBe('write');
+      expect(result.permissions).toEqual(['reports:read']);
     });
 
     it('should handle all fields at once', () => {
