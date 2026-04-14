@@ -339,13 +339,15 @@ describe('key-permissions', () => {
       expect(checkPermission(key, 'reports:write').allowed).toBe(false);
     });
 
-    it('should include key permissions in denial reason', () => {
+    it('should include missing permission in denial reason without leaking granted permissions', () => {
       const key = createApiKey({ permissions: ['reports:read', 'sessions:read'] });
 
       const result = checkPermission(key, 'reports:write');
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('reports:read');
-      expect(result.reason).toContain('sessions:read');
+      expect(result.reason).toContain('reports:write');
+      // Should NOT leak granted permissions
+      expect(result.reason).not.toContain('reports:read');
+      expect(result.reason).not.toContain('sessions:read');
     });
   });
 

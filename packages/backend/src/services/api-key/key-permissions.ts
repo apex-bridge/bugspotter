@@ -30,9 +30,9 @@ export const SCOPE_PERMISSIONS: Record<PermissionScope, string[]> = {
  */
 export function resolvePermissions(scope: PermissionScope, customPermissions?: string[]): string[] {
   if (scope === PERMISSION_SCOPE.CUSTOM) {
-    return customPermissions ?? [];
+    return customPermissions ? [...customPermissions] : [];
   }
-  return SCOPE_PERMISSIONS[scope] ?? [];
+  return [...(SCOPE_PERMISSIONS[scope] ?? [])];
 }
 
 /**
@@ -136,7 +136,7 @@ export function checkPermission(key: ApiKey, requiredPermission: string): Permis
 
   return {
     allowed: false,
-    reason: `Missing permission: ${requiredPermission}. Key has: [${permissions.join(', ')}]`,
+    reason: `Missing permission: ${requiredPermission}`,
   };
 }
 

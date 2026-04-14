@@ -163,6 +163,57 @@ describe('API Key Helpers', () => {
       expect(Object.keys(result)).toHaveLength(0);
     });
 
+    it('should set permission_scope to custom when only permissions are updated', () => {
+      const body = {
+        permissions: ['reports:read', 'sessions:write'],
+      };
+
+      const result = mapUpdateFields(body);
+
+      expect(result.permissions).toEqual(['reports:read', 'sessions:write']);
+      expect(result.permission_scope).toBe('custom');
+    });
+
+    it('should not clear permissions when switching to custom scope without providing permissions', () => {
+      const body = {
+        permission_scope: PERMISSION_SCOPE.CUSTOM,
+        // No permissions field — should NOT wipe existing permissions
+      };
+
+      const result = mapUpdateFields(body);
+
+      expect(result.permission_scope).toBe('custom');
+      expect(result.permissions).toBeUndefined();
+    });
+
+    it('should resolve permissions when switching to custom scope with explicit permissions', () => {
+      const body = {
+        permission_scope: PERMISSION_SCOPE.CUSTOM,
+        permissions: ['reports:read'],
+      };
+
+      const result = mapUpdateFields(body);
+
+      expect(result.permission_scope).toBe('custom');
+      expect(result.permissions).toEqual(['reports:read']);
+    });
+
+    it('should resolve write scope to read + write permissions on PATCH', () => {
+      const body = {
+        permission_scope: PERMISSION_SCOPE.WRITE,
+      };
+
+      const result = mapUpdateFields(body);
+
+      expect(result.permission_scope).toBe('write');
+      expect(result.permissions).toEqual([
+        'reports:read',
+        'reports:write',
+        'sessions:read',
+        'sessions:write',
+      ]);
+    });
+
     it('should handle all fields at once', () => {
       const body = {
         name: 'Complete Update',
