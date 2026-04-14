@@ -1320,7 +1320,8 @@
       async function triggerCorsError() {
         console.log('[API] Fetching external resource...');
         try {
-          await fetch('https://httpbin.org/status/200', {
+          // Use a non-routable IP to guarantee CORS failure without depending on external service
+          await fetch('https://192.0.2.1/api/data', {
             mode: 'cors',
             headers: { 'X-Custom-Header': 'test' },
           });
@@ -1347,9 +1348,9 @@
           controller.abort();
         }, 2000);
         try {
-          await fetch(DEMO_CONFIG.endpoint + '/api/bugs/error/503', {
+          // Use a non-routable IP that will hang until abort (not a mock endpoint)
+          await fetch('https://10.255.255.1/api/slow-endpoint', {
             signal: controller.signal,
-            headers: { 'X-API-Key': DEMO_CONFIG.apiKey },
           });
         } catch (error) {
           clearTimeout(timeoutId);
@@ -1359,7 +1360,7 @@
           var report = await sdk.capture();
           await submitReport(
             'Network timeout: request aborted after 2s',
-            'The API call to /api/bugs/error/503 did not respond within 2 seconds. The request was aborted via AbortController. This blocks the user from completing their action.',
+            'The API call did not respond within 2 seconds. The request was aborted via AbortController. This blocks the user from completing their action.',
             report
           );
         }
@@ -1397,25 +1398,25 @@
         console.log('[API] Sending rapid requests...');
         var results = [];
         try {
-          for (var i = 0; i < 5; i++) {
-            console.log('[API] Request ' + (i + 1) + '/5');
-            var resp = await fetch(DEMO_CONFIG.endpoint + '/api/bugs/error/429', {
-              headers: { 'X-API-Key': DEMO_CONFIG.apiKey },
+          // Fire 10 rapid requests to a real endpoint to simulate rate limiting
+          for (var i = 0; i < 10; i++) {
+            console.log('[API] Request ' + (i + 1) + '/10');
+            var resp = await fetch(DEMO_CONFIG.endpoint + '/api/v1/reports', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': DEMO_CONFIG.apiKey,
+              },
+              body: JSON.stringify({ title: 'rate-limit-test-' + i }),
             });
             results.push(resp.status);
           }
-          var rateLimited = results.filter(function (s) {
-            return s === 429;
-          });
-          if (rateLimited.length > 0) {
-            throw new Error(
-              'Rate limited: ' +
-                rateLimited.length +
-                ' of ' +
-                results.length +
-                ' requests returned 429'
-            );
-          }
+          // Simulate the rate limit error regardless of actual response
+          // (production may or may not rate-limit, but the console/network captures are real)
+          console.error('[API] Sent 10 rapid requests — statuses: ' + results.join(', '));
+          throw new Error(
+            'Rate limit stress test: 10 rapid requests sent, statuses: ' + results.join(', ')
+          );
         } catch (error) {
           console.error('[API] Rate limit hit:', error.message);
           showToast('Rate limited: ' + error.message, 'error');
@@ -1423,7 +1424,7 @@
           var report = await sdk.capture();
           await submitReport(
             '429 Too Many Requests: rate limit exceeded',
-            'Rapid API calls triggered server-side rate limiting. Multiple requests returned HTTP 429. The user experiences failed actions and must wait before retrying.',
+            'Rapid API calls triggered server-side rate limiting. Multiple requests returned errors. The user experiences failed actions and must wait before retrying.',
             report
           );
         }
@@ -1506,7 +1507,9 @@
           container.appendChild(node);
         }
         var elapsed = Math.round(performance.now() - start);
-        document.querySelector('.bug-grid:last-of-type').after(container);
+        var grids = document.querySelectorAll('.bug-grid');
+        var target = grids.length > 0 ? grids[grids.length - 1] : document.body;
+        target.after(container);
         console.error('[Gallery] Inserted 5000 DOM nodes in ' + elapsed + 'ms');
         console.warn('[Performance] Forced reflow detected — consider virtualization');
         showToast('5000 nodes inserted in ' + elapsed + 'ms', 'error');
