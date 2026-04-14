@@ -132,7 +132,14 @@ export function isKeyUsable(key: ApiKey, gracePeriodMs: number): boolean {
  * @returns Permission check result
  */
 export function checkPermission(key: ApiKey, requiredPermission: string): PermissionCheckResult {
-  const permissions = key.permissions ?? [];
+  let permissions = key.permissions ?? [];
+
+  // Defensive fallback: if permissions array is empty but a non-custom scope is set,
+  // resolve on the fly. This handles pre-migration keys and cached keys fetched
+  // before the backfill migration ran.
+  if (permissions.length === 0 && key.permission_scope && key.permission_scope !== 'custom') {
+    permissions = resolvePermissions(key.permission_scope);
+  }
 
   if (permissions.includes('*') || permissions.includes(requiredPermission)) {
     return { allowed: true };

@@ -347,11 +347,28 @@ describe('key-permissions', () => {
       expect(result.reason).toContain('Missing permission: reports:write');
     });
 
-    it('should deny all permissions for empty array', () => {
-      const key = createApiKey({ permissions: [] });
+    it('should deny all permissions for empty array with custom scope', () => {
+      const key = createApiKey({ permissions: [], permission_scope: 'custom' });
 
       expect(checkPermission(key, 'reports:read').allowed).toBe(false);
       expect(checkPermission(key, 'reports:write').allowed).toBe(false);
+    });
+
+    it('should fallback to scope resolution for pre-migration keys with empty permissions', () => {
+      // Key has permission_scope 'full' but empty permissions (pre-migration state)
+      const key = createApiKey({ permissions: [], permission_scope: 'full' });
+
+      // Defensive fallback resolves 'full' → ['*'] on the fly
+      expect(checkPermission(key, 'reports:read').allowed).toBe(true);
+      expect(checkPermission(key, 'anything:here').allowed).toBe(true);
+    });
+
+    it('should fallback to scope resolution for write scope with empty permissions', () => {
+      const key = createApiKey({ permissions: [], permission_scope: 'write' });
+
+      expect(checkPermission(key, 'reports:read').allowed).toBe(true);
+      expect(checkPermission(key, 'reports:write').allowed).toBe(true);
+      expect(checkPermission(key, 'reports:delete').allowed).toBe(false);
     });
 
     it('should include missing permission in denial reason without leaking granted permissions', () => {

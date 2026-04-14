@@ -356,9 +356,14 @@ describe('ApiKeyTable', () => {
           {...mockHandlers}
         />
       );
+      // Find permissions column index from headers (not hardcoded)
+      const headers = screen.getAllByRole('columnheader');
+      const permissionsColumnIndex = headers.findIndex((header) =>
+        /permissions/i.test(header.textContent || '')
+      );
       const row = screen.getByRole('row', { name: new RegExp(name, 'i') });
       const cells = within(row).getAllByRole('cell');
-      return cells[4]; // Permissions column is 5th cell (0-indexed: 4)
+      return cells[permissionsColumnIndex];
     }
 
     describe('Resolved scope permissions (permissions always populated)', () => {

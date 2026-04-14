@@ -384,9 +384,14 @@ export class ApiKeyService {
             normalizedData.permission_scope,
             normalizedData.permissions
           );
+        } else if (normalizedData.permissions === undefined) {
+          // Switching to custom scope requires explicit permissions
+          throw new AppError(
+            'Permissions array is required when switching to custom scope',
+            400,
+            'ValidationError'
+          );
         }
-        // For custom scope, only update permissions if explicitly provided
-        // (don't silently clear existing custom permissions)
       } else if (normalizedData.permissions !== undefined) {
         // Updating permissions directly → mark as custom
         normalizedData.permission_scope = 'custom';
@@ -417,7 +422,7 @@ export class ApiKeyService {
           action: API_KEY_AUDIT_ACTION.UPDATED,
           performed_by: actorId,
           changes: {
-            fields: Object.keys(data),
+            fields: Object.keys(normalizedData),
           },
         });
 
