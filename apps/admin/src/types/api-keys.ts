@@ -37,6 +37,7 @@ export interface ApiKeyResponse {
   allowed_projects: string[] | null;
   api_key: string;
   key_prefix: string;
+  permission_scope: PermissionScope;
   permissions: string[];
   created_at: string;
 }

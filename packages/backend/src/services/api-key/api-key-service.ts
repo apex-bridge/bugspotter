@@ -197,8 +197,11 @@ export class ApiKeyService {
       }
 
       // Resolve permission scope into concrete permissions array
-      // Always resolve — DB defaults permission_scope to 'full' when omitted
-      const effectiveScope = data.permission_scope || 'full';
+      // If permissions are explicitly provided without a scope, treat as 'custom'
+      // to avoid unintended privilege escalation (defaulting to 'full' would override them)
+      const effectiveScope =
+        data.permission_scope ||
+        (data.permissions && data.permissions.length > 0 ? 'custom' : 'full');
       const resolvedPermissions = resolvePermissions(effectiveScope, data.permissions);
 
       // Generate plaintext key and hash
