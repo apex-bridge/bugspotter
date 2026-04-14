@@ -473,6 +473,173 @@
         </div>
       </div>
 
+      <!-- Additional Bug Scenarios -->
+      <h2 class="section-title">More Bug Scenarios</h2>
+      <div class="bug-grid">
+        <!-- 7: JSON Parse Crash -->
+        <div class="bug-card">
+          <span class="badge badge-crash">JS Crash</span>
+          <h3>Malformed JSON Response</h3>
+          <p>API returns invalid JSON. The app tries to parse it and crashes with a SyntaxError.</p>
+          <button class="bug-trigger" onclick="triggerJsonParseCrash()">Trigger Bug</button>
+        </div>
+
+        <!-- 8: Stack Overflow -->
+        <div class="bug-card">
+          <span class="badge badge-crash">JS Crash</span>
+          <h3>Recursive Render Loop</h3>
+          <p>A component update triggers itself recursively, causing a stack overflow.</p>
+          <button class="bug-trigger" onclick="triggerStackOverflow()">Trigger Bug</button>
+        </div>
+
+        <!-- 9: Null DOM Reference -->
+        <div class="bug-card">
+          <span class="badge badge-crash">JS Crash</span>
+          <h3>Missing DOM Element</h3>
+          <p>
+            Code references a DOM element that was removed or never rendered. TypeError on null.
+          </p>
+          <button class="bug-trigger" onclick="triggerNullDom()">Trigger Bug</button>
+        </div>
+
+        <!-- 10: Array Out-of-Bounds -->
+        <div class="bug-card">
+          <span class="badge badge-crash">JS Crash</span>
+          <h3>Array Index Error</h3>
+          <p>Accessing an array element beyond its length, then calling a method on undefined.</p>
+          <button class="bug-trigger" onclick="triggerArrayBounds()">Trigger Bug</button>
+        </div>
+
+        <!-- 11: Invalid Date -->
+        <div class="bug-card">
+          <span class="badge badge-crash">JS Crash</span>
+          <h3>Invalid Date Format</h3>
+          <p>Parsing a malformed date string and calling toISOString() throws a RangeError.</p>
+          <button class="bug-trigger" onclick="triggerInvalidDate()">Trigger Bug</button>
+        </div>
+
+        <!-- 12: CORS Error -->
+        <div class="bug-card">
+          <span class="badge badge-network">CORS Error</span>
+          <h3>Cross-Origin Blocked</h3>
+          <p>
+            Fetch to a cross-origin endpoint without CORS headers. Request is blocked by the
+            browser.
+          </p>
+          <button class="bug-trigger" onclick="triggerCorsError()">Trigger Bug</button>
+        </div>
+
+        <!-- 13: Network Timeout -->
+        <div class="bug-card">
+          <span class="badge badge-network">Timeout</span>
+          <h3>Request Timeout</h3>
+          <p>API call aborted after 2 seconds via AbortController. Simulates a hung backend.</p>
+          <button class="bug-trigger" onclick="triggerNetworkTimeout()">Trigger Bug</button>
+        </div>
+
+        <!-- 14: 401 Unauthorized -->
+        <div class="bug-card">
+          <span class="badge badge-network">Auth Error</span>
+          <h3>401 Unauthorized</h3>
+          <p>Request to a protected endpoint with an invalid token. Server returns 401.</p>
+          <button class="bug-trigger" onclick="trigger401()">Trigger Bug</button>
+        </div>
+
+        <!-- 15: 429 Rate Limit -->
+        <div class="bug-card">
+          <span class="badge badge-network">Rate Limit</span>
+          <h3>429 Too Many Requests</h3>
+          <p>Rapid API calls trigger rate limiting. Server returns 429.</p>
+          <button class="bug-trigger" onclick="trigger429()">Trigger Bug</button>
+        </div>
+
+        <!-- 16: WebSocket Failure -->
+        <div class="bug-card">
+          <span class="badge badge-network">WebSocket</span>
+          <h3>WebSocket Connection Failed</h3>
+          <p>Attempt to open a WebSocket to an invalid host. Connection error in console.</p>
+          <button class="bug-trigger" onclick="triggerWebSocketFail()">Trigger Bug</button>
+        </div>
+
+        <!-- 17: Long Blocking Task -->
+        <div class="bug-card">
+          <span class="badge badge-perf">Performance</span>
+          <h3>Main Thread Blocked</h3>
+          <p>
+            A synchronous computation blocks the main thread for 3 seconds. UI freezes completely.
+          </p>
+          <button class="bug-trigger" onclick="triggerLongTask()">Trigger Bug</button>
+        </div>
+
+        <!-- 18: Excessive DOM -->
+        <div class="bug-card">
+          <span class="badge badge-perf">Performance</span>
+          <h3>DOM Node Explosion</h3>
+          <p>Inserting 5000 DOM nodes in a tight loop causes layout thrashing and jank.</p>
+          <button class="bug-trigger" onclick="triggerDomExplosion()">Trigger Bug</button>
+        </div>
+
+        <!-- 19: Heavy Canvas -->
+        <div class="bug-card">
+          <span class="badge badge-perf">Performance</span>
+          <h3>Memory-Heavy Canvas</h3>
+          <p>
+            Creating an oversized canvas (8000&times;8000) to process an image. High memory usage.
+          </p>
+          <button class="bug-trigger" onclick="triggerHeavyCanvas()">Trigger Bug</button>
+        </div>
+
+        <!-- 20: localStorage Quota -->
+        <div class="bug-card">
+          <span class="badge badge-crash">Storage Error</span>
+          <h3>localStorage Quota Exceeded</h3>
+          <p>Writing too much data to localStorage. Throws DOMException: QuotaExceededError.</p>
+          <button class="bug-trigger" onclick="triggerStorageQuota()">Trigger Bug</button>
+        </div>
+
+        <!-- 21: Stale Closure -->
+        <div class="bug-card">
+          <span class="badge badge-ux">State Bug</span>
+          <h3>Stale State in Handler</h3>
+          <p>Click handler captures old state value. Displayed count doesn't match actual count.</p>
+          <button class="bug-trigger" onclick="triggerStaleClosure()">Trigger Bug</button>
+        </div>
+
+        <!-- 22: Z-Index Conflict -->
+        <div class="bug-card">
+          <span class="badge badge-ux">CSS Bug</span>
+          <h3>Dropdown Behind Header</h3>
+          <p>A dropdown menu renders behind the sticky navigation bar due to z-index conflict.</p>
+          <button class="bug-trigger" onclick="triggerZIndex()">Trigger Bug</button>
+        </div>
+
+        <!-- 23: Layout Shift -->
+        <div class="bug-card">
+          <span class="badge badge-ux">CSS Bug</span>
+          <h3>Content Layout Shift</h3>
+          <p>Late-loading content pushes the page down, causing a jarring layout shift.</p>
+          <button class="bug-trigger" onclick="triggerLayoutShift()">Trigger Bug</button>
+        </div>
+
+        <!-- 24: Unhandled Promise -->
+        <div class="bug-card">
+          <span class="badge badge-crash">JS Crash</span>
+          <h3>Unhandled Promise Rejection</h3>
+          <p>
+            A promise rejects without a catch handler. Triggers the global unhandledrejection event.
+          </p>
+          <button class="bug-trigger" onclick="triggerUnhandledPromise()">Trigger Bug</button>
+        </div>
+
+        <!-- 25: Event Listener Leak -->
+        <div class="bug-card">
+          <span class="badge badge-perf">Memory Leak</span>
+          <h3>Event Listener Leak</h3>
+          <p>Adding 100 scroll listeners without cleanup. Memory grows, performance degrades.</p>
+          <button class="bug-trigger" onclick="triggerListenerLeak()">Trigger Bug</button>
+        </div>
+      </div>
+
       <!-- v2.1 Feature Demo: Sensitive Data Protection -->
       <h2 class="section-title">
         Sensitive Data Protection <span style="font-size: 0.7em; color: #d35400">(v2.1)</span>
@@ -989,6 +1156,585 @@
           );
         };
         imgDiv.appendChild(img);
+      }
+
+      // ========================================================================
+      // Bug 7: JSON.parse crash on malformed response
+      // ========================================================================
+      async function triggerJsonParseCrash() {
+        console.log('[API] Fetching user preferences...');
+        try {
+          // Simulate receiving malformed JSON from API
+          const malformed = '{"user": "jane", "prefs": {broken';
+          console.log('[API] Raw response body:', malformed);
+          JSON.parse(malformed);
+        } catch (error) {
+          console.error('[API] JSON parse failed:', error.message);
+          showToast('JSON parse error: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'JSON parse crash: ' + error.message,
+            'The /api/user/preferences endpoint returned malformed JSON. The app crashes when trying to parse the response body. This breaks the settings page entirely.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 8: Stack overflow from recursive function
+      // ========================================================================
+      async function triggerStackOverflow() {
+        console.log('[Render] Updating component tree...');
+        try {
+          function renderComponent(depth) {
+            console.log('[Render] Rendering at depth ' + depth);
+            return renderComponent(depth + 1); // infinite recursion
+          }
+          renderComponent(0);
+        } catch (error) {
+          console.error('[Render] Stack overflow:', error.message);
+          showToast('Stack overflow: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Stack overflow in component render',
+            'A recursive component update triggers infinite re-rendering. The call stack exceeds the maximum size, crashing the page. Likely caused by a state update inside a render cycle.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 9: Null reference on missing DOM element
+      // ========================================================================
+      async function triggerNullDom() {
+        console.log('[Profile] Loading user profile section...');
+        try {
+          // Element was conditionally rendered and doesn't exist
+          const el = document.getElementById('user-avatar-container');
+          console.log('[Profile] Setting avatar for user...');
+          el.textContent = 'John Doe'; // TypeError: null
+        } catch (error) {
+          console.error('[Profile] DOM reference error:', error.message);
+          showToast('DOM error: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Null DOM reference: ' + error.message,
+            'The profile page tries to update #user-avatar-container which does not exist in the DOM. The element is conditionally rendered and missing when the user has no avatar set.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 10: Array out-of-bounds access
+      // ========================================================================
+      async function triggerArrayBounds() {
+        console.log('[List] Processing item list...');
+        try {
+          const items = ['Widget A', 'Widget B', 'Widget C'];
+          console.log('[List] Items loaded:', items.length);
+          // Off-by-one: accessing index 3 of a 3-element array
+          const lastItem = items[items.length]; // undefined
+          console.log('[List] Formatting last item...');
+          const formatted = lastItem.toString().toUpperCase(); // TypeError on undefined
+        } catch (error) {
+          console.error('[List] Array access error:', error.message);
+          showToast('Array error: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Array index out of bounds: ' + error.message,
+            'Off-by-one error when accessing the last element of the item list. Code uses items[items.length] instead of items[items.length - 1], resulting in undefined access.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 11: Invalid date formatting
+      // ========================================================================
+      async function triggerInvalidDate() {
+        console.log('[DatePicker] Parsing selected date...');
+        try {
+          const userInput = '2024-13-45'; // invalid month/day
+          console.log('[DatePicker] User entered:', userInput);
+          const date = new Date(userInput);
+          console.log('[DatePicker] Parsed date object:', date);
+          // toISOString() throws on Invalid Date
+          const iso = date.toISOString();
+        } catch (error) {
+          console.error('[DatePicker] Date format error:', error.message);
+          showToast('Date error: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Invalid date crash: ' + error.message,
+            'The date picker accepts free-text input without validation. Entering "2024-13-45" creates an Invalid Date object, and calling toISOString() throws a RangeError.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 12: CORS blocked fetch
+      // ========================================================================
+      async function triggerCorsError() {
+        console.log('[API] Fetching external resource...');
+        try {
+          const resp = await fetch('https://httpbin.org/status/200', {
+            mode: 'cors',
+            headers: { 'X-Custom-Header': 'test' },
+          });
+        } catch (error) {
+          console.error('[API] CORS error:', error.message);
+          showToast('CORS blocked: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'CORS error: cross-origin request blocked',
+            'Fetch to external API blocked by browser CORS policy. The request includes a custom header that triggers a preflight OPTIONS request, which the server does not handle.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 13: Network timeout via AbortController
+      // ========================================================================
+      async function triggerNetworkTimeout() {
+        console.log('[API] Fetching with 2s timeout...');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+        try {
+          // Use the mock backend's slow endpoint, or a URL that will hang
+          const resp = await fetch(DEMO_CONFIG.endpoint + '/api/bugs/error/503', {
+            signal: controller.signal,
+            headers: { 'X-API-Key': DEMO_CONFIG.apiKey },
+          });
+        } catch (error) {
+          clearTimeout(timeoutId);
+          console.error('[API] Request timed out:', error.message);
+          showToast('Request timeout: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Network timeout: request aborted after 2s',
+            'The API call to /api/bugs/error/503 did not respond within 2 seconds. The request was aborted via AbortController. This blocks the user from completing their action.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 14: 401 Unauthorized
+      // ========================================================================
+      async function trigger401() {
+        console.log('[Auth] Accessing protected resource...');
+        try {
+          const resp = await fetch(DEMO_CONFIG.endpoint + '/api/bugs', {
+            headers: { Authorization: 'Bearer invalid-token-expired' },
+          });
+          if (!resp.ok) {
+            throw new Error('Server returned ' + resp.status + ' ' + resp.statusText);
+          }
+        } catch (error) {
+          console.error('[Auth] Authentication failed:', error.message);
+          showToast('Auth error: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            '401 Unauthorized: authentication failed',
+            'Request to protected endpoint returned 401. The bearer token has expired or is invalid. User is unable to access their data until they re-authenticate.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 15: 429 Rate Limited
+      // ========================================================================
+      async function trigger429() {
+        console.log('[API] Sending rapid requests...');
+        const results = [];
+        try {
+          // Fire 5 rapid requests to trigger rate limiting
+          for (let i = 0; i < 5; i++) {
+            console.log('[API] Request ' + (i + 1) + '/5');
+            const resp = await fetch(DEMO_CONFIG.endpoint + '/api/bugs/error/429', {
+              headers: { 'X-API-Key': DEMO_CONFIG.apiKey },
+            });
+            results.push(resp.status);
+          }
+          const rateLimited = results.filter((s) => s === 429);
+          if (rateLimited.length > 0) {
+            throw new Error(
+              'Rate limited: ' +
+                rateLimited.length +
+                ' of ' +
+                results.length +
+                ' requests returned 429'
+            );
+          }
+        } catch (error) {
+          console.error('[API] Rate limit hit:', error.message);
+          showToast('Rate limited: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            '429 Too Many Requests: rate limit exceeded',
+            'Rapid API calls triggered server-side rate limiting. Multiple requests returned HTTP 429. The user experiences failed actions and must wait before retrying.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 16: WebSocket connection failure
+      // ========================================================================
+      async function triggerWebSocketFail() {
+        console.log('[WebSocket] Connecting to notification service...');
+        try {
+          const ws = new WebSocket('wss://invalid-ws-host.example.com/notifications');
+          await new Promise((resolve, reject) => {
+            ws.onerror = function (event) {
+              console.error('[WebSocket] Connection failed');
+              reject(new Error('WebSocket connection to wss://invalid-ws-host.example.com failed'));
+            };
+            ws.onopen = resolve;
+            // Timeout fallback
+            setTimeout(() => reject(new Error('WebSocket connection timed out')), 5000);
+          });
+        } catch (error) {
+          console.error('[WebSocket] Error:', error.message);
+          showToast('WebSocket failed: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'WebSocket connection failed',
+            'The app failed to establish a WebSocket connection to the notification service at wss://invalid-ws-host.example.com. Real-time updates are unavailable. Users will not receive live notifications.',
+            report
+          );
+        }
+      }
+
+      // ========================================================================
+      // Bug 17: Long blocking task (3s sync loop)
+      // ========================================================================
+      async function triggerLongTask() {
+        console.log('[Compute] Starting heavy computation...');
+        console.warn('[Performance] Main thread will be blocked');
+        showToast('UI will freeze for ~3 seconds...', 'info', 1000);
+
+        // Allow toast to render before blocking
+        await new Promise((r) => setTimeout(r, 100));
+
+        const start = performance.now();
+        // Synchronous blocking loop
+        let sum = 0;
+        while (performance.now() - start < 3000) {
+          sum += Math.random();
+        }
+        const elapsed = Math.round(performance.now() - start);
+
+        console.error('[Performance] Main thread blocked for ' + elapsed + 'ms');
+        console.warn('[Performance] Long task detected: ' + elapsed + 'ms (threshold: 50ms)');
+        showToast('UI was frozen for ' + (elapsed / 1000).toFixed(1) + 's', 'error');
+
+        var sdk = await getSDK();
+        const report = await sdk.capture();
+        await submitReport(
+          'Main thread blocked for ' + (elapsed / 1000).toFixed(1) + 's',
+          'A synchronous computation blocked the main thread for ' +
+            elapsed +
+            'ms. The UI was completely frozen during this time. Users cannot interact with the page, scroll, or click anything.',
+          report
+        );
+      }
+
+      // ========================================================================
+      // Bug 18: Excessive DOM manipulation (5000 nodes)
+      // ========================================================================
+      async function triggerDomExplosion() {
+        console.log('[Gallery] Rendering all items without virtualization...');
+        const container = document.createElement('div');
+        container.id = 'dom-explosion-container';
+        container.style.cssText =
+          'max-height:200px;overflow:auto;border:2px solid #e53e3e;margin:1rem 0;padding:0.5rem;';
+
+        const start = performance.now();
+        for (let i = 0; i < 5000; i++) {
+          const node = document.createElement('div');
+          node.textContent = 'Item #' + i + ' — ' + Math.random().toString(36).substring(7);
+          node.style.cssText = 'padding:2px 4px;border-bottom:1px solid #eee;font-size:0.75rem;';
+          container.appendChild(node);
+        }
+        const elapsed = Math.round(performance.now() - start);
+
+        // Insert into page briefly then clean up
+        document.querySelector('.bug-grid:last-of-type').after(container);
+        console.error('[Gallery] Inserted 5000 DOM nodes in ' + elapsed + 'ms');
+        console.warn('[Performance] Forced reflow detected — consider virtualization');
+        showToast('5000 nodes inserted in ' + elapsed + 'ms', 'error');
+
+        var sdk = await getSDK();
+        const report = await sdk.capture();
+        await submitReport(
+          'DOM explosion: 5000 nodes inserted in ' + elapsed + 'ms',
+          'The gallery component renders all items without virtualization, inserting 5000 DOM nodes synchronously. This causes layout thrashing, forced reflows, and noticeable jank. List virtualization (e.g., react-window) is needed.',
+          report
+        );
+
+        // Clean up after capture
+        setTimeout(() => container.remove(), 5000);
+      }
+
+      // ========================================================================
+      // Bug 19: Memory-heavy canvas operation
+      // ========================================================================
+      async function triggerHeavyCanvas() {
+        console.log('[Upload] Processing uploaded image...');
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 8000;
+          canvas.height = 8000;
+          console.warn(
+            '[Upload] Creating 8000x8000 canvas (' +
+              Math.round((8000 * 8000 * 4) / 1024 / 1024) +
+              'MB)'
+          );
+          const ctx = canvas.getContext('2d');
+          // Fill with gradient to force memory allocation
+          const gradient = ctx.createLinearGradient(0, 0, 8000, 8000);
+          gradient.addColorStop(0, '#ff0000');
+          gradient.addColorStop(1, '#0000ff');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, 8000, 8000);
+          console.log('[Upload] Canvas rendered, extracting data...');
+          // This forces the full pixel data into memory
+          const imageData = ctx.getImageData(0, 0, 8000, 8000);
+          console.warn(
+            '[Upload] ImageData allocated: ' +
+              Math.round(imageData.data.length / 1024 / 1024) +
+              'MB'
+          );
+
+          showToast(
+            'Heavy canvas: ' + Math.round(imageData.data.length / 1024 / 1024) + 'MB allocated',
+            'error'
+          );
+        } catch (error) {
+          console.error('[Upload] Canvas operation failed:', error.message);
+          showToast('Canvas error: ' + error.message, 'error');
+        }
+
+        var sdk = await getSDK();
+        const report = await sdk.capture();
+        await submitReport(
+          'Memory-heavy canvas: 8000x8000 image processing',
+          'The image upload handler creates an oversized canvas (8000x8000 = 256MB raw pixel data) without checking dimensions first. This can crash tabs on low-memory devices and causes significant memory pressure.',
+          report
+        );
+      }
+
+      // ========================================================================
+      // Bug 20: localStorage quota exceeded
+      // ========================================================================
+      async function triggerStorageQuota() {
+        console.log('[Cache] Saving user data to localStorage...');
+        try {
+          // Generate a large string (~6MB) to exceed quota
+          const bigData = 'x'.repeat(6 * 1024 * 1024);
+          console.log(
+            '[Cache] Attempting to store ' + Math.round(bigData.length / 1024 / 1024) + 'MB...'
+          );
+          localStorage.setItem('bugspotter_demo_cache', bigData);
+        } catch (error) {
+          console.error('[Cache] Storage quota exceeded:', error.message);
+          showToast('Storage error: ' + error.message, 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'localStorage quota exceeded: ' + error.name,
+            'Attempting to save a large cache entry to localStorage throws QuotaExceededError. The app does not handle storage limits gracefully, causing the save to fail silently and losing user data.',
+            report
+          );
+        } finally {
+          // Clean up
+          localStorage.removeItem('bugspotter_demo_cache');
+        }
+      }
+
+      // ========================================================================
+      // Bug 21: Stale closure in event handler
+      // ========================================================================
+      async function triggerStaleClosure() {
+        console.log('[State] Demonstrating stale closure bug...');
+        let counter = 0;
+
+        // Create a handler that captures `counter` by reference at creation time
+        // but simulates stale closure by using a snapshot
+        const staleValue = counter; // captured as 0
+
+        // Simulate rapid state updates
+        for (let i = 0; i < 5; i++) {
+          counter++;
+        }
+        console.log('[State] Counter updated to:', counter);
+        console.error(
+          '[State] Stale closure: handler sees ' + staleValue + ' but actual value is ' + counter
+        );
+        showToast('Stale state: expected ' + counter + ', got ' + staleValue, 'error');
+
+        var sdk = await getSDK();
+        const report = await sdk.capture();
+        await submitReport(
+          'Stale closure: handler shows 0 instead of ' + counter,
+          'An event handler captured a stale reference to the counter state. After 5 rapid updates, the handler still shows 0 instead of the current value ' +
+            counter +
+            '. This is a classic React useEffect/useCallback closure bug.',
+          report
+        );
+      }
+
+      // ========================================================================
+      // Bug 22: Z-index conflict (dropdown behind header)
+      // ========================================================================
+      async function triggerZIndex() {
+        console.log('[UI] Opening dropdown menu...');
+        // Create a dropdown that renders behind the sticky nav
+        const dropdown = document.createElement('div');
+        dropdown.id = 'zindex-dropdown';
+        dropdown.style.cssText =
+          'position:absolute;top:60px;right:20px;background:#fff;border:1px solid #ccc;padding:0.5rem;z-index:50;box-shadow:0 4px 12px rgba(0,0,0,0.15);border-radius:4px;min-width:150px;';
+        dropdown.innerHTML =
+          '<div style="padding:4px 8px;color:#333;">My Account</div><div style="padding:4px 8px;color:#333;">Settings</div><div style="padding:4px 8px;color:#333;">Logout</div>';
+        document.body.appendChild(dropdown);
+
+        console.warn(
+          '[UI] Z-index conflict: dropdown (z-index:50) renders behind nav (z-index:100)'
+        );
+        console.error('[UI] Dropdown menu is not visible — covered by sticky header');
+        showToast('Dropdown hidden behind navigation bar', 'error');
+
+        var sdk = await getSDK();
+        const report = await sdk.capture();
+        await submitReport(
+          'Z-index bug: dropdown menu hidden behind header',
+          'The account dropdown menu has z-index:50 but the sticky navigation has z-index:100. The dropdown renders behind the nav bar and is completely inaccessible. Users cannot access account settings or logout.',
+          report
+        );
+
+        setTimeout(() => dropdown.remove(), 5000);
+      }
+
+      // ========================================================================
+      // Bug 23: Layout shift from late-loading content
+      // ========================================================================
+      async function triggerLayoutShift() {
+        console.log('[UI] Loading promotional banner...');
+        showToast('Watch the page shift...', 'info', 2000);
+
+        // Delay then inject a tall banner at the top, pushing everything down
+        setTimeout(async () => {
+          const banner = document.createElement('div');
+          banner.id = 'layout-shift-banner';
+          banner.style.cssText =
+            'background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:2rem;text-align:center;font-size:1.2rem;font-weight:bold;';
+          banner.textContent = 'FLASH SALE: 50% OFF EVERYTHING — Limited Time Only!';
+          document.querySelector('.buggy-nav').after(banner);
+
+          console.warn(
+            '[UI] Content layout shift detected — banner injected without reserved space'
+          );
+          console.error('[UI] CLS score exceeded threshold: elements shifted by ~120px');
+          showToast('Layout shift: content pushed down by 120px', 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Layout shift: late-loading banner pushes content down',
+            'A promotional banner loads 1.5 seconds after page render and injects itself below the nav without reserved space. All page content shifts down by ~120px. This is a poor CLS score and frustrating for users who are mid-scroll.',
+            report
+          );
+
+          setTimeout(() => banner.remove(), 8000);
+        }, 1500);
+      }
+
+      // ========================================================================
+      // Bug 24: Unhandled promise rejection
+      // ========================================================================
+      async function triggerUnhandledPromise() {
+        console.log('[Async] Starting background sync...');
+        console.warn('[Async] About to trigger unhandled promise rejection');
+
+        // Listen for the unhandled rejection to capture it
+        const handler = async function (event) {
+          console.error(
+            '[Async] Unhandled promise rejection:',
+            event.reason?.message || event.reason
+          );
+          showToast('Unhandled rejection: ' + (event.reason?.message || event.reason), 'error');
+
+          var sdk = await getSDK();
+          const report = await sdk.capture();
+          await submitReport(
+            'Unhandled promise rejection: ' + (event.reason?.message || event.reason),
+            'A background synchronization promise rejected without a catch handler. The error is silently swallowed unless the global unhandledrejection event is monitored. Data may be lost or stale.',
+            report
+          );
+          window.removeEventListener('unhandledrejection', handler);
+        };
+        window.addEventListener('unhandledrejection', handler);
+
+        // Fire and forget — no .catch()
+        Promise.reject(new Error('Background sync failed: connection reset'));
+      }
+
+      // ========================================================================
+      // Bug 25: Event listener leak
+      // ========================================================================
+      async function triggerListenerLeak() {
+        console.log('[Performance] Simulating event listener leak...');
+        const listeners = [];
+
+        for (let i = 0; i < 100; i++) {
+          const fn = function () {
+            /* leaked scroll handler #' + i + ' */
+          };
+          window.addEventListener('scroll', fn);
+          listeners.push(fn);
+        }
+        console.error('[Performance] Added 100 scroll event listeners without cleanup');
+        console.warn('[Performance] Memory leak: listener count growing on every component mount');
+        console.warn('[Performance] Expected: 1 scroll listener, Actual: 100+');
+        showToast('100 scroll listeners leaked!', 'error');
+
+        var sdk = await getSDK();
+        const report = await sdk.capture();
+        await submitReport(
+          'Event listener leak: 100 scroll handlers registered',
+          'Each component mount adds a new scroll listener without removing the previous one. After multiple navigations, 100+ duplicate listeners accumulate, causing noticeable scroll jank and memory growth.',
+          report
+        );
+
+        // Clean up to not actually degrade the demo
+        listeners.forEach((fn) => window.removeEventListener('scroll', fn));
       }
 
       // ========================================================================
