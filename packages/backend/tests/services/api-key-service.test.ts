@@ -169,6 +169,7 @@ describe('ApiKeyService', () => {
         changes: {
           type: 'production',
           permission_scope: 'read',
+          permissions: ['reports:read', 'sessions:read'],
         },
       });
     });
@@ -304,6 +305,7 @@ describe('ApiKeyService', () => {
           rotated_from: 'old-key',
           type: 'development',
           permission_scope: 'write',
+          permissions: ['reports:read', 'reports:write', 'sessions:read', 'sessions:write'],
         },
       });
     });

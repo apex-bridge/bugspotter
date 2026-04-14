@@ -315,6 +315,7 @@ export class ApiKeyService {
             rotated_from: oldKeyId,
             type: newKey.type,
             permission_scope: newKey.permission_scope,
+            permissions: newKey.permissions,
           },
         });
 
