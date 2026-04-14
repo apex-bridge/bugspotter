@@ -6,6 +6,7 @@ export interface ApiKey {
   type: ApiKeyType;
   allowed_projects: string[] | null;
   key_prefix: string;
+  permission_scope: PermissionScope;
   permissions: string[];
   status: ApiKeyStatus;
   expires_at: string | null;

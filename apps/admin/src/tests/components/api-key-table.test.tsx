@@ -39,6 +39,7 @@ describe('ApiKeyTable', () => {
     type: 'production',
     allowed_projects: ['proj-1'],
     key_prefix: 'bgs_test12',
+    permission_scope: 'custom',
     permissions: ['reports:read', 'reports:write'],
     status: 'active',
     expires_at: null,
@@ -339,6 +340,189 @@ describe('ApiKeyTable', () => {
       // Project column is the 4th cell (0-indexed: 3)
       const projectCell = cells[3];
       expect(projectCell).toHaveTextContent('Unknown');
+    });
+  });
+
+  describe('Permission Display', () => {
+    // Helper to get the permissions cell content for a given key config
+    function renderAndGetPermissionsCell(overrides: Partial<ApiKey>) {
+      const name = overrides.name || 'test-key';
+      const apiKeys = [createMockApiKey({ name, ...overrides })];
+      render(
+        <ApiKeyTable
+          apiKeys={apiKeys}
+          projects={mockProjects}
+          isLoading={false}
+          {...mockHandlers}
+        />
+      );
+      const row = screen.getByRole('row', { name: new RegExp(name, 'i') });
+      const cells = within(row).getAllByRole('cell');
+      return cells[4]; // Permissions column is 5th cell (0-indexed: 4)
+    }
+
+    describe('Predefined scopes (permissions array empty)', () => {
+      it.each([
+        { scope: 'full', label: 'full' },
+        { scope: 'read', label: 'read' },
+        { scope: 'write', label: 'write' },
+      ] as const)(
+        'should display "$scope" badge for permission_scope="$scope"',
+        ({ scope, label }) => {
+          const cell = renderAndGetPermissionsCell({
+            permission_scope: scope,
+            permissions: [],
+            name: `${scope}-scope-key`,
+          });
+          expect(cell).toHaveTextContent(label);
+        }
+      );
+    });
+
+    describe('Custom scope — individual permissions', () => {
+      it.each([
+        'reports:read',
+        'reports:write',
+        'reports:update',
+        'reports:delete',
+        'sessions:read',
+        'sessions:write',
+      ])('should display single custom permission "%s"', (permission) => {
+        const safeName = permission.replace(':', '-');
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: [permission],
+          name: `single-${safeName}`,
+        });
+        expect(cell).toHaveTextContent(permission);
+      });
+    });
+
+    describe('Custom scope — permission combinations', () => {
+      it('should display reports:read + reports:write', () => {
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: ['reports:read', 'reports:write'],
+          name: 'combo-rw',
+        });
+        expect(cell).toHaveTextContent('reports:read');
+        expect(cell).toHaveTextContent('reports:write');
+      });
+
+      it('should display all report permissions', () => {
+        const allReportPerms = [
+          'reports:read',
+          'reports:write',
+          'reports:update',
+          'reports:delete',
+        ];
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: allReportPerms,
+          name: 'combo-all-reports',
+        });
+        for (const perm of allReportPerms) {
+          expect(cell).toHaveTextContent(perm);
+        }
+      });
+
+      it('should display all session permissions', () => {
+        const allSessionPerms = ['sessions:read', 'sessions:write'];
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: allSessionPerms,
+          name: 'combo-all-sessions',
+        });
+        for (const perm of allSessionPerms) {
+          expect(cell).toHaveTextContent(perm);
+        }
+      });
+
+      it('should display mixed reports + sessions permissions', () => {
+        const mixed = ['reports:write', 'sessions:read'];
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: mixed,
+          name: 'combo-mixed',
+        });
+        for (const perm of mixed) {
+          expect(cell).toHaveTextContent(perm);
+        }
+      });
+
+      it('should display all 6 permissions at once', () => {
+        const allPerms = [
+          'reports:read',
+          'reports:write',
+          'reports:update',
+          'reports:delete',
+          'sessions:read',
+          'sessions:write',
+        ];
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: allPerms,
+          name: 'combo-all',
+        });
+        for (const perm of allPerms) {
+          expect(cell).toHaveTextContent(perm);
+        }
+      });
+
+      it('should display default SDK permissions (reports:write + sessions:write)', () => {
+        const defaults = ['reports:write', 'sessions:write'];
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: defaults,
+          name: 'combo-defaults',
+        });
+        for (const perm of defaults) {
+          expect(cell).toHaveTextContent(perm);
+        }
+      });
+    });
+
+    describe('Edge cases', () => {
+      it('should show nothing when both permissions and permission_scope are empty', () => {
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: '' as 'custom',
+          permissions: [],
+          name: 'empty-everything',
+        });
+        expect(cell.textContent).toBe('');
+      });
+
+      it('should prefer permissions array over permission_scope when both present', () => {
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'write',
+          permissions: ['reports:read'],
+          name: 'both-present',
+        });
+        // When permissions array has items, those should display (not the scope)
+        expect(cell).toHaveTextContent('reports:read');
+        expect(cell).not.toHaveTextContent('write');
+      });
+
+      it('should render correct badge count matching permissions array length', () => {
+        const perms = ['reports:read', 'reports:write', 'sessions:read'];
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'custom',
+          permissions: perms,
+          name: 'badge-count',
+        });
+        const badges = cell.querySelectorAll('span');
+        expect(badges).toHaveLength(perms.length);
+      });
+
+      it('should render exactly 1 badge for predefined scope with empty permissions', () => {
+        const cell = renderAndGetPermissionsCell({
+          permission_scope: 'write',
+          permissions: [],
+          name: 'single-badge',
+        });
+        const badges = cell.querySelectorAll('span');
+        expect(badges).toHaveLength(1);
+      });
     });
   });
 

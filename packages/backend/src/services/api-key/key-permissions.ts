@@ -129,8 +129,14 @@ export function checkPermission(key: ApiKey, requiredScope: string): PermissionC
 
     // Then check if required permission matches the scope pattern
     // E.g., permission_scope 'read' allows 'bugs:read', 'projects:read', etc.
+    // Write scope implies read access (write is a superset of read)
     const scopePattern = `:${key.permission_scope}`;
     if (requiredScope.endsWith(scopePattern) || requiredScope === key.permission_scope) {
+      return { allowed: true };
+    }
+
+    // Write scope also allows read operations
+    if (key.permission_scope === PERMISSION_SCOPE.WRITE && requiredScope.endsWith(':read')) {
       return { allowed: true };
     }
 

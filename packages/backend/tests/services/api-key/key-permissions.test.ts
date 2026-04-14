@@ -302,7 +302,7 @@ describe('key-permissions', () => {
     it('should allow read scope for any :read permission (pattern matching)', () => {
       const key = createApiKey({
         permission_scope: PERMISSION_SCOPE.READ,
-        permissions: null,
+        permissions: [],
       });
 
       expect(checkPermission(key, 'bugs:read')).toEqual({ allowed: true });
@@ -313,7 +313,7 @@ describe('key-permissions', () => {
     it('should allow write scope for any :write permission (pattern matching)', () => {
       const key = createApiKey({
         permission_scope: PERMISSION_SCOPE.WRITE,
-        permissions: null,
+        permissions: [],
       });
 
       expect(checkPermission(key, 'bugs:write')).toEqual({ allowed: true });
@@ -324,7 +324,7 @@ describe('key-permissions', () => {
     it('should deny read scope for write operations', () => {
       const key = createApiKey({
         permission_scope: PERMISSION_SCOPE.READ,
-        permissions: null,
+        permissions: [],
       });
 
       const result = checkPermission(key, 'bugs:write');
@@ -334,17 +334,28 @@ describe('key-permissions', () => {
       expect(result.reason).toContain('*:read');
     });
 
-    it('should deny write scope for read operations', () => {
+    it('should allow write scope for read operations (write implies read)', () => {
       const key = createApiKey({
         permission_scope: PERMISSION_SCOPE.WRITE,
-        permissions: null,
+        permissions: [],
       });
 
-      const result = checkPermission(key, 'bugs:read');
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('bugs:read');
-      expect(result.reason).toContain('write');
-      expect(result.reason).toContain('*:write');
+      expect(checkPermission(key, 'bugs:read')).toEqual({ allowed: true });
+      expect(checkPermission(key, 'projects:read')).toEqual({ allowed: true });
+      expect(checkPermission(key, 'users:read')).toEqual({ allowed: true });
+      expect(checkPermission(key, 'sessions:read')).toEqual({ allowed: true });
+    });
+
+    it('should deny read scope for write operations (read does NOT imply write)', () => {
+      const key = createApiKey({
+        permission_scope: PERMISSION_SCOPE.READ,
+        permissions: [],
+      });
+
+      expect(checkPermission(key, 'bugs:write').allowed).toBe(false);
+      expect(checkPermission(key, 'projects:write').allowed).toBe(false);
+      expect(checkPermission(key, 'users:write').allowed).toBe(false);
+      expect(checkPermission(key, 'sessions:write').allowed).toBe(false);
     });
 
     it('should prioritize explicit permissions over pattern matching', () => {
@@ -367,7 +378,7 @@ describe('key-permissions', () => {
     it('should handle custom scope without permissions array gracefully', () => {
       const key = createApiKey({
         permission_scope: PERMISSION_SCOPE.CUSTOM,
-        permissions: null,
+        permissions: [],
       });
 
       const result = checkPermission(key, 'bugs:read');
@@ -378,12 +389,103 @@ describe('key-permissions', () => {
     it('should handle unknown permission scope', () => {
       const key = createApiKey({
         permission_scope: 'unknown' as any,
-        permissions: null,
+        permissions: [],
       });
 
       const result = checkPermission(key, 'bugs:read');
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe('Unknown permission scope: unknown');
+    });
+  });
+
+  // ============================================================================
+  // SCOPE ACCESS MATRIX
+  // ============================================================================
+
+  describe('scope access matrix', () => {
+    const RESOURCES = ['reports', 'sessions', 'bugs', 'projects'] as const;
+    const ACTIONS = ['read', 'write'] as const;
+
+    // Expected access for each scope
+    // full: everything allowed
+    // read: only :read
+    // write: :read + :write (write implies read)
+    // custom: only explicit permissions
+
+    describe('full scope — allows everything', () => {
+      const key = createApiKey({ permission_scope: PERMISSION_SCOPE.FULL });
+
+      for (const resource of RESOURCES) {
+        for (const action of ACTIONS) {
+          it(`should allow ${resource}:${action}`, () => {
+            expect(checkPermission(key, `${resource}:${action}`)).toEqual({ allowed: true });
+          });
+        }
+      }
+    });
+
+    describe('read scope — allows only :read', () => {
+      const key = createApiKey({ permission_scope: PERMISSION_SCOPE.READ, permissions: [] });
+
+      for (const resource of RESOURCES) {
+        it(`should allow ${resource}:read`, () => {
+          expect(checkPermission(key, `${resource}:read`)).toEqual({ allowed: true });
+        });
+
+        it(`should deny ${resource}:write`, () => {
+          expect(checkPermission(key, `${resource}:write`).allowed).toBe(false);
+        });
+      }
+    });
+
+    describe('write scope — allows :read and :write', () => {
+      const key = createApiKey({ permission_scope: PERMISSION_SCOPE.WRITE, permissions: [] });
+
+      for (const resource of RESOURCES) {
+        it(`should allow ${resource}:write`, () => {
+          expect(checkPermission(key, `${resource}:write`)).toEqual({ allowed: true });
+        });
+
+        it(`should allow ${resource}:read (write implies read)`, () => {
+          expect(checkPermission(key, `${resource}:read`)).toEqual({ allowed: true });
+        });
+      }
+    });
+
+    describe('custom scope — allows only explicit permissions', () => {
+      it('should allow only listed permissions and deny everything else', () => {
+        const key = createApiKey({
+          permission_scope: PERMISSION_SCOPE.CUSTOM,
+          permissions: ['reports:write', 'sessions:read'],
+        });
+
+        expect(checkPermission(key, 'reports:write')).toEqual({ allowed: true });
+        expect(checkPermission(key, 'sessions:read')).toEqual({ allowed: true });
+        expect(checkPermission(key, 'reports:read').allowed).toBe(false);
+        expect(checkPermission(key, 'sessions:write').allowed).toBe(false);
+        expect(checkPermission(key, 'bugs:read').allowed).toBe(false);
+        expect(checkPermission(key, 'bugs:write').allowed).toBe(false);
+      });
+
+      it.each([
+        'reports:read',
+        'reports:write',
+        'reports:update',
+        'reports:delete',
+        'sessions:read',
+        'sessions:write',
+      ])('should allow single permission "%s" and deny others', (permission) => {
+        const key = createApiKey({
+          permission_scope: PERMISSION_SCOPE.CUSTOM,
+          permissions: [permission],
+        });
+
+        expect(checkPermission(key, permission)).toEqual({ allowed: true });
+
+        // Pick a different permission and verify it's denied
+        const other = permission === 'reports:read' ? 'reports:write' : 'reports:read';
+        expect(checkPermission(key, other).allowed).toBe(false);
+      });
     });
   });
 
