@@ -199,9 +199,8 @@ export class ApiKeyService {
       // Resolve permission scope into concrete permissions array
       // If permissions are explicitly provided without a scope, treat as 'custom'
       // to avoid unintended privilege escalation (defaulting to 'full' would override them)
-      const effectiveScope =
-        data.permission_scope ||
-        (data.permissions && data.permissions.length > 0 ? 'custom' : 'full');
+      const effectiveScope = data.permission_scope || (data.permissions ? 'custom' : 'full');
+      this.validatePermissions(effectiveScope, data.permissions);
       const resolvedPermissions = resolvePermissions(effectiveScope, data.permissions);
 
       // Generate plaintext key and hash
@@ -215,6 +214,7 @@ export class ApiKeyService {
       const key = await this.db.apiKeys.create({
         ...data,
         name: sanitizedName,
+        permission_scope: effectiveScope,
         permissions: resolvedPermissions,
         key_hash: keyHash,
         key_prefix: prefix,

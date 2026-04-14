@@ -361,6 +361,7 @@ describe('ApiKeyTable', () => {
       const permissionsColumnIndex = headers.findIndex((header) =>
         /permissions/i.test(header.textContent || '')
       );
+      expect(permissionsColumnIndex).toBeGreaterThanOrEqual(0);
       const row = screen.getByRole('row', { name: new RegExp(name, 'i') });
       const cells = within(row).getAllByRole('cell');
       return cells[permissionsColumnIndex];
