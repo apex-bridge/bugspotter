@@ -749,11 +749,11 @@ describe('ApiKeyService', () => {
   // ============================================================================
 
   describe('checkPermission', () => {
-    it('should allow full scope with permissions', () => {
+    it('should allow full scope with wildcard permission', () => {
       const key = {
         id: 'key-123',
         permission_scope: 'full',
-        permissions: ['bugs:read'], // Need at least one permission
+        permissions: ['*'], // Resolved from full scope at creation time
       } as unknown as ApiKey;
 
       const result = service.checkPermission(key, 'bugs:delete');
@@ -771,7 +771,7 @@ describe('ApiKeyService', () => {
       const result = service.checkPermission(key, 'bugs:delete');
 
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Missing required permission');
+      expect(result.reason).toContain('Missing permission');
     });
 
     it('should check specific permissions for read scope', () => {
