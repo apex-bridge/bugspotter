@@ -1,0 +1,218 @@
+/**
+ * Subdomain Service
+ * Generates and validates tenant subdomains for self-service signup.
+ * Handles slugification, reserved-name blocking, uniqueness across
+ * `organizations` and `organization_requests` (to avoid collision when
+ * a pending enterprise request is later approved).
+ */
+
+import type { DatabaseClient } from '../../db/client.js';
+import { AppError } from '../../api/middleware/error.js';
+
+const SUBDOMAIN_MIN_LENGTH = 3;
+const SUBDOMAIN_MAX_LENGTH = 63;
+const MAX_AUTO_SUFFIX_ATTEMPTS = 50;
+
+/**
+ * DNS-safe subdomain pattern: lowercase alphanumeric + single hyphens,
+ * no leading/trailing hyphen, 3–63 chars (LDH rule minus TLD constraints).
+ */
+const SUBDOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
+
+/**
+ * Subdomains reserved for platform infrastructure. Blocking these prevents
+ * tenants from impersonating api/admin/support surfaces or colliding with
+ * existing DNS records on *.kz.bugspotter.io.
+ */
+const RESERVED_SUBDOMAINS = new Set([
+  // Platform infra
+  'app',
+  'api',
+  'admin',
+  'www',
+  'mail',
+  'static',
+  'cdn',
+  'assets',
+  'media',
+  'uploads',
+  'files',
+  // Environments
+  'staging',
+  'dev',
+  'test',
+  'demo',
+  'preview',
+  'sandbox',
+  'local',
+  // Product surfaces
+  'docs',
+  'blog',
+  'status',
+  'help',
+  'support',
+  'billing',
+  'auth',
+  'login',
+  'signup',
+  'register',
+  'onboarding',
+  // Generic reserved
+  'root',
+  'system',
+  'public',
+  'private',
+  'internal',
+  // Monitoring/ops
+  'grafana',
+  'prometheus',
+  'kibana',
+  'logs',
+  'metrics',
+]);
+
+export class SubdomainService {
+  constructor(private readonly db: DatabaseClient) {}
+
+  /**
+   * Convert an organization name into a DNS-safe subdomain candidate.
+   * Strategy: lowercase → replace non-[a-z0-9] with hyphens → collapse
+   * consecutive hyphens → trim leading/trailing hyphens → truncate to
+   * SUBDOMAIN_MAX_LENGTH → trim edge hyphens again in case the truncation
+   * landed on one.
+   * Returns empty string if nothing usable remains (caller must handle).
+   */
+  slugify(input: string): string {
+    const normalized = input
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    // Truncate first, then re-trim — truncation can land on a `-` and leave
+    // a trailing hyphen that would fail LDH validation.
+    return normalized.slice(0, SUBDOMAIN_MAX_LENGTH).replace(/^-|-$/g, '');
+  }
+
+  /**
+   * Validate subdomain format and reserved-name policy.
+   * Does NOT check uniqueness — use isAvailable() for that.
+   */
+  validateFormat(subdomain: string): void {
+    if (subdomain.length < SUBDOMAIN_MIN_LENGTH) {
+      throw new AppError(
+        `Subdomain must be at least ${SUBDOMAIN_MIN_LENGTH} characters`,
+        400,
+        'ValidationError'
+      );
+    }
+    if (subdomain.length > SUBDOMAIN_MAX_LENGTH) {
+      throw new AppError(
+        `Subdomain must be at most ${SUBDOMAIN_MAX_LENGTH} characters`,
+        400,
+        'ValidationError'
+      );
+    }
+    if (!SUBDOMAIN_REGEX.test(subdomain)) {
+      throw new AppError(
+        'Subdomain must contain only lowercase letters, numbers, and hyphens (no leading/trailing hyphen)',
+        400,
+        'ValidationError'
+      );
+    }
+    if (RESERVED_SUBDOMAINS.has(subdomain)) {
+      throw new AppError('This subdomain is reserved', 400, 'ValidationError');
+    }
+  }
+
+  /**
+   * Check if a subdomain is available across both `organizations` (active
+   * tenants — subdomain stays reserved for soft-deleted rows until hard
+   * delete) and `organization_requests` (non-terminal enterprise flow that
+   * could later approve into a real org).
+   *
+   * The pre-existing `organizationRequests.isSubdomainTaken()` queries the
+   * organizations table despite its name; we use the request-table-specific
+   * method here to get the intended behavior.
+   */
+  async isAvailable(subdomain: string): Promise<boolean> {
+    const normalized = subdomain.toLowerCase();
+
+    const orgTaken = !(await this.db.organizations.isSubdomainAvailable(normalized));
+    if (orgTaken) {
+      return false;
+    }
+
+    const requestReserved =
+      await this.db.organizationRequests.isSubdomainReservedByRequest(normalized);
+    if (requestReserved) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Generate a unique subdomain from a seed (e.g. company name).
+   * If the slugified seed collides, appends numeric suffixes (-2, -3, ...).
+   * Throws if the seed yields no usable slug or suffixes exhaust.
+   *
+   * Used for auto-suggesting a subdomain from company_name at signup.
+   * The caller may still let the user override before commit.
+   */
+  async generateUniqueFromName(name: string): Promise<string> {
+    const base = this.slugify(name);
+    if (base.length < SUBDOMAIN_MIN_LENGTH) {
+      throw new AppError(
+        'Could not derive a valid subdomain from the organization name',
+        400,
+        'ValidationError',
+        { hint: 'Try a name with at least 3 alphanumeric characters' }
+      );
+    }
+
+    // Reserved base → fall through to suffixed attempts, which are not reserved.
+    const baseUsable = !RESERVED_SUBDOMAINS.has(base);
+
+    if (baseUsable && (await this.isAvailable(base))) {
+      return base;
+    }
+
+    for (let i = 2; i <= MAX_AUTO_SUFFIX_ATTEMPTS; i++) {
+      // Leave room for the suffix so total length stays within limit.
+      // Re-trim the sliced base so we don't end up with "foo--2" when the
+      // cut-off character is a hyphen.
+      const suffix = `-${i}`;
+      const maxBase = SUBDOMAIN_MAX_LENGTH - suffix.length;
+      const trimmedBase = base.slice(0, maxBase).replace(/-+$/, '');
+      if (trimmedBase.length < SUBDOMAIN_MIN_LENGTH) {
+        continue;
+      }
+      const candidate = `${trimmedBase}${suffix}`;
+      if (await this.isAvailable(candidate)) {
+        return candidate;
+      }
+    }
+
+    throw new AppError(
+      'Could not generate a unique subdomain — please choose one manually',
+      409,
+      'Conflict'
+    );
+  }
+
+  /**
+   * Full validation pipeline for a user-provided subdomain at signup:
+   * normalize → format check → reserved check → uniqueness.
+   * Throws AppError with a specific code on any failure.
+   */
+  async assertValidAndAvailable(subdomain: string): Promise<string> {
+    const normalized = subdomain.toLowerCase().trim();
+    this.validateFormat(normalized);
+    if (!(await this.isAvailable(normalized))) {
+      throw new AppError('This subdomain is already taken', 409, 'Conflict');
+    }
+    return normalized;
+  }
+}

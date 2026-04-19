@@ -35,6 +35,18 @@ export interface JwtConfig {
 export interface AuthConfig {
   allowRegistration: boolean;
   requireInvitationToRegister: boolean;
+  selfServiceSignupEnabled: boolean;
+  /**
+   * Domain attribute for refresh_token cookie. When set (e.g. `.kz.bugspotter.io`),
+   * enables cross-subdomain SSO between the landing signup wizard and tenant
+   * admin UIs. When null/empty, the cookie is scoped to the emitting host.
+   */
+  cookieDomain: string | null;
+}
+
+export interface DataResidencyConfig {
+  /** Region code for this deployment (e.g. `kz`, `rf`). Used for signup and billing currency. */
+  region: string;
 }
 
 export interface FrontendConfig {
@@ -82,4 +94,5 @@ export interface AppConfig {
   shareToken: ShareTokenConfig;
   rateLimit: RateLimitConfig;
   storage: StorageConfig;
+  dataResidency: DataResidencyConfig;
 }

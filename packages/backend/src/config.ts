@@ -69,6 +69,10 @@ export const config: AppConfig = {
       parseBooleanEnv(process.env.ALLOW_REGISTRATION) ?? process.env.DEPLOYMENT_MODE === 'saas',
     requireInvitationToRegister:
       parseBooleanEnv(process.env.REQUIRE_INVITATION_TO_REGISTER) ?? true,
+    selfServiceSignupEnabled:
+      parseBooleanEnv(process.env.SELF_SERVICE_SIGNUP_ENABLED) ??
+      process.env.DEPLOYMENT_MODE === 'saas',
+    cookieDomain: process.env.COOKIE_DOMAIN?.trim() || null,
   },
   frontend: {
     url: process.env.FRONTEND_URL ?? '',
@@ -102,6 +106,9 @@ export const config: AppConfig = {
       maxRetries: parseInt(process.env.S3_MAX_RETRIES ?? '3', 10),
       timeout: parseInt(process.env.S3_TIMEOUT_MS ?? '30000', 10),
     },
+  },
+  dataResidency: {
+    region: (process.env.DATA_RESIDENCY_REGION ?? 'kz').toLowerCase(),
   },
 } as const;
 

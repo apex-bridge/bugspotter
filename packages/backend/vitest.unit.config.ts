@@ -19,6 +19,8 @@ export default defineConfig({
       'tests/saas/invitation-email.service.test.ts',
       'tests/saas/plans.test.ts',
       'tests/saas/spam-filter.service.test.ts',
+      'tests/saas/subdomain.service.test.ts',
+      'tests/saas/signup.service.test.ts',
       'tests/saas/tenant-middleware.test.ts',
       // Integration tests that don't require database
       'tests/integrations/plugin-utils-retry.test.ts',

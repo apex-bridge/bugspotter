@@ -161,6 +161,26 @@ export class OrganizationRequestRepository extends BaseRepository<
   }
 
   /**
+   * Check whether a subdomain is held by a non-terminal organization request
+   * (pending_verification / verified / approved). Rejected and expired
+   * requests are ignored — their subdomain is free to reuse.
+   *
+   * Used by self-service signup to avoid racing an enterprise onboarding
+   * request that hasn't yet materialized into a real organization row.
+   */
+  async isSubdomainReservedByRequest(subdomain: string): Promise<boolean> {
+    const query = `
+      SELECT EXISTS(
+        SELECT 1 FROM ${this.schema}.${this.tableName}
+        WHERE LOWER(subdomain) = $1
+          AND status IN ('pending_verification', 'verified', 'approved')
+      ) AS reserved
+    `;
+    const result = await this.pool.query<{ reserved: boolean }>(query, [subdomain.toLowerCase()]);
+    return result.rows[0]?.reserved ?? false;
+  }
+
+  /**
    * Update request status with audit fields
    */
   async updateStatus(
