@@ -18,8 +18,9 @@
  * production code paths.
  */
 
-// Required by JiraConfigManager → CredentialEncryption. Must be ≥ 32 chars
-// after base64 decode; any sentinel of the right length works.
+// Required by JiraConfigManager → CredentialEncryption. The validator
+// checks the raw string length (≥ 32 chars, UTF-8 — no base64 decode).
+// Any sentinel of the right length works.
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'unit-test-encryption-key-32-bytes-min';
 
 // Required by the JWT plugin when any auth-handling module loads.

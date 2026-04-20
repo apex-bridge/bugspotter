@@ -9,6 +9,7 @@ import type { DatabaseClient } from '../../../db/client.js';
 import { hasPermissionLevel } from '../../../types/project-roles.js';
 import { sendUnauthorized, sendForbidden } from './responses.js';
 import { isPlatformAdmin } from './assertions.js';
+import { checkPermission as checkApiKeyPermission } from '../../../services/api-key/key-permissions.js';
 
 /**
  * Role-based authorization middleware factory
@@ -99,18 +100,27 @@ export async function requireApiKey(request: FastifyRequest, reply: FastifyReply
  * "ingest-only" property of self-service-signup-issued keys purely
  * advisory.
  *
+ * This middleware delegates to the shared `checkPermission` in
+ * `services/api-key/key-permissions.ts` so that enforcement rules match
+ * what the ApiKeyService uses when creating/verifying keys — including:
+ *   - The `'*'` wildcard (used by `full`-scope keys)
+ *   - Defensive fallback: if `permissions` is empty but a non-custom
+ *     `permission_scope` is set, resolve scope → permissions on the fly
+ *     (handles pre-migration keys and cached keys fetched before the
+ *     permissions-backfill migration ran).
+ *
  * Behavior:
- * - **API key requests** must include `permission` in their
- *   `apiKey.permissions` array, OR have `permission_scope === 'full'`
- *   (legacy/unrestricted). Otherwise → 403 Forbidden.
  * - **User (JWT) requests** pass through. System-role permission checks
  *   are handled separately by `requirePermission(db, resource, action)`;
  *   this middleware is an API-key-specific gate and must not double-block
  *   JWT users.
- * - **Unauthenticated requests** → 401 Unauthorized. (In practice this
- *   branch is unreachable when the middleware is composed after
- *   `requireAuth`/`requireProject`, but we're defensive — a route that
- *   forgets to require auth first still shouldn't leak.)
+ * - **API-key requests** go through the shared `checkPermission`. A `full`
+ *   scope (which resolves to `['*']`) satisfies every permission. A key
+ *   missing the required permission → 403 Forbidden.
+ * - **Unauthenticated requests** → 401 Unauthorized. (Unreachable in
+ *   practice when the middleware is composed after `requireAuth` /
+ *   `requireProject`, but defensive so a route that forgets to require
+ *   auth first still can't leak.)
  *
  * Usage (on a route handler):
  *
@@ -128,20 +138,15 @@ export function requireApiKeyPermission(permission: string) {
       return;
     }
 
-    // API key path
     if (request.apiKey) {
-      // Legacy `full` scope is unrestricted by design; skip the check so
-      // existing keys (pre-permissions-array) don't break.
-      if (request.apiKey.permission_scope === 'full') {
+      const result = checkApiKeyPermission(request.apiKey, permission);
+      if (result.allowed) {
         return;
       }
-
-      const permissions = request.apiKey.permissions ?? [];
-      if (permissions.includes(permission)) {
-        return;
-      }
-
-      return sendForbidden(reply, `API key does not have the required permission: ${permission}`);
+      return sendForbidden(
+        reply,
+        result.reason ?? `API key does not have the required permission: ${permission}`
+      );
     }
 
     return sendUnauthorized(reply, 'Authentication required');

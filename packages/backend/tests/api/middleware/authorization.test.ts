@@ -590,5 +590,57 @@ describe('Authorization Middleware', () => {
 
       expect(reply.code).toHaveBeenCalledWith(403);
     });
+
+    it("allows a key whose permissions array contains '*' (wildcard)", async () => {
+      // Shared `checkPermission` treats '*' as "grants everything". The
+      // middleware delegates to it, so the wildcard must be honored even
+      // on a `custom`-scope key.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'custom', permissions: ['*'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it("falls back to permission_scope when a key's permissions array is empty (pre-backfill key)", async () => {
+      // Regression guard for older keys stored with a scope (`read` /
+      // `write`) but an EMPTY permissions array — those exist in DBs
+      // predating the permissions-backfill migration. The shared
+      // `checkPermission` resolves `scope → permissions` on the fly in
+      // that case; the middleware must preserve that behavior, or it
+      // would wrongly 403 older keys.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'read', permissions: [] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      // `read` scope resolves to ['reports:read', 'sessions:read'] — so
+      // the check passes even though the stored permissions array is empty.
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('fallback from empty permissions + `read` scope still rejects write actions', async () => {
+      // Sanity check for the fallback: `read` scope must not satisfy a
+      // required write permission even when the stored permissions array
+      // is empty.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'read', permissions: [] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:write')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(403);
+    });
   });
 });

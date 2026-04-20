@@ -298,10 +298,12 @@ jobs:
           CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
           DISABLE_STRICT_RESIDENCY_VALIDATION=${{ vars.DISABLE_STRICT_RESIDENCY_VALIDATION || 'true' }}
 
-          # Self-service signup (POST /api/v1/auth/signup)
-          # Default: on in saas mode. Set vars.SELF_SERVICE_SIGNUP_ENABLED=false
-          # to disable without changing DEPLOYMENT_MODE.
-          SELF_SERVICE_SIGNUP_ENABLED=${{ vars.SELF_SERVICE_SIGNUP_ENABLED || 'true' }}
+          # Self-service signup (POST /api/v1/auth/signup).
+          # Pass the var through unset/empty when not explicitly configured —
+          # the app's own default (`true` in saas mode, `false` self-hosted)
+          # stays authoritative. Set `vars.SELF_SERVICE_SIGNUP_ENABLED`
+          # explicitly (`true` / `false`) only to override that default.
+          SELF_SERVICE_SIGNUP_ENABLED=${{ vars.SELF_SERVICE_SIGNUP_ENABLED }}
 
           # Cross-subdomain refresh cookie scope.
           # REQUIRED for cross-subdomain SSO between the signup wizard on
