@@ -4,7 +4,7 @@
  * - duplicate email → 409 (before any DB writes)
  * - spam filter rejection → 403
  * - spam filter error → 503 (fail closed, not fail open)
- * - invalid subdomain format → 400 ValidationError; taken/reserved subdomain → 409
+ * - invalid or reserved subdomain → 400 ValidationError; taken subdomain → 409 Conflict
  * - concurrent-insert race (Postgres 23505) → 409, not 500
  * - atomic transaction: all 6 inserts or none
  * - API key returned in plaintext; stored as SHA-256 hash

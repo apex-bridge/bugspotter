@@ -66,9 +66,14 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
     const result = await this.getClient().query<User>(query, [email]);
 
     if (result.rows.length > 1) {
+      // `sampledCount` not `matchedCount`: the query uses `LIMIT 2` as a
+      // cheap "more than one" sentinel, so the actual number of duplicate
+      // rows may be higher than what we logged. Any non-zero value here
+      // still warrants ops cleanup — the exact count requires a separate
+      // COUNT(*) if triage needs it.
       logger.warn('Case-insensitive email lookup matched multiple rows', {
         normalizedEmail: email.toLowerCase(),
-        matchedCount: result.rows.length,
+        sampledCount: result.rows.length,
         oldestId: result.rows[0]?.id,
       });
     }
