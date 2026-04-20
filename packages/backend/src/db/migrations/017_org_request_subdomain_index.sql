@@ -6,9 +6,11 @@
 -- inside generateUniqueFromName). Without an index, those queries
 -- degrade to a seq scan as the table grows.
 --
--- A partial functional index on non-terminal statuses keeps the index
--- small (terminal rows — rejected/expired — dominate over time and are
--- not queried here).
+-- A partial index on non-terminal statuses keeps the index small
+-- (terminal rows — rejected/expired — dominate over time and are not
+-- queried here). No function expression on the column: the stored
+-- `subdomain` is already normalized to lowercase on insert, so plain
+-- equality is enough.
 
 SET search_path TO saas;
 

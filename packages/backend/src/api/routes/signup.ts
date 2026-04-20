@@ -4,10 +4,12 @@
  * POST /api/v1/auth/signup
  *
  * Sentry-style instant onboarding: one atomic call provisions user +
- * organization + trial subscription + default project + write-scoped API
- * key, returns JWTs + plaintext key in a single response. The landing
- * wizard on `kz.bugspotter.io` calls this; enterprise/admin-approval flow
- * lives at `/organization-requests` unchanged.
+ * organization + trial subscription + default project + ingest-only
+ * custom-scope API key (limited to `reports:write` + `sessions:write`,
+ * with no read access). Returns JWTs + plaintext key in a single
+ * response. The landing wizard on `kz.bugspotter.io` calls this;
+ * enterprise/admin-approval flow lives at `/organization-requests`
+ * unchanged.
  *
  * Separate from `/auth/register` (which is user-only and does not create
  * an organization) to keep the invite-flow contract stable.
