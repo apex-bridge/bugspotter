@@ -18,7 +18,12 @@ import { config } from '../../config.js';
 import { InvitationService } from '../../saas/services/invitation.service.js';
 import { sendSuccess, sendCreated } from '../utils/response.js';
 import { findOrThrow, omitFields } from '../utils/resource.js';
-import { PASSWORD, parseTimeString, DEFAULT_TOKEN_EXPIRY_SECONDS } from '../utils/constants.js';
+import { PASSWORD } from '../utils/constants.js';
+import {
+  buildRefreshCookieOptions,
+  buildClearRefreshCookieOptions,
+} from '../utils/auth-cookies.js';
+import { generateAuthTokens } from '../utils/auth-tokens.js';
 import {
   checkLockoutStatus,
   recordFailedAttempt,
@@ -42,36 +47,6 @@ interface RegisterBody {
 
 interface RefreshTokenBody {
   refresh_token: string;
-}
-
-/**
- * Generate JWT tokens for a user
- */
-function generateTokens(fastify: FastifyInstance, user: User) {
-  const payload = { userId: user.id, isPlatformAdmin: isPlatformAdmin(user) };
-
-  const access_token = fastify.jwt.sign(payload, {
-    expiresIn: config.jwt.expiresIn,
-  });
-
-  const refresh_token = fastify.jwt.sign(payload, {
-    expiresIn: config.jwt.refreshExpiresIn,
-  });
-
-  // Calculate expiry time in seconds
-  const expiresIn = parseTimeString(config.jwt.expiresIn, DEFAULT_TOKEN_EXPIRY_SECONDS);
-  const refreshExpiresIn = parseTimeString(
-    config.jwt.refreshExpiresIn,
-    DEFAULT_TOKEN_EXPIRY_SECONDS
-  );
-
-  return {
-    access_token,
-    refresh_token,
-    expires_in: expiresIn,
-    refresh_expires_in: refreshExpiresIn,
-    token_type: 'Bearer' as const,
-  };
 }
 
 /**
@@ -197,16 +172,14 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       await invitationService.autoAcceptPendingInvitations(email, user.id);
 
       // Generate tokens
-      const tokens = generateTokens(fastify, user);
+      const tokens = generateAuthTokens(fastify, user);
 
       // Set refresh token in httpOnly cookie
-      reply.setCookie('refresh_token', tokens.refresh_token, {
-        httpOnly: true,
-        secure: config.server.env === 'production',
-        sameSite: 'strict',
-        maxAge: tokens.refresh_expires_in,
-        path: '/',
-      });
+      reply.setCookie(
+        'refresh_token',
+        tokens.refresh_token,
+        buildRefreshCookieOptions(tokens.refresh_expires_in)
+      );
 
       // Remove password hash from response
       const userWithoutPassword = omitFields(user, 'password_hash');
@@ -278,16 +251,14 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       await clearFailedAttempts(email);
 
       // Generate tokens
-      const tokens = generateTokens(fastify, user);
+      const tokens = generateAuthTokens(fastify, user);
 
       // Set refresh token in httpOnly cookie
-      reply.setCookie('refresh_token', tokens.refresh_token, {
-        httpOnly: true,
-        secure: config.server.env === 'production',
-        sameSite: 'strict',
-        maxAge: tokens.refresh_expires_in,
-        path: '/',
-      });
+      reply.setCookie(
+        'refresh_token',
+        tokens.refresh_token,
+        buildRefreshCookieOptions(tokens.refresh_expires_in)
+      );
 
       // Remove password hash from response
       const userWithoutPassword = omitFields(user, 'password_hash');
@@ -335,16 +306,14 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         const user = await findOrThrow(() => db.users.findById(decoded.userId), 'User');
 
         // Generate new tokens
-        const tokens = generateTokens(fastify, user);
+        const tokens = generateAuthTokens(fastify, user);
 
         // Set new refresh token in httpOnly cookie
-        reply.setCookie('refresh_token', tokens.refresh_token, {
-          httpOnly: true,
-          secure: config.server.env === 'production',
-          sameSite: 'strict',
-          maxAge: tokens.refresh_expires_in,
-          path: '/',
-        });
+        reply.setCookie(
+          'refresh_token',
+          tokens.refresh_token,
+          buildRefreshCookieOptions(tokens.refresh_expires_in)
+        );
 
         return sendSuccess(reply, {
           access_token: tokens.access_token,
@@ -419,16 +388,14 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         }
 
         // Generate regular access/refresh tokens for the session
-        const tokens = generateTokens(fastify, user);
+        const tokens = generateAuthTokens(fastify, user);
 
         // Set refresh token in httpOnly cookie
-        reply.setCookie('refresh_token', tokens.refresh_token, {
-          httpOnly: true,
-          secure: config.server.env === 'production',
-          sameSite: 'strict',
-          maxAge: tokens.refresh_expires_in,
-          path: '/',
-        });
+        reply.setCookie(
+          'refresh_token',
+          tokens.refresh_token,
+          buildRefreshCookieOptions(tokens.refresh_expires_in)
+        );
 
         // Remove password hash from response
         const userWithoutPassword = omitFields(user, 'password_hash');
@@ -463,12 +430,7 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
     },
     async (_request, reply) => {
       // Clear refresh token cookie
-      reply.clearCookie('refresh_token', {
-        httpOnly: true,
-        secure: config.server.env === 'production',
-        sameSite: 'strict',
-        path: '/',
-      });
+      reply.clearCookie('refresh_token', buildClearRefreshCookieOptions());
 
       return sendSuccess(reply, { message: 'Logged out successfully' });
     }

@@ -150,6 +150,73 @@ export const magicLoginSchema = {
   },
 } as const;
 
+export const signupSchema = {
+  body: {
+    type: 'object',
+    required: ['email', 'password', 'company_name'],
+    properties: {
+      email: { type: 'string', format: 'email', maxLength: 254 },
+      password: { type: 'string', minLength: 8, maxLength: 128 },
+      name: { type: 'string', minLength: 1, maxLength: 128 },
+      company_name: { type: 'string', minLength: 1, maxLength: 128 },
+      subdomain: { type: 'string', minLength: 3, maxLength: 63 },
+      // Honeypot: must be empty/absent for humans. Bots auto-fill visible
+      // form fields, including ones hidden via CSS.
+      website: { type: 'string', maxLength: 256 },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    201: {
+      type: 'object',
+      required: ['success', 'data', 'timestamp'],
+      properties: {
+        success: { type: 'boolean', enum: [true] },
+        data: {
+          type: 'object',
+          required: [
+            'user',
+            'organization',
+            'project',
+            'api_key',
+            'api_key_id',
+            'access_token',
+            'expires_in',
+            'token_type',
+          ],
+          properties: {
+            user: userSchema,
+            organization: {
+              type: 'object',
+              required: ['id', 'name', 'subdomain'],
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                name: { type: 'string' },
+                subdomain: { type: 'string' },
+                trial_ends_at: { type: 'string', format: 'date-time', nullable: true },
+              },
+            },
+            project: {
+              type: 'object',
+              required: ['id', 'name'],
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                name: { type: 'string' },
+              },
+            },
+            api_key: { type: 'string' },
+            api_key_id: { type: 'string', format: 'uuid' },
+            access_token: { type: 'string' },
+            expires_in: { type: 'number' },
+            token_type: { type: 'string', enum: ['Bearer'] },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+} as const;
+
 export const registrationStatusSchema = {
   response: {
     200: {

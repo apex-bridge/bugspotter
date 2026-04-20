@@ -7,6 +7,9 @@ import { BaseRepository } from './base-repository.js';
 import type { User, UserInsert, PaginatedResult } from '../types.js';
 import { createFilter } from '../filter-builder.js';
 import { createPagination } from '../pagination-builder.js';
+import { getLogger } from '../../logger.js';
+
+const logger = getLogger();
 
 export class UserRepository extends BaseRepository<User, UserInsert, Partial<User>> {
   constructor(pool: Pool | PoolClient) {
@@ -28,10 +31,54 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
   }
 
   /**
-   * Find user by email
+   * Find user by email — case-insensitive.
+   *
+   * Existing rows in the `users` table may have mixed-case emails: the
+   * base UNIQUE constraint is case-sensitive, and historical
+   * `/auth/register` paths did not lowercase before insert. A case-
+   * sensitive lookup of `foo@bar.com` would miss an existing row stored
+   * as `Foo@bar.com`, so duplicate-email checks (in signup/login/invite)
+   * would be unreliable and two accounts could end up sharing an
+   * effective address.
+   *
+   * For callers that already normalize (signup service, invitation
+   * service) this is redundant-but-safe. For callers that don't
+   * (existing `/auth/register` — out of scope here), this at least makes
+   * the lookup side correct.
+   *
+   * Determinism: multiple rows CAN match today if historical data has
+   * case-insensitive duplicates. We `ORDER BY created_at ASC, id ASC`
+   * and `LIMIT 2` so the caller always sees the oldest row, and we
+   * `logger.warn` when more than one matches so ops can schedule a
+   * cleanup. A follow-up migration should add a `UNIQUE` functional
+   * index on `LOWER(email)` once the data is clean; the current
+   * migration 018 adds a non-unique functional index for the perf side
+   * only.
    */
   async findByEmail(email: string): Promise<User | null> {
-    return this.findBy('email', email);
+    const query = `
+      SELECT *
+      FROM ${this.schema}.${this.tableName}
+      WHERE LOWER(email) = LOWER($1)
+      ORDER BY created_at ASC, id ASC
+      LIMIT 2
+    `;
+    const result = await this.getClient().query<User>(query, [email]);
+
+    if (result.rows.length > 1) {
+      // `sampledCount` not `matchedCount`: the query uses `LIMIT 2` as a
+      // cheap "more than one" sentinel, so the actual number of duplicate
+      // rows may be higher than what we logged. Any non-zero value here
+      // still warrants ops cleanup — the exact count requires a separate
+      // COUNT(*) if triage needs it.
+      logger.warn('Case-insensitive email lookup matched multiple rows', {
+        normalizedEmail: email.toLowerCase(),
+        sampledCount: result.rows.length,
+        oldestId: result.rows[0]?.id,
+      });
+    }
+
+    return result.rows[0] ?? null;
   }
 
   /**
