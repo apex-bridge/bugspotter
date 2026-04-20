@@ -139,18 +139,16 @@ export class SubdomainService {
   async isAvailable(subdomain: string): Promise<boolean> {
     const normalized = subdomain.toLowerCase();
 
-    const orgTaken = !(await this.db.organizations.isSubdomainAvailable(normalized));
-    if (orgTaken) {
-      return false;
-    }
+    // Parallelize the two independent reads — `generateUniqueFromName`
+    // calls this up to 50 times in a collision loop, so halving per-iter
+    // latency from 2 sequential round-trips to 1 cuts worst-case suffix
+    // search time materially.
+    const [orgAvailable, requestReserved] = await Promise.all([
+      this.db.organizations.isSubdomainAvailable(normalized),
+      this.db.organizationRequests.isSubdomainReservedByRequest(normalized),
+    ]);
 
-    const requestReserved =
-      await this.db.organizationRequests.isSubdomainReservedByRequest(normalized);
-    if (requestReserved) {
-      return false;
-    }
-
-    return true;
+    return orgAvailable && !requestReserved;
   }
 
   /**

@@ -315,6 +315,57 @@ describe('Application Configuration', () => {
       }
     });
 
+    it('should accept a whitespace-padded DATA_RESIDENCY_REGION (trim at ingestion)', async () => {
+      // Regression guard: config.ts previously only `.toLowerCase()`ed the
+      // env, so `" kz "` (whitespace-padded, common in shell exports) would
+      // fail startup validation even though `parseDataResidencyRegion` later
+      // trimmed and accepted it.
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.DATA_RESIDENCY_REGION = '  KZ  ';
+
+      const { validateConfig, config } = await import('../src/config.js');
+      expect(() => validateConfig()).not.toThrow();
+      expect(config.dataResidency.region).toBe('kz');
+    });
+
+    it('should reject COOKIE_DOMAIN with a URL scheme', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.COOKIE_DOMAIN = 'https://example.com';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('Configuration validation failed');
+      expect(() => validateConfig()).toThrow('COOKIE_DOMAIN must be a bare hostname');
+    });
+
+    it('should reject COOKIE_DOMAIN with a port', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.COOKIE_DOMAIN = 'example.com:3000';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('COOKIE_DOMAIN must be a bare hostname');
+    });
+
+    it('should reject COOKIE_DOMAIN with a path', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.COOKIE_DOMAIN = 'example.com/path';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('COOKIE_DOMAIN must be a bare hostname');
+    });
+
+    it('should accept common COOKIE_DOMAIN forms', async () => {
+      for (const domain of ['.kz.bugspotter.io', 'kz.bugspotter.io', 'localhost']) {
+        vi.resetModules();
+        process.env = { ...originalEnv, DATABASE_URL: 'postgres://localhost/db' };
+        process.env.COOKIE_DOMAIN = domain;
+        const { validateConfig } = await import('../src/config.js');
+        expect(() => validateConfig()).not.toThrow(/COOKIE_DOMAIN/);
+      }
+    });
+
     it('should throw error for mismatched S3 credentials', async () => {
       process.env.DATABASE_URL = 'postgres://localhost/db';
       process.env.STORAGE_BACKEND = 's3';

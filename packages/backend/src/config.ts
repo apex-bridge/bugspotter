@@ -12,6 +12,7 @@ import {
   type LogLevel,
   type AppConfig,
 } from './config/types.js';
+import { DATA_RESIDENCY_REGION } from './db/types.js';
 import {
   MIN_PORT,
   MAX_PORT,
@@ -108,7 +109,11 @@ export const config: AppConfig = {
     },
   },
   dataResidency: {
-    region: (process.env.DATA_RESIDENCY_REGION ?? 'kz').toLowerCase(),
+    // Trim + lowercase at ingestion so `validateConfig` and
+    // `parseDataResidencyRegion` always agree on what's a valid value.
+    // Without `.trim()` an env like `" kz "` would pass parse() but fail
+    // validate(), causing a confusing boot error.
+    region: (process.env.DATA_RESIDENCY_REGION ?? 'kz').trim().toLowerCase(),
   },
 } as const;
 
@@ -169,16 +174,45 @@ function collectSecurityErrors(): string[] {
   return errors;
 }
 
-const VALID_DATA_RESIDENCY_REGIONS = ['kz', 'rf', 'eu', 'us', 'global'] as const;
+function collectCookieDomainErrors(): string[] {
+  // Skip the check when not configured — a null/empty value means
+  // "host-scoped cookie only" which is the self-hosted default.
+  const raw = config.auth.cookieDomain;
+  if (!raw) {
+    return [];
+  }
+
+  // Reject obvious misconfigurations that would silently break cookie
+  // issuance or expose the refresh cookie to the wrong origin. We don't
+  // try to be a full RFC 1034 hostname validator — just catch the
+  // common env-var mistakes (pasted URL, included port, trailing path,
+  // whitespace, or uppercase).
+  const lower = raw.toLowerCase();
+  const errors: string[] = [];
+  if (raw !== lower) {
+    errors.push(`COOKIE_DOMAIN must be lowercase (got "${raw}")`);
+  }
+  if (/[\s/]/.test(raw) || raw.includes('://') || /:\d+$/.test(raw)) {
+    errors.push(
+      `COOKIE_DOMAIN must be a bare hostname (no scheme, path, port, or whitespace). Got "${raw}"`
+    );
+  }
+  return errors;
+}
 
 function collectDataResidencyErrors(): string[] {
   // Validate at boot rather than on the first signup. A misconfigured region
   // otherwise surfaces as a 500 from /api/v1/auth/signup instead of a clear
   // operator-facing startup failure.
+  //
+  // Source of truth: `DATA_RESIDENCY_REGION` in `db/types.ts` (which is also
+  // mirrored by the DB CHECK constraint in the organizations table). Using
+  // the enum here means adding a region only requires editing one place.
+  const validRegions = Object.values(DATA_RESIDENCY_REGION);
   const region = config.dataResidency.region;
-  if (!(VALID_DATA_RESIDENCY_REGIONS as readonly string[]).includes(region)) {
+  if (!(validRegions as string[]).includes(region)) {
     return [
-      `Invalid DATA_RESIDENCY_REGION: ${region}. Expected one of: ${VALID_DATA_RESIDENCY_REGIONS.join(', ')}`,
+      `Invalid DATA_RESIDENCY_REGION: ${region}. Expected one of: ${validRegions.join(', ')}`,
     ];
   }
   return [];
@@ -251,6 +285,7 @@ export function validateConfig(context: ValidationContext = 'api'): void {
   if (context === 'api') {
     errors.push(...collectStorageErrors());
     errors.push(...collectDataResidencyErrors());
+    errors.push(...collectCookieDomainErrors());
   }
 
   throwIfErrors(errors);

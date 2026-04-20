@@ -329,6 +329,26 @@ describe('SignupService', () => {
       });
     });
 
+    it('returns a clearer 409 (not generic 403) when email has a pending enterprise request', async () => {
+      // `SpamFilterService.findPendingByEmail` queries organization_requests.
+      // When the user previously submitted the admin-approved enterprise
+      // flow, SpamFilter sets reasons: ['duplicate_pending']. The generic
+      // 403 we return for honeypot/etc. gives the user no actionable info;
+      // this case gets a specific 409 with a support-pointer message.
+      mock = createMockDb({
+        findPendingByEmail: async () => ({
+          id: 'existing-request',
+          status: 'pending_verification',
+        }),
+      });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ);
+
+      const err = await service.signup(validInput()).catch((e) => e);
+      expect(err.statusCode).toBe(409);
+      expect(err.error).toBe('PendingEnterpriseRequest');
+      expect(err.message).toMatch(/enterprise/i);
+    });
+
     it('fails CLOSED when the spam filter itself errors (503, not allow-through)', async () => {
       // Regression guard: the first PR revision caught this error and let the
       // signup proceed, effectively disabling rate-limits during DB outages.
@@ -392,6 +412,20 @@ describe('SignupService', () => {
       await expect(service.signup(validInput())).rejects.toMatchObject({
         statusCode: 409,
       });
+    });
+
+    it('does NOT misclassify a hypothetical users_phone_key as an email conflict', async () => {
+      // Regression guard: an earlier revision used `.includes('users')` /
+      // `.includes('email')` substring matching, which would wrongly report
+      // a future users_phone_key collision as "email already exists".
+      // The current implementation uses an exact allow-list.
+      const raceMock = createMockDbWithUniqueViolation('users_phone_key');
+      service = new SignupService(raceMock.db, DATA_RESIDENCY_REGION.KZ);
+
+      const err = await service.signup(validInput()).catch((e) => e);
+      expect(err.statusCode).toBe(409);
+      expect(err.message).not.toMatch(/email/i);
+      expect(err.message).not.toMatch(/subdomain/i);
     });
 
     it('does NOT swallow unrelated errors (only 23505 is remapped)', async () => {
