@@ -19,6 +19,8 @@ export default defineConfig({
       'tests/saas/invitation-email.service.test.ts',
       'tests/saas/plans.test.ts',
       'tests/saas/spam-filter.service.test.ts',
+      'tests/saas/subdomain.service.test.ts',
+      'tests/saas/signup.service.test.ts',
       'tests/saas/tenant-middleware.test.ts',
       // Integration tests that don't require database
       'tests/integrations/plugin-utils-retry.test.ts',
@@ -34,6 +36,7 @@ export default defineConfig({
       'tests/api/routes/rbac-enforcement.test.ts',
       'tests/api/routes/permissions.test.ts',
       'tests/api/routes/rbac-regression.test.ts',
+      'tests/api/routes/signup.route.test.ts',
       'tests/api/services/**/*.test.ts',
       'tests/cache/**/*.test.ts',
       // Only include pure unit tests from tests/db/ (no database required)
@@ -58,6 +61,8 @@ export default defineConfig({
       'tests/api/utils/enrichment-trigger.test.ts',
       'tests/services/intelligence/dedup-service.test.ts',
       'tests/services/intelligence/self-service.test.ts',
+      // Pure env-var / config validation test, no DB.
+      'tests/config.test.ts',
     ],
     testTimeout: 10000,
     hookTimeout: 10000,
