@@ -122,85 +122,100 @@ export class SignupService {
     const now = new Date();
     const trialEnd = addDays(now, TRIAL_DURATION_DAYS);
 
-    const result = await this.db.transaction(async (tx) => {
-      const user = await tx.users.create({
-        email,
-        name: input.name?.trim() || null,
-        password_hash: passwordHash,
-        role: 'user',
-      });
+    let result;
+    try {
+      result = await this.db.transaction(async (tx) => {
+        const user = await tx.users.create({
+          email,
+          name: input.name?.trim() || null,
+          password_hash: passwordHash,
+          role: 'user',
+        });
 
-      const organization = await tx.organizations.create({
-        name: companyName,
-        subdomain,
-        data_residency_region: this.region,
-        subscription_status: SUBSCRIPTION_STATUS.TRIAL,
-        trial_ends_at: trialEnd,
-      });
+        const organization = await tx.organizations.create({
+          name: companyName,
+          subdomain,
+          data_residency_region: this.region,
+          subscription_status: SUBSCRIPTION_STATUS.TRIAL,
+          trial_ends_at: trialEnd,
+        });
 
-      const subscription = await tx.subscriptions.create({
-        organization_id: organization.id,
-        plan_name: PLAN_NAME.TRIAL,
-        status: BILLING_STATUS.TRIAL,
-        current_period_start: now,
-        current_period_end: trialEnd,
-        quotas: getQuotaForPlan(PLAN_NAME.TRIAL),
-      });
+        const subscription = await tx.subscriptions.create({
+          organization_id: organization.id,
+          plan_name: PLAN_NAME.TRIAL,
+          status: BILLING_STATUS.TRIAL,
+          current_period_start: now,
+          current_period_end: trialEnd,
+          quotas: getQuotaForPlan(PLAN_NAME.TRIAL),
+        });
 
-      await tx.organizationMembers.create({
-        organization_id: organization.id,
-        user_id: user.id,
-        role: ORG_MEMBER_ROLE.OWNER,
-      });
+        await tx.organizationMembers.create({
+          organization_id: organization.id,
+          user_id: user.id,
+          role: ORG_MEMBER_ROLE.OWNER,
+        });
 
-      // Fresh org → project count is guaranteed 0, trial quota is 2.
-      // No advisory lock needed (no concurrent project creation possible
-      // on an org that doesn't exist yet outside this transaction).
-      const project = await tx.projects.create({
-        name: DEFAULT_PROJECT_NAME,
-        created_by: user.id,
-        organization_id: organization.id,
-        settings: {},
-      });
+        // Fresh org → project count is guaranteed 0, trial quota is 2.
+        // No advisory lock needed (no concurrent project creation possible
+        // on an org that doesn't exist yet outside this transaction).
+        const project = await tx.projects.create({
+          name: DEFAULT_PROJECT_NAME,
+          created_by: user.id,
+          organization_id: organization.id,
+          settings: {},
+        });
 
-      const plaintextKey = generatePlaintextKey();
-      const keyHash = hashKey(plaintextKey);
-      const { prefix, suffix } = extractKeyMetadata(plaintextKey);
-      const scope = PERMISSION_SCOPE.WRITE;
+        const plaintextKey = generatePlaintextKey();
+        const keyHash = hashKey(plaintextKey);
+        const { prefix, suffix } = extractKeyMetadata(plaintextKey);
+        const scope = PERMISSION_SCOPE.WRITE;
 
-      const apiKey = await tx.apiKeys.create({
-        name: `${DEFAULT_PROJECT_NAME} — SDK key`,
-        description: 'Auto-generated at signup — use this in your SDK init.',
-        type: API_KEY_TYPE.PRODUCTION,
-        permission_scope: scope,
-        permissions: resolvePermissions(scope),
-        allowed_projects: [project.id],
-        key_hash: keyHash,
-        key_prefix: prefix,
-        key_suffix: suffix,
-        created_by: user.id,
-      });
-
-      await tx.apiKeys.logAudit({
-        api_key_id: apiKey.id,
-        action: API_KEY_AUDIT_ACTION.CREATED,
-        performed_by: user.id,
-        changes: {
-          type: apiKey.type,
+        const apiKey = await tx.apiKeys.create({
+          name: `${DEFAULT_PROJECT_NAME} — SDK key`,
+          description: 'Auto-generated at signup — use this in your SDK init.',
+          type: API_KEY_TYPE.PRODUCTION,
           permission_scope: scope,
-          source: 'self-service-signup',
-        },
-      });
+          permissions: resolvePermissions(scope),
+          allowed_projects: [project.id],
+          key_hash: keyHash,
+          key_prefix: prefix,
+          key_suffix: suffix,
+          created_by: user.id,
+        });
 
-      return {
-        user,
-        organization,
-        subscription,
-        project,
-        api_key: plaintextKey,
-        api_key_id: apiKey.id,
-      };
-    });
+        await tx.apiKeys.logAudit({
+          api_key_id: apiKey.id,
+          action: API_KEY_AUDIT_ACTION.CREATED,
+          performed_by: user.id,
+          changes: {
+            type: apiKey.type,
+            permission_scope: scope,
+            source: 'self-service-signup',
+          },
+        });
+
+        return {
+          user,
+          organization,
+          subscription,
+          project,
+          api_key: plaintextKey,
+          api_key_id: apiKey.id,
+        };
+      });
+    } catch (err) {
+      // Race-condition backstop: two concurrent signups can both pass the
+      // read-side checks (findByEmail / isAvailable) and both reach INSERT.
+      // The UNIQUE constraints on users.email and organizations.subdomain
+      // mean one will succeed, the other raises Postgres 23505. Without
+      // this remap, the loser sees a 500 Internal Server Error rather than
+      // the proper 409 Conflict they'd get from the read-side checks.
+      const remapped = remapUniqueViolation(err);
+      if (remapped) {
+        throw remapped;
+      }
+      throw err;
+    }
 
     // Log AFTER commit — logging inside the tx callback would record
     // success even if the COMMIT itself fails.
@@ -273,6 +288,40 @@ function addDays(base: Date, days: number): Date {
   const end = new Date(base);
   end.setDate(end.getDate() + days);
   return end;
+}
+
+/**
+ * Postgres unique_violation SQLSTATE. When a concurrent signup wins the
+ * INSERT race, the loser's transaction raises this code.
+ */
+const PG_UNIQUE_VIOLATION = '23505';
+
+/**
+ * If `err` is a Postgres unique_violation, return a user-facing 409 AppError
+ * with a hint about which field collided; otherwise return null so the
+ * caller can rethrow the original error.
+ *
+ * We inspect `error.constraint` (the PG constraint name) to pick the
+ * message. Unknown constraints fall back to a generic "already exists"
+ * message so we never leak raw SQL identifiers to the client.
+ */
+function remapUniqueViolation(err: unknown): AppError | null {
+  if (!err || typeof err !== 'object') {
+    return null;
+  }
+  const candidate = err as { code?: unknown; constraint?: unknown };
+  if (candidate.code !== PG_UNIQUE_VIOLATION) {
+    return null;
+  }
+
+  const constraint = typeof candidate.constraint === 'string' ? candidate.constraint : '';
+  if (constraint.includes('email') || constraint.includes('users')) {
+    return new AppError('User with this email already exists', 409, 'Conflict');
+  }
+  if (constraint.includes('subdomain') || constraint.includes('organizations')) {
+    return new AppError('This subdomain is already taken', 409, 'Conflict');
+  }
+  return new AppError('A conflicting record already exists', 409, 'Conflict');
 }
 
 /** Resolve a region string from config into the DataResidencyRegion enum, or throw. */

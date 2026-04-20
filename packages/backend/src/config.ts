@@ -169,6 +169,21 @@ function collectSecurityErrors(): string[] {
   return errors;
 }
 
+const VALID_DATA_RESIDENCY_REGIONS = ['kz', 'rf', 'eu', 'us', 'global'] as const;
+
+function collectDataResidencyErrors(): string[] {
+  // Validate at boot rather than on the first signup. A misconfigured region
+  // otherwise surfaces as a 500 from /api/v1/auth/signup instead of a clear
+  // operator-facing startup failure.
+  const region = config.dataResidency.region;
+  if (!(VALID_DATA_RESIDENCY_REGIONS as readonly string[]).includes(region)) {
+    return [
+      `Invalid DATA_RESIDENCY_REGION: ${region}. Expected one of: ${VALID_DATA_RESIDENCY_REGIONS.join(', ')}`,
+    ];
+  }
+  return [];
+}
+
 function collectStorageErrors(): string[] {
   const errors: string[] = [];
 
@@ -235,6 +250,7 @@ export function validateConfig(context: ValidationContext = 'api'): void {
   errors.push(...collectSecurityErrors());
   if (context === 'api') {
     errors.push(...collectStorageErrors());
+    errors.push(...collectDataResidencyErrors());
   }
 
   throwIfErrors(errors);

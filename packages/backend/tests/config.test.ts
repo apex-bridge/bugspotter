@@ -292,6 +292,29 @@ describe('Application Configuration', () => {
       expect(() => validateConfig()).toThrow('Invalid STORAGE_BACKEND');
     });
 
+    it('should throw at startup for an unknown DATA_RESIDENCY_REGION', async () => {
+      // Regression guard: a misconfigured region previously surfaced as a
+      // generic 500 on the first /api/v1/auth/signup call, which is a bad
+      // operational signal. Fail fast at boot instead.
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.DATA_RESIDENCY_REGION = 'moon';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('Configuration validation failed');
+      expect(() => validateConfig()).toThrow('Invalid DATA_RESIDENCY_REGION');
+    });
+
+    it('should accept all documented DATA_RESIDENCY_REGION values', async () => {
+      for (const region of ['kz', 'rf', 'eu', 'us', 'global']) {
+        vi.resetModules();
+        process.env = { ...originalEnv, DATABASE_URL: 'postgres://localhost/db' };
+        process.env.DATA_RESIDENCY_REGION = region;
+        const { validateConfig } = await import('../src/config.js');
+        expect(() => validateConfig()).not.toThrow(/DATA_RESIDENCY_REGION/);
+      }
+    });
+
     it('should throw error for mismatched S3 credentials', async () => {
       process.env.DATABASE_URL = 'postgres://localhost/db';
       process.env.STORAGE_BACKEND = 's3';

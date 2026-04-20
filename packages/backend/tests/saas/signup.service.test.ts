@@ -4,7 +4,8 @@
  * - duplicate email → 409 (before any DB writes)
  * - spam filter rejection → 403
  * - spam filter error → 503 (fail closed, not fail open)
- * - invalid subdomain → 409
+ * - invalid subdomain format → 400 ValidationError; taken/reserved subdomain → 409
+ * - concurrent-insert race (Postgres 23505) → 409, not 500
  * - atomic transaction: all 6 inserts or none
  * - API key returned in plaintext; stored as SHA-256 hash
  */
@@ -338,6 +339,70 @@ describe('SignupService', () => {
         statusCode: 503,
       });
       expect(mock.transactionCalled.value).toBe(0);
+    });
+  });
+
+  describe('unique-violation race', () => {
+    // Two concurrent signups can both pass the read-side checks (findByEmail,
+    // isAvailable) and both reach INSERT. The Postgres UNIQUE constraints on
+    // users.email and organizations.subdomain ensure one wins and the loser
+    // raises 23505. These tests guard that we remap to 409 (not 500).
+
+    function createMockDbWithUniqueViolation(constraint: string) {
+      const { db, log, transactionCalled } = createMockDb();
+      // Override the tx callback to throw a Postgres-shaped error with the
+      // given constraint name. This simulates the loser of an INSERT race.
+      (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        transactionCalled.value++;
+        const err = new Error('duplicate key value violates unique constraint') as Error & {
+          code: string;
+          constraint: string;
+        };
+        err.code = '23505';
+        err.constraint = constraint;
+        throw err;
+      });
+      return { db, log, transactionCalled };
+    }
+
+    it('maps a users.email UNIQUE violation to 409 Conflict', async () => {
+      const raceMock = createMockDbWithUniqueViolation('users_email_key');
+      service = new SignupService(raceMock.db, DATA_RESIDENCY_REGION.KZ);
+
+      await expect(service.signup(validInput())).rejects.toMatchObject({
+        statusCode: 409,
+        message: expect.stringMatching(/email/i) as unknown as string,
+      });
+    });
+
+    it('maps an organizations.subdomain UNIQUE violation to 409 Conflict', async () => {
+      const raceMock = createMockDbWithUniqueViolation('organizations_subdomain_key');
+      service = new SignupService(raceMock.db, DATA_RESIDENCY_REGION.KZ);
+
+      await expect(service.signup(validInput())).rejects.toMatchObject({
+        statusCode: 409,
+        message: expect.stringMatching(/subdomain/i) as unknown as string,
+      });
+    });
+
+    it('maps an unknown UNIQUE violation to a generic 409 (no SQL identifier leak)', async () => {
+      const raceMock = createMockDbWithUniqueViolation('some_internal_constraint');
+      service = new SignupService(raceMock.db, DATA_RESIDENCY_REGION.KZ);
+
+      await expect(service.signup(validInput())).rejects.toMatchObject({
+        statusCode: 409,
+      });
+    });
+
+    it('does NOT swallow unrelated errors (only 23505 is remapped)', async () => {
+      const { db, transactionCalled } = createMockDb();
+      (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        transactionCalled.value++;
+        throw new Error('unrelated internal error');
+      });
+      service = new SignupService(db, DATA_RESIDENCY_REGION.KZ);
+
+      await expect(service.signup(validInput())).rejects.toThrow(/unrelated internal error/);
     });
   });
 

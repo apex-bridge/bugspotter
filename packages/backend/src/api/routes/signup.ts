@@ -11,6 +11,14 @@
  *
  * Separate from `/auth/register` (which is user-only and does not create
  * an organization) to keep the invite-flow contract stable.
+ *
+ * Rate limiting: This endpoint overrides the default per-route rate limit
+ * with a stricter 5/minute/IP cap — genuine users never rapid-fire signups.
+ * NOTE: effectiveness depends on `trustProxy` being configured when behind
+ * a reverse proxy (CDN/Vercel/nginx) so `request.ip` reflects the real
+ * client IP rather than the proxy's. That wiring is deployment-topology
+ * config, not code, but is called out in the project plan as a
+ * pre-prod blocker.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -39,19 +47,31 @@ interface SignupBody {
 }
 
 export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void {
+  // Parse region ONCE at route-registration time. Config is already validated
+  // by `validateConfig('api')` at server boot, so this throw is a belt-and-
+  // braces guard for the theoretical "someone called signupRoutes without
+  // validating config first" case — we still prefer a boot failure to a
+  // per-request 500.
+  const region = parseDataResidencyRegion(config.dataResidency.region);
+  const service = new SignupService(db, region);
+
   fastify.post<{ Body: SignupBody }>(
     '/api/v1/auth/signup',
     {
       schema: signupSchema,
-      config: { public: true },
+      config: {
+        public: true,
+        // Per-IP burst cap — tighter than the global default because this
+        // endpoint creates real tenant data and must resist credential-
+        // stuffing / subdomain-squatting bots. Honeypot and fail-closed
+        // SpamFilter are complementary, not substitutes.
+        rateLimit: { max: 5, timeWindow: '1 minute' },
+      },
     },
     async (request, reply) => {
       if (!config.auth.selfServiceSignupEnabled) {
         throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
       }
-
-      const region = parseDataResidencyRegion(config.dataResidency.region);
-      const service = new SignupService(db, region);
 
       const input: SignupInput = {
         email: request.body.email,

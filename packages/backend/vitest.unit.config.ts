@@ -60,6 +60,8 @@ export default defineConfig({
       'tests/api/utils/enrichment-trigger.test.ts',
       'tests/services/intelligence/dedup-service.test.ts',
       'tests/services/intelligence/self-service.test.ts',
+      // Pure env-var / config validation test, no DB.
+      'tests/config.test.ts',
     ],
     testTimeout: 10000,
     hookTimeout: 10000,
