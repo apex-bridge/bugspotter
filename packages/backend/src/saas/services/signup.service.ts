@@ -115,7 +115,7 @@ export class SignupService {
     const now = new Date();
     const trialEnd = addDays(now, TRIAL_DURATION_DAYS);
 
-    let result;
+    let result: SignupResult;
     try {
       result = await this.db.transaction(async (tx) => {
         const user = await tx.users.create({
@@ -243,7 +243,7 @@ export class SignupService {
     // Passing the slug here keeps the check input-complete for future rules.
     const slugForCheck = this.subdomainService.slugify(companyName) || 'pending';
 
-    let result;
+    let result: Awaited<ReturnType<SpamFilterService['check']>>;
     try {
       result = await this.spamFilter.check({
         company_name: companyName,
@@ -274,9 +274,16 @@ export class SignupService {
           'PendingEnterpriseRequest'
         );
       }
-      throw new AppError('Signup request rejected', 403, 'Forbidden', {
+      // Log the reasons server-side for ops / abuse investigation, but
+      // DON'T echo them to the client — doing so leaks our spam
+      // heuristics and helps bots iterate past whichever rule they
+      // tripped.
+      logger.info('Self-service signup rejected by spam filter', {
+        ip: input.ip_address,
         reasons: result.reasons,
+        score: result.spam_score,
       });
+      throw new AppError('Signup request rejected', 403, 'Forbidden');
     }
   }
 

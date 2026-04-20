@@ -3,8 +3,8 @@
  *
  * Route-level verification that cannot be covered by the service-level
  * tests in `tests/saas/signup.service.test.ts`: SELF_SERVICE_SIGNUP_ENABLED
- * gating, `request.ip` → `ip_address` wiring, honeypot field name, and
- * refresh_token cookie shape (domain + SameSite).
+ * gating, honeypot field name, refresh_token cookie shape
+ * (domain + SameSite), and JSON-schema request validation.
  *
  * Uses a minimal Fastify instance with the same plugins the real server
  * registers (cookie, rate-limit, jwt) but with a mocked DatabaseClient —

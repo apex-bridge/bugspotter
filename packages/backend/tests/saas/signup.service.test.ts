@@ -329,6 +329,20 @@ describe('SignupService', () => {
       });
     });
 
+    it('does NOT leak the spam filter reasons array to the client (403 is opaque)', async () => {
+      // Security regression guard: echoing `reasons: ['honeypot', ...]`
+      // back to the caller lets bots iterate until they pass each
+      // individual heuristic. The server logs the reasons; the response
+      // stays opaque.
+      const err = await service
+        .signup({ ...validInput(), honeypot: 'spam-bot-filled-this' })
+        .catch((e) => e);
+      expect(err.statusCode).toBe(403);
+      expect(err.details).toBeUndefined();
+      // The public error message is generic — no "honeypot", "rate_limit", etc.
+      expect(err.message).not.toMatch(/honeypot|rate_limit|disposable|suspicious/i);
+    });
+
     it('returns a clearer 409 (not generic 403) when email has a pending enterprise request', async () => {
       // `SpamFilterService.findPendingByEmail` queries organization_requests.
       // When the user previously submitted the admin-approved enterprise

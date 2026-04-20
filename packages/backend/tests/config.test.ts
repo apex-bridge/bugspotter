@@ -320,11 +320,15 @@ describe('Application Configuration', () => {
       // env, so `" kz "` (whitespace-padded, common in shell exports) would
       // fail startup validation even though `parseDataResidencyRegion` later
       // trimmed and accepted it.
+      //
+      // The assertion is regex-scoped to DATA_RESIDENCY_REGION so this test
+      // does not flake on CI where unrelated env vars (e.g. S3 credentials)
+      // may independently fail validation.
       process.env.DATABASE_URL = 'postgres://localhost/db';
       process.env.DATA_RESIDENCY_REGION = '  KZ  ';
 
       const { validateConfig, config } = await import('../src/config.js');
-      expect(() => validateConfig()).not.toThrow();
+      expect(() => validateConfig()).not.toThrow(/DATA_RESIDENCY_REGION/);
       expect(config.dataResidency.region).toBe('kz');
     });
 

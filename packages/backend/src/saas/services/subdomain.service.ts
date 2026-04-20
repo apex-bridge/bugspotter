@@ -8,6 +8,7 @@
 
 import type { DatabaseClient } from '../../db/client.js';
 import { AppError } from '../../api/middleware/error.js';
+import { RESERVED_SUBDOMAINS as TENANT_RESERVED_SUBDOMAINS } from '../middleware/tenant.js';
 
 const SUBDOMAIN_MIN_LENGTH = 3;
 const SUBDOMAIN_MAX_LENGTH = 63;
@@ -20,20 +21,18 @@ const MAX_AUTO_SUFFIX_ATTEMPTS = 50;
 const SUBDOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
 
 /**
- * Subdomains reserved for platform infrastructure. Blocking these prevents
- * tenants from impersonating api/admin/support surfaces or colliding with
- * existing DNS records on *.kz.bugspotter.io.
+ * Subdomains reserved for platform infrastructure. Blocking these at signup
+ * prevents tenants from impersonating api/admin/support surfaces or
+ * colliding with existing DNS records on *.kz.bugspotter.io.
+ *
+ * This set is a SUPERSET of the tenant resolution middleware's reserved
+ * list — anything the middleware refuses to route to must also be blocked
+ * at signup, otherwise a user could register an org whose admin UI the
+ * router would never serve. Extras here cover environments, monitoring,
+ * and platform-only names that the middleware doesn't need to know about.
  */
-const RESERVED_SUBDOMAINS = new Set([
+const SIGNUP_ONLY_RESERVED = new Set([
   // Platform infra
-  'app',
-  'api',
-  'admin',
-  'www',
-  'mail',
-  'static',
-  'cdn',
-  'assets',
   'media',
   'uploads',
   'files',
@@ -41,20 +40,11 @@ const RESERVED_SUBDOMAINS = new Set([
   'staging',
   'dev',
   'test',
-  'demo',
   'preview',
   'sandbox',
   'local',
-  // Product surfaces
-  'docs',
+  // Product surfaces the tenant middleware doesn't explicitly block
   'blog',
-  'status',
-  'help',
-  'support',
-  'billing',
-  'auth',
-  'login',
-  'signup',
   'register',
   'onboarding',
   // Generic reserved
@@ -69,6 +59,11 @@ const RESERVED_SUBDOMAINS = new Set([
   'kibana',
   'logs',
   'metrics',
+]);
+
+const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
+  ...TENANT_RESERVED_SUBDOMAINS,
+  ...SIGNUP_ONLY_RESERVED,
 ]);
 
 export class SubdomainService {
@@ -127,14 +122,18 @@ export class SubdomainService {
   }
 
   /**
-   * Check if a subdomain is available across both `organizations` (active
-   * tenants — subdomain stays reserved for soft-deleted rows until hard
-   * delete) and `organization_requests` (non-terminal enterprise flow that
-   * could later approve into a real org).
+   * Check if a subdomain is available across both `organizations` and
+   * `organization_requests`.
    *
-   * The pre-existing `organizationRequests.isSubdomainTaken()` queries the
-   * organizations table despite its name; we use the request-table-specific
-   * method here to get the intended behavior.
+   * The `organizations` side uses `isSubdomainAvailable`, which does NOT
+   * filter `deleted_at IS NULL` — so a soft-deleted org still reserves
+   * its subdomain until a hard delete. That's intentional: if a tenant
+   * is restored or the name is revived by platform admins, the identity
+   * is still unambiguous. (Note: the pre-existing `isSubdomainTaken` on
+   * `organizationRequests` is misnamed and queries the organizations
+   * table with `deleted_at IS NULL` — we don't use it here; we call
+   * `isSubdomainReservedByRequest` which queries the request table
+   * for non-terminal statuses only.)
    */
   async isAvailable(subdomain: string): Promise<boolean> {
     const normalized = subdomain.toLowerCase();

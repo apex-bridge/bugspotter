@@ -118,6 +118,16 @@ describe('SubdomainService', () => {
       expect(() => service.validateFormat('admin')).toThrow(/reserved/);
       expect(() => service.validateFormat('signup')).toThrow(/reserved/);
     });
+
+    it('blocks every subdomain the tenant middleware refuses to route', () => {
+      // Regression guard: the reserved list used at signup must be a
+      // superset of the tenant resolution middleware's reserved set.
+      // Otherwise a user could register an org with a subdomain the
+      // router will never serve — an unrecoverable broken state.
+      for (const reserved of ['dashboard', 'payment', 'ftp', 'api', 'admin']) {
+        expect(() => service.validateFormat(reserved)).toThrow(/reserved/);
+      }
+    });
   });
 
   describe('isAvailable()', () => {

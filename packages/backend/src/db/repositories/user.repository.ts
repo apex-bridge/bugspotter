@@ -28,10 +28,27 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
   }
 
   /**
-   * Find user by email
+   * Find user by email — case-insensitive.
+   *
+   * Existing rows in the `users` table may have mixed-case emails: the
+   * base UNIQUE constraint is case-sensitive, and historical
+   * `/auth/register` paths did not lowercase before insert. A case-
+   * sensitive lookup of `foo@bar.com` would miss an existing row stored
+   * as `Foo@bar.com`, so duplicate-email checks (in signup/login/invite)
+   * would be unreliable and two accounts could end up sharing an
+   * effective address. See PR #15 review.
+   *
+   * For callers that already normalize (signup service, invitation
+   * service) this is redundant-but-safe. For callers that don't
+   * (existing `/auth/register` — out of scope here), this at least makes
+   * the lookup side correct; a follow-up should also normalize on insert
+   * and add a `LOWER(email)` unique functional index for DB-level
+   * enforcement.
    */
   async findByEmail(email: string): Promise<User | null> {
-    return this.findBy('email', email);
+    const query = `SELECT * FROM ${this.schema}.${this.tableName} WHERE LOWER(email) = LOWER($1)`;
+    const result = await this.getClient().query<User>(query, [email]);
+    return result.rows[0] ?? null;
   }
 
   /**

@@ -179,6 +179,7 @@ export const signupSchema = {
             'organization',
             'project',
             'api_key',
+            'api_key_id',
             'access_token',
             'expires_in',
             'token_type',
