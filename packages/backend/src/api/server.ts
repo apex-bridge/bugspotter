@@ -29,6 +29,7 @@ import { projectRoutes } from './routes/projects.js';
 import { projectMemberRoutes } from './routes/project-members.js';
 import { projectIntegrationRoutes } from './routes/project-integrations.js';
 import { authRoutes } from './routes/auth.js';
+import { signupRoutes } from './routes/signup.js';
 import { shareTokenRoutes } from './routes/share-tokens.js';
 import { retentionRoutes } from './routes/retention.js';
 import { dataResidencyRoutes } from './routes/data-residency.js';
@@ -419,6 +420,7 @@ export async function createServer(options: ServerOptions): Promise<FastifyInsta
   projectMemberRoutes(fastify, db);
   projectIntegrationRoutes(fastify, db, options.pluginRegistry);
   authRoutes(fastify, db);
+  signupRoutes(fastify, db);
   await adminRoutes(fastify, db, options.pluginRegistry);
   await adminJobsRoutes(fastify);
   await setupRoutes(fastify, db);

@@ -292,6 +292,84 @@ describe('Application Configuration', () => {
       expect(() => validateConfig()).toThrow('Invalid STORAGE_BACKEND');
     });
 
+    it('should throw at startup for an unknown DATA_RESIDENCY_REGION', async () => {
+      // Regression guard: a misconfigured region previously surfaced as a
+      // generic 500 on the first /api/v1/auth/signup call, which is a bad
+      // operational signal. Fail fast at boot instead.
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.DATA_RESIDENCY_REGION = 'moon';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('Configuration validation failed');
+      expect(() => validateConfig()).toThrow('Invalid DATA_RESIDENCY_REGION');
+    });
+
+    it('should accept all documented DATA_RESIDENCY_REGION values', async () => {
+      for (const region of ['kz', 'rf', 'eu', 'us', 'global']) {
+        vi.resetModules();
+        process.env = { ...originalEnv, DATABASE_URL: 'postgres://localhost/db' };
+        process.env.DATA_RESIDENCY_REGION = region;
+        const { validateConfig } = await import('../src/config.js');
+        expect(() => validateConfig()).not.toThrow(/DATA_RESIDENCY_REGION/);
+      }
+    });
+
+    it('should accept a whitespace-padded DATA_RESIDENCY_REGION (trim at ingestion)', async () => {
+      // Regression guard: config.ts previously only `.toLowerCase()`ed the
+      // env, so `" kz "` (whitespace-padded, common in shell exports) would
+      // fail startup validation even though `parseDataResidencyRegion` later
+      // trimmed and accepted it.
+      //
+      // The assertion is regex-scoped to DATA_RESIDENCY_REGION so this test
+      // does not flake on CI where unrelated env vars (e.g. S3 credentials)
+      // may independently fail validation.
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.DATA_RESIDENCY_REGION = '  KZ  ';
+
+      const { validateConfig, config } = await import('../src/config.js');
+      expect(() => validateConfig()).not.toThrow(/DATA_RESIDENCY_REGION/);
+      expect(config.dataResidency.region).toBe('kz');
+    });
+
+    it('should reject COOKIE_DOMAIN with a URL scheme', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.COOKIE_DOMAIN = 'https://example.com';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('Configuration validation failed');
+      expect(() => validateConfig()).toThrow('COOKIE_DOMAIN must be a bare hostname');
+    });
+
+    it('should reject COOKIE_DOMAIN with a port', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.COOKIE_DOMAIN = 'example.com:3000';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('COOKIE_DOMAIN must be a bare hostname');
+    });
+
+    it('should reject COOKIE_DOMAIN with a path', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.COOKIE_DOMAIN = 'example.com/path';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('COOKIE_DOMAIN must be a bare hostname');
+    });
+
+    it('should accept common COOKIE_DOMAIN forms', async () => {
+      for (const domain of ['.kz.bugspotter.io', 'kz.bugspotter.io', 'localhost']) {
+        vi.resetModules();
+        process.env = { ...originalEnv, DATABASE_URL: 'postgres://localhost/db' };
+        process.env.COOKIE_DOMAIN = domain;
+        const { validateConfig } = await import('../src/config.js');
+        expect(() => validateConfig()).not.toThrow(/COOKIE_DOMAIN/);
+      }
+    });
+
     it('should throw error for mismatched S3 credentials', async () => {
       process.env.DATABASE_URL = 'postgres://localhost/db';
       process.env.STORAGE_BACKEND = 's3';
