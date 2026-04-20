@@ -17,6 +17,7 @@ export {
   requireProject,
   requireUser,
   requireApiKey,
+  requireApiKeyPermission,
   requireAuth,
   requirePermission,
   requireProjectRole,

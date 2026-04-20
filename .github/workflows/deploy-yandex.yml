@@ -298,6 +298,22 @@ jobs:
           CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
           DISABLE_STRICT_RESIDENCY_VALIDATION=${{ vars.DISABLE_STRICT_RESIDENCY_VALIDATION || 'true' }}
 
+          # Self-service signup (POST /api/v1/auth/signup)
+          # Default: on in saas mode. Set vars.SELF_SERVICE_SIGNUP_ENABLED=false
+          # to disable without changing DEPLOYMENT_MODE.
+          SELF_SERVICE_SIGNUP_ENABLED=${{ vars.SELF_SERVICE_SIGNUP_ENABLED || 'true' }}
+
+          # Cross-subdomain refresh cookie scope.
+          # REQUIRED for cross-subdomain SSO between the signup wizard on
+          # kz.bugspotter.io and tenant admin UIs on [org].kz.bugspotter.io.
+          # Empty value keeps cookies host-scoped (SameSite=Strict).
+          COOKIE_DOMAIN=${{ vars.COOKIE_DOMAIN }}
+
+          # Data residency region for this deployment. Drives the
+          # `data_residency_region` column on new orgs and billing currency.
+          # Validated at startup (see config.ts collectDataResidencyErrors).
+          DATA_RESIDENCY_REGION=${{ vars.DATA_RESIDENCY_REGION || 'kz' }}
+
           # URLs
           FRONTEND_URL=${{ vars.FRONTEND_URL }}
           API_URL=${{ vars.API_URL }}

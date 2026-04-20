@@ -11,6 +11,7 @@ import {
   requireUser,
   requireApiKey,
   requireAuth,
+  requireApiKeyPermission,
 } from '../../../src/api/middleware/auth/authorization.js';
 
 // Mock response helpers
@@ -477,6 +478,117 @@ describe('Authorization Middleware', () => {
 
       expect(reply.code).not.toHaveBeenCalled();
       expect(reply.send).not.toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================================
+  // requireApiKeyPermission
+  // ============================================================================
+  //
+  // BACKGROUND: prior to this fix, an API key's `permissions` array was stored
+  // but never consulted by any route middleware. The comment at
+  // `requirePermission` in authorization.ts explicitly bypasses API keys,
+  // saying "their access is validated by requireProjectAccess" — but
+  // `requireProjectAccess` only checks `allowed_projects`, not per-action
+  // permissions. Verified in prod 2026-04-20: a signup-issued key with
+  // `permissions: ['reports:write', 'sessions:write']` could GET
+  // `/api/v1/reports` and receive 200. See PR that introduces this middleware.
+  //
+  // These tests pin down the new behavior: the key's declared permissions
+  // gate access to the route that declares a required permission.
+  //
+  describe('requireApiKeyPermission', () => {
+    const mkKey = (overrides: Record<string, unknown> = {}) => ({
+      id: 'key-123',
+      permission_scope: 'custom',
+      permissions: ['reports:write', 'sessions:write'],
+      allowed_projects: ['proj-1'],
+      ...overrides,
+    });
+
+    it('allows an API key whose permissions include the required one', async () => {
+      const request = createMockRequest({
+        apiKey: mkKey({ permissions: ['reports:read', 'reports:write'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('REJECTS an ingest-only API key (write-only) from a read-required route — 403', async () => {
+      // This is the regression that PR #17 left open: a signup-issued
+      // ingest-only key was supposed to be unable to read reports, but
+      // the permissions array was purely advisory. This test locks in
+      // the fix.
+      const request = createMockRequest({
+        apiKey: mkKey({ permissions: ['reports:write', 'sessions:write'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(403);
+      expect(reply.send).toHaveBeenCalledWith(expect.objectContaining({ error: 'Forbidden' }));
+    });
+
+    it('allows a full-scope API key regardless of the required permission', async () => {
+      // `permission_scope: 'full'` is the legacy "can do anything" scope.
+      // Middleware must not break existing keys that predate the permissions
+      // array, even if the permissions array is empty or stale.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'full', permissions: [] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('allows a user JWT request (no API key) to pass through', async () => {
+      // This middleware is a gate for API-key requests specifically.
+      // User (JWT) requests go through system-role permission checks
+      // elsewhere (`requirePermission`) and must not be double-blocked.
+      const request = createMockRequest({
+        authUser: { id: 'user-123', email: 'u@example.com', role: 'user' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('rejects requests with neither API key nor user — 401', async () => {
+      const request = createMockRequest();
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(401);
+    });
+
+    it('rejects an API key with permissions array that does not match the required action', async () => {
+      // Different axis: a key scoped to `reports:read` should NOT satisfy
+      // `sessions:read`. Regression guard against string-match-any bugs.
+      const request = createMockRequest({
+        apiKey: mkKey({ permissions: ['reports:read'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('sessions:read')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(403);
     });
   });
 });

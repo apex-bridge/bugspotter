@@ -89,6 +89,66 @@ export async function requireApiKey(request: FastifyRequest, reply: FastifyReply
 }
 
 /**
+ * Enforce a specific permission on the authenticating API key.
+ *
+ * The key's `permissions` array is the source of truth for what an API key
+ * can do. Before this middleware existed, the array was stored at key
+ * creation time but never consulted at route-enforcement time — so a key
+ * created with `permissions: ['reports:write']` could still perform reads
+ * on any route it reached via `requireProject`/`requireAuth`. That made the
+ * "ingest-only" property of self-service-signup-issued keys purely
+ * advisory.
+ *
+ * Behavior:
+ * - **API key requests** must include `permission` in their
+ *   `apiKey.permissions` array, OR have `permission_scope === 'full'`
+ *   (legacy/unrestricted). Otherwise → 403 Forbidden.
+ * - **User (JWT) requests** pass through. System-role permission checks
+ *   are handled separately by `requirePermission(db, resource, action)`;
+ *   this middleware is an API-key-specific gate and must not double-block
+ *   JWT users.
+ * - **Unauthenticated requests** → 401 Unauthorized. (In practice this
+ *   branch is unreachable when the middleware is composed after
+ *   `requireAuth`/`requireProject`, but we're defensive — a route that
+ *   forgets to require auth first still shouldn't leak.)
+ *
+ * Usage (on a route handler):
+ *
+ * ```ts
+ * fastify.get('/api/v1/reports', {
+ *   preHandler: [requireProject, requireApiKeyPermission('reports:read')],
+ *   ...
+ * });
+ * ```
+ */
+export function requireApiKeyPermission(permission: string) {
+  return async function apiKeyPermissionMiddleware(request: FastifyRequest, reply: FastifyReply) {
+    // User (JWT) — bypass. Their permissions are checked via requirePermission.
+    if (request.authUser) {
+      return;
+    }
+
+    // API key path
+    if (request.apiKey) {
+      // Legacy `full` scope is unrestricted by design; skip the check so
+      // existing keys (pre-permissions-array) don't break.
+      if (request.apiKey.permission_scope === 'full') {
+        return;
+      }
+
+      const permissions = request.apiKey.permissions ?? [];
+      if (permissions.includes(permission)) {
+        return;
+      }
+
+      return sendForbidden(reply, `API key does not have the required permission: ${permission}`);
+    }
+
+    return sendUnauthorized(reply, 'Authentication required');
+  };
+}
+
+/**
  * Require any authentication (API key OR JWT user)
  * Use this for routes that should work with both SDK clients and dashboard users.
  * Full-scope API keys (no allowed_projects restriction) are accepted — project-level

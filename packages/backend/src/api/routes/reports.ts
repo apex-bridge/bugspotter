@@ -17,7 +17,7 @@ import {
   BugStatus,
   BugPriority,
 } from '../schemas/bug-report-schema.js';
-import { requireProject } from '../middleware/auth.js';
+import { requireProject, requireApiKeyPermission } from '../middleware/auth.js';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response.js';
 import { AppError } from '../middleware/error.js';
 import { buildPagination, buildSort, parseDateFilter } from '../utils/query-builder.js';
@@ -282,6 +282,10 @@ export function bugReportRoutes(
     '/api/v1/reports',
     {
       schema: listBugReportsSchema,
+      // Enforce API-key permission: an ingest-only key (e.g. from
+      // self-service signup) must NOT be able to list reports. User JWT
+      // requests pass through (handled by the middleware).
+      preHandler: [requireApiKeyPermission('reports:read')],
     },
     async (request, reply) => {
       const {
@@ -334,6 +338,7 @@ export function bugReportRoutes(
     '/api/v1/reports/:id',
     {
       schema: getBugReportSchema,
+      preHandler: [requireApiKeyPermission('reports:read')],
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -474,6 +479,9 @@ export function bugReportRoutes(
    */
   fastify.get<{ Params: { id: string } }>(
     '/api/v1/reports/:id/sessions',
+    {
+      preHandler: [requireApiKeyPermission('sessions:read')],
+    },
     async (request, reply) => {
       const { id } = request.params;
 
