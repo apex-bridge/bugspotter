@@ -187,6 +187,13 @@ export class SubdomainService {
         continue;
       }
       const candidate = `${trimmedBase}${suffix}`;
+      // Defense against future reserved-list growth: if someone later adds
+      // a suffixed name like `api-2` to RESERVED_SUBDOMAINS, this loop
+      // must not mint it. Today's list has no such entries so this is a
+      // guard, not a reachable branch — but zero-cost to check.
+      if (RESERVED_SUBDOMAINS.has(candidate)) {
+        continue;
+      }
       if (await this.isAvailable(candidate)) {
         return candidate;
       }

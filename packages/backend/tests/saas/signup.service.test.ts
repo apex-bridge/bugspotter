@@ -254,13 +254,20 @@ describe('SignupService', () => {
       expect(storedOrg.subdomain).toBe('my-custom-sub');
     });
 
-    it('issues a write-scoped API key limited to the new project', async () => {
+    it('issues an ingest-only API key (write-only, no read) limited to the new project', async () => {
+      // Security regression guard: the key must NOT grant reports:read or
+      // sessions:read. SDK-embedded keys ship to public web pages; granting
+      // read would let anyone with the key exfiltrate all reports/sessions.
       const result = await service.signup(validInput());
       const storedKey = mock.log.apiKeys[0] as {
         permission_scope: string;
+        permissions: string[];
         allowed_projects: string[];
       };
-      expect(storedKey.permission_scope).toBe('write');
+      expect(storedKey.permission_scope).toBe('custom');
+      expect(storedKey.permissions).toEqual(['reports:write', 'sessions:write']);
+      expect(storedKey.permissions).not.toContain('reports:read');
+      expect(storedKey.permissions).not.toContain('sessions:read');
       expect(storedKey.allowed_projects).toEqual([result.project.id]);
     });
 

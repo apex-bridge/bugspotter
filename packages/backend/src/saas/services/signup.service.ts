@@ -3,15 +3,16 @@
  *
  * Orchestrates self-service tenant creation: a single atomic flow that
  * provisions user + organization + trial subscription + owner membership +
- * default project + write-scoped API key for SDK ingestion. Separate from
- * `/auth/register` (user-only) and from the admin-approved
+ * default project + ingest-only API key for SDK write access. Separate
+ * from `/auth/register` (user-only) and from the admin-approved
  * `/organization-requests` flow (kept for enterprise onboarding).
  *
- * The API key uses `PERMISSION_SCOPE.WRITE` (reports:read/write +
- * sessions:read/write) — the minimum the SDK needs to post reports and
- * session replays. There is no dedicated `ingest` scope in the
- * permission enum; adding one would require a DB CHECK-constraint
- * migration and is out of scope here.
+ * The API key uses `PERMISSION_SCOPE.CUSTOM` with exactly
+ * `['reports:write', 'sessions:write']` — least privilege for the SDK,
+ * which only POSTs bug reports and session replays. Using the stock
+ * `WRITE` scope would have ALSO granted `reports:read` + `sessions:read`,
+ * which is dangerous for keys customers typically paste into public
+ * front-end SDK code where the key ships to every page visitor.
  *
  * Atomicity: all six inserts run inside a single `db.transaction`. If any
  * step fails, nothing is committed — the user can retry without orphan
@@ -41,7 +42,6 @@ import {
   hashKey,
   extractKeyMetadata,
 } from '../../services/api-key/key-crypto.js';
-import { resolvePermissions } from '../../services/api-key/key-permissions.js';
 import { getLogger } from '../../logger.js';
 
 const logger = getLogger();
@@ -164,14 +164,20 @@ export class SignupService {
         const plaintextKey = generatePlaintextKey();
         const keyHash = hashKey(plaintextKey);
         const { prefix, suffix } = extractKeyMetadata(plaintextKey);
-        const scope = PERMISSION_SCOPE.WRITE;
+
+        // Ingest-only: write access to reports and sessions, NO read.
+        // Intentionally narrower than PERMISSION_SCOPE.WRITE (which also
+        // grants reports:read + sessions:read). SDK-embedded keys must
+        // not be able to exfiltrate data — a public page would leak
+        // everyone else's reports/sessions.
+        const SDK_INGEST_PERMISSIONS = ['reports:write', 'sessions:write'];
 
         const apiKey = await tx.apiKeys.create({
           name: `${DEFAULT_PROJECT_NAME} — SDK key`,
           description: 'Auto-generated at signup — use this in your SDK init.',
           type: API_KEY_TYPE.PRODUCTION,
-          permission_scope: scope,
-          permissions: resolvePermissions(scope),
+          permission_scope: PERMISSION_SCOPE.CUSTOM,
+          permissions: SDK_INGEST_PERMISSIONS,
           allowed_projects: [project.id],
           key_hash: keyHash,
           key_prefix: prefix,
@@ -185,7 +191,8 @@ export class SignupService {
           performed_by: user.id,
           changes: {
             type: apiKey.type,
-            permission_scope: scope,
+            permission_scope: PERMISSION_SCOPE.CUSTOM,
+            permissions: SDK_INGEST_PERMISSIONS,
             source: 'self-service-signup',
           },
         });
