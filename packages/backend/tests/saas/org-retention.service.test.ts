@@ -69,6 +69,14 @@ function createMockDb(overrides: MockDbOverrides = {}): {
           })
       ),
     },
+    // Counts are read *inside* the tx so the audit trail reflects the
+    // exact state being cascaded. Mirrors the service's Promise.all call.
+    projects: {
+      countByOrganizationId: vi.fn(overrides.countByOrganizationId ?? (async () => 0)),
+    },
+    bugReports: {
+      countByOrganizationId: vi.fn(overrides.countBugReportsByOrganizationId ?? (async () => 0)),
+    },
   };
 
   return {
@@ -77,12 +85,6 @@ function createMockDb(overrides: MockDbOverrides = {}): {
       organizations: {
         findByIdIncludeDeleted: vi.fn(overrides.findByIdIncludeDeleted ?? (async () => null)),
         findExpiredSoftDeleted: vi.fn(overrides.findExpiredSoftDeleted ?? (async () => [])),
-      },
-      projects: {
-        countByOrganizationId: vi.fn(overrides.countByOrganizationId ?? (async () => 0)),
-      },
-      bugReports: {
-        countByOrganizationId: vi.fn(overrides.countBugReportsByOrganizationId ?? (async () => 0)),
       },
       transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
         if (overrides.transactionThrows) {
@@ -218,6 +220,19 @@ describe('OrganizationService.hardDeleteExpired', () => {
     expect(mock.log.auditCreated).toHaveLength(0);
     expect(mock.log.hardDeleted).toHaveLength(0);
     expect(mock.db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('accepts an uppercase / whitespace-padded subdomain (case-insensitive)', async () => {
+    // Mirrors the UI's contract: typing "  ACME  " should work the same
+    // as "acme". The service trims + lowercases both sides before
+    // comparing. Without this, a direct API client that sent mixed case
+    // would hit 400 even though the UI promises otherwise.
+    const mock = createMockDb({ findByIdIncludeDeleted: async () => validOrg });
+    const service = new OrganizationService(mock.db);
+
+    const result = await service.hardDeleteExpired('org-1', RETENTION_DAYS, 'admin', '  ACME  ');
+    expect(result).toEqual({ id: 'org-1', subdomain: 'acme', name: 'Acme' });
+    expect(mock.log.hardDeleted).toEqual(['org-1']);
   });
 
   it('throws 404 when the organization does not exist', async () => {

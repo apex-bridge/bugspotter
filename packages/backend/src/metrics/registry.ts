@@ -48,8 +48,13 @@ export const queueJobDuration = new client.Histogram({
 // === Platform-admin org retention ===
 // Admin-initiated hard-deletion of soft-deleted orgs that have aged past
 // ORG_RETENTION_DAYS. No scheduler — each increment is a human click.
-// Labels: `result` = 'success' (cascade executed) | 'guard_failed' (org
-// not eligible) | 'error'.
+// Labels: `result` =
+//   'success'           — cascade executed
+//   'validation_failed' — 400, subdomain confirmation mismatch
+//   'guard_failed'      — 409, org not soft-deleted / inside retention
+//                         window / state changed during delete
+//   'error'             — any other unexpected error
+// Keep dashboards/alerts in sync when adding new labels.
 export const orgHardDeleteTotal = new client.Counter({
   name: 'bugspotter_org_hard_delete_total',
   help: 'Platform-admin hard-deletions of soft-deleted organizations past the retention window',

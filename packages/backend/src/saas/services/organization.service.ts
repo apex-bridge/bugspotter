@@ -738,9 +738,10 @@ export class OrganizationService {
    * so the trail is readable without joining anything.
    *
    * `confirmSubdomain` is the string the admin typed into the UI's confirm
-   * field. A mismatch throws 400 here — the server-side check is the
-   * authoritative one; the client dialog is mis-click defense, not a
-   * trust boundary.
+   * field. Compared case-insensitively (trim + lowercase both sides) to
+   * match the UX contract — typing "Acme" works the same as "acme". A
+   * mismatch throws 400 here — the server-side check is the authoritative
+   * one; the client dialog is mis-click defense, not a trust boundary.
    *
    * Returns the deleted org's identifiers for UI confirmation. Throws:
    *   - 404 if the org doesn't exist
@@ -757,7 +758,12 @@ export class OrganizationService {
     if (!org) {
       throw new AppError('Organization not found', 404, 'NotFound');
     }
-    if (confirmSubdomain !== org.subdomain) {
+    // Normalize both sides before comparing. Subdomains are enforced
+    // lowercase at signup, but a direct API call (bypassing the UI) might
+    // send mixed case; the UX contract is that typing "Acme" should work
+    // the same as "acme". The UI lowercases input on change, so this is
+    // also the server-side mirror of that behavior.
+    if (confirmSubdomain.trim().toLowerCase() !== org.subdomain.toLowerCase()) {
       throw new AppError(
         'Subdomain confirmation did not match — refusing hard-delete',
         400,
@@ -782,18 +788,19 @@ export class OrganizationService {
       );
     }
 
-    // Capture both counts for the audit log before the cascade takes them.
-    // `bug_reports` is the larger of the two and the one a user is more
-    // likely to care about post-fact ("how many reports did we lose?").
-    const [projectCount, bugReportCount] = await Promise.all([
-      this.db.projects.countByOrganizationId(organizationId),
-      this.db.bugReports.countByOrganizationId(organizationId),
-    ]);
-
     // Write audit, then delete, in one tx. If either step fails the other
     // is rolled back — we never log a deletion that didn't happen, nor
-    // delete without a trail.
+    // delete without a trail. Counts are read inside the tx so the audit
+    // trail reflects the exact state being cascaded (in theory concurrent
+    // writes against a soft-deleted-for-30d org are near-impossible, but
+    // the audit log is the whole point of this flow, so we don't cut
+    // corners on its accuracy).
     await this.db.transaction(async (tx) => {
+      const [projectCount, bugReportCount] = await Promise.all([
+        tx.projects.countByOrganizationId(organizationId),
+        tx.bugReports.countByOrganizationId(organizationId),
+      ]);
+
       await tx.auditLogs.create({
         action: 'organization.hard_delete',
         resource: 'organization',
