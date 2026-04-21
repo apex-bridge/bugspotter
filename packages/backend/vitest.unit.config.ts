@@ -72,6 +72,12 @@ export default defineConfig({
         singleFork: false,
       },
     },
-    // No setupFiles for unit tests - we mock everything
+    // Minimal env-var bootstrap. Unit tests mock DB/services, but a handful
+    // of modules (e.g. JiraConfigManager) instantiate env-backed
+    // dependencies at import time and will refuse to load without
+    // ENCRYPTION_KEY / JWT_SECRET. CI provides them via workflow env;
+    // locally this file ensures `pnpm test:unit` matches CI behavior out
+    // of the box. No services are started here.
+    setupFiles: ['./tests/setup-unit-env.ts'],
   },
 });

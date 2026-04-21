@@ -11,6 +11,7 @@ import {
   requireUser,
   requireApiKey,
   requireAuth,
+  requireApiKeyPermission,
 } from '../../../src/api/middleware/auth/authorization.js';
 
 // Mock response helpers
@@ -474,6 +475,216 @@ describe('Authorization Middleware', () => {
       const reply = createMockReply();
 
       await requireAuth(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================================
+  // requireApiKeyPermission
+  // ============================================================================
+  //
+  // BACKGROUND: prior to this fix, an API key's `permissions` array was stored
+  // but never consulted by any route middleware. The comment at
+  // `requirePermission` in authorization.ts explicitly bypasses API keys,
+  // saying "their access is validated by requireProjectAccess" — but
+  // `requireProjectAccess` only checks `allowed_projects`, not per-action
+  // permissions. Verified in prod 2026-04-20: a signup-issued key with
+  // `permissions: ['reports:write', 'sessions:write']` could GET
+  // `/api/v1/reports` and receive 200. See PR that introduces this middleware.
+  //
+  // These tests pin down the new behavior: the key's declared permissions
+  // gate access to the route that declares a required permission.
+  //
+  describe('requireApiKeyPermission', () => {
+    const mkKey = (overrides: Record<string, unknown> = {}) => ({
+      id: 'key-123',
+      permission_scope: 'custom',
+      permissions: ['reports:write', 'sessions:write'],
+      allowed_projects: ['proj-1'],
+      ...overrides,
+    });
+
+    it('allows an API key whose permissions include the required one', async () => {
+      const request = createMockRequest({
+        apiKey: mkKey({ permissions: ['reports:read', 'reports:write'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('REJECTS an ingest-only API key (write-only) from a read-required route — 403', async () => {
+      // This is the regression that PR #17 left open: a signup-issued
+      // ingest-only key was supposed to be unable to read reports, but
+      // the permissions array was purely advisory. This test locks in
+      // the fix.
+      const request = createMockRequest({
+        apiKey: mkKey({ permissions: ['reports:write', 'sessions:write'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(403);
+      expect(reply.send).toHaveBeenCalledWith(expect.objectContaining({ error: 'Forbidden' }));
+    });
+
+    it('allows a full-scope API key regardless of the required permission', async () => {
+      // `permission_scope: 'full'` is the legacy "can do anything" scope.
+      // Middleware must not break existing keys that predate the permissions
+      // array, even if the permissions array is empty or stale.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'full', permissions: [] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('allows a user JWT request (no API key) to pass through', async () => {
+      // This middleware is a gate for API-key requests specifically.
+      // User (JWT) requests go through system-role permission checks
+      // elsewhere (`requirePermission`) and must not be double-blocked.
+      const request = createMockRequest({
+        authUser: { id: 'user-123', email: 'u@example.com', role: 'user' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('rejects requests with neither API key nor user — 401', async () => {
+      const request = createMockRequest();
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(401);
+    });
+
+    it('rejects an API key with permissions array that does not match the required action', async () => {
+      // Different axis: a key scoped to `reports:read` should NOT satisfy
+      // `sessions:read`. Regression guard against string-match-any bugs.
+      const request = createMockRequest({
+        apiKey: mkKey({ permissions: ['reports:read'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('sessions:read')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(403);
+    });
+
+    it("allows a key whose permissions array contains '*' (wildcard)", async () => {
+      // Shared `checkPermission` treats '*' as "grants everything". The
+      // middleware delegates to it, so the wildcard must be honored even
+      // on a `custom`-scope key.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'custom', permissions: ['*'] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it("falls back to permission_scope when a key's permissions array is empty (pre-backfill key)", async () => {
+      // Regression guard for older keys stored with a scope (`read` /
+      // `write`) but an EMPTY permissions array — those exist in DBs
+      // predating the permissions-backfill migration. The shared
+      // `checkPermission` resolves `scope → permissions` on the fly in
+      // that case; the middleware must preserve that behavior, or it
+      // would wrongly 403 older keys.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'read', permissions: [] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      // `read` scope resolves to ['reports:read', 'sessions:read'] — so
+      // the check passes even though the stored permissions array is empty.
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
+    });
+
+    it('fallback from empty permissions + `read` scope still rejects write actions', async () => {
+      // Sanity check for the fallback: `read` scope must not satisfy a
+      // required write permission even when the stored permissions array
+      // is empty.
+      const request = createMockRequest({
+        apiKey: mkKey({ permission_scope: 'read', permissions: [] }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:write')(request, reply);
+
+      expect(reply.code).toHaveBeenCalledWith(403);
+    });
+
+    it('does NOT bypass on request.authProject when apiKey is ALSO set (order matters)', async () => {
+      // Regression guard: for single-project keys, `handlers.ts:98` sets
+      // `authProject` alongside `apiKey`. The middleware must run the
+      // apiKey permission check FIRST so a key with restricted
+      // permissions still 403s on an action it isn't authorized for —
+      // even though `authProject` is present. Flipping the order
+      // (checking `authProject` before `apiKey`) would incorrectly
+      // bypass the apiKey permission check and let restricted keys
+      // perform actions their `permissions` array doesn't grant.
+      const request = createMockRequest({
+        apiKey: mkKey({
+          permission_scope: 'custom',
+          permissions: ['reports:write', 'sessions:write'],
+          allowed_projects: ['proj-1'],
+        }),
+        authProject: { id: 'proj-1', name: 'Proj' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      // Must reject — the apiKey check runs first and finds the
+      // permission missing; the authProject fallback below never fires.
+      expect(reply.code).toHaveBeenCalledWith(403);
+    });
+
+    it('DOES bypass on request.authProject when NO apiKey is present (defensive fallback)', async () => {
+      // No assignment site in the current codebase produces this state
+      // (every `authProject` is set alongside an `apiKey`), but every
+      // sibling `require*` middleware in the same file treats
+      // `authProject` as a first-class auth mode. This test locks in
+      // that consistency so the middleware stays correct if a future
+      // auth handler (e.g. a share-token-style project-scoped flow)
+      // ever assigns `authProject` without an `apiKey`.
+      const request = createMockRequest({
+        authProject: { id: 'proj-1', name: 'Legacy Project' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
 
       expect(reply.code).not.toHaveBeenCalled();
       expect(reply.send).not.toHaveBeenCalled();

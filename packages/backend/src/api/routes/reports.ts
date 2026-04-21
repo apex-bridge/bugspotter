@@ -17,7 +17,7 @@ import {
   BugStatus,
   BugPriority,
 } from '../schemas/bug-report-schema.js';
-import { requireProject } from '../middleware/auth.js';
+import { requireProject, requireApiKeyPermission } from '../middleware/auth.js';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response.js';
 import { AppError } from '../middleware/error.js';
 import { buildPagination, buildSort, parseDateFilter } from '../utils/query-builder.js';
@@ -67,7 +67,14 @@ export function bugReportRoutes(
     '/api/v1/reports',
     {
       schema: createBugReportSchema,
-      preHandler: [requireProject, requireQuota(orgService, RESOURCE_TYPE.BUG_REPORTS)],
+      // Enforce declared write permission on the key. The signup-issued
+      // ingest-only key has `reports:write` and passes. A hypothetical
+      // `read`-only key (no `reports:write`) is correctly blocked.
+      preHandler: [
+        requireProject,
+        requireApiKeyPermission('reports:write'),
+        requireQuota(orgService, RESOURCE_TYPE.BUG_REPORTS),
+      ],
     },
     async (request, reply) => {
       const {
@@ -282,6 +289,10 @@ export function bugReportRoutes(
     '/api/v1/reports',
     {
       schema: listBugReportsSchema,
+      // Enforce API-key permission: an ingest-only key (e.g. from
+      // self-service signup) must NOT be able to list reports. User JWT
+      // requests pass through (handled by the middleware).
+      preHandler: [requireApiKeyPermission('reports:read')],
     },
     async (request, reply) => {
       const {
@@ -334,6 +345,7 @@ export function bugReportRoutes(
     '/api/v1/reports/:id',
     {
       schema: getBugReportSchema,
+      preHandler: [requireApiKeyPermission('reports:read')],
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -364,6 +376,7 @@ export function bugReportRoutes(
     '/api/v1/reports/:id',
     {
       schema: updateBugReportSchema,
+      preHandler: [requireApiKeyPermission('reports:write')],
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -408,6 +421,12 @@ export function bugReportRoutes(
     '/api/v1/reports/:id',
     {
       schema: deleteBugReportSchema,
+      // Delete gated by `reports:write`. A future dedicated
+      // `reports:delete` would be the stricter option if we want
+      // write-but-not-destroy keys; for now writes and deletes share
+      // a permission to keep parity with the shared SCOPE_PERMISSIONS
+      // table.
+      preHandler: [requireApiKeyPermission('reports:write')],
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -445,6 +464,7 @@ export function bugReportRoutes(
     '/api/v1/reports/bulk-delete',
     {
       schema: bulkDeleteBugReportsSchema,
+      preHandler: [requireApiKeyPermission('reports:write')],
     },
     async (request, reply) => {
       const { ids } = request.body;
@@ -474,6 +494,17 @@ export function bugReportRoutes(
    */
   fastify.get<{ Params: { id: string } }>(
     '/api/v1/reports/:id/sessions',
+    {
+      // `sessions:read` is the dedicated permission — preserves the
+      // granularity the permission model supports. `read` and `write`
+      // scopes both include `sessions:read` (see SCOPE_PERMISSIONS) so
+      // broad-scope keys aren't affected. Custom-scope keys that list
+      // only `reports:read` but not `sessions:read` are blocked
+      // deliberately: session data often contains more PII than the
+      // report envelope, and a compliance-restricted key may want to
+      // see reports without session contents.
+      preHandler: [requireApiKeyPermission('sessions:read')],
+    },
     async (request, reply) => {
       const { id } = request.params;
 
