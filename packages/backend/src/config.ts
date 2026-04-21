@@ -115,6 +115,9 @@ export const config: AppConfig = {
     // validate(), causing a confusing boot error.
     region: (process.env.DATA_RESIDENCY_REGION ?? 'kz').trim().toLowerCase(),
   },
+  orgRetention: {
+    retentionDays: parseInt(process.env.ORG_RETENTION_DAYS ?? '30', 10),
+  },
 } as const;
 
 /**
@@ -198,6 +201,21 @@ function collectCookieDomainErrors(): string[] {
     );
   }
   return errors;
+}
+
+function collectOrgRetentionErrors(): string[] {
+  // Guard against typos like `ORG_RETENTION_DAYS=30d` that parse to NaN
+  // (which `<` comparisons treat as "never past the window" — nothing would
+  // ever be eligible, and the ops team wouldn't know why). Also block
+  // nonsense values like 0 or negative; the point of the window is a grace
+  // period, so the minimum meaningful value is 1 day.
+  const days = config.orgRetention.retentionDays;
+  if (!Number.isFinite(days) || !Number.isInteger(days) || days < 1) {
+    return [
+      `ORG_RETENTION_DAYS must be a positive integer (got "${process.env.ORG_RETENTION_DAYS}")`,
+    ];
+  }
+  return [];
 }
 
 function collectDataResidencyErrors(): string[] {
@@ -286,6 +304,7 @@ export function validateConfig(context: ValidationContext = 'api'): void {
     errors.push(...collectStorageErrors());
     errors.push(...collectDataResidencyErrors());
     errors.push(...collectCookieDomainErrors());
+    errors.push(...collectOrgRetentionErrors());
   }
 
   throwIfErrors(errors);

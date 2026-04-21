@@ -698,6 +698,125 @@ export class OrganizationService {
   }
 
   /**
+   * List soft-deleted organizations that have aged past the retention window
+   * and are eligible for permanent removal by a platform admin.
+   *
+   * Service layer — the route handler is in `admin-organizations.ts` and is
+   * gated by `requirePlatformAdmin`.
+   */
+  async listPendingHardDelete(retentionDays: number): Promise<
+    Array<{
+      id: string;
+      name: string;
+      subdomain: string;
+      deleted_at: Date;
+      deleted_by: string | null;
+      project_count: number;
+      bug_report_count: number;
+      days_since_deleted: number;
+    }>
+  > {
+    const rows = await this.db.organizations.findExpiredSoftDeleted(retentionDays);
+    const now = Date.now();
+    return rows.map((row) => ({
+      ...row,
+      days_since_deleted: Math.floor(
+        (now - new Date(row.deleted_at).getTime()) / (24 * 60 * 60 * 1000)
+      ),
+    }));
+  }
+
+  /**
+   * Permanently delete a soft-deleted organization that has aged past the
+   * retention window. FK cascades handle projects, bug_reports,
+   * subscriptions, memberships, invitations, invoices.
+   *
+   * The audit log is written BEFORE the delete in the same transaction so
+   * the record survives the cascade even though `audit_logs.organization_id`
+   * is `ON DELETE SET NULL`. Key fields (subdomain, name, project count,
+   * original deleted_at) are duplicated into `details` so the trail is
+   * readable without joining anything.
+   *
+   * Returns the deleted org's identifiers for UI confirmation. Throws:
+   *   - 404 if the org doesn't exist
+   *   - 409 if the org isn't soft-deleted, or hasn't aged past the window
+   *     (the UI must pass the same subdomain the admin typed as a
+   *     double-confirm — mismatches throw 400 at the route layer)
+   */
+  async hardDeleteExpired(
+    organizationId: string,
+    retentionDays: number,
+    actorUserId: string
+  ): Promise<{ id: string; subdomain: string; name: string }> {
+    const org = await this.db.organizations.findByIdIncludeDeleted(organizationId);
+    if (!org) {
+      throw new AppError('Organization not found', 404, 'NotFound');
+    }
+    if (!org.deleted_at) {
+      throw new AppError(
+        'Organization is not soft-deleted and cannot be hard-deleted via this route',
+        409,
+        'Conflict'
+      );
+    }
+    const ageMs = Date.now() - new Date(org.deleted_at).getTime();
+    const windowMs = retentionDays * 24 * 60 * 60 * 1000;
+    if (ageMs < windowMs) {
+      throw new AppError(
+        `Organization is inside its retention window (${retentionDays} days). ` +
+          `Eligible in ${Math.ceil((windowMs - ageMs) / (24 * 60 * 60 * 1000))} day(s).`,
+        409,
+        'Conflict'
+      );
+    }
+
+    // Capture what we need for the audit log before the row vanishes.
+    const projectCount = await this.db.projects.countByOrganizationId(organizationId);
+
+    // Write audit, then delete, in one tx. If either step fails the other
+    // is rolled back — we never log a deletion that didn't happen, nor
+    // delete without a trail.
+    await this.db.transaction(async (tx) => {
+      await tx.auditLogs.create({
+        action: 'organization.hard_delete',
+        resource: 'organization',
+        resource_id: org.id,
+        user_id: actorUserId,
+        // organization_id intentionally omitted — the FK would be nulled
+        // by the CASCADE-SET-NULL on audit_logs, so we keep the identity
+        // fully inside `details` instead.
+        organization_id: null,
+        details: {
+          subdomain: org.subdomain,
+          name: org.name,
+          deleted_at_original: org.deleted_at,
+          retention_days: retentionDays,
+          project_count_at_delete: projectCount,
+        },
+        success: true,
+      });
+
+      const deleted = await tx.organizations.hardDeleteExpiredSoftDeleted(
+        organizationId,
+        retentionDays
+      );
+      if (!deleted) {
+        // A concurrent restore could have flipped deleted_at back to NULL
+        // between our check above and this delete. The guard clause in the
+        // DELETE prevents acting on that state; the tx rollback discards
+        // the audit we just wrote.
+        throw new AppError(
+          'Organization state changed during delete (possibly restored). Retry.',
+          409,
+          'Conflict'
+        );
+      }
+    });
+
+    return { id: org.id, subdomain: org.subdomain, name: org.name };
+  }
+
+  /**
    * Restore a soft-deleted organization.
    */
   async restoreOrganization(organizationId: string): Promise<Organization> {
