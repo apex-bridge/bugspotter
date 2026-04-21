@@ -6,8 +6,8 @@ SaaS bug-reporting platform. pnpm + TypeScript, Docker-native dev loop.
 
 - `packages/` — backend (Fastify), billing, types, utils, message-broker, payment-service
 - `apps/` — admin (React/Vite), demo (showcase)
-- `docker-compose*.yml` — dev stack; `./dev.sh up` brings everything up including Postgres + Redis + MinIO
-- **Dozzle** on `:8080` — live log viewer for running containers
+- `docker-compose*.yml` — dev stack; `./dev.sh start` brings everything up including Postgres + Redis + MinIO. `./dev.sh help` lists the other subcommands.
+- **Dozzle** on `http://localhost:9999` — live log viewer for running containers (host port from `docker-compose.override.yml`; container port is 8080).
 
 ## Deployment modes
 
@@ -21,7 +21,7 @@ Flags that depend on mode are declared in `packages/backend/src/config.ts`.
 ## Common commands
 
 ```bash
-./dev.sh up                                      # bring up the stack
+./dev.sh start                                   # bring up the stack
 pnpm --filter @bugspotter/backend dev            # API on :3000
 pnpm --filter @bugspotter/backend typecheck      # src-only typecheck
 pnpm --filter @bugspotter/backend test:unit      # no docker needed
