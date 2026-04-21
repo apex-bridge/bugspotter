@@ -9,6 +9,7 @@ import type { DatabaseClient } from '../../../db/client.js';
 import { hasPermissionLevel } from '../../../types/project-roles.js';
 import { sendUnauthorized, sendForbidden } from './responses.js';
 import { isPlatformAdmin } from './assertions.js';
+import { checkPermission as checkApiKeyPermission } from '../../../services/api-key/key-permissions.js';
 
 /**
  * Role-based authorization middleware factory
@@ -86,6 +87,101 @@ export async function requireApiKey(request: FastifyRequest, reply: FastifyReply
   if (!request.apiKey) {
     return sendUnauthorized(reply, 'API key required (X-API-Key header)');
   }
+}
+
+/**
+ * Enforce a specific permission on the authenticating API key.
+ *
+ * The key's `permissions` array is the source of truth for what an API key
+ * can do. Before this middleware existed, the array was stored at key
+ * creation time but never consulted at route-enforcement time — so a key
+ * created with `permissions: ['reports:write']` could still perform reads
+ * on any route it reached via `requireProject`/`requireAuth`. That made the
+ * "ingest-only" property of self-service-signup-issued keys purely
+ * advisory.
+ *
+ * This middleware delegates to the shared `checkPermission` in
+ * `services/api-key/key-permissions.ts` so that enforcement rules match
+ * what the ApiKeyService uses when creating/verifying keys — including:
+ *   - The `'*'` wildcard (used by `full`-scope keys)
+ *   - Defensive fallback: if `permissions` is empty but a non-custom
+ *     `permission_scope` is set, resolve scope → permissions on the fly
+ *     (handles pre-migration keys and cached keys fetched before the
+ *     permissions-backfill migration ran).
+ *
+ * Behavior:
+ * - **User (JWT) requests** pass through. System-role permission checks
+ *   are handled separately by `requirePermission(db, resource, action)`;
+ *   this middleware is an API-key-specific gate and must not double-block
+ *   JWT users.
+ * - **API-key requests** go through the shared `checkPermission`. A `full`
+ *   scope (which resolves to `['*']`) satisfies every permission. A key
+ *   missing the required permission → 403 Forbidden.
+ * - **Unauthenticated requests** → 401 Unauthorized. This middleware
+ *   is safe to use standalone on a route (it will fail closed rather
+ *   than leak), but composing it after `requireAuth` or `requireProject`
+ *   yields a clearer error message — the auth layer's 401 explains
+ *   what's missing, where this middleware's 401 is more generic.
+ *
+ * Usage (on a route handler):
+ *
+ * ```ts
+ * // Standalone — safe, gives a generic 401 when unauthenticated
+ * fastify.get('/api/v1/reports', {
+ *   preHandler: [requireApiKeyPermission('reports:read')],
+ * });
+ *
+ * // Composed — preferred when the route already requires a specific
+ * // auth mode; the outer middleware's 401 is more informative
+ * fastify.post('/api/v1/reports', {
+ *   preHandler: [requireProject, requireApiKeyPermission('reports:write')],
+ * });
+ * ```
+ */
+export function requireApiKeyPermission(permission: string) {
+  return async function apiKeyPermissionMiddleware(request: FastifyRequest, reply: FastifyReply) {
+    // User (JWT) — bypass. Their permissions are checked via requirePermission.
+    if (request.authUser) {
+      return;
+    }
+
+    // Order matters: the API-key check MUST run before any `authProject`
+    // fallback below.
+    //
+    // `handlers.ts:98` sets `request.authProject` alongside
+    // `request.apiKey` (line 91) whenever a modern API key has
+    // `allowed_projects.length === 1`. That includes the self-service-
+    // signup-issued ingest-only key this middleware was written to
+    // constrain. If an `authProject` check ran first, the signup key
+    // would short-circuit past the permission gate and regain the
+    // unrestricted read access this middleware was introduced to
+    // remove. Running the `apiKey` check first means the 403 lands
+    // before the fallback is reached.
+    if (request.apiKey) {
+      const result = checkApiKeyPermission(request.apiKey, permission);
+      if (result.allowed) {
+        return;
+      }
+      return sendForbidden(
+        reply,
+        result.reason ?? `API key does not have the required permission: ${permission}`
+      );
+    }
+
+    // Defensive fallback: a request that carries `authProject` but no
+    // `apiKey` doesn't exist in this codebase today (the only assignment
+    // site always sets both). This branch matches how every sibling
+    // `require*` middleware in this file treats `authProject` — as a
+    // first-class auth mode — so if a future auth handler ever attaches
+    // `authProject` without an `apiKey` (e.g. a project-scoped share-
+    // token flow), the permissions middleware stays consistent with the
+    // rest of the auth chain.
+    if (request.authProject) {
+      return;
+    }
+
+    return sendUnauthorized(reply, 'Authentication required');
+  };
 }
 
 /**
