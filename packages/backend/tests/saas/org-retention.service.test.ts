@@ -40,6 +40,7 @@ interface MockDbOverrides {
   findExpiredSoftDeleted?: () => Promise<unknown[]>;
   hardDeleteExpiredSoftDeleted?: () => Promise<boolean>;
   countByOrganizationId?: () => Promise<number>;
+  countBugReportsByOrganizationId?: () => Promise<number>;
   transactionThrows?: Error;
 }
 
@@ -79,6 +80,9 @@ function createMockDb(overrides: MockDbOverrides = {}): {
       },
       projects: {
         countByOrganizationId: vi.fn(overrides.countByOrganizationId ?? (async () => 0)),
+      },
+      bugReports: {
+        countByOrganizationId: vi.fn(overrides.countBugReportsByOrganizationId ?? (async () => 0)),
       },
       transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
         if (overrides.transactionThrows) {
@@ -158,10 +162,16 @@ describe('OrganizationService.hardDeleteExpired', () => {
     const mock = createMockDb({
       findByIdIncludeDeleted: async () => validOrg,
       countByOrganizationId: async () => 3,
+      countBugReportsByOrganizationId: async () => 42,
     });
     const service = new OrganizationService(mock.db);
 
-    const result = await service.hardDeleteExpired(validOrg.id, RETENTION_DAYS, 'admin-user');
+    const result = await service.hardDeleteExpired(
+      validOrg.id,
+      RETENTION_DAYS,
+      'admin-user',
+      validOrg.subdomain
+    );
 
     expect(result).toEqual({ id: 'org-1', subdomain: 'acme', name: 'Acme' });
     expect(mock.log.auditCreated).toHaveLength(1);
@@ -186,16 +196,37 @@ describe('OrganizationService.hardDeleteExpired', () => {
       name: 'Acme',
       retention_days: RETENTION_DAYS,
       project_count_at_delete: 3,
+      bug_report_count_at_delete: 42,
     });
 
     expect(mock.log.hardDeleted).toEqual(['org-1']);
+  });
+
+  it('throws 400 when the typed subdomain does not match', async () => {
+    // Server-side mirror of the UI's typed-confirmation. If the dialog were
+    // ever bypassed (direct API call, stale frontend, scripted tool), the
+    // service still refuses to cascade-delete without an exact match.
+    const mock = createMockDb({ findByIdIncludeDeleted: async () => validOrg });
+    const service = new OrganizationService(mock.db);
+
+    const err = await service
+      .hardDeleteExpired('org-1', RETENTION_DAYS, 'admin', 'wrong-subdomain')
+      .catch((e) => e);
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toMatch(/subdomain confirmation/i);
+    // No audit, no delete — the mismatch is rejected before the tx opens.
+    expect(mock.log.auditCreated).toHaveLength(0);
+    expect(mock.log.hardDeleted).toHaveLength(0);
+    expect(mock.db.transaction).not.toHaveBeenCalled();
   });
 
   it('throws 404 when the organization does not exist', async () => {
     const mock = createMockDb({ findByIdIncludeDeleted: async () => null });
     const service = new OrganizationService(mock.db);
 
-    await expect(service.hardDeleteExpired('nope', RETENTION_DAYS, 'admin')).rejects.toMatchObject({
+    await expect(
+      service.hardDeleteExpired('nope', RETENTION_DAYS, 'admin', 'anything')
+    ).rejects.toMatchObject({
       statusCode: 404,
     });
   });
@@ -206,12 +237,12 @@ describe('OrganizationService.hardDeleteExpired', () => {
     });
     const service = new OrganizationService(mock.db);
 
-    await expect(service.hardDeleteExpired('org-1', RETENTION_DAYS, 'admin')).rejects.toMatchObject(
-      {
-        statusCode: 409,
-        message: expect.stringMatching(/not soft-deleted/i) as unknown as string,
-      }
-    );
+    await expect(
+      service.hardDeleteExpired('org-1', RETENTION_DAYS, 'admin', validOrg.subdomain)
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/not soft-deleted/i) as unknown as string,
+    });
   });
 
   it('throws 409 when the org is inside the retention window', async () => {
@@ -221,7 +252,9 @@ describe('OrganizationService.hardDeleteExpired', () => {
     });
     const service = new OrganizationService(mock.db);
 
-    const err = await service.hardDeleteExpired('org-1', RETENTION_DAYS, 'admin').catch((e) => e);
+    const err = await service
+      .hardDeleteExpired('org-1', RETENTION_DAYS, 'admin', validOrg.subdomain)
+      .catch((e) => e);
     expect(err.statusCode).toBe(409);
     expect(err.message).toMatch(/retention window/i);
     expect(err.message).toMatch(/eligible in \d+ day/i);
@@ -238,7 +271,9 @@ describe('OrganizationService.hardDeleteExpired', () => {
     });
     const service = new OrganizationService(mock.db);
 
-    const err = await service.hardDeleteExpired('org-1', RETENTION_DAYS, 'admin').catch((e) => e);
+    const err = await service
+      .hardDeleteExpired('org-1', RETENTION_DAYS, 'admin', validOrg.subdomain)
+      .catch((e) => e);
     expect(err.statusCode).toBe(409);
     expect(err.message).toMatch(/state changed during delete/i);
     // The hard-delete attempt was made (and correctly returned false)…

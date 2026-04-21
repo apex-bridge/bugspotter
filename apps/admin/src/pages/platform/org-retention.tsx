@@ -11,12 +11,13 @@
  * in the audit log with the admin's user_id.
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Trash2, AlertTriangle, Building2 } from 'lucide-react';
 import { organizationService } from '../../services/organization-service';
+import { useModalFocus } from '../../hooks/use-modal-focus';
 
 interface PendingOrg {
   id: string;
@@ -187,6 +188,12 @@ interface ConfirmDialogProps {
  * org's exact subdomain before the delete button unlocks. The server
  * ALSO checks the same string — the dialog's job is to prevent a
  * muscle-memory mis-click, not to be the only line of defense.
+ *
+ * The dialog needs a custom body (an input field inline with the
+ * confirmation prompt), so it can't reuse the generic
+ * `components/ui/confirm-dialog.tsx` directly. It does share the same
+ * `useModalFocus` hook for the accessibility wiring (ESC-to-close,
+ * focus restoration on close, body scroll lock).
  */
 function ConfirmDialog({
   target,
@@ -197,16 +204,36 @@ function ConfirmDialog({
   isDeleting,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
-  const matches = confirmInput === target.subdomain;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Compare case-insensitively. Subdomains are enforced lowercase at signup,
+  // so `target.subdomain` is always lowercase; normalizing the user's input
+  // here avoids a "looks identical but fails" moment if the admin's caps-
+  // lock or IME inserts an uppercase letter.
+  const matches = confirmInput.toLowerCase() === target.subdomain;
+
+  // ESC-to-close, body scroll lock, focus trap — same hook the app's other
+  // modals use (see `components/ui/confirm-dialog.tsx`). Disabled while the
+  // mutation is in flight so Escape doesn't rip the dialog out mid-request.
+  useModalFocus(dialogRef, !isDeleting, onCancel);
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="org-retention-confirm-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isDeleting) {
+          onCancel();
+        }
+      }}
+      role="presentation"
     >
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="org-retention-confirm-title"
+        tabIndex={-1}
+        className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+      >
         <div className="flex items-start gap-3 mb-4">
           <AlertTriangle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
           <div>
@@ -233,7 +260,7 @@ function ConfirmDialog({
         <input
           type="text"
           value={confirmInput}
-          onChange={(e) => onConfirmInputChange(e.target.value)}
+          onChange={(e) => onConfirmInputChange(e.target.value.toLowerCase())}
           aria-label={t('orgRetention.confirm.inputLabel', {
             defaultValue: 'Subdomain confirmation',
           })}

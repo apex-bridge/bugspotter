@@ -734,23 +734,35 @@ export class OrganizationService {
    * The audit log is written BEFORE the delete in the same transaction so
    * the record survives the cascade even though `audit_logs.organization_id`
    * is `ON DELETE SET NULL`. Key fields (subdomain, name, project count,
-   * original deleted_at) are duplicated into `details` so the trail is
-   * readable without joining anything.
+   * bug-report count, original deleted_at) are duplicated into `details`
+   * so the trail is readable without joining anything.
+   *
+   * `confirmSubdomain` is the string the admin typed into the UI's confirm
+   * field. A mismatch throws 400 here — the server-side check is the
+   * authoritative one; the client dialog is mis-click defense, not a
+   * trust boundary.
    *
    * Returns the deleted org's identifiers for UI confirmation. Throws:
    *   - 404 if the org doesn't exist
+   *   - 400 if `confirmSubdomain` doesn't match
    *   - 409 if the org isn't soft-deleted, or hasn't aged past the window
-   *     (the UI must pass the same subdomain the admin typed as a
-   *     double-confirm — mismatches throw 400 at the route layer)
    */
   async hardDeleteExpired(
     organizationId: string,
     retentionDays: number,
-    actorUserId: string
+    actorUserId: string,
+    confirmSubdomain: string
   ): Promise<{ id: string; subdomain: string; name: string }> {
     const org = await this.db.organizations.findByIdIncludeDeleted(organizationId);
     if (!org) {
       throw new AppError('Organization not found', 404, 'NotFound');
+    }
+    if (confirmSubdomain !== org.subdomain) {
+      throw new AppError(
+        'Subdomain confirmation did not match — refusing hard-delete',
+        400,
+        'ValidationError'
+      );
     }
     if (!org.deleted_at) {
       throw new AppError(
@@ -770,8 +782,13 @@ export class OrganizationService {
       );
     }
 
-    // Capture what we need for the audit log before the row vanishes.
-    const projectCount = await this.db.projects.countByOrganizationId(organizationId);
+    // Capture both counts for the audit log before the cascade takes them.
+    // `bug_reports` is the larger of the two and the one a user is more
+    // likely to care about post-fact ("how many reports did we lose?").
+    const [projectCount, bugReportCount] = await Promise.all([
+      this.db.projects.countByOrganizationId(organizationId),
+      this.db.bugReports.countByOrganizationId(organizationId),
+    ]);
 
     // Write audit, then delete, in one tx. If either step fails the other
     // is rolled back — we never log a deletion that didn't happen, nor
@@ -792,6 +809,7 @@ export class OrganizationService {
           deleted_at_original: org.deleted_at,
           retention_days: retentionDays,
           project_count_at_delete: projectCount,
+          bug_report_count_at_delete: bugReportCount,
         },
         success: true,
       });

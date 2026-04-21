@@ -116,7 +116,12 @@ export const config: AppConfig = {
     region: (process.env.DATA_RESIDENCY_REGION ?? 'kz').trim().toLowerCase(),
   },
   orgRetention: {
-    retentionDays: parseInt(process.env.ORG_RETENTION_DAYS ?? '30', 10),
+    // Use `Number` (strict) instead of `parseInt` (permissive). `parseInt('30d', 10)`
+    // returns 30 — silently shortening the retention window; `Number('30d')` is
+    // `NaN`, which `collectOrgRetentionErrors` catches via the `Number.isInteger`
+    // guard. The `?? '30'` keeps the default when the env is unset, and an empty
+    // string trimmed to zero falls through to validation (0 is rejected).
+    retentionDays: Number((process.env.ORG_RETENTION_DAYS ?? '30').trim()),
   },
 } as const;
 

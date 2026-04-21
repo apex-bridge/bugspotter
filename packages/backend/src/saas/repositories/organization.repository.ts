@@ -5,6 +5,15 @@
 
 import type { Pool, PoolClient } from 'pg';
 import { BaseRepository } from '../../db/repositories/base-repository.js';
+
+/**
+ * Page size for `findExpiredSoftDeleted`. Caps one request's payload so a
+ * backlog of thousands of expired orgs doesn't translate into a slow admin
+ * UI load. Operators work through the list oldest-first; processed orgs
+ * drop out as they're hard-deleted, so the next page appears automatically
+ * on refresh.
+ */
+const EXPIRED_SOFT_DELETED_LIMIT = 100;
 import type {
   Organization,
   OrganizationInsert,
@@ -282,6 +291,12 @@ export class OrganizationRepository extends BaseRepository<
    * for an admin UI. Results are ordered oldest-first so the admin naturally
    * works through the backlog.
    *
+   * Capped at `EXPIRED_SOFT_DELETED_LIMIT` per call so one admin page load
+   * doesn't pull thousands of rows if the backlog has been neglected. The
+   * admin UI fetches one page at a time; processed orgs drop out naturally
+   * as they get hard-deleted. Per-row subqueries for project/bug_report
+   * counts are fine at N=100 (indexed lookups on `organization_id`).
+   *
    * Different from `hasVitalData` / `hardDeleteGuarded`: those enforce
    * "empty and active" for admin-initiated hard-delete of never-used orgs.
    * This path is the opposite — the org is abandoned AND past its grace
@@ -311,6 +326,7 @@ export class OrganizationRepository extends BaseRepository<
       WHERE o.deleted_at IS NOT NULL
         AND o.deleted_at < NOW() - ($1 || ' days')::interval
       ORDER BY o.deleted_at ASC
+      LIMIT ${EXPIRED_SOFT_DELETED_LIMIT}
     `;
     const result = await this.pool.query<{
       id: string;

@@ -566,32 +566,34 @@ export function adminOrganizationRoutes(fastify: FastifyInstance, db: DatabaseCl
       preHandler: [requirePlatformAdmin()],
     },
     async (request, reply) => {
-      // Fetch first so we can compare the confirm string before doing any
-      // damage. Service will re-check soft-delete + window.
-      const org = await db.organizations.findByIdIncludeDeleted(request.params.id);
-      if (!org) {
-        throw new AppError('Organization not found', 404, 'NotFound');
-      }
-      if (request.body.confirm_subdomain !== org.subdomain) {
-        throw new AppError(
-          'Subdomain confirmation did not match — refusing hard-delete',
-          400,
-          'ValidationError'
-        );
-      }
-
+      // Service owns all the validation (existence, subdomain match, soft-
+      // deleted state, retention window) in a single fetch path. The route
+      // just forwards and translates errors into metrics. Route-level
+      // pre-fetching would have meant two SELECTs for the same org.
       try {
         const result = await orgService.hardDeleteExpired(
           request.params.id,
           config.orgRetention.retentionDays,
-          request.authUser!.id
+          request.authUser!.id,
+          request.body.confirm_subdomain
         );
         orgHardDeleteTotal.inc({ result: 'success' });
         return sendSuccess(reply, result);
       } catch (err) {
-        if (err instanceof AppError && err.statusCode === 409) {
-          // Window-guard or concurrent-restore — not a bug, just ineligible.
-          orgHardDeleteTotal.inc({ result: 'guard_failed' });
+        if (err instanceof AppError) {
+          // 404 (missing) and 400 (subdomain mismatch) are validation-shape
+          // failures — the caller is asking for something that can't be
+          // done. 409 is eligibility (not soft-deleted, or still inside
+          // the retention window). Both categories get counted so
+          // monitoring sees every hard-delete attempt, not only
+          // successful ones.
+          if (err.statusCode === 404 || err.statusCode === 400) {
+            orgHardDeleteTotal.inc({ result: 'validation_failed' });
+          } else if (err.statusCode === 409) {
+            orgHardDeleteTotal.inc({ result: 'guard_failed' });
+          } else {
+            orgHardDeleteTotal.inc({ result: 'error' });
+          }
         } else {
           orgHardDeleteTotal.inc({ result: 'error' });
         }
