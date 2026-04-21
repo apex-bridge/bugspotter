@@ -4,13 +4,14 @@ Fastify + pg + BullMQ. Most complex package in the monorepo.
 
 ## The auth trio
 
-Every request can carry up to three auth artifacts:
+Every request can carry up to four auth artifacts:
 
-| Field                 | Set by                                                  | Meaning                                 |
-| --------------------- | ------------------------------------------------------- | --------------------------------------- |
-| `request.authUser`    | JWT (`Authorization: Bearer <token>`)                   | Dashboard user                          |
-| `request.apiKey`      | `X-API-Key: bgs_...` header                             | SDK / machine credential                |
-| `request.authProject` | Alongside `apiKey` when `allowed_projects.length === 1` | Convenience flag for single-project key |
+| Field                    | Set by                                                  | Meaning                                       |
+| ------------------------ | ------------------------------------------------------- | --------------------------------------------- |
+| `request.authUser`       | JWT (`Authorization: Bearer <token>`)                   | Dashboard user                                |
+| `request.apiKey`         | `X-API-Key: bgs_...` header                             | SDK / machine credential                      |
+| `request.authProject`    | Alongside `apiKey` when `allowed_projects.length === 1` | Convenience flag for single-project key       |
+| `request.authShareToken` | `handleShareTokenAuth` via share-token query/body param | Public replay-access grant, bug-report-scoped |
 
 **`authProject` is NOT a legacy flag.** It's set inside `handleNewApiKeyAuth` (`src/api/middleware/auth/handlers.ts`), only after `request.apiKey` is set, and only for single-project keys — which includes the self-service-signup-issued ingest-only key. Bypassing on `authProject` would let that key read reports, so don't.
 

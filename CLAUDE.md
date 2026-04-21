@@ -7,7 +7,7 @@ SaaS bug-reporting platform. pnpm + TypeScript, Docker-native dev loop.
 - `packages/` — backend (Fastify), billing, types, utils, message-broker, payment-service
 - `apps/` — admin (React/Vite), demo (showcase)
 - `docker-compose*.yml` — dev stack; `./dev.sh start` brings everything up including Postgres + Redis + MinIO. `./dev.sh help` lists the other subcommands.
-- **Dozzle** on `http://localhost:9999` — live log viewer for running containers (host port from `docker-compose.override.yml`; container port is 8080).
+- **Dozzle** (optional live log viewer) is behind the `monitoring` profile — NOT started by `./dev.sh start`. Bring it up with `docker compose --profile monitoring up -d dozzle`; then `http://localhost:9999`.
 
 ## Deployment modes
 
