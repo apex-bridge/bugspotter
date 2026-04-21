@@ -90,7 +90,18 @@ function createMockDb(overrides: MockDbOverrides = {}): {
         if (overrides.transactionThrows) {
           throw overrides.transactionThrows;
         }
-        return cb(tx);
+        // Simulate pg transaction semantics: if the callback throws, any
+        // audit-log writes recorded during the tx are discarded (as a real
+        // ROLLBACK would). Without this, the "guarded DELETE returned
+        // false" test couldn't faithfully assert that the pre-delete audit
+        // write doesn't survive.
+        const auditSnapshot = log.auditCreated.length;
+        try {
+          return await cb(tx);
+        } catch (e) {
+          log.auditCreated.length = auditSnapshot;
+          throw e;
+        }
       }),
     } as unknown as DatabaseClient,
   };
@@ -278,8 +289,10 @@ describe('OrganizationService.hardDeleteExpired', () => {
   it('throws 409 and rolls back audit if the guarded DELETE does not match (concurrent restore)', async () => {
     // Simulate a race: by the time we execute the DELETE, `deleted_at` has
     // been flipped back to NULL. Our guard (WHERE deleted_at < ...) doesn't
-    // match, rowCount is 0, the service throws, and the tx rollback should
-    // discard the audit log we wrote.
+    // match, rowCount is 0, the service throws, and the tx rollback discards
+    // the audit log we wrote. The mock's `transaction` helper models the
+    // rollback (see `createMockDb`), so we can assert the final audit log
+    // state is empty instead of merely asserting the throw happened.
     const mock = createMockDb({
       findByIdIncludeDeleted: async () => validOrg,
       hardDeleteExpiredSoftDeleted: async () => false, // guard did not hold
@@ -291,13 +304,10 @@ describe('OrganizationService.hardDeleteExpired', () => {
       .catch((e) => e);
     expect(err.statusCode).toBe(409);
     expect(err.message).toMatch(/state changed during delete/i);
-    // The hard-delete attempt was made (and correctly returned false)…
+    // The tx was opened and the guard was hit…
     expect(mock.db.transaction).toHaveBeenCalledOnce();
-    // …but the audit log write is rolled back by the tx throw. The mock
-    // records the create() call, but in real execution the row would be
-    // discarded — what we care about is that the tx-level throw happened.
-    // (For this mock the `auditLogs.create` call is still observed; the
-    // real rollback is a DB-level guarantee.)
-    expect(mock.log.auditCreated).toHaveLength(1);
+    // …and the audit write that happened inside the tx is rolled back.
+    expect(mock.log.auditCreated).toHaveLength(0);
+    expect(mock.log.hardDeleted).toHaveLength(0);
   });
 });

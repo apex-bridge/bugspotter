@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Trash2, AlertTriangle, Building2 } from 'lucide-react';
 import { organizationService } from '../../services/organization-service';
+import { handleApiError } from '../../lib/api-client';
 import { useModalFocus } from '../../hooks/use-modal-focus';
 
 interface PendingOrg {
@@ -55,8 +56,15 @@ export default function OrgRetentionPage() {
       setTarget(null);
       setConfirmInput('');
     },
-    onError: (err: Error) => {
-      toast.error(err.message || t('orgRetention.deleteFailed', { defaultValue: 'Delete failed' }));
+    onError: (err: unknown) => {
+      // Route through the app's shared axios-error unpacker so the admin
+      // sees the backend's actual message (e.g. "Subdomain confirmation
+      // did not match...") instead of axios's generic "Request failed
+      // with status code 400". The i18n key is the fallback for the
+      // non-axios case (network error, unexpected shape).
+      toast.error(
+        handleApiError(err) || t('orgRetention.deleteFailed', { defaultValue: 'Delete failed' })
+      );
     },
   });
 
