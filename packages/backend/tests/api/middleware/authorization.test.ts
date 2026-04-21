@@ -646,11 +646,12 @@ describe('Authorization Middleware', () => {
     it('does NOT bypass on request.authProject when apiKey is ALSO set (order matters)', async () => {
       // Regression guard: for single-project keys, `handlers.ts:98` sets
       // `authProject` alongside `apiKey`. The middleware must run the
-      // apiKey permission check FIRST so the signup-issued ingest-only
-      // key still 403s on a read — even though `authProject` is present.
-      // Flipping the order (checking `authProject` before `apiKey`) is
-      // what reviewers keep suggesting and what would re-introduce the
-      // PR #19 bug.
+      // apiKey permission check FIRST so a key with restricted
+      // permissions still 403s on an action it isn't authorized for —
+      // even though `authProject` is present. Flipping the order
+      // (checking `authProject` before `apiKey`) would incorrectly
+      // bypass the apiKey permission check and let restricted keys
+      // perform actions their `permissions` array doesn't grant.
       const request = createMockRequest({
         apiKey: mkKey({
           permission_scope: 'custom',

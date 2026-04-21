@@ -117,17 +117,24 @@ export async function requireApiKey(request: FastifyRequest, reply: FastifyReply
  * - **API-key requests** go through the shared `checkPermission`. A `full`
  *   scope (which resolves to `['*']`) satisfies every permission. A key
  *   missing the required permission → 403 Forbidden.
- * - **Unauthenticated requests** → 401 Unauthorized. (Unreachable in
- *   practice when the middleware is composed after `requireAuth` /
- *   `requireProject`, but defensive so a route that forgets to require
- *   auth first still can't leak.)
+ * - **Unauthenticated requests** → 401 Unauthorized. This middleware
+ *   is safe to use standalone on a route (it will fail closed rather
+ *   than leak), but composing it after `requireAuth` or `requireProject`
+ *   yields a clearer error message — the auth layer's 401 explains
+ *   what's missing, where this middleware's 401 is more generic.
  *
  * Usage (on a route handler):
  *
  * ```ts
+ * // Standalone — safe, gives a generic 401 when unauthenticated
  * fastify.get('/api/v1/reports', {
- *   preHandler: [requireProject, requireApiKeyPermission('reports:read')],
- *   ...
+ *   preHandler: [requireApiKeyPermission('reports:read')],
+ * });
+ *
+ * // Composed — preferred when the route already requires a specific
+ * // auth mode; the outer middleware's 401 is more informative
+ * fastify.post('/api/v1/reports', {
+ *   preHandler: [requireProject, requireApiKeyPermission('reports:write')],
  * });
  * ```
  */
@@ -146,9 +153,10 @@ export function requireApiKeyPermission(permission: string) {
     // `allowed_projects.length === 1`. That includes the self-service-
     // signup-issued ingest-only key this middleware was written to
     // constrain. If an `authProject` check ran first, the signup key
-    // would short-circuit past the permission gate — exactly the bug
-    // PR #19 fixes. Running the `apiKey` check first means the 403
-    // lands before the fallback is reached.
+    // would short-circuit past the permission gate and regain the
+    // unrestricted read access this middleware was introduced to
+    // remove. Running the `apiKey` check first means the 403 lands
+    // before the fallback is reached.
     if (request.apiKey) {
       const result = checkApiKeyPermission(request.apiKey, permission);
       if (result.allowed) {

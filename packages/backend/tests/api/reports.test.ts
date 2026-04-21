@@ -47,8 +47,8 @@ describe('Bug Report Routes', () => {
 
     // Create managed API key for the project. Grants explicit reports +
     // sessions access so the same fixture can drive both write-path and
-    // read-path (including GET /reports/:id/sessions which enforces
-    // `sessions:read` since PR #18).
+    // read-path — including GET /reports/:id/sessions, which enforces
+    // `sessions:read` via the `requireApiKeyPermission` middleware.
     const apiKeyService = new ApiKeyService(db);
     const apiKeyResult = await apiKeyService.createKey({
       name: 'Test API Key',
