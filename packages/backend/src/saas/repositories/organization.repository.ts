@@ -5,15 +5,6 @@
 
 import type { Pool, PoolClient } from 'pg';
 import { BaseRepository } from '../../db/repositories/base-repository.js';
-
-/**
- * Page size for `findExpiredSoftDeleted`. Caps one request's payload so a
- * backlog of thousands of expired orgs doesn't translate into a slow admin
- * UI load. Operators work through the list oldest-first; processed orgs
- * drop out as they're hard-deleted, so the next page appears automatically
- * on refresh.
- */
-const EXPIRED_SOFT_DELETED_LIMIT = 100;
 import type {
   Organization,
   OrganizationInsert,
@@ -25,6 +16,15 @@ import type {
   PaginatedResult,
   SubscriptionStatus,
 } from '../../db/types.js';
+
+/**
+ * Page size for `findExpiredSoftDeleted`. Caps one request's payload so a
+ * backlog of thousands of expired orgs doesn't translate into a slow admin
+ * UI load. Operators work through the list oldest-first; processed orgs
+ * drop out as they're hard-deleted, so the next page appears automatically
+ * on refresh.
+ */
+const EXPIRED_SOFT_DELETED_LIMIT = 100;
 
 export class OrganizationRepository extends BaseRepository<
   Organization,
@@ -324,7 +324,7 @@ export class OrganizationRepository extends BaseRepository<
         (SELECT COUNT(*)::int FROM application.bug_reports WHERE organization_id = o.id) AS bug_report_count
       FROM ${this.schema}.${this.tableName} o
       WHERE o.deleted_at IS NOT NULL
-        AND o.deleted_at < NOW() - ($1 || ' days')::interval
+        AND o.deleted_at < NOW() - ($1 * INTERVAL '1 day')
       ORDER BY o.deleted_at ASC
       LIMIT ${EXPIRED_SOFT_DELETED_LIMIT}
     `;
@@ -336,7 +336,7 @@ export class OrganizationRepository extends BaseRepository<
       deleted_by: string | null;
       project_count: number;
       bug_report_count: number;
-    }>(query, [retentionDays.toString()]);
+    }>(query, [retentionDays]);
     return result.rows;
   }
 
@@ -358,9 +358,9 @@ export class OrganizationRepository extends BaseRepository<
       DELETE FROM ${this.schema}.${this.tableName}
       WHERE id = $1
         AND deleted_at IS NOT NULL
-        AND deleted_at < NOW() - ($2 || ' days')::interval
+        AND deleted_at < NOW() - ($2 * INTERVAL '1 day')
     `;
-    const result = await this.pool.query(query, [organizationId, retentionDays.toString()]);
+    const result = await this.pool.query(query, [organizationId, retentionDays]);
     return (result.rowCount ?? 0) > 0;
   }
 }

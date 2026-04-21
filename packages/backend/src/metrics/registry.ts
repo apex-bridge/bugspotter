@@ -51,6 +51,9 @@ export const queueJobDuration = new client.Histogram({
 // Labels: `result` =
 //   'success'           — cascade executed
 //   'validation_failed' — 400, subdomain confirmation mismatch
+//   'not_found'         — 404, org id doesn't exist (stale UI / typo in
+//                         a scripted call / already hard-deleted by
+//                         another admin moments earlier)
 //   'guard_failed'      — 409, org not soft-deleted / inside retention
 //                         window / state changed during delete
 //   'error'             — any other unexpected error

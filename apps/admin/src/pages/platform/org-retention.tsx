@@ -205,11 +205,13 @@ function ConfirmDialog({
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
-  // Compare case-insensitively. Subdomains are enforced lowercase at signup,
-  // so `target.subdomain` is always lowercase; normalizing the user's input
-  // here avoids a "looks identical but fails" moment if the admin's caps-
-  // lock or IME inserts an uppercase letter.
-  const matches = confirmInput.toLowerCase() === target.subdomain;
+  // Apply the same normalization the server does (trim + lowercase) so the
+  // button enable state matches what the server would accept. Subdomains
+  // are enforced lowercase at signup, so `target.subdomain` is always
+  // lowercase. Without the trim, an admin who pastes "acme " with a
+  // trailing space would see the button stay disabled even though the
+  // backend would accept the submission — confusing.
+  const matches = confirmInput.trim().toLowerCase() === target.subdomain;
 
   // ESC-to-close, body scroll lock, focus trap — same hook the app's other
   // modals use (see `components/ui/confirm-dialog.tsx`). Disabled while the

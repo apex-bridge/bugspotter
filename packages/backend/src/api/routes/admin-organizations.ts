@@ -581,14 +581,16 @@ export function adminOrganizationRoutes(fastify: FastifyInstance, db: DatabaseCl
         return sendSuccess(reply, result);
       } catch (err) {
         if (err instanceof AppError) {
-          // 404 (missing) and 400 (subdomain mismatch) are validation-shape
-          // failures — the caller is asking for something that can't be
-          // done. 409 is eligibility (not soft-deleted, or still inside
-          // the retention window). Both categories get counted so
-          // monitoring sees every hard-delete attempt, not only
-          // successful ones.
-          if (err.statusCode === 404 || err.statusCode === 400) {
+          // Bucket counters by the *shape* of the failure so a dashboard
+          // can distinguish between "caller sent bad input" (400),
+          // "thing the caller referenced doesn't exist" (404),
+          // "thing exists but isn't eligible yet" (409), and anything
+          // unexpected. Kept in sync with the label list documented in
+          // `metrics/registry.ts`.
+          if (err.statusCode === 400) {
             orgHardDeleteTotal.inc({ result: 'validation_failed' });
+          } else if (err.statusCode === 404) {
+            orgHardDeleteTotal.inc({ result: 'not_found' });
           } else if (err.statusCode === 409) {
             orgHardDeleteTotal.inc({ result: 'guard_failed' });
           } else {

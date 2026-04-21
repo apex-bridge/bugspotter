@@ -720,9 +720,7 @@ export class OrganizationService {
     const now = Date.now();
     return rows.map((row) => ({
       ...row,
-      days_since_deleted: Math.floor(
-        (now - new Date(row.deleted_at).getTime()) / (24 * 60 * 60 * 1000)
-      ),
+      days_since_deleted: Math.floor((now - row.deleted_at.getTime()) / (24 * 60 * 60 * 1000)),
     }));
   }
 
@@ -777,7 +775,7 @@ export class OrganizationService {
         'Conflict'
       );
     }
-    const ageMs = Date.now() - new Date(org.deleted_at).getTime();
+    const ageMs = Date.now() - org.deleted_at.getTime();
     const windowMs = retentionDays * 24 * 60 * 60 * 1000;
     if (ageMs < windowMs) {
       throw new AppError(
