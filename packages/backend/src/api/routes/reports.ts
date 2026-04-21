@@ -67,7 +67,14 @@ export function bugReportRoutes(
     '/api/v1/reports',
     {
       schema: createBugReportSchema,
-      preHandler: [requireProject, requireQuota(orgService, RESOURCE_TYPE.BUG_REPORTS)],
+      // Enforce declared write permission on the key. The signup-issued
+      // ingest-only key has `reports:write` and passes. A hypothetical
+      // `read`-only key (no `reports:write`) is correctly blocked.
+      preHandler: [
+        requireProject,
+        requireApiKeyPermission('reports:write'),
+        requireQuota(orgService, RESOURCE_TYPE.BUG_REPORTS),
+      ],
     },
     async (request, reply) => {
       const {
@@ -369,6 +376,7 @@ export function bugReportRoutes(
     '/api/v1/reports/:id',
     {
       schema: updateBugReportSchema,
+      preHandler: [requireApiKeyPermission('reports:write')],
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -413,6 +421,12 @@ export function bugReportRoutes(
     '/api/v1/reports/:id',
     {
       schema: deleteBugReportSchema,
+      // Delete gated by `reports:write`. A future dedicated
+      // `reports:delete` would be the stricter option if we want
+      // write-but-not-destroy keys; for now writes and deletes share
+      // a permission to keep parity with the shared SCOPE_PERMISSIONS
+      // table.
+      preHandler: [requireApiKeyPermission('reports:write')],
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -450,6 +464,7 @@ export function bugReportRoutes(
     '/api/v1/reports/bulk-delete',
     {
       schema: bulkDeleteBugReportsSchema,
+      preHandler: [requireApiKeyPermission('reports:write')],
     },
     async (request, reply) => {
       const { ids } = request.body;

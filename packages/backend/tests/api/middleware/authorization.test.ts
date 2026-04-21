@@ -643,13 +643,14 @@ describe('Authorization Middleware', () => {
       expect(reply.code).toHaveBeenCalledWith(403);
     });
 
-    it('does NOT bypass on request.authProject — single-project keys still hit the permission check', async () => {
-      // Regression guard for a recurring reviewer suggestion: do NOT add
-      // `if (request.authProject) return;` to this middleware. `authProject`
-      // is set in handlers.ts:98 for any API key with
-      // `allowed_projects.length === 1`, including the self-service-signup-
-      // issued ingest-only key. Bypassing on `authProject` would let that
-      // key read reports — the exact bug this middleware fixes.
+    it('does NOT bypass on request.authProject when apiKey is ALSO set (order matters)', async () => {
+      // Regression guard: for single-project keys, `handlers.ts:98` sets
+      // `authProject` alongside `apiKey`. The middleware must run the
+      // apiKey permission check FIRST so the signup-issued ingest-only
+      // key still 403s on a read — even though `authProject` is present.
+      // Flipping the order (checking `authProject` before `apiKey`) is
+      // what reviewers keep suggesting and what would re-introduce the
+      // PR #19 bug.
       const request = createMockRequest({
         apiKey: mkKey({
           permission_scope: 'custom',
@@ -663,8 +664,29 @@ describe('Authorization Middleware', () => {
 
       await requireApiKeyPermission('reports:read')(request, reply);
 
-      // Must reject even though authProject is set.
+      // Must reject — the apiKey check runs first and finds the
+      // permission missing; the authProject fallback below never fires.
       expect(reply.code).toHaveBeenCalledWith(403);
+    });
+
+    it('DOES bypass on request.authProject when NO apiKey is present (defensive fallback)', async () => {
+      // No assignment site in the current codebase produces this state
+      // (every `authProject` is set alongside an `apiKey`), but every
+      // sibling `require*` middleware in the same file treats
+      // `authProject` as a first-class auth mode. This test locks in
+      // that consistency so the middleware stays correct if a future
+      // auth handler (e.g. a share-token-style project-scoped flow)
+      // ever assigns `authProject` without an `apiKey`.
+      const request = createMockRequest({
+        authProject: { id: 'proj-1', name: 'Legacy Project' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      expect(reply.code).not.toHaveBeenCalled();
+      expect(reply.send).not.toHaveBeenCalled();
     });
   });
 });

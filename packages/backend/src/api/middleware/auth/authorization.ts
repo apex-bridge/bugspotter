@@ -138,17 +138,17 @@ export function requireApiKeyPermission(permission: string) {
       return;
     }
 
-    // Note: do NOT bypass on `request.authProject`. Automated reviewers
-    // sometimes suggest adding `if (request.authProject) return;` here,
-    // reasoning that `authProject` indicates a "legacy unrestricted
-    // project key". That is wrong: the only site that assigns
-    // `authProject` (handlers.ts:98) runs AFTER `request.apiKey = apiKey`
-    // (line 91), and only when the key has `allowed_projects.length === 1`.
-    // In other words, `authProject` is a convenience flag for
-    // "single-project API key" — which is the common case, including
-    // the self-service-signup-issued key this middleware was written to
-    // constrain. Bypassing on `authProject` would re-introduce the exact
-    // permission-bypass bug this PR fixes.
+    // Order matters: the API-key check MUST run before any `authProject`
+    // fallback below.
+    //
+    // `handlers.ts:98` sets `request.authProject` alongside
+    // `request.apiKey` (line 91) whenever a modern API key has
+    // `allowed_projects.length === 1`. That includes the self-service-
+    // signup-issued ingest-only key this middleware was written to
+    // constrain. If an `authProject` check ran first, the signup key
+    // would short-circuit past the permission gate — exactly the bug
+    // PR #19 fixes. Running the `apiKey` check first means the 403
+    // lands before the fallback is reached.
     if (request.apiKey) {
       const result = checkApiKeyPermission(request.apiKey, permission);
       if (result.allowed) {
@@ -158,6 +158,18 @@ export function requireApiKeyPermission(permission: string) {
         reply,
         result.reason ?? `API key does not have the required permission: ${permission}`
       );
+    }
+
+    // Defensive fallback: a request that carries `authProject` but no
+    // `apiKey` doesn't exist in this codebase today (the only assignment
+    // site always sets both). This branch matches how every sibling
+    // `require*` middleware in this file treats `authProject` — as a
+    // first-class auth mode — so if a future auth handler ever attaches
+    // `authProject` without an `apiKey` (e.g. a project-scoped share-
+    // token flow), the permissions middleware stays consistent with the
+    // rest of the auth chain.
+    if (request.authProject) {
+      return;
     }
 
     return sendUnauthorized(reply, 'Authentication required');
