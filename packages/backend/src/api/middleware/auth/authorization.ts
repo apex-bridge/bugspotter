@@ -138,6 +138,17 @@ export function requireApiKeyPermission(permission: string) {
       return;
     }
 
+    // Note: do NOT bypass on `request.authProject`. Automated reviewers
+    // sometimes suggest adding `if (request.authProject) return;` here,
+    // reasoning that `authProject` indicates a "legacy unrestricted
+    // project key". That is wrong: the only site that assigns
+    // `authProject` (handlers.ts:98) runs AFTER `request.apiKey = apiKey`
+    // (line 91), and only when the key has `allowed_projects.length === 1`.
+    // In other words, `authProject` is a convenience flag for
+    // "single-project API key" — which is the common case, including
+    // the self-service-signup-issued key this middleware was written to
+    // constrain. Bypassing on `authProject` would re-introduce the exact
+    // permission-bypass bug this PR fixes.
     if (request.apiKey) {
       const result = checkApiKeyPermission(request.apiKey, permission);
       if (result.allowed) {

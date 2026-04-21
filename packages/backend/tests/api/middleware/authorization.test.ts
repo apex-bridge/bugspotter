@@ -642,5 +642,29 @@ describe('Authorization Middleware', () => {
 
       expect(reply.code).toHaveBeenCalledWith(403);
     });
+
+    it('does NOT bypass on request.authProject — single-project keys still hit the permission check', async () => {
+      // Regression guard for a recurring reviewer suggestion: do NOT add
+      // `if (request.authProject) return;` to this middleware. `authProject`
+      // is set in handlers.ts:98 for any API key with
+      // `allowed_projects.length === 1`, including the self-service-signup-
+      // issued ingest-only key. Bypassing on `authProject` would let that
+      // key read reports — the exact bug this middleware fixes.
+      const request = createMockRequest({
+        apiKey: mkKey({
+          permission_scope: 'custom',
+          permissions: ['reports:write', 'sessions:write'],
+          allowed_projects: ['proj-1'],
+        }),
+        authProject: { id: 'proj-1', name: 'Proj' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const reply = createMockReply();
+
+      await requireApiKeyPermission('reports:read')(request, reply);
+
+      // Must reject even though authProject is set.
+      expect(reply.code).toHaveBeenCalledWith(403);
+    });
   });
 });

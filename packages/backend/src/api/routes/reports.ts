@@ -480,13 +480,15 @@ export function bugReportRoutes(
   fastify.get<{ Params: { id: string } }>(
     '/api/v1/reports/:id/sessions',
     {
-      // Sessions are a child resource of bug reports — the existing implicit
-      // model is "if you can read the report, you can see its session data".
-      // We enforce `reports:read` (not `sessions:read`) so legitimate callers
-      // with a reports-read-only key keep working, while an ingest-only
-      // signup key (which has neither `reports:read` nor `sessions:read`) is
-      // still blocked.
-      preHandler: [requireApiKeyPermission('reports:read')],
+      // `sessions:read` is the dedicated permission — preserves the
+      // granularity the permission model supports. `read` and `write`
+      // scopes both include `sessions:read` (see SCOPE_PERMISSIONS) so
+      // broad-scope keys aren't affected. Custom-scope keys that list
+      // only `reports:read` but not `sessions:read` are blocked
+      // deliberately: session data often contains more PII than the
+      // report envelope, and a compliance-restricted key may want to
+      // see reports without session contents.
+      preHandler: [requireApiKeyPermission('sessions:read')],
     },
     async (request, reply) => {
       const { id } = request.params;
