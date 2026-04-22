@@ -11,7 +11,7 @@
  * in the audit log with the admin's user_id.
  */
 
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -166,7 +166,7 @@ export default function OrgRetentionPage() {
       )}
 
       {target && (
-        <ConfirmDialog
+        <OrgRetentionConfirmDialog
           target={target}
           confirmInput={confirmInput}
           onConfirmInputChange={setConfirmInput}
@@ -182,7 +182,7 @@ export default function OrgRetentionPage() {
   );
 }
 
-interface ConfirmDialogProps {
+export interface OrgRetentionConfirmDialogProps {
   target: PendingOrg;
   confirmInput: string;
   onConfirmInputChange: (v: string) => void;
@@ -203,14 +203,14 @@ interface ConfirmDialogProps {
  * `useModalFocus` hook for the accessibility wiring (ESC-to-close,
  * focus restoration on close, body scroll lock).
  */
-function ConfirmDialog({
+export function OrgRetentionConfirmDialog({
   target,
   confirmInput,
   onConfirmInputChange,
   onCancel,
   onConfirm,
   isDeleting,
-}: ConfirmDialogProps) {
+}: OrgRetentionConfirmDialogProps) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
   // Apply the same normalization the server does (trim + lowercase) so the
@@ -222,16 +222,25 @@ function ConfirmDialog({
   const matches = confirmInput.trim().toLowerCase() === target.subdomain;
 
   // ESC-to-close, body scroll lock, focus trap — same hook the app's other
-  // modals use (see `components/ui/confirm-dialog.tsx`). Disabled while the
-  // mutation is in flight so Escape doesn't rip the dialog out mid-request.
-  useModalFocus(dialogRef, !isDeleting, onCancel);
+  // modals use (see `components/ui/confirm-dialog.tsx`). The hook stays
+  // enabled for the dialog's whole lifetime — if we disabled it while
+  // `isDeleting` flipped true, the hook's cleanup would run and scroll
+  // lock / Escape listener / focus trap would all tear down WHILE the
+  // dialog is still rendered. Close behavior is gated instead via
+  // `handleClose`, which no-ops during the request.
+  const handleClose = useCallback(() => {
+    if (!isDeleting) {
+      onCancel();
+    }
+  }, [isDeleting, onCancel]);
+  useModalFocus(dialogRef, true, handleClose);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={(e) => {
-        if (e.target === e.currentTarget && !isDeleting) {
-          onCancel();
+        if (e.target === e.currentTarget) {
+          handleClose();
         }
       }}
       role="presentation"

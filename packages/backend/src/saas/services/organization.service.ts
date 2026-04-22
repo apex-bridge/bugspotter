@@ -34,6 +34,7 @@ import { InvitationService } from './invitation.service.js';
 
 const TRIAL_DURATION_DAYS = 14;
 const ADMIN_PLAN_DURATION_DAYS = 365;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
  * Advisory lock namespace for organization project quota enforcement.
@@ -720,7 +721,7 @@ export class OrganizationService {
     const now = Date.now();
     return rows.map((row) => ({
       ...row,
-      days_since_deleted: Math.floor((now - row.deleted_at.getTime()) / (24 * 60 * 60 * 1000)),
+      days_since_deleted: Math.floor((now - row.deleted_at.getTime()) / MS_PER_DAY),
     }));
   }
 
@@ -776,11 +777,11 @@ export class OrganizationService {
       );
     }
     const ageMs = Date.now() - org.deleted_at.getTime();
-    const windowMs = retentionDays * 24 * 60 * 60 * 1000;
+    const windowMs = retentionDays * MS_PER_DAY;
     if (ageMs < windowMs) {
       throw new AppError(
         `Organization is inside its retention window (${retentionDays} days). ` +
-          `Eligible in ${Math.ceil((windowMs - ageMs) / (24 * 60 * 60 * 1000))} day(s).`,
+          `Eligible in ${Math.ceil((windowMs - ageMs) / MS_PER_DAY)} day(s).`,
         409,
         'Conflict'
       );
