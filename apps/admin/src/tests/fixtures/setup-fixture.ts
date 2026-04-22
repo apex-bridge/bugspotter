@@ -457,14 +457,20 @@ export const test = base.extend<SetupFixtures>({
         const loginData = await loginResponse.json();
         const authToken = loginData.data.access_token;
 
-        // Use the storageKey from presignedUrls (already in database as replay_key from prepareUploadUrls)
-        // We just need to mark upload as completed
-        const updateResponse = await request.patch(`${API_URL}/api/v1/reports/${bugReportId}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-          data: {
-            replay_upload_status: 'completed',
-          },
-        });
+        // Mark the upload as completed via the dedicated confirm-upload
+        // endpoint. The general PATCH /reports/:id schema has
+        // `additionalProperties: false` and intentionally doesn't expose
+        // `replay_upload_status` as a user-writable field — upload state
+        // transitions go through POST /reports/:id/confirm-upload
+        // instead, which also handles the storage headObject check and
+        // queues the replay-processing job.
+        const updateResponse = await request.post(
+          `${API_URL}/api/v1/reports/${bugReportId}/confirm-upload`,
+          {
+            headers: { Authorization: `Bearer ${authToken}` },
+            data: { fileType: 'replay' },
+          }
+        );
 
         if (!updateResponse.ok()) {
           const body = await updateResponse.text();

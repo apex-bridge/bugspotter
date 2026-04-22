@@ -56,7 +56,10 @@ test.describe('Platform Admin: Organizations', () => {
     await loginAsAdmin(page);
     await page.goto('/organizations');
 
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 10000 });
+    // Scope to <main> to avoid matching the sidebar brand <h1>BugSpotter</h1>.
+    await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible({
+      timeout: 10000,
+    });
     expect(page.url()).toContain('/organizations');
   });
 
@@ -142,8 +145,10 @@ test.describe('Platform Admin: Organizations', () => {
     await loginAsAdmin(page);
     await page.goto(`/organizations/${createdOrgId}`);
 
-    // Should show org name
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 10000 });
+    // Should show org name (scoped to <main> to avoid the sidebar brand h1).
+    await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible({
+      timeout: 10000,
+    });
 
     // Should show subdomain badge
     const subdomainBadge = page.getByTestId('subdomain-badge');
