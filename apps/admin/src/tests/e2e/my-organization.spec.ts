@@ -64,8 +64,10 @@ test.describe('Org Self-Service: My Organization', () => {
     await loginAsAdmin(page);
     await page.goto('/my-organization');
 
-    // Should show org name heading
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 15000 });
+    // Should show org name heading (scoped to <main> to avoid the sidebar brand h1).
+    await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible({
+      timeout: 15000,
+    });
 
     // Should show stats cards (Plan, Team Members, Billing Status)
     const cards = page.locator('a[href*="my-organization"], div').filter({
@@ -87,8 +89,10 @@ test.describe('Org Self-Service: My Organization', () => {
     await loginAsAdmin(page);
     await page.goto('/my-organization/members');
 
-    // Should show team heading
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 15000 });
+    // Should show team heading (scoped to <main> to avoid the sidebar brand h1).
+    await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible({
+      timeout: 15000,
+    });
 
     // Should show members table with at least the owner
     const table = page.locator('table');
@@ -123,8 +127,10 @@ test.describe('Org Self-Service: My Organization', () => {
     await loginAsAdmin(page);
     await page.goto('/my-organization/usage');
 
-    // Should show usage heading
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 15000 });
+    // Should show usage heading (scoped to <main> to avoid the sidebar brand h1).
+    await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible({
+      timeout: 15000,
+    });
 
     // Should show plan badge
     const planBadge = page.getByTestId('plan-badge');
