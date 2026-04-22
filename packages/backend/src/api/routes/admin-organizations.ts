@@ -21,6 +21,8 @@ import { AppError } from '../middleware/error.js';
 import { validateBillingMethodSwitch } from '../../saas/services/billing-method.js';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response.js';
 import { generateMagicToken } from './auth.js';
+import { config } from '../../config.js';
+import { orgHardDeleteTotal } from '../../metrics/registry.js';
 
 interface AdminCreateOrgBody {
   name: string;
@@ -509,6 +511,96 @@ export function adminOrganizationRoutes(fastify: FastifyInstance, db: DatabaseCl
       const token = generateMagicToken(fastify, user, request.params.id, expiresIn);
 
       return sendSuccess(reply, { token, expires_in: expiresIn });
+    }
+  );
+
+  /**
+   * GET /api/v1/admin/organizations/pending-hard-delete
+   *
+   * Platform-admin list of organizations that are soft-deleted AND have
+   * aged past `ORG_RETENTION_DAYS`. The admin UI uses this to render the
+   * "ready for permanent deletion" tab — each row exposes subdomain, name,
+   * days-since-deleted, and counts of cascadable child rows (projects,
+   * bug_reports) so the admin knows roughly what they're about to obliterate.
+   */
+  fastify.get(
+    '/api/v1/admin/organizations/pending-hard-delete',
+    { preHandler: [requirePlatformAdmin()] },
+    async (_request, reply) => {
+      const rows = await orgService.listPendingHardDelete(config.orgRetention.retentionDays);
+      return sendSuccess(reply, {
+        retention_days: config.orgRetention.retentionDays,
+        orgs: rows,
+      });
+    }
+  );
+
+  /**
+   * POST /api/v1/admin/organizations/:id/hard-delete
+   *
+   * Permanently delete a soft-deleted org past the retention window, with
+   * FK cascade into projects / bug_reports / subscriptions / members /
+   * invitations / invoices.
+   *
+   * Double-confirmation: the request body must echo the org's subdomain
+   * (the string the admin typed into the UI's confirm field). If the
+   * client lies or typos it, we refuse before touching the DB — matches
+   * the GitHub "type the repo name to delete it" pattern.
+   */
+  fastify.post<{ Params: { id: string }; Body: { confirm_subdomain: string } }>(
+    '/api/v1/admin/organizations/:id/hard-delete',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', format: 'uuid' } },
+        },
+        body: {
+          type: 'object',
+          required: ['confirm_subdomain'],
+          properties: { confirm_subdomain: { type: 'string', minLength: 1 } },
+          additionalProperties: false,
+        },
+      },
+      preHandler: [requirePlatformAdmin()],
+    },
+    async (request, reply) => {
+      // Service owns all the validation (existence, subdomain match, soft-
+      // deleted state, retention window) in a single fetch path. The route
+      // just forwards and translates errors into metrics. Route-level
+      // pre-fetching would have meant two SELECTs for the same org.
+      try {
+        const result = await orgService.hardDeleteExpired(
+          request.params.id,
+          config.orgRetention.retentionDays,
+          request.authUser!.id,
+          request.body.confirm_subdomain
+        );
+        orgHardDeleteTotal.inc({ result: 'success' });
+        return sendSuccess(reply, result);
+      } catch (err) {
+        if (err instanceof AppError) {
+          // Bucket counters by the *shape* of the failure so a dashboard
+          // can distinguish between "caller sent bad input" (400),
+          // "thing the caller referenced doesn't exist" (404),
+          // "thing exists but isn't eligible yet" (409), and anything
+          // unexpected. Kept in sync with the label list documented in
+          // `metrics/registry.ts`.
+          if (err.statusCode === 400) {
+            orgHardDeleteTotal.inc({ result: 'validation_failed' });
+          } else if (err.statusCode === 404) {
+            orgHardDeleteTotal.inc({ result: 'not_found' });
+          } else if (err.statusCode === 409) {
+            orgHardDeleteTotal.inc({ result: 'guard_failed' });
+          } else {
+            orgHardDeleteTotal.inc({ result: 'error' });
+          }
+        } else {
+          orgHardDeleteTotal.inc({ result: 'error' });
+        }
+        throw err;
+      }
     }
   );
 }

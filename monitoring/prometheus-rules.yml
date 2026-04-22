@@ -193,3 +193,40 @@ groups:
         annotations:
           summary: Intelligence jobs moving to failed queue
           description: 'More than 5 intelligence jobs have failed in the last 30 minutes. Check worker logs and Ollama health.'
+
+  - name: bugspotter-org-retention
+    rules:
+      # Human-triggered hard-deletes. Normal volume is near-zero (a few per
+      # month). A sudden burst is either a legitimate cleanup session
+      # (acceptable) or a compromised admin / UI bug (urgent). We warn
+      # early and let oncall correlate with audit_logs.
+      - alert: OrgHardDeleteBurst
+        expr: sum(increase(bugspotter_org_hard_delete_total{result="success"}[10m])) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Unusual volume of organization hard-deletes
+          description: >
+            More than 5 organizations were permanently deleted in the last 10 minutes.
+            This is human-triggered via the admin UI — correlate with `audit_logs`
+            (action = 'organization.hard_delete') to identify the actor(s) and confirm
+            it is legitimate cleanup, not a compromised admin or a UI regression.
+
+      # The hard-delete flow has two guarded error modes that should be
+      # near-zero. A spike of `guard_failed` means either the UI is out
+      # of sync with the server's retention window, or someone is poking
+      # the endpoint directly. A spike of `error` means the service
+      # threw something unexpected.
+      - alert: OrgHardDeleteErrors
+        expr: sum(increase(bugspotter_org_hard_delete_total{result="error"}[15m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Unexpected errors in organization hard-delete
+          description: >
+            More than 3 hard-delete calls returned an unexpected error in the last
+            15 minutes. Guard-failed results (retention window not met) are tracked
+            separately and are not included here — this alert fires on actual
+            exceptions. Check API logs.

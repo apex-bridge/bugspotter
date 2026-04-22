@@ -237,6 +237,8 @@ export const API_ENDPOINTS = {
     setMagicLoginStatus: (id: string) =>
       `${API_VERSION}/admin/organizations/${id}/magic-login-status`,
     generateMagicToken: (id: string) => `${API_VERSION}/admin/organizations/${id}/magic-token`,
+    pendingHardDelete: () => `${API_VERSION}/admin/organizations/pending-hard-delete`,
+    hardDelete: (id: string) => `${API_VERSION}/admin/organizations/${id}/hard-delete`,
   },
 
   // Admin organization request endpoints

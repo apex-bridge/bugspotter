@@ -370,6 +370,38 @@ describe('Application Configuration', () => {
       }
     });
 
+    it('should reject ORG_RETENTION_DAYS with a non-numeric suffix like "30d"', async () => {
+      // Regression guard: we previously used `parseInt`, which stops at the
+      // first non-digit and returns `30` for `"30d"` — silently honoring a
+      // typo. Switching to `Number` makes `"30d"` parse as `NaN`, which the
+      // integer guard then catches at startup.
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.ORG_RETENTION_DAYS = '30d';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('Configuration validation failed');
+      expect(() => validateConfig()).toThrow('ORG_RETENTION_DAYS must be a positive integer');
+    });
+
+    it('should reject ORG_RETENTION_DAYS of zero or negative', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.ORG_RETENTION_DAYS = '0';
+
+      const { validateConfig } = await import('../src/config.js');
+
+      expect(() => validateConfig()).toThrow('ORG_RETENTION_DAYS must be a positive integer');
+    });
+
+    it('should accept a whitespace-padded ORG_RETENTION_DAYS', async () => {
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.ORG_RETENTION_DAYS = '  45  ';
+
+      const { validateConfig, config } = await import('../src/config.js');
+      expect(() => validateConfig()).not.toThrow(/ORG_RETENTION_DAYS/);
+      expect(config.orgRetention.retentionDays).toBe(45);
+    });
+
     it('should throw error for mismatched S3 credentials', async () => {
       process.env.DATABASE_URL = 'postgres://localhost/db';
       process.env.STORAGE_BACKEND = 's3';

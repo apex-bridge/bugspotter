@@ -74,7 +74,8 @@
     "invoices": "Invoices",
     "legalDetails": "Legal Details",
     "intelligence": "Intelligence",
-    "organizationRequests": "Requests"
+    "organizationRequests": "Requests",
+    "orgRetention": "Retention"
   },
   "auth": {
     "checkingSystemStatus": "Checking system status...",
@@ -1685,6 +1686,33 @@
       "enrichmentFailed": "Enrichment failed",
       "selfServiceDisabled": "Self-service is disabled for this organization",
       "dedupDisabled": "Duplicate detection is disabled for this organization"
+    }
+  },
+  "orgRetention": {
+    "title": "Pending permanent deletion",
+    "description": "Soft-deleted organizations that have been inactive longer than {{retentionDays}} days. Permanent deletion cascades to all projects, bug reports, subscriptions, and memberships — it cannot be undone.",
+    "empty": "No organizations are ready for permanent deletion.",
+    "loadFailed": "Failed to load pending deletions",
+    "tableCaption": "Organizations eligible for permanent deletion",
+    "deleted": "Permanently deleted {{subdomain}}",
+    "deleteFailed": "Delete failed",
+    "col": {
+      "subdomain": "Subdomain",
+      "name": "Name",
+      "daysDeleted": "Days deleted",
+      "projects": "Projects",
+      "reports": "Bug reports"
+    },
+    "action": {
+      "delete": "Delete permanently"
+    },
+    "confirm": {
+      "title": "Permanently delete?",
+      "warning": "This deletes the organization and cascades to all {{projects}} project(s) and {{reports}} bug report(s). It cannot be undone.",
+      "prompt": "Type the subdomain to confirm:",
+      "inputLabel": "Subdomain confirmation",
+      "submit": "Delete permanently",
+      "deleting": "Deleting..."
     }
   }
 }

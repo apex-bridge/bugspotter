@@ -17,6 +17,15 @@ import type {
   SubscriptionStatus,
 } from '../../db/types.js';
 
+/**
+ * Page size for `findExpiredSoftDeleted`. Caps one request's payload so a
+ * backlog of thousands of expired orgs doesn't translate into a slow admin
+ * UI load. Operators work through the list oldest-first; processed orgs
+ * drop out as they're hard-deleted, so the next page appears automatically
+ * on refresh.
+ */
+const EXPIRED_SOFT_DELETED_LIMIT = 100;
+
 export class OrganizationRepository extends BaseRepository<
   Organization,
   OrganizationInsert,
@@ -274,5 +283,84 @@ export class OrganizationRepository extends BaseRepository<
       projectCount: row.project_count,
       hasActiveSubscription: row.active_sub_count > 0,
     };
+  }
+
+  /**
+   * List soft-deleted organizations whose `deleted_at` is older than the
+   * retention window, along with denormalized project / bug_report counts
+   * for an admin UI. Results are ordered oldest-first so the admin naturally
+   * works through the backlog.
+   *
+   * Capped at `EXPIRED_SOFT_DELETED_LIMIT` per call so one admin page load
+   * doesn't pull thousands of rows if the backlog has been neglected. The
+   * admin UI fetches one page at a time; processed orgs drop out naturally
+   * as they get hard-deleted. Per-row subqueries for project/bug_report
+   * counts are fine at N=100 (indexed lookups on `organization_id`).
+   *
+   * Different from `hasVitalData` / `hardDeleteGuarded`: those enforce
+   * "empty and active" for admin-initiated hard-delete of never-used orgs.
+   * This path is the opposite — the org is abandoned AND past its grace
+   * period, and the cascade is the point (FKs take care of children).
+   */
+  async findExpiredSoftDeleted(retentionDays: number): Promise<
+    Array<{
+      id: string;
+      name: string;
+      subdomain: string;
+      deleted_at: Date;
+      deleted_by: string | null;
+      project_count: number;
+      bug_report_count: number;
+    }>
+  > {
+    const query = `
+      SELECT
+        o.id,
+        o.name,
+        o.subdomain,
+        o.deleted_at,
+        o.deleted_by,
+        (SELECT COUNT(*)::int FROM application.projects WHERE organization_id = o.id) AS project_count,
+        (SELECT COUNT(*)::int FROM application.bug_reports WHERE organization_id = o.id) AS bug_report_count
+      FROM ${this.schema}.${this.tableName} o
+      WHERE o.deleted_at IS NOT NULL
+        AND o.deleted_at < NOW() - ($1 * INTERVAL '1 day')
+      ORDER BY o.deleted_at ASC
+      LIMIT ${EXPIRED_SOFT_DELETED_LIMIT}
+    `;
+    const result = await this.pool.query<{
+      id: string;
+      name: string;
+      subdomain: string;
+      deleted_at: Date;
+      deleted_by: string | null;
+      project_count: number;
+      bug_report_count: number;
+    }>(query, [retentionDays]);
+    return result.rows;
+  }
+
+  /**
+   * Hard-delete a soft-deleted organization whose `deleted_at` is older than
+   * `retentionDays`. Guarded on both conditions in a single SQL statement
+   * so an admin can't race the window or hard-delete an active org.
+   *
+   * Returns true if a row was deleted, false if the guard didn't hold (org
+   * doesn't exist, isn't soft-deleted, or hasn't aged past the window).
+   * FK CASCADEs on `organization_id` take care of projects / bug_reports /
+   * subscriptions / members / invitations / invoices.
+   */
+  async hardDeleteExpiredSoftDeleted(
+    organizationId: string,
+    retentionDays: number
+  ): Promise<boolean> {
+    const query = `
+      DELETE FROM ${this.schema}.${this.tableName}
+      WHERE id = $1
+        AND deleted_at IS NOT NULL
+        AND deleted_at < NOW() - ($2 * INTERVAL '1 day')
+    `;
+    const result = await this.pool.query(query, [organizationId, retentionDays]);
+    return (result.rowCount ?? 0) > 0;
   }
 }

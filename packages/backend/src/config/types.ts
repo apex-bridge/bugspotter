@@ -49,6 +49,20 @@ export interface DataResidencyConfig {
   region: string;
 }
 
+export interface OrgRetentionConfig {
+  /**
+   * Days a soft-deleted organization must sit before a platform admin can
+   * hard-delete it via the retention UI. The window gives tenants a grace
+   * period to restore themselves if the soft-delete was a mistake.
+   *
+   * The value gates both the "pending hard-delete" list endpoint (only
+   * orgs past this age appear) and the hard-delete endpoint itself (a
+   * server-side guard rejects any attempt on an org that hasn't aged
+   * past it yet). Default: 30.
+   */
+  retentionDays: number;
+}
+
 export interface FrontendConfig {
   url: string;
 }
@@ -95,4 +109,5 @@ export interface AppConfig {
   rateLimit: RateLimitConfig;
   storage: StorageConfig;
   dataResidency: DataResidencyConfig;
+  orgRetention: OrgRetentionConfig;
 }
