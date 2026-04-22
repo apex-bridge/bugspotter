@@ -281,6 +281,13 @@ export default async function globalSetup() {
         LOG_LEVEL: 'warn', // Only show warnings and errors (reduce log noise)
         CORS_ORIGINS: 'http://localhost:4001,http://localhost:4000',
         FRONTEND_URL: 'http://localhost:4001',
+        // Run the backend in SaaS mode so routes gated by `SaaSRoute` in
+        // the admin (organizations list, retention, billing, etc.) are
+        // reachable during E2E. Without this, the backend defaults to
+        // selfhosted, the admin's /deployment endpoint returns
+        // `selfhosted`, and those routes silently redirect to /projects
+        // — failing any test that navigates to a SaaS-gated page.
+        DEPLOYMENT_MODE: 'saas',
         // Increase database pool size for E2E tests
         DB_POOL_MIN: '5',
         DB_POOL_MAX: '20',
