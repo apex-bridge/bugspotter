@@ -379,6 +379,12 @@ export default async function globalSetup() {
         REDIS_URL: redisUrl,
         NODE_ENV: 'test',
         LOG_LEVEL: 'error',
+        // Match the backend's deployment mode so queue consumers operate
+        // under the same billing / usage-tracking / tenant-resolution
+        // rules as the API they're paired with. Diverging here would
+        // silently drift behavior between sync (API) and async (queue)
+        // paths.
+        DEPLOYMENT_MODE: 'saas',
         // Configure MinIO storage for E2E tests (same as backend)
         STORAGE_BACKEND: 'minio',
         S3_ENDPOINT: minioEndpoint,
