@@ -761,8 +761,11 @@ export class OrganizationService {
     // lowercase at signup, but a direct API call (bypassing the UI) might
     // send mixed case; the UX contract is that typing "Acme" should work
     // the same as "acme". The UI lowercases input on change, so this is
-    // also the server-side mirror of that behavior.
-    if (confirmSubdomain.trim().toLowerCase() !== org.subdomain.toLowerCase()) {
+    // also the server-side mirror of that behavior. `.trim()` on both
+    // sides is defensive against stray whitespace from legacy data or
+    // direct DB edits — if `org.subdomain` ever has whitespace, the
+    // comparison stays consistent with the UI's matching logic.
+    if (confirmSubdomain.trim().toLowerCase() !== org.subdomain.trim().toLowerCase()) {
       throw new AppError(
         'Subdomain confirmation did not match — refusing hard-delete',
         400,
@@ -778,10 +781,18 @@ export class OrganizationService {
     }
     const ageMs = Date.now() - org.deleted_at.getTime();
     const windowMs = retentionDays * MS_PER_DAY;
-    if (ageMs < windowMs) {
+    // `<=` matches the SQL guard's strict `deleted_at < NOW() - N days`:
+    // at the exact boundary (age === window) the DELETE would find no
+    // rows, so the service rejects here with the same "retention window"
+    // message the admin would see 10 days early — rather than a
+    // misleading "state changed during delete" 409 from the guard.
+    if (ageMs <= windowMs) {
+      // Clamp the countdown to a minimum of 1 day so the boundary case
+      // doesn't read "Eligible in 0 day(s)".
+      const daysLeft = Math.max(1, Math.ceil((windowMs - ageMs) / MS_PER_DAY));
       throw new AppError(
         `Organization is inside its retention window (${retentionDays} days). ` +
-          `Eligible in ${Math.ceil((windowMs - ageMs) / MS_PER_DAY)} day(s).`,
+          `Eligible in ${daysLeft} day(s).`,
         409,
         'Conflict'
       );

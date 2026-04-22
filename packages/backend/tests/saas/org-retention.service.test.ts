@@ -286,6 +286,43 @@ describe('OrganizationService.hardDeleteExpired', () => {
     expect(err.message).toMatch(/eligible in \d+ day/i);
   });
 
+  it('throws 409 with a retention-window message at the exact boundary (age === window)', async () => {
+    // Boundary consistency: the SQL guard uses strict `<` (deleted_at <
+    // NOW() - N days), so at `ageMs === windowMs` exactly the DELETE
+    // rowCount is 0. If the service pre-check used `<` too, it would
+    // pass the request through, open a tx, write the audit row, and
+    // then throw a misleading "state changed during delete" 409 from
+    // the failing guard. Using `<=` here aligns both layers so the
+    // admin sees the same "retention window" message whether they're
+    // 10 days early or 1ms early.
+    //
+    // Freezing time with `vi.useFakeTimers` lets us pin `ageMs` exactly.
+    const anchor = new Date('2026-06-15T12:00:00Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(anchor);
+    try {
+      const deletedAtExactlyWindowAgo = new Date(anchor.getTime() - RETENTION_DAYS * DAY_MS);
+      const mock = createMockDb({
+        findByIdIncludeDeleted: async () => ({
+          ...validOrg,
+          deleted_at: deletedAtExactlyWindowAgo,
+        }),
+      });
+      const service = new OrganizationService(mock.db);
+
+      const err = await service
+        .hardDeleteExpired('org-1', RETENTION_DAYS, 'admin', validOrg.subdomain)
+        .catch((e) => e);
+      expect(err.statusCode).toBe(409);
+      expect(err.message).toMatch(/retention window/i);
+      expect(err.message).not.toMatch(/state changed/i);
+      // No audit, no tx — rejection happens in the service pre-check.
+      expect(mock.db.transaction).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('throws 409 and rolls back audit if the guarded DELETE does not match (concurrent restore)', async () => {
     // Simulate a race: by the time we execute the DELETE, `deleted_at` has
     // been flipped back to NULL. Our guard (WHERE deleted_at < ...) doesn't

@@ -213,13 +213,15 @@ export function OrgRetentionConfirmDialog({
 }: OrgRetentionConfirmDialogProps) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
-  // Apply the same normalization the server does (trim + lowercase) so the
-  // button enable state matches what the server would accept. Subdomains
-  // are enforced lowercase at signup, so `target.subdomain` is always
-  // lowercase. Without the trim, an admin who pastes "acme " with a
-  // trailing space would see the button stay disabled even though the
-  // backend would accept the submission — confusing.
-  const matches = confirmInput.trim().toLowerCase() === target.subdomain;
+  // Apply the same normalization the server does (trim + lowercase on
+  // both sides) so the button enable state matches what the server would
+  // accept. Subdomains are enforced lowercase at signup, but normalizing
+  // `target.subdomain` too is cheap defense against a stray whitespace
+  // sneaking in through legacy data or direct DB edits. Without the
+  // trim on user input, an admin who pastes "acme " with a trailing
+  // space would see the button stay disabled even though the backend
+  // would accept the submission — confusing.
+  const matches = confirmInput.trim().toLowerCase() === target.subdomain.trim().toLowerCase();
 
   // ESC-to-close, body scroll lock, focus trap — same hook the app's other
   // modals use (see `components/ui/confirm-dialog.tsx`). The hook stays
