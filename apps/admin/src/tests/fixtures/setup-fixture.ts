@@ -67,42 +67,63 @@ export const test = base.extend<SetupFixtures>({
         };
         const isInitialized = await setupState.checkStatus();
 
+        let accessToken: string;
+
         if (isInitialized) {
           console.log('✓ System already initialized');
-          return;
+          // We still need a token so the default-org seed below can run
+          // idempotently — earlier setup paths (e.g. the setup-wizard
+          // E2E tests) initialize the system without touching this
+          // fixture and therefore without creating an org. Logging in
+          // here picks up that case.
+          const loginResponse = await request.post(`${API_URL}/api/v1/auth/login`, {
+            data: { email: creds.email, password: creds.password },
+          });
+          if (!loginResponse.ok()) {
+            throw new Error(
+              `Failed to log in after init check: ${loginResponse.status()} ${await loginResponse.text()}`
+            );
+          }
+          const { data: loginData } = await loginResponse.json();
+          accessToken = loginData.access_token;
+        } else {
+          console.log('🔍 Initializing with credentials:', {
+            email: creds.email,
+            name: creds.name,
+          });
+
+          // Initialize the system with local storage for E2E tests
+          // Note: Backend setup route requires S3 credentials even for local storage
+          // These are dummy values that won't be used since STORAGE_BACKEND=local
+          const response = await request.post(`${API_URL}/api/v1/setup/initialize`, {
+            data: {
+              admin_email: creds.email,
+              admin_password: creds.password,
+              admin_name: creds.name,
+              instance_name: 'Test BugSpotter',
+              instance_url: 'http://localhost:4001',
+              storage_type: 'local',
+              // Dummy S3 credentials (required by validation but not used)
+              storage_access_key: 'dummy-access-key',
+              storage_secret_key: 'dummy-secret-key',
+              storage_bucket: 'dummy-bucket',
+            },
+          });
+
+          if (!response.ok()) {
+            const error = await response.json();
+            throw new Error(`Failed to initialize system: ${JSON.stringify(error)}`);
+          }
+
+          // `/setup/initialize` returns the admin's access_token in its
+          // response body — no separate login call needed.
+          const { data: initData } = await response.json();
+          accessToken = initData.access_token;
+
+          console.log('✓ System initialized successfully');
         }
 
-        console.log('🔍 Initializing with credentials:', {
-          email: creds.email,
-          name: creds.name,
-        });
-
-        // Initialize the system with local storage for E2E tests
-        // Note: Backend setup route requires S3 credentials even for local storage
-        // These are dummy values that won't be used since STORAGE_BACKEND=local
-        const response = await request.post(`${API_URL}/api/v1/setup/initialize`, {
-          data: {
-            admin_email: creds.email,
-            admin_password: creds.password,
-            admin_name: creds.name,
-            instance_name: 'Test BugSpotter',
-            instance_url: 'http://localhost:4001',
-            storage_type: 'local',
-            // Dummy S3 credentials (required by validation but not used)
-            storage_access_key: 'dummy-access-key',
-            storage_secret_key: 'dummy-secret-key',
-            storage_bucket: 'dummy-bucket',
-          },
-        });
-
-        if (!response.ok()) {
-          const error = await response.json();
-          throw new Error(`Failed to initialize system: ${JSON.stringify(error)}`);
-        }
-
-        console.log('✓ System initialized successfully');
-
-        // SaaS-mode default org.
+        // SaaS-mode default org (idempotent).
         //
         // The E2E backend runs with `DEPLOYMENT_MODE=saas` so the
         // `SaaSRoute`-gated pages in the admin (organizations list,
@@ -111,40 +132,60 @@ export const test = base.extend<SetupFixtures>({
         // (no tenant subdomain) the backend requires `organization_id`
         // in the body — see `resolveOrganizationForProject` in
         // `packages/backend/src/api/routes/projects.ts`. Tests that
-        // drive the admin's project-create form (audit-logs,
-        // api-keys, bug-reports, etc.) need the admin to own at least
-        // one org so the form's "select organization" flow resolves:
-        // the admin UI auto-selects when exactly one org is present
-        // (see `projects.tsx`), which keeps the existing tests
-        // working without per-test changes.
+        // drive the admin's project-create form (audit-logs, api-keys,
+        // bug-reports, etc.) need the admin to own at least one org so
+        // the form's "select organization" flow resolves: the admin UI
+        // auto-selects when exactly one org is present (see
+        // `projects.tsx`), which keeps existing tests working without
+        // per-test changes.
         //
-        // Creating the org via the public POST endpoint makes the
-        // admin the owner — no extra membership plumbing needed.
-        const loginResponse = await request.post(`${API_URL}/api/v1/auth/login`, {
-          data: { email: creds.email, password: creds.password },
+        // Runs on EVERY call (not just first-time init) so the seed
+        // still happens after setup paths that bypass this fixture
+        // entirely (e.g. the setup-wizard E2E tests).
+        const authHeaders = { Authorization: `Bearer ${accessToken}` };
+        const myOrgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
+          headers: authHeaders,
         });
-        if (!loginResponse.ok()) {
-          throw new Error(
-            `Failed to log in after init: ${loginResponse.status()} ${await loginResponse.text()}`
-          );
+        if (myOrgsResponse.ok()) {
+          const { data: existing } = await myOrgsResponse.json();
+          if (Array.isArray(existing) && existing.length > 0) {
+            return;
+          }
         }
-        const { data: loginData } = await loginResponse.json();
-        const accessToken: string = loginData.access_token;
 
         const orgResponse = await request.post(`${API_URL}/api/v1/organizations`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: authHeaders,
           data: {
             name: 'E2E Default Org',
             subdomain: 'e2e-default',
             data_residency_region: 'global',
           },
         });
-        if (!orgResponse.ok()) {
-          throw new Error(
-            `Failed to create default E2E org: ${orgResponse.status()} ${await orgResponse.text()}`
-          );
+        if (orgResponse.ok()) {
+          console.log('✓ Default E2E org created');
+          return;
         }
-        console.log('✓ Default E2E org created');
+
+        // 409 = subdomain reserved by a soft-deleted org from a prior
+        // run that didn't fully clean up. Treat as success if the admin
+        // already has an org accessible via /me; otherwise surface the
+        // error so we're not silently papering over broken state.
+        if (orgResponse.status() === 409) {
+          const recheck = await request.get(`${API_URL}/api/v1/organizations/me`, {
+            headers: authHeaders,
+          });
+          if (recheck.ok()) {
+            const { data: existing } = await recheck.json();
+            if (Array.isArray(existing) && existing.length > 0) {
+              console.log('✓ Default E2E org already exists (409)');
+              return;
+            }
+          }
+        }
+
+        throw new Error(
+          `Failed to create default E2E org: ${orgResponse.status()} ${await orgResponse.text()}`
+        );
       },
 
       /**
@@ -180,11 +221,35 @@ export const test = base.extend<SetupFixtures>({
         // field here was rejected with a 400 — the fixture had been
         // silently relying on `project` being resolved from the list
         // call. Keep only the supported fields.
+        //
+        // In SaaS mode on the hub domain (what E2E is), the backend's
+        // `resolveOrganizationForProject` requires `organization_id`
+        // in the body. This helper is a direct API call — it bypasses
+        // the admin UI's auto-select — so we must resolve the org ID
+        // ourselves. `ensureInitialized` seeds exactly one org owned
+        // by the admin, so taking `[0]` is deterministic.
         if (!project) {
+          const orgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!orgsResponse.ok()) {
+            throw new Error(
+              `Failed to resolve organization for test project: ${orgsResponse.status()} ${await orgsResponse.text()}`
+            );
+          }
+          const { data: myOrgs } = await orgsResponse.json();
+          const organizationId = Array.isArray(myOrgs) ? myOrgs[0]?.id : undefined;
+          if (!organizationId) {
+            throw new Error(
+              'Failed to resolve organization for test project: admin has no org memberships'
+            );
+          }
+
           const createResponse = await request.post(`${API_URL}/api/v1/projects`, {
             headers: { Authorization: `Bearer ${token}` },
             data: {
               name: 'E2E Test Project',
+              organization_id: organizationId,
             },
           });
 
