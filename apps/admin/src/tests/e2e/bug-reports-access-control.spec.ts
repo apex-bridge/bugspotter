@@ -98,6 +98,31 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     const regularData = await regularLoginResponse.json();
     regularUserToken = regularData.data.access_token;
 
+    // Create a dedicated org for this spec's projects. We can't reuse
+    // the admin's default E2E org because the trial plan caps at 2
+    // projects and earlier specs in the suite (api-keys, audit-logs,
+    // etc.) already consume slots via `ensureProjectExists`. A fresh
+    // org gives us our own 2-project budget.
+    //
+    // Required in SaaS mode anyway: the hub domain's project-create
+    // needs `organization_id` in the body
+    // (see `resolveOrganizationForProject` in
+    // packages/backend/src/api/routes/projects.ts).
+    const bugReportOrgResponse = await request.post(`${API_URL}/api/v1/organizations`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: {
+        name: `Bug Reports RBAC ${Date.now()}`,
+        subdomain: `bug-reports-rbac-${Date.now()}`,
+        data_residency_region: 'global',
+      },
+    });
+    if (!bugReportOrgResponse.ok()) {
+      throw new Error(
+        `Failed to create test org: ${bugReportOrgResponse.status()} ${await bugReportOrgResponse.text()}`
+      );
+    }
+    const organizationId = (await bugReportOrgResponse.json()).data.id as string;
+
     // Create two projects
     const project1Response = await request.post(`${API_URL}/api/v1/projects`, {
       headers: {
@@ -105,6 +130,7 @@ test.describe('Bug Reports - Access Control & Filters', () => {
       },
       data: {
         name: 'Project Alpha',
+        organization_id: organizationId,
       },
     });
     const project1Data = await project1Response.json();
@@ -116,6 +142,7 @@ test.describe('Bug Reports - Access Control & Filters', () => {
       },
       data: {
         name: 'Project Beta',
+        organization_id: organizationId,
       },
     });
     const project2Data = await project2Response.json();

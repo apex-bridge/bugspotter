@@ -279,8 +279,10 @@ export default async function globalSetup() {
         PORT: apiPort,
         NODE_ENV: 'test',
         LOG_LEVEL: 'warn', // Only show warnings and errors (reduce log noise)
-        CORS_ORIGINS: 'http://localhost:4001,http://localhost:4000',
-        FRONTEND_URL: 'http://localhost:4001',
+        // Honor port overrides so local runs on Windows (Hyper-V
+        // reserves 4000/4001) can pick free ports via env vars.
+        CORS_ORIGINS: `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'},http://localhost:${apiPort}`,
+        FRONTEND_URL: `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'}`,
         // Run the backend in SaaS mode so routes gated by `SaaSRoute` in
         // the admin (organizations list, retention, billing, etc.) are
         // reachable during E2E. Without this, the backend defaults to
@@ -379,6 +381,10 @@ export default async function globalSetup() {
         REDIS_URL: redisUrl,
         NODE_ENV: 'test',
         LOG_LEVEL: 'error',
+        // Honor WORKER_HEALTH_PORT override so local runs on Windows
+        // (Hyper-V reserves 3001 via `netsh int ipv4 show
+        // excludedportrange`) can pick a free port.
+        WORKER_HEALTH_PORT: process.env.WORKER_HEALTH_PORT ?? '3001',
         // Match the backend's deployment mode so queue consumers operate
         // under the same billing / usage-tracking / tenant-resolution
         // rules as the API they're paired with. Diverging here would

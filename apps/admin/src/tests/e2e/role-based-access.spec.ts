@@ -28,20 +28,29 @@ const NO_ORG_USER = {
   name: 'No Org User',
 };
 
-/** Admin-only sidebar labels (from en.json nav.*) */
+/** Admin-only sidebar labels (from en.json nav.*).
+ *
+ * These items are gated by `adminOnly: true` in `NAV_ITEMS` inside
+ * `dashboard-layout.tsx` and render only for platform admins.
+ *
+ * Note: 'Audit Logs' and 'API Keys' are intentionally NOT here — the
+ * sidebar renders them for every authenticated user, with the backend
+ * enforcing access control per-route (e.g. `requireAuditAccess` lets
+ * org owners view their org's audit trail, and api-keys are scoped to
+ * projects the user is a member of). They appear in GENERAL_LABELS
+ * instead.
+ */
 const ADMIN_ONLY_LABELS = [
   'Dashboard',
   'User Management',
   'Organizations',
   'System Health',
-  'Audit Logs',
-  'API Keys',
   'Integrations',
   'Settings',
 ];
 
-/** Sidebar labels visible to all authenticated users */
-const GENERAL_LABELS = ['Projects', 'Bug Reports', 'Notifications'];
+/** Sidebar labels visible to all authenticated users (no gates in NAV_ITEMS) */
+const GENERAL_LABELS = ['Projects', 'Bug Reports', 'Notifications', 'Audit Logs', 'API Keys'];
 
 /** Organization section sidebar labels */
 const ORG_LABELS = ['My Organization', 'Team', 'Usage & Quotas', 'Billing'];

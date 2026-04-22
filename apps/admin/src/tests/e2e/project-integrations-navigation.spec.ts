@@ -56,9 +56,22 @@ test.describe('Project Integrations Navigation', () => {
       }
     }
 
-    // Create a test project
+    // Create a test project. In SaaS mode, the hub domain requires
+    // `organization_id` in the body (see `resolveOrganizationForProject`
+    // in packages/backend/src/api/routes/projects.ts). The admin user is
+    // seeded into a single default org by `ensureInitialized`, so
+    // taking `[0]` is deterministic.
+    const myOrgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const myOrgs = (await myOrgsResponse.json()).data as Array<{ id: string }> | undefined;
+    const organizationId = Array.isArray(myOrgs) ? myOrgs[0]?.id : undefined;
+    if (!organizationId) {
+      throw new Error('Failed to resolve organization_id for test project');
+    }
+
     const projectResponse = await request.post(`${API_URL}/api/v1/projects`, {
-      data: { name: 'E2E Navigation Test Project' },
+      data: { name: 'E2E Navigation Test Project', organization_id: organizationId },
       headers: { Authorization: `Bearer ${adminToken}` },
     });
 

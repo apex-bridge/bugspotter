@@ -116,10 +116,13 @@ test.describe('Org Self-Service: My Organization', () => {
     await addButton.waitFor({ state: 'visible', timeout: 10000 });
     await addButton.click();
 
-    // Should show the add form with email input and role select
-    const emailInput = page.getByLabel(/email/i);
+    // Should show the add form with email input and role select.
+    // Use the form's own stable IDs (see `invite-member-form.tsx`) so
+    // the locator doesn't match unrelated email/role-labeled elements
+    // elsewhere on the page (e.g. member-row emails in the table).
+    const emailInput = page.locator('#invite-email');
     await expect(emailInput).toBeVisible({ timeout: 5000 });
-    const roleSelect = page.getByLabel(/role/i);
+    const roleSelect = page.locator('#invite-role');
     await expect(roleSelect).toBeVisible();
   });
 

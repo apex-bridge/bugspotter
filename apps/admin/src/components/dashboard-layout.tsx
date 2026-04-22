@@ -164,8 +164,11 @@ export default function DashboardLayout() {
             <p className="text-sm text-gray-500 mt-1">{t('nav.adminPanel')}</p>
           </div>
 
-          {/* Navigation */}
-          <nav className="flex-1 p-4 space-y-1">
+          {/* Navigation — overflow-y-auto so a long list of items (platform
+              admin + org sections together can be 20+) scrolls INSIDE the
+              sidebar rather than pushing the user info + logout button
+              below the viewport on shorter screens. */}
+          <nav className="flex-1 overflow-y-auto p-4 space-y-1">
             {NAV_ITEMS.map((item) => {
               if (item.adminOnly && !isAdmin) {
                 return null;
