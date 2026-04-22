@@ -878,4 +878,15 @@ export class BugReportRepository extends BaseRepository<
     const result = await this.getClient().query<{ count: string }>(query);
     return parseInt(result.rows[0]?.count ?? '0', DECIMAL_BASE);
   }
+
+  /**
+   * Count bug reports belonging to an organization (includes soft-deleted,
+   * since the audit log for a cascade-driven hard-delete wants the total
+   * count of rows the cascade is about to destroy — not only the live ones).
+   */
+  async countByOrganizationId(organizationId: string): Promise<number> {
+    const query = `SELECT COUNT(*)::int AS count FROM ${this.schema}.${this.tableName} WHERE organization_id = $1`;
+    const result = await this.getClient().query<{ count: number }>(query, [organizationId]);
+    return result.rows[0]?.count ?? 0;
+  }
 }

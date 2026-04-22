@@ -45,5 +45,25 @@ export const queueJobDuration = new client.Histogram({
   registers: [register],
 });
 
+// === Platform-admin org retention ===
+// Admin-initiated hard-deletion of soft-deleted orgs that have aged past
+// ORG_RETENTION_DAYS. No scheduler — each increment is a human click.
+// Labels: `result` =
+//   'success'           — cascade executed
+//   'validation_failed' — 400, subdomain confirmation mismatch
+//   'not_found'         — 404, org id doesn't exist (stale UI / typo in
+//                         a scripted call / already hard-deleted by
+//                         another admin moments earlier)
+//   'guard_failed'      — 409, org not soft-deleted / inside retention
+//                         window / state changed during delete
+//   'error'             — any other unexpected error
+// Keep dashboards/alerts in sync when adding new labels.
+export const orgHardDeleteTotal = new client.Counter({
+  name: 'bugspotter_org_hard_delete_total',
+  help: 'Platform-admin hard-deletions of soft-deleted organizations past the retention window',
+  labelNames: ['result'] as const,
+  registers: [register],
+});
+
 // Note: queueDepth and dbPoolSize gauges are created in collectors.ts
 // with async collect callbacks (populated on each /metrics scrape).

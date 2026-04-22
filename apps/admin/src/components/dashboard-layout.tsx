@@ -24,6 +24,7 @@ import {
   CreditCard,
   ClipboardList,
   Brain,
+  Trash2,
   LucideIcon,
 } from 'lucide-react';
 
@@ -49,6 +50,13 @@ const NAV_ITEMS: NavItem[] = [
     path: '/organization-requests',
     label: 'nav.organizationRequests',
     icon: ClipboardList,
+    adminOnly: true,
+    saasOnly: true,
+  },
+  {
+    path: '/organizations/retention',
+    label: 'nav.orgRetention',
+    icon: Trash2,
     adminOnly: true,
     saasOnly: true,
   },

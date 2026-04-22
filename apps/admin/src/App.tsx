@@ -45,6 +45,7 @@ import OrgLegalDetailsPage from './pages/organization/org-legal-details';
 import OrgIntelligencePage from './pages/organization/org-intelligence';
 import AcceptInvitationPage from './pages/invitations/accept';
 import OrganizationRequestsPage from './pages/platform/organization-requests';
+import OrgRetentionPage from './pages/platform/org-retention';
 
 function App() {
   return (
@@ -184,6 +185,16 @@ function App() {
                       <AdminRoute>
                         <SaaSRoute>
                           <OrganizationRequestsPage />
+                        </SaaSRoute>
+                      </AdminRoute>
+                    }
+                  />
+                  <Route
+                    path="organizations/retention"
+                    element={
+                      <AdminRoute>
+                        <SaaSRoute>
+                          <OrgRetentionPage />
                         </SaaSRoute>
                       </AdminRoute>
                     }

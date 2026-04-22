@@ -168,6 +168,62 @@ export const organizationService = {
     return response.data.data;
   },
 
+  // --- Platform-admin retention window ---
+
+  /**
+   * List orgs that are soft-deleted AND have aged past `ORG_RETENTION_DAYS`.
+   * These are the candidates the "pending hard-delete" tab shows.
+   */
+  listPendingHardDelete: async (): Promise<{
+    retention_days: number;
+    orgs: Array<{
+      id: string;
+      name: string;
+      subdomain: string;
+      deleted_at: string;
+      deleted_by: string | null;
+      project_count: number;
+      bug_report_count: number;
+      days_since_deleted: number;
+    }>;
+  }> => {
+    const response = await api.get<{
+      success: boolean;
+      data: {
+        retention_days: number;
+        orgs: Array<{
+          id: string;
+          name: string;
+          subdomain: string;
+          deleted_at: string;
+          deleted_by: string | null;
+          project_count: number;
+          bug_report_count: number;
+          days_since_deleted: number;
+        }>;
+      };
+    }>(API_ENDPOINTS.adminOrganizations.pendingHardDelete());
+    return response.data.data;
+  },
+
+  /**
+   * Permanently delete a soft-deleted org. `confirmSubdomain` must match
+   * the org's actual subdomain (GitHub-style typed confirmation) or the
+   * server 400s before touching any data.
+   */
+  adminHardDelete: async (
+    orgId: string,
+    confirmSubdomain: string
+  ): Promise<{ id: string; subdomain: string; name: string }> => {
+    const response = await api.post<{
+      success: boolean;
+      data: { id: string; subdomain: string; name: string };
+    }>(API_ENDPOINTS.adminOrganizations.hardDelete(orgId), {
+      confirm_subdomain: confirmSubdomain,
+    });
+    return response.data.data;
+  },
+
   /** Admin: Set or change an organization's plan */
   adminSetPlan: async (orgId: string, input: AdminSetPlanInput): Promise<Subscription> => {
     const response = await api.patch<{ success: boolean; data: Subscription }>(

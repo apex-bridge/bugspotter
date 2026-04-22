@@ -34,6 +34,7 @@ import { InvitationService } from './invitation.service.js';
 
 const TRIAL_DURATION_DAYS = 14;
 const ADMIN_PLAN_DURATION_DAYS = 365;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
  * Advisory lock namespace for organization project quota enforcement.
@@ -695,6 +696,159 @@ export class OrganizationService {
       );
     }
     return { mode: 'soft' as const };
+  }
+
+  /**
+   * List soft-deleted organizations that have aged past the retention window
+   * and are eligible for permanent removal by a platform admin.
+   *
+   * Service layer — the route handler is in `admin-organizations.ts` and is
+   * gated by `requirePlatformAdmin`.
+   */
+  async listPendingHardDelete(retentionDays: number): Promise<
+    Array<{
+      id: string;
+      name: string;
+      subdomain: string;
+      deleted_at: Date;
+      deleted_by: string | null;
+      project_count: number;
+      bug_report_count: number;
+      days_since_deleted: number;
+    }>
+  > {
+    const rows = await this.db.organizations.findExpiredSoftDeleted(retentionDays);
+    const now = Date.now();
+    return rows.map((row) => ({
+      ...row,
+      days_since_deleted: Math.floor((now - row.deleted_at.getTime()) / MS_PER_DAY),
+    }));
+  }
+
+  /**
+   * Permanently delete a soft-deleted organization that has aged past the
+   * retention window. FK cascades handle projects, bug_reports,
+   * subscriptions, memberships, invitations, invoices.
+   *
+   * The audit log is written BEFORE the delete in the same transaction so
+   * the record survives the cascade even though `audit_logs.organization_id`
+   * is `ON DELETE SET NULL`. Key fields (subdomain, name, project count,
+   * bug-report count, original deleted_at) are duplicated into `details`
+   * so the trail is readable without joining anything.
+   *
+   * `confirmSubdomain` is the string the admin typed into the UI's confirm
+   * field. Compared case-insensitively (trim + lowercase both sides) to
+   * match the UX contract — typing "Acme" works the same as "acme". A
+   * mismatch throws 400 here — the server-side check is the authoritative
+   * one; the client dialog is mis-click defense, not a trust boundary.
+   *
+   * Returns the deleted org's identifiers for UI confirmation. Throws:
+   *   - 404 if the org doesn't exist
+   *   - 400 if `confirmSubdomain` doesn't match
+   *   - 409 if the org isn't soft-deleted, or hasn't aged past the window
+   */
+  async hardDeleteExpired(
+    organizationId: string,
+    retentionDays: number,
+    actorUserId: string,
+    confirmSubdomain: string
+  ): Promise<{ id: string; subdomain: string; name: string }> {
+    const org = await this.db.organizations.findByIdIncludeDeleted(organizationId);
+    if (!org) {
+      throw new AppError('Organization not found', 404, 'NotFound');
+    }
+    // Normalize both sides before comparing. Subdomains are enforced
+    // lowercase at signup, but a direct API call (bypassing the UI) might
+    // send mixed case; the UX contract is that typing "Acme" should work
+    // the same as "acme". The UI lowercases input on change, so this is
+    // also the server-side mirror of that behavior. `.trim()` on both
+    // sides is defensive against stray whitespace from legacy data or
+    // direct DB edits — if `org.subdomain` ever has whitespace, the
+    // comparison stays consistent with the UI's matching logic.
+    if (confirmSubdomain.trim().toLowerCase() !== org.subdomain.trim().toLowerCase()) {
+      throw new AppError(
+        'Subdomain confirmation did not match — refusing hard-delete',
+        400,
+        'ValidationError'
+      );
+    }
+    if (!org.deleted_at) {
+      throw new AppError(
+        'Organization is not soft-deleted and cannot be hard-deleted via this route',
+        409,
+        'Conflict'
+      );
+    }
+    const ageMs = Date.now() - org.deleted_at.getTime();
+    const windowMs = retentionDays * MS_PER_DAY;
+    // `<=` matches the SQL guard's strict `deleted_at < NOW() - N days`:
+    // at the exact boundary (age === window) the DELETE would find no
+    // rows, so the service rejects here with the same "retention window"
+    // message the admin would see 10 days early — rather than a
+    // misleading "state changed during delete" 409 from the guard.
+    if (ageMs <= windowMs) {
+      // Clamp the countdown to a minimum of 1 day so the boundary case
+      // doesn't read "Eligible in 0 day(s)".
+      const daysLeft = Math.max(1, Math.ceil((windowMs - ageMs) / MS_PER_DAY));
+      throw new AppError(
+        `Organization is inside its retention window (${retentionDays} days). ` +
+          `Eligible in ${daysLeft} day(s).`,
+        409,
+        'Conflict'
+      );
+    }
+
+    // Write audit, then delete, in one tx. If either step fails the other
+    // is rolled back — we never log a deletion that didn't happen, nor
+    // delete without a trail. Counts are read inside the tx so the audit
+    // trail reflects the exact state being cascaded (in theory concurrent
+    // writes against a soft-deleted-for-30d org are near-impossible, but
+    // the audit log is the whole point of this flow, so we don't cut
+    // corners on its accuracy).
+    await this.db.transaction(async (tx) => {
+      const [projectCount, bugReportCount] = await Promise.all([
+        tx.projects.countByOrganizationId(organizationId),
+        tx.bugReports.countByOrganizationId(organizationId),
+      ]);
+
+      await tx.auditLogs.create({
+        action: 'organization.hard_delete',
+        resource: 'organization',
+        resource_id: org.id,
+        user_id: actorUserId,
+        // organization_id intentionally omitted — the FK would be nulled
+        // by the CASCADE-SET-NULL on audit_logs, so we keep the identity
+        // fully inside `details` instead.
+        organization_id: null,
+        details: {
+          subdomain: org.subdomain,
+          name: org.name,
+          deleted_at_original: org.deleted_at,
+          retention_days: retentionDays,
+          project_count_at_delete: projectCount,
+          bug_report_count_at_delete: bugReportCount,
+        },
+        success: true,
+      });
+
+      const deleted = await tx.organizations.hardDeleteExpiredSoftDeleted(
+        organizationId,
+        retentionDays
+      );
+      if (!deleted) {
+        // A concurrent restore could have flipped deleted_at back to NULL
+        // between our check above and this delete. The guard clause in the
+        // DELETE prevents acting on that state; the tx rollback discards
+        // the audit we just wrote.
+        throw new AppError(
+          'Organization state changed during delete (possibly restored). Retry.',
+          409,
+          'Conflict'
+        );
+      }
+    });
+
+    return { id: org.id, subdomain: org.subdomain, name: org.name };
   }
 
   /**
