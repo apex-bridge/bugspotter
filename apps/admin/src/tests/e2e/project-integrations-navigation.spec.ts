@@ -1,7 +1,10 @@
 import { test, expect, type Page } from '../fixtures/setup-fixture';
 import { waitForI18nReady } from './helpers/i18n-helpers';
+import { E2E_API_URL } from './config';
 
-const API_URL = process.env.API_URL || 'http://localhost:4000';
+// Use the shared helper so `API_PORT` / `API_URL` overrides (see
+// `src/tests/e2e/config.ts`) actually apply here too.
+const API_URL = E2E_API_URL;
 
 // Test credentials
 const TEST_ADMIN = {

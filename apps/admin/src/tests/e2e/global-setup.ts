@@ -258,9 +258,13 @@ export default async function globalSetup() {
       throw error;
     }
 
-    // Set API_URL for both backend and frontend
+    // Set API_URL for both backend and frontend. Precedence:
+    //   1. `API_URL` if explicitly provided (someone pointing tests at a
+    //      non-localhost backend, or a port + host combination that can't
+    //      be captured via `API_PORT` alone).
+    //   2. Otherwise derive from `API_PORT` (default `4000`).
     const apiPort = process.env.API_PORT || '4000';
-    const apiUrl = `http://localhost:${apiPort}`;
+    const apiUrl = process.env.API_URL || `http://localhost:${apiPort}`;
     process.env.API_URL = apiUrl;
     process.env.VITE_API_URL = apiUrl; // For Vite proxy configuration
 
@@ -268,10 +272,18 @@ export default async function globalSetup() {
     // when someone is running Playwright against an already-running admin
     // (in that case Playwright's webServer is skipped); otherwise we
     // honor `E2E_ADMIN_PORT` for Windows/Hyper-V port conflicts; finally
-    // default to `:4001`. Used for both the backend's `FRONTEND_URL`
-    // and its CORS allowlist so the two never disagree.
-    const adminUrl =
+    // default to `:4001`. Normalize via `new URL(...).origin` so a
+    // `BASE_URL` that includes a path (`https://host.com/admin`) or a
+    // trailing slash doesn't leak into CORS matching — the browser's
+    // `Origin` header is always just `scheme://host[:port]`.
+    const rawAdminUrl =
       process.env.BASE_URL ?? `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'}`;
+    let adminUrl: string;
+    try {
+      adminUrl = new URL(rawAdminUrl).origin;
+    } catch {
+      throw new Error(`Invalid BASE_URL / E2E_ADMIN_PORT combination: ${rawAdminUrl}`);
+    }
 
     // Start backend server on port 4000
     console.log('🚀 Starting backend server on port 4000...');

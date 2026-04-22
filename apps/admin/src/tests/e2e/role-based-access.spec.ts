@@ -32,6 +32,9 @@ const NO_ORG_USER = {
  *
  * These items are gated by `adminOnly: true` in `NAV_ITEMS` inside
  * `dashboard-layout.tsx` and render only for platform admins.
+ * Keep this list in sync with every `NAV_ITEMS` entry that carries
+ * `adminOnly: true` — if they drift, the "regular user cannot see
+ * admin items" assertions silently stop catching regressions.
  *
  * Note: 'Audit Logs' and 'API Keys' are intentionally NOT here — the
  * sidebar renders them for every authenticated user, with the backend
@@ -44,6 +47,8 @@ const ADMIN_ONLY_LABELS = [
   'Dashboard',
   'User Management',
   'Organizations',
+  'Requests', // organization-requests, adminOnly + saasOnly
+  'Retention', // organizations/retention, adminOnly + saasOnly
   'System Health',
   'Integrations',
   'Settings',
