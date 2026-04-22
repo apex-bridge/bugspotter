@@ -27,7 +27,12 @@ test.describe('Platform Admin: Org Retention', () => {
     await loginAsAdmin(page);
     await page.goto('/organizations/retention');
 
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 10000 });
+    // Scope the heading check to <main> — the dashboard layout has a
+    // sidebar brand <h1>BugSpotter</h1> that would otherwise make
+    // `getByRole('heading', { level: 1 })` a strict-mode violation.
+    await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible({
+      timeout: 10000,
+    });
     expect(page.url()).toContain('/organizations/retention');
     // Either the empty-state message or the table is rendered — both
     // confirm the page loaded past the loading state.
