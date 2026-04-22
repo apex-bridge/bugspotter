@@ -264,6 +264,15 @@ export default async function globalSetup() {
     process.env.API_URL = apiUrl;
     process.env.VITE_API_URL = apiUrl; // For Vite proxy configuration
 
+    // Resolve the admin (frontend) URL once. `BASE_URL` takes precedence
+    // when someone is running Playwright against an already-running admin
+    // (in that case Playwright's webServer is skipped); otherwise we
+    // honor `E2E_ADMIN_PORT` for Windows/Hyper-V port conflicts; finally
+    // default to `:4001`. Used for both the backend's `FRONTEND_URL`
+    // and its CORS allowlist so the two never disagree.
+    const adminUrl =
+      process.env.BASE_URL ?? `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'}`;
+
     // Start backend server on port 4000
     console.log('🚀 Starting backend server on port 4000...');
     const backendPath = path.resolve(__dirname, '../../../../../packages/backend');
@@ -280,9 +289,12 @@ export default async function globalSetup() {
         NODE_ENV: 'test',
         LOG_LEVEL: 'warn', // Only show warnings and errors (reduce log noise)
         // Honor port overrides so local runs on Windows (Hyper-V
-        // reserves 4000/4001) can pick free ports via env vars.
-        CORS_ORIGINS: `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'},http://localhost:${apiPort}`,
-        FRONTEND_URL: `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'}`,
+        // reserves 4000/4001) can pick free ports via env vars. Uses
+        // the shared `adminUrl` resolved above so `FRONTEND_URL` and
+        // the frontend entry in `CORS_ORIGINS` stay in sync even when
+        // the admin is served from a non-localhost `BASE_URL`.
+        CORS_ORIGINS: `${adminUrl},${apiUrl}`,
+        FRONTEND_URL: adminUrl,
         // Run the backend in SaaS mode so routes gated by `SaaSRoute` in
         // the admin (organizations list, retention, billing, etc.) are
         // reachable during E2E. Without this, the backend defaults to

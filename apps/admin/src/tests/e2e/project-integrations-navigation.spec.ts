@@ -64,6 +64,14 @@ test.describe('Project Integrations Navigation', () => {
     const myOrgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
       headers: { Authorization: `Bearer ${adminToken}` },
     });
+    if (!myOrgsResponse.ok()) {
+      // Include status + body so a 401 (adminToken never populated
+      // because login failed) doesn't masquerade as "admin has no
+      // org memberships".
+      throw new Error(
+        `Failed to fetch /organizations/me: ${myOrgsResponse.status()} ${await myOrgsResponse.text()}`
+      );
+    }
     const myOrgs = (await myOrgsResponse.json()).data as Array<{ id: string }> | undefined;
     const organizationId = Array.isArray(myOrgs) ? myOrgs[0]?.id : undefined;
     if (!organizationId) {

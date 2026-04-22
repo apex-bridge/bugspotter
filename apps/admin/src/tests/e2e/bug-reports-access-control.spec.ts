@@ -51,6 +51,7 @@ test.describe('Bug Reports - Access Control & Filters', () => {
   let project1: { id: string; name: string; api_key: string };
   let project2: { id: string; name: string; api_key: string };
   let regularUserId: string;
+  let bugReportOrgId: string | undefined;
 
   test.beforeAll(async ({ request, setupState }) => {
     // Create admin user
@@ -108,11 +109,17 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     // needs `organization_id` in the body
     // (see `resolveOrganizationForProject` in
     // packages/backend/src/api/routes/projects.ts).
+    //
+    // Captured to `bugReportOrgId` so `afterAll` can tear it down —
+    // otherwise this spec leaves the admin with an extra membership
+    // and later specs that pick `myOrgs[0]` could select the wrong
+    // one.
+    const orgTimestamp = Date.now();
     const bugReportOrgResponse = await request.post(`${API_URL}/api/v1/organizations`, {
       headers: { Authorization: `Bearer ${adminToken}` },
       data: {
-        name: `Bug Reports RBAC ${Date.now()}`,
-        subdomain: `bug-reports-rbac-${Date.now()}`,
+        name: `Bug Reports RBAC ${orgTimestamp}`,
+        subdomain: `bug-reports-rbac-${orgTimestamp}`,
         data_residency_region: 'global',
       },
     });
@@ -121,7 +128,8 @@ test.describe('Bug Reports - Access Control & Filters', () => {
         `Failed to create test org: ${bugReportOrgResponse.status()} ${await bugReportOrgResponse.text()}`
       );
     }
-    const organizationId = (await bugReportOrgResponse.json()).data.id as string;
+    bugReportOrgId = (await bugReportOrgResponse.json()).data.id as string;
+    const organizationId = bugReportOrgId;
 
     // Create two projects
     const project1Response = await request.post(`${API_URL}/api/v1/projects`, {
@@ -315,6 +323,22 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     } catch (error) {
       console.log(
         'Failed to delete regular user (backend may be down):',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    try {
+      // Delete the dedicated org this spec created. Without this, the
+      // admin accumulates an extra membership across specs and later
+      // tests that pick `myOrgs[0]` could select the wrong one.
+      if (bugReportOrgId && adminToken) {
+        await request.delete(`${API_URL}/api/v1/organizations/${bugReportOrgId}`, {
+          headers: { Authorization: `Bearer ${adminToken}` },
+        });
+      }
+    } catch (error) {
+      console.log(
+        'Failed to delete bug-reports RBAC org (backend may be down):',
         error instanceof Error ? error.message : String(error)
       );
     }
