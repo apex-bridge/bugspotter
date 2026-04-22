@@ -101,6 +101,50 @@ export const test = base.extend<SetupFixtures>({
         }
 
         console.log('✓ System initialized successfully');
+
+        // SaaS-mode default org.
+        //
+        // The E2E backend runs with `DEPLOYMENT_MODE=saas` so the
+        // `SaaSRoute`-gated pages in the admin (organizations list,
+        // retention, billing, etc.) are reachable. But SaaS mode also
+        // changes project creation semantics: from the hub domain
+        // (no tenant subdomain) the backend requires `organization_id`
+        // in the body — see `resolveOrganizationForProject` in
+        // `packages/backend/src/api/routes/projects.ts`. Tests that
+        // drive the admin's project-create form (audit-logs,
+        // api-keys, bug-reports, etc.) need the admin to own at least
+        // one org so the form's "select organization" flow resolves:
+        // the admin UI auto-selects when exactly one org is present
+        // (see `projects.tsx`), which keeps the existing tests
+        // working without per-test changes.
+        //
+        // Creating the org via the public POST endpoint makes the
+        // admin the owner — no extra membership plumbing needed.
+        const loginResponse = await request.post(`${API_URL}/api/v1/auth/login`, {
+          data: { email: creds.email, password: creds.password },
+        });
+        if (!loginResponse.ok()) {
+          throw new Error(
+            `Failed to log in after init: ${loginResponse.status()} ${await loginResponse.text()}`
+          );
+        }
+        const { data: loginData } = await loginResponse.json();
+        const accessToken: string = loginData.access_token;
+
+        const orgResponse = await request.post(`${API_URL}/api/v1/organizations`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          data: {
+            name: 'E2E Default Org',
+            subdomain: 'e2e-default',
+            data_residency_region: 'global',
+          },
+        });
+        if (!orgResponse.ok()) {
+          throw new Error(
+            `Failed to create default E2E org: ${orgResponse.status()} ${await orgResponse.text()}`
+          );
+        }
+        console.log('✓ Default E2E org created');
       },
 
       /**
@@ -131,13 +175,16 @@ export const test = base.extend<SetupFixtures>({
           }
         }
 
-        // Create a test project if none exists
+        // Create a test project if none exists. Note: the create-project
+        // schema has `additionalProperties: false` and the old `description`
+        // field here was rejected with a 400 — the fixture had been
+        // silently relying on `project` being resolved from the list
+        // call. Keep only the supported fields.
         if (!project) {
           const createResponse = await request.post(`${API_URL}/api/v1/projects`, {
             headers: { Authorization: `Bearer ${token}` },
             data: {
               name: 'E2E Test Project',
-              description: 'Project for E2E testing',
             },
           });
 
