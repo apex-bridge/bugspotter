@@ -139,15 +139,13 @@ test.describe('Org Self-Service: My Organization', () => {
     const planBadge = page.getByTestId('plan-badge');
     await expect(planBadge).toBeVisible({ timeout: 10000 });
 
-    // Should show quota progress bars. Use `toBeAttached` (DOM
-    // presence) not `toBeVisible` (non-zero box): the `quota-progress-bar`
-    // testid is on the inner *fill* div whose width is `${pct}%`. On a
-    // fresh DB the admin has 0 usage → pct=0 → width:0 → Playwright's
-    // visibility check sees a 0-width box as "hidden". Attached still
-    // waits for the render to happen (i.e. after the quota API
-    // resolves) without caring about the fill's current width.
+    // Should show quota progress bars. The `quota-progress-bar` testid
+    // lives on the track container (`w-full bg-gray-200`, fixed width)
+    // so `toBeVisible` is a proper assertion — unlike the old placement
+    // on the inner fill div, which has width:0 at 0% usage and would
+    // be treated as hidden by Playwright on a fresh DB.
     const progressBars = page.getByTestId('quota-progress-bar');
-    await expect(progressBars.first()).toBeAttached({ timeout: 10000 });
+    await expect(progressBars.first()).toBeVisible({ timeout: 10000 });
     const barCount = await progressBars.count();
     expect(barCount).toBeGreaterThan(0);
   });

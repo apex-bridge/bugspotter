@@ -8,11 +8,16 @@
  * 4. Verify integrations appear in overview list
  *
  * Requires: JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, JIRA_E2E_API_TOKEN, JIRA_E2E_PROJECT_KEY
- * See: packages/backend/.env.integration for configuration
+ * See: `.env.example` (repo root) for the full list.
  */
 
 import { test, expect, type Page } from '../fixtures/setup-fixture';
 import axios from 'axios';
+import {
+  getJiraConfig,
+  hasJiraCredentials,
+  type JiraTestConfig as JiraConfig,
+} from './helpers/jira-helpers';
 
 // ============================================================================
 // CONFIGURATION
@@ -23,33 +28,6 @@ const API_BASE_URL = 'http://localhost:3000';
 
 // Track created integrations for cleanup
 const createdIntegrations: string[] = [];
-
-interface JiraConfig {
-  baseUrl: string;
-  email: string;
-  apiToken: string;
-  projectKey: string;
-}
-
-/**
- * Get Jira configuration from environment variables
- */
-function getJiraConfig(): JiraConfig {
-  const baseUrl = process.env.JIRA_E2E_BASE_URL;
-  const email = process.env.JIRA_E2E_EMAIL;
-  const apiToken = process.env.JIRA_E2E_API_TOKEN;
-  const projectKey = process.env.JIRA_E2E_PROJECT_KEY || 'E2E';
-
-  if (!baseUrl || !email || !apiToken) {
-    throw new Error(
-      'Jira E2E configuration not found. Set JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, ' +
-        'JIRA_E2E_API_TOKEN, and JIRA_E2E_PROJECT_KEY environment variables. ' +
-        'See packages/backend/.env.integration for configuration.'
-    );
-  }
-
-  return { baseUrl, email, apiToken, projectKey };
-}
 
 // ============================================================================
 // TEST HELPERS
@@ -176,14 +154,15 @@ test.describe('Jira Integration E2E', () => {
   // cleanly — previously the `beforeAll` threw and every test
   // reported as a failure, which repeatedly broke `deploy-admin.yml`
   // on main. CI can opt in by setting the vars as secrets.
-  const hasJiraCreds =
-    !!process.env.JIRA_E2E_BASE_URL &&
-    !!process.env.JIRA_E2E_EMAIL &&
-    !!process.env.JIRA_E2E_API_TOKEN;
+  //
+  // Defer to `hasJiraCredentials()` so the env-var list can't drift
+  // between this check and the authoritative `getJiraConfig()` in
+  // `helpers/jira-helpers.ts`.
   test.skip(
-    !hasJiraCreds,
-    'Jira E2E credentials not configured (JIRA_E2E_BASE_URL / JIRA_E2E_EMAIL / JIRA_E2E_API_TOKEN). ' +
-      'See packages/backend/.env.integration.'
+    !hasJiraCredentials(),
+    'Jira E2E credentials not configured (JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, ' +
+      'JIRA_E2E_API_TOKEN, JIRA_E2E_PROJECT_KEY). ' +
+      'See `.env.example` at the repo root for the full list.'
   );
 
   let jiraConfig: JiraConfig;
