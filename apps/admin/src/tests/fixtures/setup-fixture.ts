@@ -226,8 +226,10 @@ export const test = base.extend<SetupFixtures>({
         // `resolveOrganizationForProject` requires `organization_id`
         // in the body. This helper is a direct API call — it bypasses
         // the admin UI's auto-select — so we must resolve the org ID
-        // ourselves. `ensureInitialized` seeds exactly one org owned
-        // by the admin, so taking `[0]` is deterministic.
+        // ourselves. Select by subdomain rather than `[0]`: the
+        // backend's `findByUserId` orders by name, and other specs
+        // may have created additional orgs (e.g. role-based-access,
+        // my-organization) that sort ahead of 'E2E Default Org'.
         if (!project) {
           const orgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -237,11 +239,16 @@ export const test = base.extend<SetupFixtures>({
               `Failed to resolve organization for test project: ${orgsResponse.status()} ${await orgsResponse.text()}`
             );
           }
-          const { data: myOrgs } = await orgsResponse.json();
-          const organizationId = Array.isArray(myOrgs) ? myOrgs[0]?.id : undefined;
+          const { data: myOrgs } = (await orgsResponse.json()) as {
+            data: Array<{ id: string; subdomain: string }>;
+          };
+          const defaultOrg = Array.isArray(myOrgs)
+            ? myOrgs.find((o) => o.subdomain === 'e2e-default')
+            : undefined;
+          const organizationId = defaultOrg?.id;
           if (!organizationId) {
             throw new Error(
-              'Failed to resolve organization for test project: admin has no org memberships'
+              "Failed to resolve organization for test project: admin is not a member of the seeded 'e2e-default' org"
             );
           }
 

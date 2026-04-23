@@ -61,9 +61,11 @@ test.describe('Project Integrations Navigation', () => {
 
     // Create a test project. In SaaS mode, the hub domain requires
     // `organization_id` in the body (see `resolveOrganizationForProject`
-    // in packages/backend/src/api/routes/projects.ts). The admin user is
-    // seeded into a single default org by `ensureInitialized`, so
-    // taking `[0]` is deterministic.
+    // in packages/backend/src/api/routes/projects.ts). Select the
+    // seeded default org explicitly by subdomain — `myOrgs[0]` is NOT
+    // stable because the backend's `OrganizationRepository.findByUserId`
+    // orders by name and other specs (organizations, my-organization,
+    // role-based-access) create orgs of their own that could sort ahead.
     const myOrgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
       headers: { Authorization: `Bearer ${adminToken}` },
     });
@@ -75,10 +77,18 @@ test.describe('Project Integrations Navigation', () => {
         `Failed to fetch /organizations/me: ${myOrgsResponse.status()} ${await myOrgsResponse.text()}`
       );
     }
-    const myOrgs = (await myOrgsResponse.json()).data as Array<{ id: string }> | undefined;
-    const organizationId = Array.isArray(myOrgs) ? myOrgs[0]?.id : undefined;
+    const myOrgs = (await myOrgsResponse.json()).data as
+      | Array<{ id: string; subdomain: string }>
+      | undefined;
+    const defaultOrg = Array.isArray(myOrgs)
+      ? myOrgs.find((o) => o.subdomain === 'e2e-default')
+      : undefined;
+    const organizationId = defaultOrg?.id;
     if (!organizationId) {
-      throw new Error('Failed to resolve organization_id for test project');
+      throw new Error(
+        'Failed to resolve organization_id for test project: ' +
+          "admin is not a member of the seeded 'e2e-default' org"
+      );
     }
 
     const projectResponse = await request.post(`${API_URL}/api/v1/projects`, {

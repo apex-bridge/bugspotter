@@ -285,8 +285,16 @@ export default async function globalSetup() {
       throw new Error(`Invalid BASE_URL / E2E_ADMIN_PORT combination: ${rawAdminUrl}`);
     }
 
-    // Start backend server on port 4000
-    console.log('🚀 Starting backend server on port 4000...');
+    // Normalize apiUrl the same way so a user-provided `API_URL` with
+    // a path/trailing slash doesn't leak into CORS matching.
+    let apiOrigin: string;
+    try {
+      apiOrigin = new URL(apiUrl).origin;
+    } catch {
+      throw new Error(`Invalid API_URL / API_PORT combination: ${apiUrl}`);
+    }
+
+    console.log(`🚀 Starting backend server on port ${apiPort}...`);
     const backendPath = path.resolve(__dirname, '../../../../../packages/backend');
 
     // Use npx tsx to avoid Corepack issues (shell: true required on Windows)
@@ -305,7 +313,7 @@ export default async function globalSetup() {
         // the shared `adminUrl` resolved above so `FRONTEND_URL` and
         // the frontend entry in `CORS_ORIGINS` stay in sync even when
         // the admin is served from a non-localhost `BASE_URL`.
-        CORS_ORIGINS: `${adminUrl},${apiUrl}`,
+        CORS_ORIGINS: `${adminUrl},${apiOrigin}`,
         FRONTEND_URL: adminUrl,
         // Run the backend in SaaS mode so routes gated by `SaaSRoute` in
         // the admin (organizations list, retention, billing, etc.) are
