@@ -72,7 +72,8 @@ export const config: AppConfig = {
     // assumption:
     //   - signup spam filter (`SpamFilterService`) keys velocity
     //     checks on IP and persists `ip_address` on signup rows
-    //     (`auth/signup.ts`, `organization-requests.ts`)
+    //     (`src/api/routes/signup.ts`,
+    //     `src/api/routes/organization-requests.ts`)
     //   - API-key usage tracking
     //     (`api/middleware/auth/handlers.ts:112`)
     //   - data-residency compliance audit log
@@ -204,6 +205,17 @@ function collectServerErrors(): string[] {
 
   errors.push(...numericChecks.filter((error): error is string => error !== null));
   errors.push(...validateDatabasePoolConfig(config.database.poolMin, config.database.poolMax));
+
+  // `parseTrustProxy` returns `NaN` for garbage like `TRUST_PROXY=yes`
+  // or `TRUST_PROXY=-3`; surface that here rather than at parse time
+  // so it collects into the single "configuration validation failed"
+  // message alongside every other config error.
+  const tp = config.server.trustProxy;
+  if (typeof tp === 'number' && !Number.isFinite(tp)) {
+    errors.push(
+      `TRUST_PROXY must be 'true', 'false', or a non-negative integer (got "${process.env.TRUST_PROXY}")`
+    );
+  }
 
   return errors;
 }

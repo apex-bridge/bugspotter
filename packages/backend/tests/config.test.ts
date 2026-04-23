@@ -176,10 +176,33 @@ describe('Application Configuration', () => {
       expect(config.server.trustProxy).toBe(1);
     });
 
-    it('should reject invalid TRUST_PROXY values at startup', async () => {
+    it('should reject invalid TRUST_PROXY values via validateConfig', async () => {
+      // `parseTrustProxy` returns NaN for garbage; `validateConfig`
+      // surfaces it in the single "Configuration validation failed"
+      // block alongside any other config issues, rather than throwing
+      // at module-eval time (which would mask other errors).
+      process.env.DATABASE_URL = 'postgres://localhost/db';
       process.env.TRUST_PROXY = 'yes';
 
-      await expect(import('../src/config.js')).rejects.toThrow(/Invalid TRUST_PROXY/);
+      const { validateConfig, config } = await import('../src/config.js');
+
+      expect(config.server.trustProxy).toBeNaN();
+      expect(() => validateConfig()).toThrow('Configuration validation failed');
+      expect(() => validateConfig()).toThrow(
+        /TRUST_PROXY must be 'true', 'false', or a non-negative integer/
+      );
+    });
+
+    it('should treat whitespace-only TRUST_PROXY as default (true)', async () => {
+      // Matches the `??` / empty-string semantics: a user env export
+      // like `TRUST_PROXY=" "` (trailing whitespace, common in shell
+      // pipelines) should fall back to the default, not silently
+      // parse to `Number(" ") === 0` (= false).
+      process.env.TRUST_PROXY = '   ';
+
+      const { config } = await import('../src/config.js');
+
+      expect(config.server.trustProxy).toBe(true);
     });
   });
 

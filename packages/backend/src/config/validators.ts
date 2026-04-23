@@ -188,29 +188,34 @@ export function parseBooleanEnv(value: string | undefined): boolean | undefined 
  *   - `true` / `false` — trust all hops / trust none
  *   - `<non-negative integer>` — trust the last N hops in XFF
  *     (e.g. `1` for "single trusted reverse-proxy in front")
- *   - unset / empty — default `true` (safe for dev where no XFF is
- *     present; correct in prod behind a header-sanitizing proxy)
+ *   - unset / empty / whitespace — default `true` (safe for dev where
+ *     no XFF is present; correct in prod behind a header-sanitizing
+ *     proxy)
  *
  * `<CIDR list>` and arbitrary strings are not accepted here — add if
  * a deployment needs it. Fastify supports them in principle.
+ *
+ * Does NOT throw on invalid input — returns `NaN` as a sentinel,
+ * mirroring the `Number(ORG_RETENTION_DAYS)` pattern. Validation is
+ * done later in `collectServerErrors`, so operators see every bad
+ * config value in one error message instead of one at a time.
  */
 export function parseTrustProxy(value: string | undefined): boolean | number {
-  if (value === undefined || value === '') {
+  const trimmed = value?.trim();
+  if (trimmed === undefined || trimmed === '') {
     return true;
   }
-  if (value === 'true') {
+  if (trimmed === 'true') {
     return true;
   }
-  if (value === 'false') {
+  if (trimmed === 'false') {
     return false;
   }
-  const n = Number(value);
+  const n = Number(trimmed);
   if (Number.isInteger(n) && n >= 0) {
     return n;
   }
-  throw new Error(
-    `Invalid TRUST_PROXY: "${value}". Expected "true", "false", or a non-negative integer (hop count).`
-  );
+  return NaN;
 }
 
 // ============================================================================

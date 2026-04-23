@@ -218,11 +218,13 @@ export async function createServer(options: ServerOptions): Promise<FastifyInsta
     // Global body size limit - protects against DoS attacks via large JSON payloads
     // Multipart uploads use separate limit (config.server.maxUploadSize)
     bodyLimit: REQUEST_BODY_LIMIT,
-    // With `trustProxy: true`, Fastify reads `X-Forwarded-For` /
-    // `X-Forwarded-Proto` so `request.ip` and `request.protocol`
-    // reflect the real client rather than the immediate proxy hop.
-    // Critical for `@fastify/rate-limit` keying on real IP behind
-    // CDN/NLB/nginx. See `config.server.trustProxy` for the rationale.
+    // When `trustProxy` is truthy (`true` or a hop count), Fastify
+    // reads `X-Forwarded-For` / `X-Forwarded-Proto` so `request.ip`
+    // and `request.protocol` reflect the real client rather than the
+    // immediate proxy hop. Critical for `@fastify/rate-limit` keying
+    // on real IP behind CDN/NLB/nginx. See the comment at
+    // `config.server.trustProxy` for the trust-model rationale and
+    // the full list of consumers (spam filter, audit log, etc.).
     trustProxy: config.server.trustProxy,
     genReqId: () => {
       return `req_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
