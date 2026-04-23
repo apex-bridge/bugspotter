@@ -258,15 +258,30 @@ export default async function globalSetup() {
       throw error;
     }
 
-    // Set API_URL for both backend and frontend. Precedence:
-    //   1. `API_URL` if explicitly provided (someone pointing tests at a
-    //      non-localhost backend, or a port + host combination that can't
-    //      be captured via `API_PORT` alone).
-    //   2. Otherwise derive from `API_PORT` (default `4000`).
-    const apiPort = process.env.API_PORT || '4000';
-    const apiUrl = process.env.API_URL || `http://localhost:${apiPort}`;
-    process.env.API_URL = apiUrl;
-    process.env.VITE_API_URL = apiUrl; // For Vite proxy configuration
+    // Resolve the API URL once, normalizing to an origin so a user-
+    // provided `API_URL=https://host.com/prefix/` can't leak a path
+    // into CORS matching or downstream consumers that read
+    // `process.env.API_URL` and append `/api/v1/...`.
+    //
+    // Port precedence (critical for consistency — the port used in
+    // the URL must match the port the backend is spawned on):
+    //   1. If `API_URL` is set, derive the port from it.
+    //   2. Else if `API_PORT` is set, use it.
+    //   3. Else default to 4000.
+    // Using `||` (not `??`) so an empty-string env var falls back
+    // cleanly — matches the pattern in `config.ts` and
+    // `playwright.config.ts`.
+    const rawApiUrl = process.env.API_URL || `http://localhost:${process.env.API_PORT || '4000'}`;
+    let apiUrlParsed: URL;
+    try {
+      apiUrlParsed = new URL(rawApiUrl);
+    } catch {
+      throw new Error(`Invalid API_URL / API_PORT combination: ${rawApiUrl}`);
+    }
+    const apiOrigin = apiUrlParsed.origin;
+    const apiPort = apiUrlParsed.port || (apiUrlParsed.protocol === 'https:' ? '443' : '80');
+    process.env.API_URL = apiOrigin;
+    process.env.VITE_API_URL = apiOrigin; // For Vite proxy configuration
 
     // Resolve the admin (frontend) URL once. `BASE_URL` takes precedence
     // when someone is running Playwright against an already-running admin
@@ -275,23 +290,15 @@ export default async function globalSetup() {
     // default to `:4001`. Normalize via `new URL(...).origin` so a
     // `BASE_URL` that includes a path (`https://host.com/admin`) or a
     // trailing slash doesn't leak into CORS matching — the browser's
-    // `Origin` header is always just `scheme://host[:port]`.
+    // `Origin` header is always just `scheme://host[:port]`. Using `||`
+    // (not `??`) so an empty `BASE_URL` falls back to the default.
     const rawAdminUrl =
-      process.env.BASE_URL ?? `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'}`;
+      process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || '4001'}`;
     let adminUrl: string;
     try {
       adminUrl = new URL(rawAdminUrl).origin;
     } catch {
       throw new Error(`Invalid BASE_URL / E2E_ADMIN_PORT combination: ${rawAdminUrl}`);
-    }
-
-    // Normalize apiUrl the same way so a user-provided `API_URL` with
-    // a path/trailing slash doesn't leak into CORS matching.
-    let apiOrigin: string;
-    try {
-      apiOrigin = new URL(apiUrl).origin;
-    } catch {
-      throw new Error(`Invalid API_URL / API_PORT combination: ${apiUrl}`);
     }
 
     console.log(`🚀 Starting backend server on port ${apiPort}...`);
@@ -380,7 +387,7 @@ export default async function globalSetup() {
 
     for (let i = 0; i < maxRetries; i++) {
       try {
-        const response = await fetch(`${apiUrl}/health`);
+        const response = await fetch(`${apiOrigin}/health`);
         if (response.ok) {
           console.log('✅ Backend server is ready');
           break;
@@ -470,8 +477,8 @@ export default async function globalSetup() {
 
     // Display loaded configuration
     console.log('\n📋 Test configuration:');
-    console.log(`   API URL: ${apiUrl}`);
-    console.log(`   Base URL: ${process.env.BASE_URL || 'http://localhost:4001'}`);
+    console.log(`   API URL: ${apiOrigin}`);
+    console.log(`   Base URL: ${adminUrl}`);
     console.log(`   Database: Isolated PostgreSQL container`);
     console.log(`   Redis: Isolated Redis container`);
     console.log(`   Storage: MinIO (${minioEndpoint})`);

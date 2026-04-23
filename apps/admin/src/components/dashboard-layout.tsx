@@ -167,8 +167,12 @@ export default function DashboardLayout() {
           {/* Navigation — overflow-y-auto so a long list of items (platform
               admin + org sections together can be 20+) scrolls INSIDE the
               sidebar rather than pushing the user info + logout button
-              below the viewport on shorter screens. */}
-          <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+              below the viewport on shorter screens. `min-h-0` is required
+              on a flex-1 child for `overflow-y-auto` to actually shrink
+              and scroll in a column-flex container — without it the
+              content can still push the sibling footer off-screen in
+              some browsers. */}
+          <nav className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1">
             {NAV_ITEMS.map((item) => {
               if (item.adminOnly && !isAdmin) {
                 return null;

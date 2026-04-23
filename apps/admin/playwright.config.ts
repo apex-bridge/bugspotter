@@ -21,6 +21,29 @@ dotenv.config({ path: path.resolve(__dirname, '.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../packages/backend/.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
+// Normalize user-provided URLs through `new URL(...).origin` so a
+// `BASE_URL` / `API_URL` with a trailing slash or path doesn't leak
+// into Playwright's URL resolution (`page.goto('/...')` against a
+// base with a path behaves unexpectedly) or into Vite's proxy config.
+// Mirrors the normalization done in `src/tests/e2e/config.ts` and
+// `global-setup.ts` so every consumer agrees on one canonical origin.
+function normalizeOrigin(raw: string, label: string): string {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    throw new Error(`Invalid ${label}: ${raw}`);
+  }
+}
+
+const ADMIN_BASE_URL = normalizeOrigin(
+  process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || '4001'}`,
+  'BASE_URL'
+);
+const BACKEND_API_URL = normalizeOrigin(
+  process.env.API_URL || `http://localhost:${process.env.API_PORT || '4000'}`,
+  'API_URL'
+);
+
 export default defineConfig({
   testDir: './src/tests/e2e',
   fullyParallel: false, // Run tests sequentially (can enable after verification)
@@ -37,7 +60,7 @@ export default defineConfig({
     // Port overrides via env so contributors on Windows (where Hyper-V
     // reserves 4000/4001 for its own use via `netsh int ipv4 show
     // excludedportrange`) can pick free ports.
-    baseURL: process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'}`,
+    baseURL: ADMIN_BASE_URL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -56,15 +79,15 @@ export default defineConfig({
     : {
         // Use node to run vite directly, bypassing Corepack/pnpm issues
         // This works because vite is installed in node_modules
-        command: `node node_modules/vite/bin/vite.js --port ${process.env.E2E_ADMIN_PORT ?? '4001'}`,
-        url: `http://localhost:${process.env.E2E_ADMIN_PORT ?? '4001'}`,
+        command: `node node_modules/vite/bin/vite.js --port ${process.env.E2E_ADMIN_PORT || '4001'}`,
+        url: ADMIN_BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: 120000,
         stdout: 'pipe',
         stderr: 'pipe',
         env: {
-          PORT: process.env.E2E_ADMIN_PORT ?? '4001',
-          VITE_API_URL: process.env.API_URL || `http://localhost:${process.env.API_PORT ?? '4000'}`,
+          PORT: process.env.E2E_ADMIN_PORT || '4001',
+          VITE_API_URL: BACKEND_API_URL,
         },
       },
 });
