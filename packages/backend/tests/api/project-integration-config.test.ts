@@ -405,6 +405,24 @@ describe('Project Integration Config API', () => {
       expect(response.statusCode).toBe(400);
       expect(response.json().message).toMatch(/maxResults/);
     });
+
+    it.each([['10.5'], ['10abc'], ['-5'], [' 10'], ['+10'], ['0']])(
+      'should 400 when maxResults is %s (rejects non-integer / non-positive inputs)',
+      async (bad) => {
+        const response = await server.inject({
+          method: 'POST',
+          url: `/api/v1/integrations/jira/projects?maxResults=${encodeURIComponent(bad)}`,
+          headers: { authorization: `Bearer ${authToken}` },
+          payload: {
+            instanceUrl: 'https://test.atlassian.net',
+            email: 'user@example.com',
+            apiToken: 'secret-token',
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+      }
+    );
   });
 
   describe('GET /api/v1/integrations/:platform/:projectId', () => {

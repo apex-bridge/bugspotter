@@ -128,6 +128,23 @@ describe('JiraIntegrationService.listProjects', () => {
     ).rejects.toThrowError('Jira API error: 401');
   });
 
+  it('accepts legacy `host` field when `instanceUrl` is absent', async () => {
+    // Some stored integrations predate the `instanceUrl` rename and
+    // still carry `host` — the shared helper falls back so that
+    // `searchUsers` / `listProjects` on those rows do not 400 with
+    // "instanceUrl missing" despite the URL being populated.
+    mockListProjects.mockResolvedValueOnce([{ id: '10000', key: 'ALPHA', name: 'Alpha' }]);
+    const service = makeService();
+
+    const result = await service.listProjects({
+      host: 'https://legacy.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token-xyz',
+    });
+
+    expect(result).toEqual([{ id: '10000', key: 'ALPHA', name: 'Alpha' }]);
+  });
+
   it('returns an empty array when the tenant has no projects', async () => {
     mockListProjects.mockResolvedValueOnce([]);
     const service = makeService();

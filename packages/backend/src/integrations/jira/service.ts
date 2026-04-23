@@ -556,10 +556,6 @@ export class JiraIntegrationService implements IntegrationService {
   }
 
   /**
-   * Search for Jira users by query (email, name, etc.)
-   * Used for user autocomplete in admin UI
-   */
-  /**
    * Validate caller-supplied Jira credentials and build a trimmed
    * `JiraConfig` ready for `JiraClient`.
    *
@@ -586,7 +582,12 @@ export class JiraIntegrationService implements IntegrationService {
       return t.length > 0 ? t : undefined;
     };
 
-    const host = rawConfig.instanceUrl;
+    // Accept both `instanceUrl` (used by the admin wizard and the new
+    // signup wizard) and `host` (legacy field name still in some stored
+    // integration rows — see `JiraIntegrationService.normalizeConfig`).
+    // Without this fallback, `searchUsers` on a legacy integration fails
+    // with "instanceUrl missing" even though `host` is populated.
+    const host = rawConfig.instanceUrl ?? rawConfig.host;
     const email = rawConfig.email;
     const apiToken = rawConfig.apiToken;
 
@@ -632,6 +633,10 @@ export class JiraIntegrationService implements IntegrationService {
     };
   }
 
+  /**
+   * Search for Jira users by query (email, name, etc.)
+   * Used for user autocomplete in admin UI
+   */
   async searchUsers(
     config: Record<string, unknown>,
     query: string,
