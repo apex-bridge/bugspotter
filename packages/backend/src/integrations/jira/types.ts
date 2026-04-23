@@ -187,6 +187,33 @@ export interface JiraIntegrationResult {
 }
 
 /**
+ * Jira project (from /rest/api/3/project/search).
+ * Narrower than the full API shape — just what the wizard picker needs.
+ */
+export interface JiraProject {
+  id: string;
+  key: string;
+  name: string;
+  avatarUrls?: {
+    '48x48'?: string;
+    '24x24'?: string;
+    '16x16'?: string;
+    '32x32'?: string;
+  };
+}
+
+/**
+ * Paginated response envelope from `/rest/api/3/project/search`.
+ */
+export interface JiraProjectSearchResponse {
+  isLast: boolean;
+  maxResults: number;
+  startAt: number;
+  total: number;
+  values: JiraProject[];
+}
+
+/**
  * Jira user (from user search API)
  */
 export interface JiraUser {

@@ -55,6 +55,7 @@ export default defineConfig({
       'tests/integrations/jira/mapper.test.ts',
       'tests/integrations/jira/mapper-enhanced.test.ts',
       'tests/integrations/jira/mapper-table-and-nested-metadata.test.ts',
+      'tests/integrations/jira/service-list-projects.test.ts',
       'tests/integrations/jira/template-renderer.test.ts',
       'tests/integrations/jira/formatters/base-formatter.test.ts',
       // Intelligence tests (pure unit, mocked dependencies)
