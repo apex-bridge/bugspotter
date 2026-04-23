@@ -8,11 +8,12 @@
  * 4. Verify integrations appear in overview list
  *
  * Requires: JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, JIRA_E2E_API_TOKEN, JIRA_E2E_PROJECT_KEY
- * See: packages/backend/.env.integration for configuration
+ * See: `.env.example` (repo root) for the full list.
  */
 
 import { test, expect, type Page } from '../fixtures/setup-fixture';
 import axios from 'axios';
+import { getJiraConfig, type JiraTestConfig as JiraConfig } from './helpers/jira-helpers';
 
 // ============================================================================
 // CONFIGURATION
@@ -23,33 +24,6 @@ const API_BASE_URL = 'http://localhost:3000';
 
 // Track created integrations for cleanup
 const createdIntegrations: string[] = [];
-
-interface JiraConfig {
-  baseUrl: string;
-  email: string;
-  apiToken: string;
-  projectKey: string;
-}
-
-/**
- * Get Jira configuration from environment variables
- */
-function getJiraConfig(): JiraConfig {
-  const baseUrl = process.env.JIRA_E2E_BASE_URL;
-  const email = process.env.JIRA_E2E_EMAIL;
-  const apiToken = process.env.JIRA_E2E_API_TOKEN;
-  const projectKey = process.env.JIRA_E2E_PROJECT_KEY || 'E2E';
-
-  if (!baseUrl || !email || !apiToken) {
-    throw new Error(
-      'Jira E2E configuration not found. Set JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, ' +
-        'JIRA_E2E_API_TOKEN, and JIRA_E2E_PROJECT_KEY environment variables. ' +
-        'See packages/backend/.env.integration for configuration.'
-    );
-  }
-
-  return { baseUrl, email, apiToken, projectKey };
-}
 
 // ============================================================================
 // TEST HELPERS
@@ -165,7 +139,13 @@ async function deleteIntegration(type: string, token: string): Promise<void> {
 // TESTS
 // ============================================================================
 
-test.describe('Jira Integration E2E', () => {
+// Unconditionally skipped — mirrors the pattern in
+// `notification-delivery.spec.ts`. These tests hit a real Jira cloud
+// tenant and are not part of the default E2E pipeline. To run them
+// locally, either remove the `.skip` and ensure the `JIRA_E2E_*` vars
+// are present (see `.env.example` at the repo root), or invoke the
+// file directly via `pnpm test:e2e -- jira-integration.spec.ts`.
+test.describe.skip('Jira Integration E2E', () => {
   // Parallel mode enabled - each test creates timestamped resources
   // test.describe.configure({ mode: 'serial' });
 

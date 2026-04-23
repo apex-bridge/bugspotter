@@ -28,8 +28,8 @@ export function getJiraConfig(): JiraTestConfig {
   if (!baseUrl || !email || !apiToken) {
     throw new Error(
       'Jira E2E configuration not found. Set JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, ' +
-        'JIRA_E2E_API_TOKEN, and JIRA_E2E_PROJECT_KEY environment variables. ' +
-        'See apps/admin/JIRA_E2E_SETUP.md for setup instructions.'
+        "JIRA_E2E_API_TOKEN (and optionally JIRA_E2E_PROJECT_KEY — defaults to 'E2E') " +
+        'environment variables. See `.env.example` at the repo root for the full list.'
     );
   }
 
@@ -84,8 +84,8 @@ export const test = base.extend<{ jiraConfig: JiraTestConfig }>({
     if (!hasJiraCredentials()) {
       throw new Error(
         'Jira E2E configuration not found. Set JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, ' +
-          'JIRA_E2E_API_TOKEN, and JIRA_E2E_PROJECT_KEY environment variables. ' +
-          'See apps/admin/JIRA_E2E_SETUP.md for setup instructions.'
+          "JIRA_E2E_API_TOKEN (and optionally JIRA_E2E_PROJECT_KEY — defaults to 'E2E') " +
+          'environment variables. See `.env.example` at the repo root for the full list.'
       );
     }
 

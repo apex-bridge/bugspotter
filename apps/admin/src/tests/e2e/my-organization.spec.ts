@@ -139,7 +139,11 @@ test.describe('Org Self-Service: My Organization', () => {
     const planBadge = page.getByTestId('plan-badge');
     await expect(planBadge).toBeVisible({ timeout: 10000 });
 
-    // Should show quota progress bars
+    // Should show quota progress bars. The `quota-progress-bar` testid
+    // lives on the track container (`w-full bg-gray-200`, fixed width)
+    // so `toBeVisible` is a proper assertion — unlike the old placement
+    // on the inner fill div, which has width:0 at 0% usage and would
+    // be treated as hidden by Playwright on a fresh DB.
     const progressBars = page.getByTestId('quota-progress-bar');
     await expect(progressBars.first()).toBeVisible({ timeout: 10000 });
     const barCount = await progressBars.count();

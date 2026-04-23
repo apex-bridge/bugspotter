@@ -81,9 +81,11 @@ export default function OrgUsagePage() {
                       {formatResourceValue(type, resource.limit)}
                     </span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div
+                    data-testid="quota-progress-bar"
+                    className="w-full bg-gray-200 rounded-full h-3"
+                  >
                     <div
-                      data-testid="quota-progress-bar"
                       className={`h-3 rounded-full transition-all ${getQuotaProgressColor(pct)}`}
                       style={{ width: `${Math.min(100, pct)}%` }}
                     />
