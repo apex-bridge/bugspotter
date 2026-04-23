@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { JiraIntegrationService } from '../../../src/integrations/jira/service.js';
+import { JiraClient } from '../../../src/integrations/jira/client.js';
 import { ValidationError } from '../../../src/api/middleware/error.js';
 
 const mockListProjects = vi.fn();
@@ -28,6 +29,14 @@ function makeService(): JiraIntegrationService {
 describe('JiraIntegrationService.listProjects', () => {
   beforeEach(() => {
     mockListProjects.mockReset();
+    // Reset the JiraClient mock back to the happy-path factory between
+    // tests — a previous `mockImplementationOnce` may have altered it.
+    vi.mocked(JiraClient).mockImplementation(
+      () =>
+        ({
+          listProjects: mockListProjects,
+        }) as unknown as JiraClient
+    );
   });
 
   it('returns projects reshaped to {id, key, name}, dropping extra fields', async () => {
@@ -112,6 +121,27 @@ describe('JiraIntegrationService.listProjects', () => {
         apiToken: 'token-xyz',
       })
     ).rejects.toThrowError(/invalid:.*instanceUrl/);
+  });
+
+  it('rewraps JiraClient constructor failures as ValidationError', async () => {
+    // `new JiraClient(...)` throws plain Error for malformed URL / SSRF
+    // blocks / non-HTTPS. Route would otherwise map those to 500 even
+    // though they are user-input problems — the service converts them
+    // to ValidationError so the route returns 400.
+    vi.mocked(JiraClient).mockImplementationOnce(() => {
+      throw new Error(
+        'Invalid Jira host URL (https://192.168.1.1): Requests to internal/private networks are not allowed'
+      );
+    });
+
+    const service = makeService();
+    await expect(
+      service.listProjects({
+        instanceUrl: 'https://192.168.1.1',
+        email: 'user@example.com',
+        apiToken: 'token-xyz',
+      })
+    ).rejects.toBeInstanceOf(ValidationError);
   });
 
   it('surfaces client errors to the caller without swallowing', async () => {

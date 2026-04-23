@@ -716,7 +716,18 @@ export class JiraIntegrationService implements IntegrationService {
   ): Promise<{ id: string; key: string; name: string }[]> {
     const normalizedConfig: JiraConfig = this.validateAndNormalizeCredentials(config);
 
-    const client = new JiraClient(normalizedConfig);
+    // `JiraClient`'s constructor validates the URL (format, SSRF guard,
+    // HTTPS-only) and throws plain `Error` on any failure. Those are
+    // all user-input issues — rewrap as `ValidationError` so the route
+    // returns 400 with an actionable message instead of 500.
+    let client: JiraClient;
+    try {
+      client = new JiraClient(normalizedConfig);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ValidationError(`Jira configuration invalid: ${message}`);
+    }
+
     const projects = await client.listProjects(query, maxResults);
 
     logger.info('Jira project list fetched', {

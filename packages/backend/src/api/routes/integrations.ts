@@ -135,7 +135,11 @@ export async function registerIntegrationRoutes(
 
     const { platform } = request.params;
     const config = request.body;
-    const query = firstString(request.query.query);
+    // Trim `query` at the edge so `?query=%20%20` doesn't log
+    // `hasQuery: true` and then quietly get dropped downstream.
+    const rawQuery = firstString(request.query.query);
+    const trimmedQuery = rawQuery?.trim();
+    const query = trimmedQuery ? trimmedQuery : undefined;
     const maxResultsStr = firstString(request.query.maxResults);
 
     let maxResults: number | undefined;
