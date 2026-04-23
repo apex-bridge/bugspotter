@@ -108,14 +108,16 @@ export async function registerIntegrationRoutes(
     const { query, maxResults: maxResultsRaw } = request.query;
 
     let maxResults: number | undefined;
-    if (maxResultsRaw !== undefined && maxResultsRaw !== '') {
-      // `parseInt` is too permissive — it accepts `"10.5"` (→ 10) and
-      // `"10abc"` (→ 10). Match whole strings of digits only so the
-      // error message "must be a positive integer" stays honest.
-      if (!/^\d+$/.test(maxResultsRaw)) {
+    if (maxResultsRaw !== undefined && maxResultsRaw.trim() !== '') {
+      // Trim so `?maxResults= 10` doesn't 400 on a stray space. Then
+      // require whole-digits-only — `parseInt` is too permissive and
+      // would accept `"10.5"` (→ 10) or `"10abc"` (→ 10), making the
+      // "must be a positive integer" error message misleading.
+      const trimmed = maxResultsRaw.trim();
+      if (!/^\d+$/.test(trimmed)) {
         throw new AppError('`maxResults` must be a positive integer', 400, 'BadRequest');
       }
-      const parsed = Number(maxResultsRaw);
+      const parsed = Number(trimmed);
       if (!Number.isInteger(parsed) || parsed < 1) {
         throw new AppError('`maxResults` must be a positive integer', 400, 'BadRequest');
       }

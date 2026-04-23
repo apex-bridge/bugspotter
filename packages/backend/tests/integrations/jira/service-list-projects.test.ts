@@ -145,6 +145,38 @@ describe('JiraIntegrationService.listProjects', () => {
     expect(result).toEqual([{ id: '10000', key: 'ALPHA', name: 'Alpha' }]);
   });
 
+  it('falls back to legacy `host` when `instanceUrl` is present but blank', async () => {
+    // Guard against a subtle `??`-only fallback bug: `instanceUrl=""`
+    // is not nullish, so naive `instanceUrl ?? host` would latch onto
+    // the empty string and 400 even though `host` is valid. The helper
+    // treats blank `instanceUrl` as absent for fallback purposes.
+    mockListProjects.mockResolvedValueOnce([{ id: '10000', key: 'ALPHA', name: 'Alpha' }]);
+    const service = makeService();
+
+    const result = await service.listProjects({
+      instanceUrl: '',
+      host: 'https://legacy.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token-xyz',
+    });
+
+    expect(result).toEqual([{ id: '10000', key: 'ALPHA', name: 'Alpha' }]);
+  });
+
+  it('falls back to legacy `host` when `instanceUrl` is whitespace', async () => {
+    mockListProjects.mockResolvedValueOnce([{ id: '10000', key: 'ALPHA', name: 'Alpha' }]);
+    const service = makeService();
+
+    const result = await service.listProjects({
+      instanceUrl: '   ',
+      host: 'https://legacy.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token-xyz',
+    });
+
+    expect(result).toEqual([{ id: '10000', key: 'ALPHA', name: 'Alpha' }]);
+  });
+
   it('returns an empty array when the tenant has no projects', async () => {
     mockListProjects.mockResolvedValueOnce([]);
     const service = makeService();

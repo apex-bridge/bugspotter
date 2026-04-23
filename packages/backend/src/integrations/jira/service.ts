@@ -559,16 +559,16 @@ export class JiraIntegrationService implements IntegrationService {
    * Validate caller-supplied Jira credentials and build a trimmed
    * `JiraConfig` ready for `JiraClient`.
    *
-   * Shared by `searchUsers` and `listProjects` (and future wizard-flow
-   * endpoints) so the missing/invalid/whitespace handling stays
-   * consistent. Trims the three string fields so that leading/trailing
-   * whitespace can't sneak past validation and surface as a 500 from
-   * `new URL()` inside `JiraClient`.
+   * Shared by `searchUsers` (admin edit flow) and `listProjects`
+   * (signup wizard flow) so the missing/invalid/whitespace handling
+   * stays consistent. Trims all three string fields so that
+   * leading/trailing whitespace can't sneak past validation and
+   * surface as a 500 from `new URL()` inside `JiraClient`.
    *
    * @throws {ValidationError} with a field-by-field diagnostic on the
    *   first validation failure.
    */
-  private validateAndNormalizeWizardConfig(config: Record<string, unknown>): JiraConfig {
+  private validateAndNormalizeCredentials(config: Record<string, unknown>): JiraConfig {
     const rawConfig = config as RawJiraConfig;
 
     const missingFields: string[] = [];
@@ -582,32 +582,42 @@ export class JiraIntegrationService implements IntegrationService {
       return t.length > 0 ? t : undefined;
     };
 
-    // Accept both `instanceUrl` (used by the admin wizard and the new
-    // signup wizard) and `host` (legacy field name still in some stored
-    // integration rows — see `JiraIntegrationService.normalizeConfig`).
-    // Without this fallback, `searchUsers` on a legacy integration fails
-    // with "instanceUrl missing" even though `host` is populated.
-    const host = rawConfig.instanceUrl ?? rawConfig.host;
-    const email = rawConfig.email;
-    const apiToken = rawConfig.apiToken;
+    // Accept both `instanceUrl` (used by the admin wizard and the
+    // signup wizard) and `host` (legacy field name still in some
+    // stored integration rows — see
+    // `JiraIntegrationService.normalizeConfig`). Use the first
+    // non-empty trimmed value so a blank `instanceUrl` doesn't
+    // block a valid legacy `host`.
+    const trimmedInstanceUrl = trimString(rawConfig.instanceUrl);
+    const trimmedLegacyHost = trimString(rawConfig.host);
+    const trimmedHost = trimmedInstanceUrl ?? trimmedLegacyHost;
+    const trimmedEmail = trimString(rawConfig.email);
+    const trimmedToken = trimString(rawConfig.apiToken);
 
-    const trimmedHost = trimString(host);
-    const trimmedEmail = trimString(email);
-    const trimmedToken = trimString(apiToken);
+    const hostFieldProvided =
+      rawConfig.instanceUrl !== undefined &&
+      rawConfig.instanceUrl !== null &&
+      rawConfig.instanceUrl !== '';
+    const legacyHostFieldProvided =
+      rawConfig.host !== undefined && rawConfig.host !== null && rawConfig.host !== '';
 
-    if (host === undefined || host === null || host === '') {
+    if (!hostFieldProvided && !legacyHostFieldProvided) {
       missingFields.push('instanceUrl');
     } else if (!trimmedHost) {
       invalidFields.push('instanceUrl (must be non-empty string)');
     }
 
-    if (email === undefined || email === null || email === '') {
+    if (rawConfig.email === undefined || rawConfig.email === null || rawConfig.email === '') {
       missingFields.push('email');
     } else if (!trimmedEmail) {
       invalidFields.push('email (must be non-empty string)');
     }
 
-    if (apiToken === undefined || apiToken === null || apiToken === '') {
+    if (
+      rawConfig.apiToken === undefined ||
+      rawConfig.apiToken === null ||
+      rawConfig.apiToken === ''
+    ) {
       missingFields.push('apiToken');
     } else if (!trimmedToken) {
       invalidFields.push('apiToken (must be non-empty string)');
@@ -655,7 +665,7 @@ export class JiraIntegrationService implements IntegrationService {
       configKeys: Object.keys(config),
     });
 
-    const normalizedConfig: JiraConfig = this.validateAndNormalizeWizardConfig(config);
+    const normalizedConfig: JiraConfig = this.validateAndNormalizeCredentials(config);
 
     logger.debug('Creating Jira client for user search', {
       host: normalizedConfig.host.substring(0, MAX_HOST_LOG_LENGTH) + '...',
@@ -694,7 +704,7 @@ export class JiraIntegrationService implements IntegrationService {
     query?: string,
     maxResults?: number
   ): Promise<{ id: string; key: string; name: string }[]> {
-    const normalizedConfig: JiraConfig = this.validateAndNormalizeWizardConfig(config);
+    const normalizedConfig: JiraConfig = this.validateAndNormalizeCredentials(config);
 
     const client = new JiraClient(normalizedConfig);
     const projects = await client.listProjects(query, maxResults);
