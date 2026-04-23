@@ -49,9 +49,41 @@ describe('Project Integration Config API', () => {
         async createFromBugReport() {
           return { externalId: 'JIRA-123', externalUrl: 'https://jira.example.com/JIRA-123' };
         },
+        async listProjects(config: Record<string, unknown>) {
+          // Echo back whether creds were received, so tests can assert
+          // the route forwarded the body. Real plugin proxies to the
+          // Jira REST API; mock keeps the assertion surface small.
+          if (!config.instanceUrl || !config.email || !config.apiToken) {
+            throw new Error('Jira configuration incomplete');
+          }
+          return [
+            { id: '10000', key: 'ALPHA', name: 'Alpha' },
+            { id: '10001', key: 'BETA', name: 'Beta' },
+          ];
+        },
       }),
     };
     await pluginRegistry.register(mockJiraPlugin as any);
+
+    // A second plugin that does NOT implement listProjects, so we can
+    // assert the route returns a helpful 400 rather than crashing for
+    // non-Jira platforms.
+    const mockNoListPlugin = {
+      metadata: {
+        platform: 'mock-no-list',
+        version: '1.0.0',
+        name: 'Mock plugin without project listing',
+      },
+      factory: (_context: any) => ({
+        async validateConfig() {
+          return { valid: true };
+        },
+        async createFromBugReport() {
+          return { externalId: 'MOCK-1', externalUrl: 'https://mock.example.com/1' };
+        },
+      }),
+    };
+    await pluginRegistry.register(mockNoListPlugin as any);
 
     server = await createServer({
       db,
@@ -229,6 +261,98 @@ describe('Project Integration Config API', () => {
       });
 
       expect(response.statusCode).toBe(401);
+    });
+  });
+
+  describe('POST /api/v1/integrations/:platform/projects (wizard project picker)', () => {
+    it('should return projects shaped as { projects: [...] }', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/jira/projects',
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          instanceUrl: 'https://test.atlassian.net',
+          email: 'user@example.com',
+          apiToken: 'secret-token',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const data = response.json().data;
+      expect(data.projects).toEqual([
+        { id: '10000', key: 'ALPHA', name: 'Alpha' },
+        { id: '10001', key: 'BETA', name: 'Beta' },
+      ]);
+    });
+
+    it('should NOT collide with POST /:platform/:projectId (UUID segment)', async () => {
+      // Static-segment `/projects` must win over the parametric
+      // `/:projectId` route for a path like `/integrations/jira/projects`,
+      // otherwise the wizard would accidentally hit the save-config
+      // endpoint with projectId="projects".
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/jira/projects',
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          instanceUrl: 'https://test.atlassian.net',
+          email: 'user@example.com',
+          apiToken: 'secret-token',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.projects).toBeDefined();
+    });
+
+    it('should require authentication', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/jira/projects',
+        payload: {
+          instanceUrl: 'https://test.atlassian.net',
+          email: 'user@example.com',
+          apiToken: 'secret-token',
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+    });
+
+    it('should return 400 for unsupported platform', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/unsupported_platform/projects',
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('should return 400 when platform does not support listProjects', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/mock-no-list/projects',
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.message).toMatch(/not supported|listing/i);
+    });
+
+    it('should surface plugin errors from invalid credentials', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/jira/projects',
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          // Missing email + apiToken — mock plugin rejects.
+          instanceUrl: 'https://test.atlassian.net',
+        },
+      });
+
+      expect(response.statusCode).toBe(500);
     });
   });
 

@@ -664,6 +664,72 @@ export class JiraIntegrationService implements IntegrationService {
   }
 
   /**
+   * List Jira projects visible to the authenticated user.
+   *
+   * Called by `POST /api/v1/integrations/jira/projects` to populate
+   * the signup wizard's project picker once "Test Connection" has
+   * validated the creds. No projectId is needed — the integration
+   * has not been saved yet.
+   */
+  async listProjects(
+    config: Record<string, unknown>,
+    query?: string,
+    maxResults?: number
+  ): Promise<{ id: string; key: string; name: string }[]> {
+    const rawConfig = config as RawJiraConfig;
+    const host = rawConfig.instanceUrl;
+
+    const missingFields: string[] = [];
+    const invalidFields: string[] = [];
+
+    if (!host) {
+      missingFields.push('instanceUrl');
+    } else if (typeof host !== 'string' || host.trim().length === 0) {
+      invalidFields.push('instanceUrl (must be non-empty string)');
+    }
+
+    if (!rawConfig.email) {
+      missingFields.push('email');
+    } else if (typeof rawConfig.email !== 'string' || rawConfig.email.trim().length === 0) {
+      invalidFields.push('email (must be non-empty string)');
+    }
+
+    if (!rawConfig.apiToken) {
+      missingFields.push('apiToken');
+    } else if (typeof rawConfig.apiToken !== 'string' || rawConfig.apiToken.trim().length === 0) {
+      invalidFields.push('apiToken (must be non-empty string)');
+    }
+
+    if (missingFields.length > 0 || invalidFields.length > 0) {
+      const errors = [
+        ...(missingFields.length > 0 ? [`missing: ${missingFields.join(', ')}`] : []),
+        ...(invalidFields.length > 0 ? [`invalid: ${invalidFields.join(', ')}`] : []),
+      ];
+      throw new ValidationError(`Jira configuration incomplete: ${errors.join('; ')}.`);
+    }
+
+    const normalizedConfig: JiraConfig = {
+      host: host!,
+      email: rawConfig.email!,
+      apiToken: rawConfig.apiToken!,
+      projectKey: rawConfig.projectKey || 'TEMP', // Not used for project listing
+      issueType: rawConfig.issueType,
+      enabled: rawConfig.enabled ?? true,
+    };
+
+    const client = new JiraClient(normalizedConfig);
+    const projects = await client.listProjects(query, maxResults);
+
+    logger.info('Jira project list fetched', {
+      host: host!.substring(0, MAX_HOST_LOG_LENGTH) + '...',
+      count: projects.length,
+      hasQuery: !!query,
+    });
+
+    return projects.map((p) => ({ id: p.id, key: p.key, name: p.name }));
+  }
+
+  /**
    * Get allowed avatar domains for Jira integration
    * Jira can return avatars from multiple trusted sources
    */

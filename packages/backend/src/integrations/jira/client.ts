@@ -16,6 +16,8 @@ import type {
   JiraError,
   JiraConnectionTestResult,
   JiraUser,
+  JiraProject,
+  JiraProjectSearchResponse,
 } from './types.js';
 
 const logger = getLogger();
@@ -31,7 +33,15 @@ const JIRA_ENDPOINTS = {
   GET_PROJECT: (projectKey: string) => `${JIRA_API_BASE}/project/${projectKey}`,
   GET_MYSELF: `${JIRA_API_BASE}/myself`,
   SEARCH_USERS: `${JIRA_API_BASE}/user/search`,
+  SEARCH_PROJECTS: `${JIRA_API_BASE}/project/search`,
 } as const;
+
+/**
+ * Jira caps `/project/search` at 50 results per page. Requesting more is
+ * silently truncated server-side, so mirror the cap here to keep the
+ * wizard's expectations honest.
+ */
+const JIRA_PROJECT_SEARCH_MAX_RESULTS = 50;
 
 /**
  * HTTP request options
@@ -495,6 +505,58 @@ export class JiraClient {
     });
 
     return response;
+  }
+
+  /**
+   * List Jira projects the authenticated user can see.
+   *
+   * Backs the signup wizard's project picker after "Test Connection"
+   * passes but before the integration is saved to the DB. Uses
+   * `/rest/api/3/project/search` — paginated; we return only the first
+   * page (≤ 50 entries) because the wizard's picker is designed for
+   * tenants with a handful of projects, not thousands. Callers that
+   * need to narrow the list should pass `query`.
+   *
+   * @param query      Optional substring filter (Jira matches name/key).
+   * @param maxResults 1..50 inclusive; values above 50 are clamped.
+   */
+  async listProjects(query?: string, maxResults?: number): Promise<JiraProject[]> {
+    const clamped = Math.min(
+      Math.max(1, maxResults ?? JIRA_PROJECT_SEARCH_MAX_RESULTS),
+      JIRA_PROJECT_SEARCH_MAX_RESULTS
+    );
+
+    const params = new URLSearchParams({
+      maxResults: String(clamped),
+      orderBy: 'name',
+    });
+    if (query && query.trim().length > 0) {
+      params.set('query', query.trim());
+    }
+
+    const path = `${JIRA_ENDPOINTS.SEARCH_PROJECTS}?${params.toString()}`;
+
+    logger.debug('Listing Jira projects', {
+      host: this.host,
+      hasQuery: !!query,
+      maxResults: clamped,
+    });
+
+    const response = await this.request<JiraProjectSearchResponse>({
+      method: 'GET',
+      path,
+      headers: {},
+    });
+
+    const values = Array.isArray(response?.values) ? response.values : [];
+
+    logger.debug('Jira project list returned', {
+      count: values.length,
+      total: response?.total,
+      isLast: response?.isLast,
+    });
+
+    return values;
   }
 
   /**

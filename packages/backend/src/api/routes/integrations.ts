@@ -85,6 +85,47 @@ export async function registerIntegrationRoutes(
   );
 
   /**
+   * List projects on the external platform using caller-provided credentials.
+   * POST /api/v1/integrations/:platform/projects
+   *
+   * Mirrors `/test` shape (flat config in body, no projectId): the signup
+   * wizard calls this after "Test Connection" passes but before the
+   * integration row exists in the DB, so credentials come from the
+   * request, not from decryption. Authenticated users only — the route
+   * performs an outbound HTTPS call to the platform.
+   */
+  server.post<{ Params: { platform: string }; Body: Record<string, unknown> }>(
+    '/api/v1/integrations/:platform/projects',
+    async (request, reply) => {
+      if (!request.authUser && !request.apiKey) {
+        throw new AppError('Authentication required', 401, 'Unauthorized');
+      }
+
+      const { platform } = request.params;
+      const config = request.body;
+
+      const service = await loadPluginOrThrow(registry, platform);
+
+      if (!service.listProjects || typeof service.listProjects !== 'function') {
+        throw new AppError(
+          `Project listing not supported for ${platform} integration`,
+          400,
+          'BadRequest'
+        );
+      }
+
+      logger.info('Listing projects for integration', {
+        platform,
+        userId: request.authUser?.id || 'api-key',
+      });
+
+      const projects = await service.listProjects(config);
+
+      return sendSuccess(reply, { projects });
+    }
+  );
+
+  /**
    * Save integration configuration for project
    * POST /api/v1/integrations/:platform/:projectId
    */
