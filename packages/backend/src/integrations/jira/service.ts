@@ -559,6 +559,79 @@ export class JiraIntegrationService implements IntegrationService {
    * Search for Jira users by query (email, name, etc.)
    * Used for user autocomplete in admin UI
    */
+  /**
+   * Validate caller-supplied Jira credentials and build a trimmed
+   * `JiraConfig` ready for `JiraClient`.
+   *
+   * Shared by `searchUsers` and `listProjects` (and future wizard-flow
+   * endpoints) so the missing/invalid/whitespace handling stays
+   * consistent. Trims the three string fields so that leading/trailing
+   * whitespace can't sneak past validation and surface as a 500 from
+   * `new URL()` inside `JiraClient`.
+   *
+   * @throws {ValidationError} with a field-by-field diagnostic on the
+   *   first validation failure.
+   */
+  private validateAndNormalizeWizardConfig(config: Record<string, unknown>): JiraConfig {
+    const rawConfig = config as RawJiraConfig;
+
+    const missingFields: string[] = [];
+    const invalidFields: string[] = [];
+
+    const trimString = (value: unknown): string | undefined => {
+      if (typeof value !== 'string') {
+        return undefined;
+      }
+      const t = value.trim();
+      return t.length > 0 ? t : undefined;
+    };
+
+    const host = rawConfig.instanceUrl;
+    const email = rawConfig.email;
+    const apiToken = rawConfig.apiToken;
+
+    const trimmedHost = trimString(host);
+    const trimmedEmail = trimString(email);
+    const trimmedToken = trimString(apiToken);
+
+    if (host === undefined || host === null || host === '') {
+      missingFields.push('instanceUrl');
+    } else if (!trimmedHost) {
+      invalidFields.push('instanceUrl (must be non-empty string)');
+    }
+
+    if (email === undefined || email === null || email === '') {
+      missingFields.push('email');
+    } else if (!trimmedEmail) {
+      invalidFields.push('email (must be non-empty string)');
+    }
+
+    if (apiToken === undefined || apiToken === null || apiToken === '') {
+      missingFields.push('apiToken');
+    } else if (!trimmedToken) {
+      invalidFields.push('apiToken (must be non-empty string)');
+    }
+
+    if (missingFields.length > 0 || invalidFields.length > 0) {
+      const errors = [
+        ...(missingFields.length > 0 ? [`missing: ${missingFields.join(', ')}`] : []),
+        ...(invalidFields.length > 0 ? [`invalid: ${invalidFields.join(', ')}`] : []),
+      ];
+      throw new ValidationError(`Jira configuration incomplete: ${errors.join('; ')}.`);
+    }
+
+    return {
+      host: trimmedHost!,
+      email: trimmedEmail!,
+      apiToken: trimmedToken!,
+      // `searchUsers` / `listProjects` don't need a real project key,
+      // but `JiraClient` won't construct without one.
+      projectKey: rawConfig.projectKey || 'TEMP',
+      issueType: rawConfig.issueType,
+      enabled: rawConfig.enabled ?? true,
+    };
+  }
+
   async searchUsers(
     config: Record<string, unknown>,
     query: string,
@@ -577,72 +650,12 @@ export class JiraIntegrationService implements IntegrationService {
       configKeys: Object.keys(config),
     });
 
-    // Extract Jira instance URL from config
-    const rawConfig = config as RawJiraConfig;
-    const host = rawConfig.instanceUrl;
-
-    logger.debug('Normalized Jira config for user search', {
-      hasInstanceUrl: !!rawConfig.instanceUrl,
-      hasEmail: !!rawConfig.email,
-      hasApiToken: !!rawConfig.apiToken,
-      resolvedHost: host ? host.substring(0, MAX_HOST_LOG_LENGTH) + '...' : undefined,
-    });
-
-    // Validate required Jira configuration fields (existence + type checks)
-    const missingFields: string[] = [];
-    const invalidFields: string[] = [];
-
-    if (!host) {
-      missingFields.push('instanceUrl');
-    } else if (typeof host !== 'string' || host.trim().length === 0) {
-      invalidFields.push('instanceUrl (must be non-empty string)');
-    }
-
-    if (!rawConfig.email) {
-      missingFields.push('email');
-    } else if (typeof rawConfig.email !== 'string' || rawConfig.email.trim().length === 0) {
-      invalidFields.push('email (must be non-empty string)');
-    }
-
-    if (!rawConfig.apiToken) {
-      missingFields.push('apiToken');
-    } else if (typeof rawConfig.apiToken !== 'string' || rawConfig.apiToken.trim().length === 0) {
-      invalidFields.push('apiToken (must be non-empty string)');
-    }
-
-    if (missingFields.length > 0 || invalidFields.length > 0) {
-      const errors = [
-        ...(missingFields.length > 0 ? [`missing: ${missingFields.join(', ')}`] : []),
-        ...(invalidFields.length > 0 ? [`invalid: ${invalidFields.join(', ')}`] : []),
-      ];
-
-      logger.error('Jira user search failed: configuration validation error', {
-        missingFields,
-        invalidFields,
-        availableConfigKeys: Object.keys(config),
-      });
-
-      throw new ValidationError(
-        `Jira configuration incomplete: ${errors.join('; ')}. ` +
-          'Please check that credentials are properly encrypted and stored in the database.'
-      );
-    }
-
-    // Create normalized config with 'host' field for JiraClient
-    // Non-null assertions safe here because validation above ensures these fields exist
-    const normalizedConfig: JiraConfig = {
-      host: host!,
-      email: rawConfig.email!,
-      apiToken: rawConfig.apiToken!,
-      projectKey: rawConfig.projectKey || 'TEMP', // User search doesn't need real project key
-      issueType: rawConfig.issueType,
-      enabled: rawConfig.enabled ?? true,
-    };
+    const normalizedConfig: JiraConfig = this.validateAndNormalizeWizardConfig(config);
 
     logger.debug('Creating Jira client for user search', {
-      host: host!.substring(0, MAX_HOST_LOG_LENGTH) + '...',
-      email: rawConfig.email,
-      hasProjectKey: !!rawConfig.projectKey,
+      host: normalizedConfig.host.substring(0, MAX_HOST_LOG_LENGTH) + '...',
+      email: normalizedConfig.email,
+      hasProjectKey: !!(config as RawJiraConfig).projectKey,
     });
 
     const client = new JiraClient(normalizedConfig);
@@ -676,52 +689,13 @@ export class JiraIntegrationService implements IntegrationService {
     query?: string,
     maxResults?: number
   ): Promise<{ id: string; key: string; name: string }[]> {
-    const rawConfig = config as RawJiraConfig;
-    const host = rawConfig.instanceUrl;
-
-    const missingFields: string[] = [];
-    const invalidFields: string[] = [];
-
-    if (!host) {
-      missingFields.push('instanceUrl');
-    } else if (typeof host !== 'string' || host.trim().length === 0) {
-      invalidFields.push('instanceUrl (must be non-empty string)');
-    }
-
-    if (!rawConfig.email) {
-      missingFields.push('email');
-    } else if (typeof rawConfig.email !== 'string' || rawConfig.email.trim().length === 0) {
-      invalidFields.push('email (must be non-empty string)');
-    }
-
-    if (!rawConfig.apiToken) {
-      missingFields.push('apiToken');
-    } else if (typeof rawConfig.apiToken !== 'string' || rawConfig.apiToken.trim().length === 0) {
-      invalidFields.push('apiToken (must be non-empty string)');
-    }
-
-    if (missingFields.length > 0 || invalidFields.length > 0) {
-      const errors = [
-        ...(missingFields.length > 0 ? [`missing: ${missingFields.join(', ')}`] : []),
-        ...(invalidFields.length > 0 ? [`invalid: ${invalidFields.join(', ')}`] : []),
-      ];
-      throw new ValidationError(`Jira configuration incomplete: ${errors.join('; ')}.`);
-    }
-
-    const normalizedConfig: JiraConfig = {
-      host: host!,
-      email: rawConfig.email!,
-      apiToken: rawConfig.apiToken!,
-      projectKey: rawConfig.projectKey || 'TEMP', // Not used for project listing
-      issueType: rawConfig.issueType,
-      enabled: rawConfig.enabled ?? true,
-    };
+    const normalizedConfig: JiraConfig = this.validateAndNormalizeWizardConfig(config);
 
     const client = new JiraClient(normalizedConfig);
     const projects = await client.listProjects(query, maxResults);
 
     logger.info('Jira project list fetched', {
-      host: host!.substring(0, MAX_HOST_LOG_LENGTH) + '...',
+      host: normalizedConfig.host.substring(0, MAX_HOST_LOG_LENGTH) + '...',
       count: projects.length,
       hasQuery: !!query,
     });

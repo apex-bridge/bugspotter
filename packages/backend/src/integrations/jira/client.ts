@@ -521,10 +521,14 @@ export class JiraClient {
    * @param maxResults 1..50 inclusive; values above 50 are clamped.
    */
   async listProjects(query?: string, maxResults?: number): Promise<JiraProject[]> {
-    const clamped = Math.min(
-      Math.max(1, maxResults ?? JIRA_PROJECT_SEARCH_MAX_RESULTS),
-      JIRA_PROJECT_SEARCH_MAX_RESULTS
-    );
+    // Default when unset OR non-finite (e.g. caller passed parseInt of
+    // a non-numeric querystring). Nullish coalescing alone would let
+    // NaN through and produce `maxResults=NaN` on the wire.
+    const requested =
+      typeof maxResults === 'number' && Number.isFinite(maxResults)
+        ? maxResults
+        : JIRA_PROJECT_SEARCH_MAX_RESULTS;
+    const clamped = Math.min(Math.max(1, Math.floor(requested)), JIRA_PROJECT_SEARCH_MAX_RESULTS);
 
     const params = new URLSearchParams({
       maxResults: String(clamped),

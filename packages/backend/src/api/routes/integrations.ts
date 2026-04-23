@@ -94,36 +94,49 @@ export async function registerIntegrationRoutes(
    * request, not from decryption. Authenticated users only — the route
    * performs an outbound HTTPS call to the platform.
    */
-  server.post<{ Params: { platform: string }; Body: Record<string, unknown> }>(
-    '/api/v1/integrations/:platform/projects',
-    async (request, reply) => {
-      if (!request.authUser && !request.apiKey) {
-        throw new AppError('Authentication required', 401, 'Unauthorized');
-      }
-
-      const { platform } = request.params;
-      const config = request.body;
-
-      const service = await loadPluginOrThrow(registry, platform);
-
-      if (!service.listProjects || typeof service.listProjects !== 'function') {
-        throw new AppError(
-          `Project listing not supported for ${platform} integration`,
-          400,
-          'BadRequest'
-        );
-      }
-
-      logger.info('Listing projects for integration', {
-        platform,
-        userId: request.authUser?.id || 'api-key',
-      });
-
-      const projects = await service.listProjects(config);
-
-      return sendSuccess(reply, { projects });
+  server.post<{
+    Params: { platform: string };
+    Body: Record<string, unknown>;
+    Querystring: { query?: string; maxResults?: string };
+  }>('/api/v1/integrations/:platform/projects', async (request, reply) => {
+    if (!request.authUser && !request.apiKey) {
+      throw new AppError('Authentication required', 401, 'Unauthorized');
     }
-  );
+
+    const { platform } = request.params;
+    const config = request.body;
+    const { query, maxResults: maxResultsRaw } = request.query;
+
+    let maxResults: number | undefined;
+    if (maxResultsRaw !== undefined && maxResultsRaw !== '') {
+      const parsed = Number.parseInt(maxResultsRaw, 10);
+      if (!Number.isFinite(parsed) || parsed < 1) {
+        throw new AppError('`maxResults` must be a positive integer', 400, 'BadRequest');
+      }
+      maxResults = parsed;
+    }
+
+    const service = await loadPluginOrThrow(registry, platform);
+
+    if (!service.listProjects || typeof service.listProjects !== 'function') {
+      throw new AppError(
+        `Project listing not supported for ${platform} integration`,
+        400,
+        'BadRequest'
+      );
+    }
+
+    logger.info('Listing projects for integration', {
+      platform,
+      userId: request.authUser?.id || 'api-key',
+      hasQuery: !!query,
+      maxResults,
+    });
+
+    const projects = await service.listProjects(config, query, maxResults);
+
+    return sendSuccess(reply, { projects });
+  });
 
   /**
    * Save integration configuration for project

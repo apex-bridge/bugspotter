@@ -341,18 +341,69 @@ describe('Project Integration Config API', () => {
       expect(response.json().message).toMatch(/not supported|listing/i);
     });
 
-    it('should surface plugin errors from invalid credentials', async () => {
+    it('should surface plugin errors when required fields are missing from config', async () => {
       const response = await server.inject({
         method: 'POST',
         url: '/api/v1/integrations/jira/projects',
         headers: { authorization: `Bearer ${authToken}` },
         payload: {
-          // Missing email + apiToken — mock plugin rejects.
+          // Missing email + apiToken — mock plugin rejects with a
+          // generic Error, which the error middleware maps to 500.
           instanceUrl: 'https://test.atlassian.net',
         },
       });
 
       expect(response.statusCode).toBe(500);
+    });
+
+    it('should forward query and parsed maxResults to the plugin', async () => {
+      // Swap the Jira plugin's listProjects stub for a spy that
+      // captures the args the route passes, then restore it.
+      const registeredService = await pluginRegistry.loadDynamicPlugin('jira');
+      const originalListProjects = registeredService.listProjects!.bind(registeredService);
+      const captured: Array<{ query?: string; maxResults?: number }> = [];
+      registeredService.listProjects = async (
+        _config: Record<string, unknown>,
+        q?: string,
+        m?: number
+      ) => {
+        captured.push({ query: q, maxResults: m });
+        return [{ id: '10000', key: 'ALPHA', name: 'Alpha' }];
+      };
+
+      try {
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/integrations/jira/projects?query=alp&maxResults=10',
+          headers: { authorization: `Bearer ${authToken}` },
+          payload: {
+            instanceUrl: 'https://test.atlassian.net',
+            email: 'user@example.com',
+            apiToken: 'secret-token',
+          },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(captured).toEqual([{ query: 'alp', maxResults: 10 }]);
+      } finally {
+        registeredService.listProjects = originalListProjects;
+      }
+    });
+
+    it('should 400 when maxResults is not a positive integer', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/jira/projects?maxResults=abc',
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          instanceUrl: 'https://test.atlassian.net',
+          email: 'user@example.com',
+          apiToken: 'secret-token',
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().message).toMatch(/maxResults/);
     });
   });
 
