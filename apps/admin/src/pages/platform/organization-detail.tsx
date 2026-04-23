@@ -634,9 +634,11 @@ export default function OrganizationDetailPage() {
                       {formatResourceValue(type, resource.limit)}
                     </span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    data-testid="quota-progress-bar"
+                    className="w-full bg-gray-200 rounded-full h-2"
+                  >
                     <div
-                      data-testid="quota-progress-bar"
                       className={`h-2 rounded-full transition-all ${getQuotaProgressColor(pct)}`}
                       style={{ width: `${Math.min(100, pct)}%` }}
                     />
