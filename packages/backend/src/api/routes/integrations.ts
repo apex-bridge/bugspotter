@@ -105,15 +105,31 @@ export async function registerIntegrationRoutes(
 
     const { platform } = request.params;
     const config = request.body;
-    const { query, maxResults: maxResultsRaw } = request.query;
+    const { query: queryRaw, maxResults: maxResultsRaw } = request.query;
+
+    // Fastify's default querystring parser returns an array when the
+    // same key appears more than once (`?maxResults=10&maxResults=20`).
+    // Pick the first entry so `.trim()` doesn't throw TypeError and
+    // bubble up as a 500 on what should be a request-shape error.
+    const firstString = (raw: unknown): string | undefined => {
+      if (typeof raw === 'string') {
+        return raw;
+      }
+      if (Array.isArray(raw) && typeof raw[0] === 'string') {
+        return raw[0];
+      }
+      return undefined;
+    };
+    const query = firstString(queryRaw);
+    const maxResultsStr = firstString(maxResultsRaw);
 
     let maxResults: number | undefined;
-    if (maxResultsRaw !== undefined && maxResultsRaw.trim() !== '') {
+    if (maxResultsStr !== undefined && maxResultsStr.trim() !== '') {
       // Trim so `?maxResults= 10` doesn't 400 on a stray space. Then
       // require whole-digits-only — `parseInt` is too permissive and
       // would accept `"10.5"` (→ 10) or `"10abc"` (→ 10), making the
       // "must be a positive integer" error message misleading.
-      const trimmed = maxResultsRaw.trim();
+      const trimmed = maxResultsStr.trim();
       if (!/^\d+$/.test(trimmed)) {
         throw new AppError('`maxResults` must be a positive integer', 400, 'BadRequest');
       }

@@ -341,19 +341,50 @@ describe('Project Integration Config API', () => {
       expect(response.json().message).toMatch(/not supported|listing/i);
     });
 
-    it('should surface plugin errors when required fields are missing from config', async () => {
+    it('should surface generic plugin errors as 500', async () => {
+      // Mock plugin throws `new Error(...)` (not AppError/ValidationError)
+      // when required fields are missing — confirms the error middleware
+      // maps unknown throws to 500. Real Jira plugin throws
+      // ValidationError from the shared credential helper and would
+      // reach the client as 400; see the next test for that path.
       const response = await server.inject({
         method: 'POST',
         url: '/api/v1/integrations/jira/projects',
         headers: { authorization: `Bearer ${authToken}` },
         payload: {
-          // Missing email + apiToken — mock plugin rejects with a
-          // generic Error, which the error middleware maps to 500.
           instanceUrl: 'https://test.atlassian.net',
         },
       });
 
       expect(response.statusCode).toBe(500);
+    });
+
+    it('should return 400 when the plugin throws ValidationError', async () => {
+      // The Jira plugin's real validator throws `ValidationError` for
+      // missing/blank credentials. Swap the plugin's listProjects for
+      // one that simulates that behavior, then restore it.
+      const { ValidationError } = await import('../../src/api/middleware/error.js');
+      const registeredService = await pluginRegistry.loadDynamicPlugin('jira');
+      const originalListProjects = registeredService.listProjects!.bind(registeredService);
+      registeredService.listProjects = async () => {
+        throw new ValidationError('Jira configuration incomplete: missing: email, apiToken.');
+      };
+
+      try {
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/integrations/jira/projects',
+          headers: { authorization: `Bearer ${authToken}` },
+          payload: {
+            instanceUrl: 'https://test.atlassian.net',
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json().message).toMatch(/Jira configuration incomplete/);
+      } finally {
+        registeredService.listProjects = originalListProjects;
+      }
     });
 
     it('should forward query and parsed maxResults to the plugin', async () => {
@@ -423,6 +454,27 @@ describe('Project Integration Config API', () => {
         expect(response.statusCode).toBe(400);
       }
     );
+
+    it('should tolerate duplicate maxResults querystring entries without 500', async () => {
+      // Fastify's default parser returns an array for repeated keys.
+      // The route must pick a single entry instead of crashing with
+      // `TypeError: maxResultsRaw.trim is not a function`.
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/integrations/jira/projects?maxResults=5&maxResults=20',
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          instanceUrl: 'https://test.atlassian.net',
+          email: 'user@example.com',
+          apiToken: 'secret-token',
+        },
+      });
+
+      // Either accepted as the first value (200) or rejected as malformed
+      // (400) — the exact choice is up to the route. What matters is that
+      // we don't crash with a 500.
+      expect(response.statusCode).not.toBe(500);
+    });
 
     it('should accept maxResults wrapped in whitespace after trimming', async () => {
       const response = await server.inject({
