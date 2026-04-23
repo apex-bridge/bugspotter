@@ -21,19 +21,10 @@ dotenv.config({ path: path.resolve(__dirname, '.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../packages/backend/.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
-// Normalize user-provided URLs through `new URL(...).origin` so a
-// `BASE_URL` / `API_URL` with a trailing slash or path doesn't leak
-// into Playwright's URL resolution (`page.goto('/...')` against a
-// base with a path behaves unexpectedly) or into Vite's proxy config.
-// Mirrors the normalization done in `src/tests/e2e/config.ts` and
-// `global-setup.ts` so every consumer agrees on one canonical origin.
-function normalizeOrigin(raw: string, label: string): string {
-  try {
-    return new URL(raw).origin;
-  } catch {
-    throw new Error(`Invalid ${label}: ${raw}`);
-  }
-}
+// Shared helper — see `src/tests/e2e/helpers/url-helpers.ts` for
+// rationale. Import is relative because `playwright.config.ts` lives
+// outside `src/` but TypeScript resolution still works.
+import { normalizeOrigin } from './src/tests/e2e/helpers/url-helpers';
 
 const ADMIN_BASE_URL = normalizeOrigin(
   process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || '4001'}`,

@@ -12,6 +12,7 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as fs from 'fs/promises';
+import { normalizeOrigin } from './helpers/url-helpers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -265,12 +266,15 @@ export default async function globalSetup() {
     //
     // Port precedence (critical for consistency — the port used in
     // the URL must match the port the backend is spawned on):
-    //   1. If `API_URL` is set, derive the port from it.
+    //   1. If `API_URL` is set, the port MUST come from it (and be
+    //      explicit — otherwise the default 80/443 would try to bind
+    //      privileged ports).
     //   2. Else if `API_PORT` is set, use it.
     //   3. Else default to 4000.
     // Using `||` (not `??`) so an empty-string env var falls back
     // cleanly — matches the pattern in `config.ts` and
     // `playwright.config.ts`.
+    const hasExplicitApiUrl = !!process.env.API_URL;
     const rawApiUrl = process.env.API_URL || `http://localhost:${process.env.API_PORT || '4000'}`;
     let apiUrlParsed: URL;
     try {
@@ -278,8 +282,18 @@ export default async function globalSetup() {
     } catch {
       throw new Error(`Invalid API_URL / API_PORT combination: ${rawApiUrl}`);
     }
+    if (hasExplicitApiUrl && !apiUrlParsed.port) {
+      // The backend spawn below sets `PORT=<apiPort>`. If we let that
+      // be 80/443 from the URL default, the spawn fails immediately
+      // with EACCES on every non-root environment. Fail fast and
+      // clearly instead.
+      throw new Error(
+        `API_URL must include an explicit port for E2E setup (got: ${rawApiUrl}). ` +
+          `The backend process will be spawned listening on that port.`
+      );
+    }
     const apiOrigin = apiUrlParsed.origin;
-    const apiPort = apiUrlParsed.port || (apiUrlParsed.protocol === 'https:' ? '443' : '80');
+    const apiPort = apiUrlParsed.port;
     process.env.API_URL = apiOrigin;
     process.env.VITE_API_URL = apiOrigin; // For Vite proxy configuration
 
@@ -294,12 +308,7 @@ export default async function globalSetup() {
     // (not `??`) so an empty `BASE_URL` falls back to the default.
     const rawAdminUrl =
       process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || '4001'}`;
-    let adminUrl: string;
-    try {
-      adminUrl = new URL(rawAdminUrl).origin;
-    } catch {
-      throw new Error(`Invalid BASE_URL / E2E_ADMIN_PORT combination: ${rawAdminUrl}`);
-    }
+    const adminUrl = normalizeOrigin(rawAdminUrl, 'BASE_URL / E2E_ADMIN_PORT combination');
 
     console.log(`🚀 Starting backend server on port ${apiPort}...`);
     const backendPath = path.resolve(__dirname, '../../../../../packages/backend');
@@ -423,7 +432,7 @@ export default async function globalSetup() {
         // Honor WORKER_HEALTH_PORT override so local runs on Windows
         // (Hyper-V reserves 3001 via `netsh int ipv4 show
         // excludedportrange`) can pick a free port.
-        WORKER_HEALTH_PORT: process.env.WORKER_HEALTH_PORT ?? '3001',
+        WORKER_HEALTH_PORT: process.env.WORKER_HEALTH_PORT || '3001',
         // Match the backend's deployment mode so queue consumers operate
         // under the same billing / usage-tracking / tenant-resolution
         // rules as the API they're paired with. Diverging here would
