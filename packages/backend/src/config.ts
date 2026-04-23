@@ -30,6 +30,7 @@ import {
   validateS3ForcePathStyle,
   validateLocalStorageConfig,
   parseBooleanEnv,
+  parseTrustProxy,
 } from './config/validators.js';
 
 const logger = getLogger();
@@ -59,20 +60,38 @@ export const config: AppConfig = {
       'https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net',
     ],
     logLevel: (process.env.LOG_LEVEL ?? 'info') as LogLevel,
-    // When true, Fastify reads `X-Forwarded-For` / `X-Forwarded-Proto`
-    // for `request.ip` / `request.protocol`. Required in prod so
-    // rate-limit keys on real client IPs rather than the NLB / CDN /
-    // nginx hop — without it every public request looks the same to
+    // Controls whether Fastify reads `X-Forwarded-For` / `X-Forwarded-Proto`
+    // for `request.ip` / `request.protocol`. Required so rate-limit
+    // keys on real client IPs rather than the NLB / CDN / nginx hop
+    // — without it every public request looks the same to
     // `@fastify/rate-limit`, which defeats the `/auth/signup` spam
     // throttle (plan lists this as a pre-prod blocker).
     //
+    // `request.ip` also flows into several other paths beyond
+    // rate-limit — all of which become spoofable under the same
+    // assumption:
+    //   - signup spam filter (`SpamFilterService`) keys velocity
+    //     checks on IP and persists `ip_address` on signup rows
+    //     (`auth/signup.ts`, `organization-requests.ts`)
+    //   - API-key usage tracking
+    //     (`api/middleware/auth/handlers.ts:112`)
+    //   - data-residency compliance audit log
+    //     (`data-residency/middleware.ts:151`)
+    // TRUST REQUIREMENT: every upstream proxy in the request path
+    // MUST sanitize `X-Forwarded-*` headers coming from the public
+    // (either overwrite or validate — appending alone is NOT enough
+    // because the client-supplied prefix remains in the chain and
+    // `trustProxy: true` returns the leftmost entry). If that
+    // assumption can't hold for your deployment, set
+    // `TRUST_PROXY=false` or use a hop-count (e.g. `TRUST_PROXY=1`
+    // for a single trusted reverse-proxy in front); Fastify then
+    // skips the last N entries in the XFF chain as "ours."
+    //
     // Default `true`: harmless in dev (no XFF header present means
-    // `request.ip` still comes from the socket); correct in prod.
-    // Override with `TRUST_PROXY=false` for the rare topology that
-    // exposes the backend directly to untrusted clients — in that
-    // case a client could spoof XFF to affect their own rate-limit
-    // key (not a confidentiality leak, but worth opting out of).
-    trustProxy: parseBooleanEnv(process.env.TRUST_PROXY) ?? true,
+    // `request.ip` still comes from the socket); correct for
+    // deployments behind a trusted, header-sanitizing proxy.
+    // Accepts `true` / `false` / `<integer>` (hop count).
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   },
   jwt: {
     secret: process.env.JWT_SECRET ?? '',

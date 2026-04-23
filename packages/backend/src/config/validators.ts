@@ -181,6 +181,38 @@ export function parseBooleanEnv(value: string | undefined): boolean | undefined 
   return undefined;
 }
 
+/**
+ * Parse Fastify's `trustProxy` config from the `TRUST_PROXY` env.
+ *
+ * Accepts:
+ *   - `true` / `false` — trust all hops / trust none
+ *   - `<non-negative integer>` — trust the last N hops in XFF
+ *     (e.g. `1` for "single trusted reverse-proxy in front")
+ *   - unset / empty — default `true` (safe for dev where no XFF is
+ *     present; correct in prod behind a header-sanitizing proxy)
+ *
+ * `<CIDR list>` and arbitrary strings are not accepted here — add if
+ * a deployment needs it. Fastify supports them in principle.
+ */
+export function parseTrustProxy(value: string | undefined): boolean | number {
+  if (value === undefined || value === '') {
+    return true;
+  }
+  if (value === 'true') {
+    return true;
+  }
+  if (value === 'false') {
+    return false;
+  }
+  const n = Number(value);
+  if (Number.isInteger(n) && n >= 0) {
+    return n;
+  }
+  throw new Error(
+    `Invalid TRUST_PROXY: "${value}". Expected "true", "false", or a non-negative integer (hop count).`
+  );
+}
+
 // ============================================================================
 // HOSTNAME VALIDATORS (Network Security)
 // ============================================================================

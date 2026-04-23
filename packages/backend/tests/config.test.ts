@@ -163,6 +163,24 @@ describe('Application Configuration', () => {
 
       expect(config.server.trustProxy).toBe(false);
     });
+
+    it('should accept TRUST_PROXY as an integer hop count', async () => {
+      process.env.TRUST_PROXY = '1';
+
+      const { config } = await import('../src/config.js');
+
+      // Numeric form lets deployments behind exactly one trusted
+      // reverse-proxy skip the last hop and return the next one in
+      // the XFF chain — tighter than `true` (which trusts the whole
+      // chain and returns the leftmost, potentially-spoofed entry).
+      expect(config.server.trustProxy).toBe(1);
+    });
+
+    it('should reject invalid TRUST_PROXY values at startup', async () => {
+      process.env.TRUST_PROXY = 'yes';
+
+      await expect(import('../src/config.js')).rejects.toThrow(/Invalid TRUST_PROXY/);
+    });
   });
 
   describe('JWT configuration', () => {
