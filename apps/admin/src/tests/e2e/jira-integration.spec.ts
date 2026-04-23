@@ -160,8 +160,8 @@ test.describe('Jira Integration E2E', () => {
   // `helpers/jira-helpers.ts`.
   test.skip(
     !hasJiraCredentials(),
-    'Jira E2E credentials not configured (JIRA_E2E_BASE_URL, JIRA_E2E_EMAIL, ' +
-      'JIRA_E2E_API_TOKEN, JIRA_E2E_PROJECT_KEY). ' +
+    'Jira E2E credentials not configured (required: JIRA_E2E_BASE_URL, ' +
+      "JIRA_E2E_EMAIL, JIRA_E2E_API_TOKEN; optional: JIRA_E2E_PROJECT_KEY, defaults to 'E2E'). " +
       'See `.env.example` at the repo root for the full list.'
   );
 
