@@ -437,8 +437,8 @@ describe('Project Integration Config API', () => {
       expect(response.json().message).toMatch(/maxResults/);
     });
 
-    it.each([['10.5'], ['10abc'], ['-5'], ['+10'], ['0']])(
-      'should 400 when maxResults is %s (rejects non-integer / non-positive inputs)',
+    it.each([['10.5'], ['10abc'], ['-5'], ['+10'], ['0'], ['9999999'], ['1001']])(
+      'should 400 when maxResults is %s (rejects non-integer / non-positive / oversized inputs)',
       async (bad) => {
         const response = await server.inject({
           method: 'POST',

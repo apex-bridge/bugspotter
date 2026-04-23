@@ -4,9 +4,8 @@
  * Exercises the wizard-flow path where caller-provided credentials
  * are normalized, a JiraClient is constructed, and its listProjects()
  * output is reshaped into the narrow {id, key, name} tuple the route
- * ships to the frontend. Mocks JiraClient at the module level to
- * avoid real HTTPS calls — consistent with tests/integration/
- * jira-integration-rules.test.ts.
+ * ships to the frontend. JiraClient is mocked at the module level to
+ * avoid real HTTPS calls.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';

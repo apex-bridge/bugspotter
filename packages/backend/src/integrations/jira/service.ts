@@ -47,6 +47,16 @@ const DEFAULT_TICKET_STATUS: TicketStatus = TICKET_STATUS.OPEN;
 const DEFAULT_SCREENSHOT_FILENAME = 'screenshot.png';
 
 /**
+ * `JiraClient`'s constructor requires a non-empty `projectKey`, but
+ * `searchUsers` and `listProjects` both hit endpoints that ignore it
+ * (`/user/search`, `/project/search`). This placeholder satisfies
+ * the constructor contract without fabricating a misleading real key.
+ * Do NOT use for ticket creation — `createIssue` sends the key to
+ * Jira and will 404.
+ */
+const CONFIG_ONLY_PROJECT_KEY_PLACEHOLDER = 'TEMP';
+
+/**
  * Trusted domains for Jira avatar URLs
  * These domains are allowed for avatar proxy requests in addition to the configured instanceUrl
  */
@@ -565,8 +575,10 @@ export class JiraIntegrationService implements IntegrationService {
    * leading/trailing whitespace can't sneak past validation and
    * surface as a 500 from `new URL()` inside `JiraClient`.
    *
-   * @throws {ValidationError} with a field-by-field diagnostic on the
-   *   first validation failure.
+   * @throws {ValidationError} with a single combined diagnostic
+   *   covering every missing and invalid field detected in this call.
+   *   Callers see the full picture instead of having to fix-and-retry
+   *   one field at a time.
    */
   private validateAndNormalizeCredentials(config: Record<string, unknown>): JiraConfig {
     const rawConfig = config as RawJiraConfig;
@@ -635,9 +647,7 @@ export class JiraIntegrationService implements IntegrationService {
       host: trimmedHost!,
       email: trimmedEmail!,
       apiToken: trimmedToken!,
-      // `searchUsers` / `listProjects` don't need a real project key,
-      // but `JiraClient` won't construct without one.
-      projectKey: rawConfig.projectKey || 'TEMP',
+      projectKey: rawConfig.projectKey || CONFIG_ONLY_PROJECT_KEY_PLACEHOLDER,
       issueType: rawConfig.issueType,
       enabled: rawConfig.enabled ?? true,
     };
