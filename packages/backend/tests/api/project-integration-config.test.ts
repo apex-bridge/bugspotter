@@ -338,7 +338,7 @@ describe('Project Integration Config API', () => {
       });
 
       expect(response.statusCode).toBe(400);
-      expect(response.json().error.message).toMatch(/not supported|listing/i);
+      expect(response.json().message).toMatch(/not supported|listing/i);
     });
 
     it('should surface plugin errors from invalid credentials', async () => {
