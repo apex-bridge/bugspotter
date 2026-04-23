@@ -149,14 +149,21 @@ export const test = base.extend<SetupFixtures>({
         //
         // Runs on EVERY call (not just first-time init) so the seed
         // still happens after setup paths that bypass this fixture
-        // entirely (e.g. the setup-wizard E2E tests).
+        // entirely (e.g. the setup-wizard E2E tests). Checks for the
+        // specific `e2e-default` subdomain rather than "any org" —
+        // otherwise `setupState.getDefaultOrgId` can throw if the
+        // admin happens to already own a non-default org from a
+        // prior test's cleanup gap.
         const authHeaders = { Authorization: `Bearer ${accessToken}` };
         const myOrgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
           headers: authHeaders,
         });
         if (myOrgsResponse.ok()) {
           const { data: existing } = await myOrgsResponse.json();
-          if (Array.isArray(existing) && existing.length > 0) {
+          if (
+            Array.isArray(existing) &&
+            existing.some((o: { subdomain?: string }) => o.subdomain === 'e2e-default')
+          ) {
             return;
           }
         }
@@ -175,16 +182,20 @@ export const test = base.extend<SetupFixtures>({
         }
 
         // 409 = subdomain reserved by a soft-deleted org from a prior
-        // run that didn't fully clean up. Treat as success if the admin
-        // already has an org accessible via /me; otherwise surface the
-        // error so we're not silently papering over broken state.
+        // run that didn't fully clean up. Treat as success only if the
+        // admin already has the `e2e-default` org specifically; if
+        // they have some other org but not this one, surface the
+        // error — downstream `getDefaultOrgId` would throw anyway.
         if (orgResponse.status() === 409) {
           const recheck = await request.get(`${API_URL}/api/v1/organizations/me`, {
             headers: authHeaders,
           });
           if (recheck.ok()) {
             const { data: existing } = await recheck.json();
-            if (Array.isArray(existing) && existing.length > 0) {
+            if (
+              Array.isArray(existing) &&
+              existing.some((o: { subdomain?: string }) => o.subdomain === 'e2e-default')
+            ) {
               console.log('✓ Default E2E org already exists (409)');
               return;
             }

@@ -269,11 +269,16 @@ export default async function globalSetup() {
     // into CORS matching or downstream consumers that read
     // `process.env.API_URL` and append `/api/v1/...`.
     //
-    // Port precedence (critical for consistency — the port used in
-    // the URL must match the port the backend is spawned on):
-    //   1. If `API_URL` is set, the port MUST come from it (and be
-    //      explicit — otherwise the default 80/443 would try to bind
-    //      privileged ports).
+    // Port extraction is trickier than it looks: `new URL('http://h:80')`
+    // has `.port === ''` because 80 is the protocol default — the URL
+    // API strips it. So we need to detect "was a port explicitly in
+    // the raw string" from the raw input itself. The regex matches
+    // `:<digits>` followed by a path separator or end-of-string.
+    //
+    // Port precedence (critical — the port the tests/Vite hit MUST
+    // match the port the backend is spawned on):
+    //   1. If `API_URL` is set, the port MUST be explicit in the URL
+    //      (even `:80` is OK — we just need the string to say so).
     //   2. Else if `API_PORT` is set, use it.
     //   3. Else default to 4000.
     // Using `||` (not `??`) so an empty-string env var falls back
@@ -288,18 +293,21 @@ export default async function globalSetup() {
     } catch {
       throw new Error(`Invalid API_URL / API_PORT combination: ${rawApiUrl}`);
     }
-    if (hasExplicitApiUrl && !apiUrlParsed.port) {
+    const explicitPortMatch = /:(\d+)(?:[/?#]|$)/.exec(rawApiUrl);
+    if (hasExplicitApiUrl && !explicitPortMatch) {
       // The backend spawn below sets `PORT=<apiPort>`. If we let that
-      // be 80/443 from the URL default, the spawn fails immediately
-      // with EACCES on every non-root environment. Fail fast and
-      // clearly instead.
+      // default to 80/443 from the protocol, the spawn fails
+      // immediately with EACCES on every non-root environment. Fail
+      // fast and clearly instead.
       throw new Error(
         `API_URL must include an explicit port for E2E setup (got: ${rawApiUrl}). ` +
           `The backend process will be spawned listening on that port.`
       );
     }
     const apiOrigin = apiUrlParsed.origin;
-    const apiPort = apiUrlParsed.port;
+    // Prefer the port from the raw string (so `:80` in the URL is
+    // preserved) over `URL.port` (which is empty for protocol defaults).
+    const apiPort = explicitPortMatch?.[1] ?? apiUrlParsed.port;
     process.env.API_URL = apiOrigin;
     process.env.VITE_API_URL = apiOrigin; // For Vite proxy configuration
 

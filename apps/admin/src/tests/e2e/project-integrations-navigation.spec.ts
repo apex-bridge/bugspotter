@@ -44,7 +44,9 @@ test.describe('Project Integrations Navigation', () => {
     // Ensure admin user exists
     await setupState.ensureInitialized(TEST_ADMIN);
 
-    // Get auth token for API calls
+    // Get auth token for API calls. Fail fast here — silently
+    // leaving `adminToken` unset would propagate `Bearer undefined`
+    // into the next call and surface as a confusing 401 downstream.
     if (!adminToken) {
       const loginResponse = await request.post(`${API_URL}/api/v1/auth/login`, {
         data: {
@@ -52,11 +54,13 @@ test.describe('Project Integrations Navigation', () => {
           password: TEST_ADMIN.password,
         },
       });
-
-      if (loginResponse.ok()) {
-        const data = await loginResponse.json();
-        adminToken = data.data.access_token;
+      if (!loginResponse.ok()) {
+        throw new Error(
+          `Admin login failed: ${loginResponse.status()} ${await loginResponse.text()}`
+        );
       }
+      const data = await loginResponse.json();
+      adminToken = data.data.access_token;
     }
 
     // Create a test project. In SaaS mode, the hub domain requires
@@ -66,15 +70,20 @@ test.describe('Project Integrations Navigation', () => {
     // other specs / fixtures.
     const organizationId = await setupState.getDefaultOrgId(adminToken);
 
+    // Reset between runs so a prior test's id doesn't leak into
+    // this test's cleanup if the create below fails.
+    projectId = '';
     const projectResponse = await request.post(`${API_URL}/api/v1/projects`, {
       data: { name: 'E2E Navigation Test Project', organization_id: organizationId },
       headers: { Authorization: `Bearer ${adminToken}` },
     });
-
-    if (projectResponse.ok()) {
-      const data = await projectResponse.json();
-      projectId = data.data.id;
+    if (!projectResponse.ok()) {
+      throw new Error(
+        `Failed to create test project: ${projectResponse.status()} ${await projectResponse.text()}`
+      );
     }
+    const data = await projectResponse.json();
+    projectId = data.data.id;
   });
 
   test.afterEach(async ({ request }) => {
