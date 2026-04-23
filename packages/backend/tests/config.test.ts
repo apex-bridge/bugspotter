@@ -144,6 +144,25 @@ describe('Application Configuration', () => {
       // parseInt will return NaN, which should be caught by validation
       expect(isNaN(config.server.port)).toBe(true);
     });
+
+    it('should default trustProxy to true', async () => {
+      delete process.env.TRUST_PROXY;
+
+      const { config } = await import('../src/config.js');
+
+      // Default `true` because every supported deployment topology
+      // (Yandex NLB → Docker, admin-nginx → api, CDN → backend) sits
+      // behind at least one proxy hop; rate-limit needs real client IP.
+      expect(config.server.trustProxy).toBe(true);
+    });
+
+    it('should honor TRUST_PROXY=false opt-out', async () => {
+      process.env.TRUST_PROXY = 'false';
+
+      const { config } = await import('../src/config.js');
+
+      expect(config.server.trustProxy).toBe(false);
+    });
   });
 
   describe('JWT configuration', () => {

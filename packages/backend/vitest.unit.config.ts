@@ -31,6 +31,7 @@ export default defineConfig({
       'tests/integrations/base-integration-helpers.test.ts',
       'tests/api/auth-responses.test.ts',
       'tests/api/auth-handlers.test.ts',
+      'tests/api/trust-proxy.test.ts',
       // Only include pure unit tests from middleware (no database/server)
       'tests/api/middleware/authorization.test.ts',
       'tests/api/middleware/require-project-role.test.ts',
