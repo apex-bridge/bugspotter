@@ -18,6 +18,14 @@ type SetupFixtures = {
     checkStatus: () => Promise<boolean>;
     reset: () => Promise<void>;
     ensureProjectExists: (token: string) => Promise<{ id: string; name: string; api_key: string }>;
+    /**
+     * Resolve the id of the seeded `e2e-default` org for the given
+     * admin token. Safer than `myOrgs[0]` because the backend's
+     * `findByUserId` orders by name, and other specs (organizations,
+     * my-organization, role-based-access) create orgs that can sort
+     * ahead alphabetically.
+     */
+    getDefaultOrgId: (token: string) => Promise<string>;
     createSampleBugReports: (apiKey: string, projectId: string) => Promise<void>;
     createBugReportWithReplay: (apiKey: string, projectId: string) => Promise<string>;
   };
@@ -141,14 +149,21 @@ export const test = base.extend<SetupFixtures>({
         //
         // Runs on EVERY call (not just first-time init) so the seed
         // still happens after setup paths that bypass this fixture
-        // entirely (e.g. the setup-wizard E2E tests).
+        // entirely (e.g. the setup-wizard E2E tests). Checks for the
+        // specific `e2e-default` subdomain rather than "any org" —
+        // otherwise `setupState.getDefaultOrgId` can throw if the
+        // admin happens to already own a non-default org from a
+        // prior test's cleanup gap.
         const authHeaders = { Authorization: `Bearer ${accessToken}` };
         const myOrgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
           headers: authHeaders,
         });
         if (myOrgsResponse.ok()) {
           const { data: existing } = await myOrgsResponse.json();
-          if (Array.isArray(existing) && existing.length > 0) {
+          if (
+            Array.isArray(existing) &&
+            existing.some((o: { subdomain?: string }) => o.subdomain === 'e2e-default')
+          ) {
             return;
           }
         }
@@ -167,16 +182,20 @@ export const test = base.extend<SetupFixtures>({
         }
 
         // 409 = subdomain reserved by a soft-deleted org from a prior
-        // run that didn't fully clean up. Treat as success if the admin
-        // already has an org accessible via /me; otherwise surface the
-        // error so we're not silently papering over broken state.
+        // run that didn't fully clean up. Treat as success only if the
+        // admin already has the `e2e-default` org specifically; if
+        // they have some other org but not this one, surface the
+        // error — downstream `getDefaultOrgId` would throw anyway.
         if (orgResponse.status() === 409) {
           const recheck = await request.get(`${API_URL}/api/v1/organizations/me`, {
             headers: authHeaders,
           });
           if (recheck.ok()) {
             const { data: existing } = await recheck.json();
-            if (Array.isArray(existing) && existing.length > 0) {
+            if (
+              Array.isArray(existing) &&
+              existing.some((o: { subdomain?: string }) => o.subdomain === 'e2e-default')
+            ) {
               console.log('✓ Default E2E org already exists (409)');
               return;
             }
@@ -194,6 +213,40 @@ export const test = base.extend<SetupFixtures>({
        */
       reset: async (): Promise<void> => {
         await resetDatabase();
+      },
+
+      /**
+       * Resolve the seeded default E2E org's id for the given admin
+       * token. Looks up by `subdomain === 'e2e-default'` — NOT by
+       * `myOrgs[0]` — because the backend's
+       * `OrganizationRepository.findByUserId` orders by name and
+       * other specs can create orgs that sort ahead alphabetically.
+       *
+       * Extracted so specs that need a raw `organization_id` for a
+       * direct-API project create (project-integrations-navigation,
+       * etc.) share one lookup with `ensureProjectExists` below.
+       */
+      getDefaultOrgId: async (token: string): Promise<string> => {
+        const response = await request.get(`${API_URL}/api/v1/organizations/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok()) {
+          throw new Error(
+            `Failed to fetch /organizations/me: ${response.status()} ${await response.text()}`
+          );
+        }
+        const { data: myOrgs } = (await response.json()) as {
+          data: Array<{ id: string; subdomain: string }>;
+        };
+        const defaultOrg = Array.isArray(myOrgs)
+          ? myOrgs.find((o) => o.subdomain === 'e2e-default')
+          : undefined;
+        if (!defaultOrg?.id) {
+          throw new Error(
+            "admin is not a member of the seeded 'e2e-default' org — did ensureInitialized run?"
+          );
+        }
+        return defaultOrg.id;
       },
 
       /**
@@ -224,26 +277,10 @@ export const test = base.extend<SetupFixtures>({
         //
         // In SaaS mode on the hub domain (what E2E is), the backend's
         // `resolveOrganizationForProject` requires `organization_id`
-        // in the body. This helper is a direct API call — it bypasses
-        // the admin UI's auto-select — so we must resolve the org ID
-        // ourselves. `ensureInitialized` seeds exactly one org owned
-        // by the admin, so taking `[0]` is deterministic.
+        // in the body. Resolve via `getDefaultOrgId` so this lookup
+        // stays in sync with other specs that need the same raw id.
         if (!project) {
-          const orgsResponse = await request.get(`${API_URL}/api/v1/organizations/me`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (!orgsResponse.ok()) {
-            throw new Error(
-              `Failed to resolve organization for test project: ${orgsResponse.status()} ${await orgsResponse.text()}`
-            );
-          }
-          const { data: myOrgs } = await orgsResponse.json();
-          const organizationId = Array.isArray(myOrgs) ? myOrgs[0]?.id : undefined;
-          if (!organizationId) {
-            throw new Error(
-              'Failed to resolve organization for test project: admin has no org memberships'
-            );
-          }
+          const organizationId = await setupState.getDefaultOrgId(token);
 
           const createResponse = await request.post(`${API_URL}/api/v1/projects`, {
             headers: { Authorization: `Bearer ${token}` },

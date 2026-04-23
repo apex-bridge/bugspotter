@@ -225,15 +225,24 @@ test.describe('Replay Direct Storage Access', () => {
 
     console.log('✅ Replay file uploaded successfully');
 
-    // Update upload status to 'completed'
-    await request.patch(`${API_URL}/api/v1/reports/${bugReportId}`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
-      data: {
-        replay_upload_status: 'completed',
-      },
-    });
+    // Mark upload complete via the dedicated confirm-upload endpoint.
+    // The general PATCH /reports/:id schema has `additionalProperties: false`
+    // and intentionally doesn't expose `replay_upload_status` as a
+    // user-writable field — upload state transitions go through
+    // POST /reports/:id/confirm-upload (same fix as the fixture in
+    // setup-fixture.ts::createBugReportWithReplay).
+    const confirmResponse = await request.post(
+      `${API_URL}/api/v1/reports/${bugReportId}/confirm-upload`,
+      {
+        headers: { Authorization: `Bearer ${authToken}` },
+        data: { fileType: 'replay' },
+      }
+    );
+    if (!confirmResponse.ok()) {
+      throw new Error(
+        `Failed to mark replay upload complete: ${confirmResponse.status()} ${await confirmResponse.text()}`
+      );
+    }
 
     console.log('✅ Marked replay upload as completed');
 

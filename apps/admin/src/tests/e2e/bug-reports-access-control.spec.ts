@@ -51,6 +51,7 @@ test.describe('Bug Reports - Access Control & Filters', () => {
   let project1: { id: string; name: string; api_key: string };
   let project2: { id: string; name: string; api_key: string };
   let regularUserId: string;
+  let bugReportOrgId: string | undefined;
 
   test.beforeAll(async ({ request, setupState }) => {
     // Create admin user
@@ -98,6 +99,38 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     const regularData = await regularLoginResponse.json();
     regularUserToken = regularData.data.access_token;
 
+    // Create a dedicated org for this spec's projects. We can't reuse
+    // the admin's default E2E org because the trial plan caps at 2
+    // projects and earlier specs in the suite (api-keys, audit-logs,
+    // etc.) already consume slots via `ensureProjectExists`. A fresh
+    // org gives us our own 2-project budget.
+    //
+    // Required in SaaS mode anyway: the hub domain's project-create
+    // needs `organization_id` in the body
+    // (see `resolveOrganizationForProject` in
+    // packages/backend/src/api/routes/projects.ts).
+    //
+    // Captured to `bugReportOrgId` so `afterAll` can tear it down —
+    // otherwise this spec leaves the admin with an extra membership
+    // and later specs that pick `myOrgs[0]` could select the wrong
+    // one.
+    const orgTimestamp = Date.now();
+    const bugReportOrgResponse = await request.post(`${API_URL}/api/v1/organizations`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: {
+        name: `Bug Reports RBAC ${orgTimestamp}`,
+        subdomain: `bug-reports-rbac-${orgTimestamp}`,
+        data_residency_region: 'global',
+      },
+    });
+    if (!bugReportOrgResponse.ok()) {
+      throw new Error(
+        `Failed to create test org: ${bugReportOrgResponse.status()} ${await bugReportOrgResponse.text()}`
+      );
+    }
+    bugReportOrgId = (await bugReportOrgResponse.json()).data.id as string;
+    const organizationId = bugReportOrgId;
+
     // Create two projects
     const project1Response = await request.post(`${API_URL}/api/v1/projects`, {
       headers: {
@@ -105,6 +138,7 @@ test.describe('Bug Reports - Access Control & Filters', () => {
       },
       data: {
         name: 'Project Alpha',
+        organization_id: organizationId,
       },
     });
     const project1Data = await project1Response.json();
@@ -116,6 +150,7 @@ test.describe('Bug Reports - Access Control & Filters', () => {
       },
       data: {
         name: 'Project Beta',
+        organization_id: organizationId,
       },
     });
     const project2Data = await project2Response.json();
@@ -288,6 +323,30 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     } catch (error) {
       console.log(
         'Failed to delete regular user (backend may be down):',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    try {
+      // Delete the dedicated org this spec created. Without this, the
+      // admin accumulates an extra membership across specs and later
+      // tests that pick `myOrgs[0]` could select the wrong one.
+      // Check the response status explicitly — a silently-failing
+      // delete (e.g. 401 from a stale token) would re-introduce the
+      // accumulation this block exists to prevent.
+      if (bugReportOrgId && adminToken) {
+        const response = await request.delete(`${API_URL}/api/v1/organizations/${bugReportOrgId}`, {
+          headers: { Authorization: `Bearer ${adminToken}` },
+        });
+        if (!response.ok()) {
+          console.log(
+            `[Cleanup] Failed to delete bug-reports RBAC org ${bugReportOrgId}: ${response.status()} ${await response.text()}`
+          );
+        }
+      }
+    } catch (error) {
+      console.log(
+        'Failed to delete bug-reports RBAC org (backend may be down):',
         error instanceof Error ? error.message : String(error)
       );
     }
