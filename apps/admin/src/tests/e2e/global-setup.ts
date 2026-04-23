@@ -12,7 +12,12 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as fs from 'fs/promises';
-import { normalizeOrigin } from './helpers/url-helpers';
+import {
+  DEFAULT_ADMIN_PORT,
+  DEFAULT_API_PORT,
+  DEFAULT_WORKER_PORT,
+  normalizeOrigin,
+} from './helpers/url-helpers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -275,7 +280,8 @@ export default async function globalSetup() {
     // cleanly — matches the pattern in `config.ts` and
     // `playwright.config.ts`.
     const hasExplicitApiUrl = !!process.env.API_URL;
-    const rawApiUrl = process.env.API_URL || `http://localhost:${process.env.API_PORT || '4000'}`;
+    const rawApiUrl =
+      process.env.API_URL || `http://localhost:${process.env.API_PORT || DEFAULT_API_PORT}`;
     let apiUrlParsed: URL;
     try {
       apiUrlParsed = new URL(rawApiUrl);
@@ -307,7 +313,8 @@ export default async function globalSetup() {
     // `Origin` header is always just `scheme://host[:port]`. Using `||`
     // (not `??`) so an empty `BASE_URL` falls back to the default.
     const rawAdminUrl =
-      process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || '4001'}`;
+      process.env.BASE_URL ||
+      `http://localhost:${process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT}`;
     const adminUrl = normalizeOrigin(rawAdminUrl, 'BASE_URL / E2E_ADMIN_PORT combination');
 
     console.log(`🚀 Starting backend server on port ${apiPort}...`);
@@ -432,7 +439,7 @@ export default async function globalSetup() {
         // Honor WORKER_HEALTH_PORT override so local runs on Windows
         // (Hyper-V reserves 3001 via `netsh int ipv4 show
         // excludedportrange`) can pick a free port.
-        WORKER_HEALTH_PORT: process.env.WORKER_HEALTH_PORT || '3001',
+        WORKER_HEALTH_PORT: process.env.WORKER_HEALTH_PORT || DEFAULT_WORKER_PORT,
         // Match the backend's deployment mode so queue consumers operate
         // under the same billing / usage-tracking / tenant-resolution
         // rules as the API they're paired with. Diverging here would

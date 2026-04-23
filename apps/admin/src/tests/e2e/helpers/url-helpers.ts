@@ -14,6 +14,17 @@
  */
 
 /**
+ * Default ports for the E2E harness. Shared across
+ * `playwright.config.ts`, `config.ts`, and `global-setup.ts` so the
+ * three consumers can never disagree on the fallback. Strings rather
+ * than numbers because `process.env.*` is always a string and the
+ * places that use these concatenate them into URLs.
+ */
+export const DEFAULT_ADMIN_PORT = '4001';
+export const DEFAULT_API_PORT = '4000';
+export const DEFAULT_WORKER_PORT = '3001';
+
+/**
  * Reduce a URL-like string to its bare origin (`scheme://host[:port]`).
  * Throws a descriptive error if the input can't be parsed.
  */

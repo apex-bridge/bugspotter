@@ -331,10 +331,18 @@ test.describe('Bug Reports - Access Control & Filters', () => {
       // Delete the dedicated org this spec created. Without this, the
       // admin accumulates an extra membership across specs and later
       // tests that pick `myOrgs[0]` could select the wrong one.
+      // Check the response status explicitly — a silently-failing
+      // delete (e.g. 401 from a stale token) would re-introduce the
+      // accumulation this block exists to prevent.
       if (bugReportOrgId && adminToken) {
-        await request.delete(`${API_URL}/api/v1/organizations/${bugReportOrgId}`, {
+        const response = await request.delete(`${API_URL}/api/v1/organizations/${bugReportOrgId}`, {
           headers: { Authorization: `Bearer ${adminToken}` },
         });
+        if (!response.ok()) {
+          console.log(
+            `[Cleanup] Failed to delete bug-reports RBAC org ${bugReportOrgId}: ${response.status()} ${await response.text()}`
+          );
+        }
       }
     } catch (error) {
       console.log(

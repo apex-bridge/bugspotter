@@ -21,17 +21,21 @@ dotenv.config({ path: path.resolve(__dirname, '.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../packages/backend/.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
-// Shared helper — see `src/tests/e2e/helpers/url-helpers.ts` for
+// Shared helpers — see `src/tests/e2e/helpers/url-helpers.ts` for
 // rationale. Import is relative because `playwright.config.ts` lives
 // outside `src/` but TypeScript resolution still works.
-import { normalizeOrigin } from './src/tests/e2e/helpers/url-helpers';
+import {
+  DEFAULT_ADMIN_PORT,
+  DEFAULT_API_PORT,
+  normalizeOrigin,
+} from './src/tests/e2e/helpers/url-helpers';
 
 const ADMIN_BASE_URL = normalizeOrigin(
-  process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || '4001'}`,
+  process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT}`,
   'BASE_URL'
 );
 const BACKEND_API_URL = normalizeOrigin(
-  process.env.API_URL || `http://localhost:${process.env.API_PORT || '4000'}`,
+  process.env.API_URL || `http://localhost:${process.env.API_PORT || DEFAULT_API_PORT}`,
   'API_URL'
 );
 
@@ -70,14 +74,14 @@ export default defineConfig({
     : {
         // Use node to run vite directly, bypassing Corepack/pnpm issues
         // This works because vite is installed in node_modules
-        command: `node node_modules/vite/bin/vite.js --port ${process.env.E2E_ADMIN_PORT || '4001'}`,
+        command: `node node_modules/vite/bin/vite.js --port ${process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT}`,
         url: ADMIN_BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: 120000,
         stdout: 'pipe',
         stderr: 'pipe',
         env: {
-          PORT: process.env.E2E_ADMIN_PORT || '4001',
+          PORT: process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT,
           VITE_API_URL: BACKEND_API_URL,
         },
       },
