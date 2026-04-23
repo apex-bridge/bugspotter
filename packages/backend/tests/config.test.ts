@@ -144,6 +144,66 @@ describe('Application Configuration', () => {
       // parseInt will return NaN, which should be caught by validation
       expect(isNaN(config.server.port)).toBe(true);
     });
+
+    it('should default trustProxy to true', async () => {
+      delete process.env.TRUST_PROXY;
+
+      const { config } = await import('../src/config.js');
+
+      // Default `true` because every supported deployment topology
+      // (Yandex NLB → Docker, admin-nginx → api, CDN → backend) sits
+      // behind at least one proxy hop; rate-limit needs real client IP.
+      expect(config.server.trustProxy).toBe(true);
+    });
+
+    it('should honor TRUST_PROXY=false opt-out', async () => {
+      process.env.TRUST_PROXY = 'false';
+
+      const { config } = await import('../src/config.js');
+
+      expect(config.server.trustProxy).toBe(false);
+    });
+
+    it('should accept TRUST_PROXY as an integer hop count', async () => {
+      process.env.TRUST_PROXY = '1';
+
+      const { config } = await import('../src/config.js');
+
+      // Numeric form lets deployments behind exactly one trusted
+      // reverse-proxy skip the last hop and return the next one in
+      // the XFF chain — tighter than `true` (which trusts the whole
+      // chain and returns the leftmost, potentially-spoofed entry).
+      expect(config.server.trustProxy).toBe(1);
+    });
+
+    it('should reject invalid TRUST_PROXY values via validateConfig', async () => {
+      // `parseTrustProxy` returns NaN for garbage; `validateConfig`
+      // surfaces it in the single "Configuration validation failed"
+      // block alongside any other config issues, rather than throwing
+      // at module-eval time (which would mask other errors).
+      process.env.DATABASE_URL = 'postgres://localhost/db';
+      process.env.TRUST_PROXY = 'yes';
+
+      const { validateConfig, config } = await import('../src/config.js');
+
+      expect(config.server.trustProxy).toBeNaN();
+      expect(() => validateConfig()).toThrow('Configuration validation failed');
+      expect(() => validateConfig()).toThrow(
+        /TRUST_PROXY must be 'true', 'false', or a non-negative integer/
+      );
+    });
+
+    it('should treat whitespace-only TRUST_PROXY as default (true)', async () => {
+      // Matches the `??` / empty-string semantics: a user env export
+      // like `TRUST_PROXY=" "` (trailing whitespace, common in shell
+      // pipelines) should fall back to the default, not silently
+      // parse to `Number(" ") === 0` (= false).
+      process.env.TRUST_PROXY = '   ';
+
+      const { config } = await import('../src/config.js');
+
+      expect(config.server.trustProxy).toBe(true);
+    });
   });
 
   describe('JWT configuration', () => {

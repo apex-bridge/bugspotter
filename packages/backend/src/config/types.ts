@@ -24,6 +24,7 @@ export interface ServerConfig {
   corsOrigins: string[];
   cspImgSrc: string[];
   logLevel: LogLevel;
+  trustProxy: boolean | number;
 }
 
 export interface JwtConfig {
