@@ -99,8 +99,11 @@ test.describe('Platform Admin: Organizations', () => {
     // Filter by trial status
     await statusSelect.selectOption('trial');
 
-    // Wait for filtered results to render (use semantic role query)
-    const statusBadges = page.getByRole('status');
+    // Scope the status-badge check to the table body. Without this,
+    // `getByRole('status')` also picks up unrelated badges elsewhere on
+    // the page — e.g. the "role: platform admin" badge in the admin
+    // header — and fails the "every badge says trial" assertion.
+    const statusBadges = page.locator('table tbody').getByRole('status');
     await expect(statusBadges.first().or(page.locator('text=/no organizations/i'))).toBeVisible({
       timeout: 10000,
     });

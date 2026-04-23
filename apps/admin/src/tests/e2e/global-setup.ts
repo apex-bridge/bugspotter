@@ -12,6 +12,12 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as fs from 'fs/promises';
+import {
+  DEFAULT_ADMIN_PORT,
+  DEFAULT_API_PORT,
+  DEFAULT_WORKER_PORT,
+  normalizeOrigin,
+} from './helpers/url-helpers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -258,14 +264,68 @@ export default async function globalSetup() {
       throw error;
     }
 
-    // Set API_URL for both backend and frontend
-    const apiPort = process.env.API_PORT || '4000';
-    const apiUrl = `http://localhost:${apiPort}`;
-    process.env.API_URL = apiUrl;
-    process.env.VITE_API_URL = apiUrl; // For Vite proxy configuration
+    // Resolve the API URL once, normalizing to an origin so a user-
+    // provided `API_URL=https://host.com/prefix/` can't leak a path
+    // into CORS matching or downstream consumers that read
+    // `process.env.API_URL` and append `/api/v1/...`.
+    //
+    // Port extraction is trickier than it looks: `new URL('http://h:80')`
+    // has `.port === ''` because 80 is the protocol default — the URL
+    // API strips it. So we need to detect "was a port explicitly in
+    // the raw string" from the raw input itself. The regex matches
+    // `:<digits>` followed by a path separator or end-of-string.
+    //
+    // Port precedence (critical — the port the tests/Vite hit MUST
+    // match the port the backend is spawned on):
+    //   1. If `API_URL` is set, the port MUST be explicit in the URL
+    //      (even `:80` is OK — we just need the string to say so).
+    //   2. Else if `API_PORT` is set, use it.
+    //   3. Else default to 4000.
+    // Using `||` (not `??`) so an empty-string env var falls back
+    // cleanly — matches the pattern in `config.ts` and
+    // `playwright.config.ts`.
+    const hasExplicitApiUrl = !!process.env.API_URL;
+    const rawApiUrl =
+      process.env.API_URL || `http://localhost:${process.env.API_PORT || DEFAULT_API_PORT}`;
+    let apiUrlParsed: URL;
+    try {
+      apiUrlParsed = new URL(rawApiUrl);
+    } catch {
+      throw new Error(`Invalid API_URL / API_PORT combination: ${rawApiUrl}`);
+    }
+    const explicitPortMatch = /:(\d+)(?:[/?#]|$)/.exec(rawApiUrl);
+    if (hasExplicitApiUrl && !explicitPortMatch) {
+      // The backend spawn below sets `PORT=<apiPort>`. If we let that
+      // default to 80/443 from the protocol, the spawn fails
+      // immediately with EACCES on every non-root environment. Fail
+      // fast and clearly instead.
+      throw new Error(
+        `API_URL must include an explicit port for E2E setup (got: ${rawApiUrl}). ` +
+          `The backend process will be spawned listening on that port.`
+      );
+    }
+    const apiOrigin = apiUrlParsed.origin;
+    // Prefer the port from the raw string (so `:80` in the URL is
+    // preserved) over `URL.port` (which is empty for protocol defaults).
+    const apiPort = explicitPortMatch?.[1] ?? apiUrlParsed.port;
+    process.env.API_URL = apiOrigin;
+    process.env.VITE_API_URL = apiOrigin; // For Vite proxy configuration
 
-    // Start backend server on port 4000
-    console.log('🚀 Starting backend server on port 4000...');
+    // Resolve the admin (frontend) URL once. `BASE_URL` takes precedence
+    // when someone is running Playwright against an already-running admin
+    // (in that case Playwright's webServer is skipped); otherwise we
+    // honor `E2E_ADMIN_PORT` for Windows/Hyper-V port conflicts; finally
+    // default to `:4001`. Normalize via `new URL(...).origin` so a
+    // `BASE_URL` that includes a path (`https://host.com/admin`) or a
+    // trailing slash doesn't leak into CORS matching — the browser's
+    // `Origin` header is always just `scheme://host[:port]`. Using `||`
+    // (not `??`) so an empty `BASE_URL` falls back to the default.
+    const rawAdminUrl =
+      process.env.BASE_URL ||
+      `http://localhost:${process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT}`;
+    const adminUrl = normalizeOrigin(rawAdminUrl, 'BASE_URL / E2E_ADMIN_PORT combination');
+
+    console.log(`🚀 Starting backend server on port ${apiPort}...`);
     const backendPath = path.resolve(__dirname, '../../../../../packages/backend');
 
     // Use npx tsx to avoid Corepack issues (shell: true required on Windows)
@@ -279,8 +339,13 @@ export default async function globalSetup() {
         PORT: apiPort,
         NODE_ENV: 'test',
         LOG_LEVEL: 'warn', // Only show warnings and errors (reduce log noise)
-        CORS_ORIGINS: 'http://localhost:4001,http://localhost:4000',
-        FRONTEND_URL: 'http://localhost:4001',
+        // Honor port overrides so local runs on Windows (Hyper-V
+        // reserves 4000/4001) can pick free ports via env vars. Uses
+        // the shared `adminUrl` resolved above so `FRONTEND_URL` and
+        // the frontend entry in `CORS_ORIGINS` stay in sync even when
+        // the admin is served from a non-localhost `BASE_URL`.
+        CORS_ORIGINS: `${adminUrl},${apiOrigin}`,
+        FRONTEND_URL: adminUrl,
         // Run the backend in SaaS mode so routes gated by `SaaSRoute` in
         // the admin (organizations list, retention, billing, etc.) are
         // reachable during E2E. Without this, the backend defaults to
@@ -346,7 +411,7 @@ export default async function globalSetup() {
 
     for (let i = 0; i < maxRetries; i++) {
       try {
-        const response = await fetch(`${apiUrl}/health`);
+        const response = await fetch(`${apiOrigin}/health`);
         if (response.ok) {
           console.log('✅ Backend server is ready');
           break;
@@ -379,6 +444,10 @@ export default async function globalSetup() {
         REDIS_URL: redisUrl,
         NODE_ENV: 'test',
         LOG_LEVEL: 'error',
+        // Honor WORKER_HEALTH_PORT override so local runs on Windows
+        // (Hyper-V reserves 3001 via `netsh int ipv4 show
+        // excludedportrange`) can pick a free port.
+        WORKER_HEALTH_PORT: process.env.WORKER_HEALTH_PORT || DEFAULT_WORKER_PORT,
         // Match the backend's deployment mode so queue consumers operate
         // under the same billing / usage-tracking / tenant-resolution
         // rules as the API they're paired with. Diverging here would
@@ -432,8 +501,8 @@ export default async function globalSetup() {
 
     // Display loaded configuration
     console.log('\n📋 Test configuration:');
-    console.log(`   API URL: ${apiUrl}`);
-    console.log(`   Base URL: ${process.env.BASE_URL || 'http://localhost:4001'}`);
+    console.log(`   API URL: ${apiOrigin}`);
+    console.log(`   Base URL: ${adminUrl}`);
     console.log(`   Database: Isolated PostgreSQL container`);
     console.log(`   Redis: Isolated Redis container`);
     console.log(`   Storage: MinIO (${minioEndpoint})`);

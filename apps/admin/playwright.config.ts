@@ -21,6 +21,24 @@ dotenv.config({ path: path.resolve(__dirname, '.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../packages/backend/.env.integration') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
+// Shared helpers — see `src/tests/e2e/helpers/url-helpers.ts` for
+// rationale. Import is relative because `playwright.config.ts` lives
+// outside `src/` but TypeScript resolution still works.
+import {
+  DEFAULT_ADMIN_PORT,
+  DEFAULT_API_PORT,
+  normalizeOrigin,
+} from './src/tests/e2e/helpers/url-helpers';
+
+const ADMIN_BASE_URL = normalizeOrigin(
+  process.env.BASE_URL || `http://localhost:${process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT}`,
+  'BASE_URL'
+);
+const BACKEND_API_URL = normalizeOrigin(
+  process.env.API_URL || `http://localhost:${process.env.API_PORT || DEFAULT_API_PORT}`,
+  'API_URL'
+);
+
 export default defineConfig({
   testDir: './src/tests/e2e',
   fullyParallel: false, // Run tests sequentially (can enable after verification)
@@ -34,7 +52,10 @@ export default defineConfig({
   timeout: 120000, // Increase test timeout to 120s (2 minutes) for testcontainer startup
   outputDir: 'e2e-debug/test-results',
   use: {
-    baseURL: process.env.BASE_URL || 'http://localhost:4001',
+    // Port overrides via env so contributors on Windows (where Hyper-V
+    // reserves 4000/4001 for its own use via `netsh int ipv4 show
+    // excludedportrange`) can pick free ports.
+    baseURL: ADMIN_BASE_URL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -53,15 +74,15 @@ export default defineConfig({
     : {
         // Use node to run vite directly, bypassing Corepack/pnpm issues
         // This works because vite is installed in node_modules
-        command: 'node node_modules/vite/bin/vite.js --port 4001',
-        url: 'http://localhost:4001',
+        command: `node node_modules/vite/bin/vite.js --port ${process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT}`,
+        url: ADMIN_BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: 120000,
         stdout: 'pipe',
         stderr: 'pipe',
         env: {
-          PORT: '4001',
-          VITE_API_URL: process.env.API_URL || 'http://localhost:4000',
+          PORT: process.env.E2E_ADMIN_PORT || DEFAULT_ADMIN_PORT,
+          VITE_API_URL: BACKEND_API_URL,
         },
       },
 });
