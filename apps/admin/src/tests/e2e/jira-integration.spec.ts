@@ -169,6 +169,23 @@ test.describe('Jira Integration E2E', () => {
   // Parallel mode enabled - each test creates timestamped resources
   // test.describe.configure({ mode: 'serial' });
 
+  // Skip the whole describe if Jira credentials aren't configured.
+  // These tests hit a real Jira cloud tenant; without `JIRA_E2E_*`
+  // env vars there's nothing to test against. `test.skip(condition)`
+  // at the describe-body level marks every test below as skipped
+  // cleanly — previously the `beforeAll` threw and every test
+  // reported as a failure, which repeatedly broke `deploy-admin.yml`
+  // on main. CI can opt in by setting the vars as secrets.
+  const hasJiraCreds =
+    !!process.env.JIRA_E2E_BASE_URL &&
+    !!process.env.JIRA_E2E_EMAIL &&
+    !!process.env.JIRA_E2E_API_TOKEN;
+  test.skip(
+    !hasJiraCreds,
+    'Jira E2E credentials not configured (JIRA_E2E_BASE_URL / JIRA_E2E_EMAIL / JIRA_E2E_API_TOKEN). ' +
+      'See packages/backend/.env.integration.'
+  );
+
   let jiraConfig: JiraConfig;
 
   // Verify Jira connection before running tests
