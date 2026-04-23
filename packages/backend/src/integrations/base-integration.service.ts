@@ -95,4 +95,21 @@ export interface IntegrationService {
    * @returns Array of allowed hostnames (e.g., ['secure.gravatar.com', '*.atlassian.net'])
    */
   getAllowedAvatarDomains?(config: Record<string, unknown>): string[];
+
+  /**
+   * List projects available on the external platform (optional).
+   *
+   * Used by the signup wizard's project picker after the user has
+   * passed the "Test Connection" step but before the integration is
+   * persisted. Credentials come from the caller, not from DB.
+   *
+   * @param config     Flat configuration including credentials.
+   * @param query      Optional substring filter (platform-dependent).
+   * @param maxResults Max entries to return; platform-dependent cap.
+   */
+  listProjects?(
+    config: Record<string, unknown>,
+    query?: string,
+    maxResults?: number
+  ): Promise<Array<{ id: string; key: string; name: string }>>;
 }

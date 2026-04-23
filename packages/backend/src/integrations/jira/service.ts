@@ -47,6 +47,16 @@ const DEFAULT_TICKET_STATUS: TicketStatus = TICKET_STATUS.OPEN;
 const DEFAULT_SCREENSHOT_FILENAME = 'screenshot.png';
 
 /**
+ * `JiraClient`'s constructor requires a non-empty `projectKey`, but
+ * `searchUsers` and `listProjects` both hit endpoints that ignore it
+ * (`/user/search`, `/project/search`). This placeholder satisfies
+ * the constructor contract without fabricating a misleading real key.
+ * Do NOT use for ticket creation — `createIssue` sends the key to
+ * Jira and will 404.
+ */
+const CONFIG_ONLY_PROJECT_KEY_PLACEHOLDER = 'TEMP';
+
+/**
  * Trusted domains for Jira avatar URLs
  * These domains are allowed for avatar proxy requests in addition to the configured instanceUrl
  */
@@ -556,6 +566,94 @@ export class JiraIntegrationService implements IntegrationService {
   }
 
   /**
+   * Validate caller-supplied Jira credentials and build a trimmed
+   * `JiraConfig` ready for `JiraClient`.
+   *
+   * Shared by `searchUsers` (admin edit flow) and `listProjects`
+   * (signup wizard flow) so the missing/invalid/whitespace handling
+   * stays consistent. Trims all three string fields so that
+   * leading/trailing whitespace can't sneak past validation and
+   * surface as a 500 from `new URL()` inside `JiraClient`.
+   *
+   * @throws {ValidationError} with a single combined diagnostic
+   *   covering every missing and invalid field detected in this call.
+   *   Callers see the full picture instead of having to fix-and-retry
+   *   one field at a time.
+   */
+  private validateAndNormalizeCredentials(config: Record<string, unknown>): JiraConfig {
+    const rawConfig = config as RawJiraConfig;
+
+    const missingFields: string[] = [];
+    const invalidFields: string[] = [];
+
+    const trimString = (value: unknown): string | undefined => {
+      if (typeof value !== 'string') {
+        return undefined;
+      }
+      const t = value.trim();
+      return t.length > 0 ? t : undefined;
+    };
+
+    // Accept both `instanceUrl` (used by the admin wizard and the
+    // signup wizard) and `host` (legacy field name still in some
+    // stored integration rows — see
+    // `JiraIntegrationService.normalizeConfig`). Use the first
+    // non-empty trimmed value so a blank `instanceUrl` doesn't
+    // block a valid legacy `host`.
+    const trimmedInstanceUrl = trimString(rawConfig.instanceUrl);
+    const trimmedLegacyHost = trimString(rawConfig.host);
+    const trimmedHost = trimmedInstanceUrl ?? trimmedLegacyHost;
+    const trimmedEmail = trimString(rawConfig.email);
+    const trimmedToken = trimString(rawConfig.apiToken);
+
+    const hostFieldProvided =
+      rawConfig.instanceUrl !== undefined &&
+      rawConfig.instanceUrl !== null &&
+      rawConfig.instanceUrl !== '';
+    const legacyHostFieldProvided =
+      rawConfig.host !== undefined && rawConfig.host !== null && rawConfig.host !== '';
+
+    if (!hostFieldProvided && !legacyHostFieldProvided) {
+      missingFields.push('instanceUrl');
+    } else if (!trimmedHost) {
+      invalidFields.push('instanceUrl (must be non-empty string)');
+    }
+
+    if (rawConfig.email === undefined || rawConfig.email === null || rawConfig.email === '') {
+      missingFields.push('email');
+    } else if (!trimmedEmail) {
+      invalidFields.push('email (must be non-empty string)');
+    }
+
+    if (
+      rawConfig.apiToken === undefined ||
+      rawConfig.apiToken === null ||
+      rawConfig.apiToken === ''
+    ) {
+      missingFields.push('apiToken');
+    } else if (!trimmedToken) {
+      invalidFields.push('apiToken (must be non-empty string)');
+    }
+
+    if (missingFields.length > 0 || invalidFields.length > 0) {
+      const errors = [
+        ...(missingFields.length > 0 ? [`missing: ${missingFields.join(', ')}`] : []),
+        ...(invalidFields.length > 0 ? [`invalid: ${invalidFields.join(', ')}`] : []),
+      ];
+      throw new ValidationError(`Jira configuration incomplete: ${errors.join('; ')}.`);
+    }
+
+    return {
+      host: trimmedHost!,
+      email: trimmedEmail!,
+      apiToken: trimmedToken!,
+      projectKey: rawConfig.projectKey || CONFIG_ONLY_PROJECT_KEY_PLACEHOLDER,
+      issueType: rawConfig.issueType,
+      enabled: rawConfig.enabled ?? true,
+    };
+  }
+
+  /**
    * Search for Jira users by query (email, name, etc.)
    * Used for user autocomplete in admin UI
    */
@@ -577,72 +675,12 @@ export class JiraIntegrationService implements IntegrationService {
       configKeys: Object.keys(config),
     });
 
-    // Extract Jira instance URL from config
-    const rawConfig = config as RawJiraConfig;
-    const host = rawConfig.instanceUrl;
-
-    logger.debug('Normalized Jira config for user search', {
-      hasInstanceUrl: !!rawConfig.instanceUrl,
-      hasEmail: !!rawConfig.email,
-      hasApiToken: !!rawConfig.apiToken,
-      resolvedHost: host ? host.substring(0, MAX_HOST_LOG_LENGTH) + '...' : undefined,
-    });
-
-    // Validate required Jira configuration fields (existence + type checks)
-    const missingFields: string[] = [];
-    const invalidFields: string[] = [];
-
-    if (!host) {
-      missingFields.push('instanceUrl');
-    } else if (typeof host !== 'string' || host.trim().length === 0) {
-      invalidFields.push('instanceUrl (must be non-empty string)');
-    }
-
-    if (!rawConfig.email) {
-      missingFields.push('email');
-    } else if (typeof rawConfig.email !== 'string' || rawConfig.email.trim().length === 0) {
-      invalidFields.push('email (must be non-empty string)');
-    }
-
-    if (!rawConfig.apiToken) {
-      missingFields.push('apiToken');
-    } else if (typeof rawConfig.apiToken !== 'string' || rawConfig.apiToken.trim().length === 0) {
-      invalidFields.push('apiToken (must be non-empty string)');
-    }
-
-    if (missingFields.length > 0 || invalidFields.length > 0) {
-      const errors = [
-        ...(missingFields.length > 0 ? [`missing: ${missingFields.join(', ')}`] : []),
-        ...(invalidFields.length > 0 ? [`invalid: ${invalidFields.join(', ')}`] : []),
-      ];
-
-      logger.error('Jira user search failed: configuration validation error', {
-        missingFields,
-        invalidFields,
-        availableConfigKeys: Object.keys(config),
-      });
-
-      throw new ValidationError(
-        `Jira configuration incomplete: ${errors.join('; ')}. ` +
-          'Please check that credentials are properly encrypted and stored in the database.'
-      );
-    }
-
-    // Create normalized config with 'host' field for JiraClient
-    // Non-null assertions safe here because validation above ensures these fields exist
-    const normalizedConfig: JiraConfig = {
-      host: host!,
-      email: rawConfig.email!,
-      apiToken: rawConfig.apiToken!,
-      projectKey: rawConfig.projectKey || 'TEMP', // User search doesn't need real project key
-      issueType: rawConfig.issueType,
-      enabled: rawConfig.enabled ?? true,
-    };
+    const normalizedConfig: JiraConfig = this.validateAndNormalizeCredentials(config);
 
     logger.debug('Creating Jira client for user search', {
-      host: host!.substring(0, MAX_HOST_LOG_LENGTH) + '...',
-      email: rawConfig.email,
-      hasProjectKey: !!rawConfig.projectKey,
+      host: normalizedConfig.host.substring(0, MAX_HOST_LOG_LENGTH) + '...',
+      email: normalizedConfig.email,
+      hasProjectKey: !!(config as RawJiraConfig).projectKey,
     });
 
     const client = new JiraClient(normalizedConfig);
@@ -661,6 +699,44 @@ export class JiraIntegrationService implements IntegrationService {
       emailAddress: user.emailAddress,
       avatarUrls: user.avatarUrls,
     }));
+  }
+
+  /**
+   * List Jira projects visible to the authenticated user.
+   *
+   * Called by `POST /api/v1/integrations/jira/projects` to populate
+   * the signup wizard's project picker once "Test Connection" has
+   * validated the creds. No projectId is needed — the integration
+   * has not been saved yet.
+   */
+  async listProjects(
+    config: Record<string, unknown>,
+    query?: string,
+    maxResults?: number
+  ): Promise<{ id: string; key: string; name: string }[]> {
+    const normalizedConfig: JiraConfig = this.validateAndNormalizeCredentials(config);
+
+    // `JiraClient`'s constructor validates the URL (format, SSRF guard,
+    // HTTPS-only) and throws plain `Error` on any failure. Those are
+    // all user-input issues — rewrap as `ValidationError` so the route
+    // returns 400 with an actionable message instead of 500.
+    let client: JiraClient;
+    try {
+      client = new JiraClient(normalizedConfig);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ValidationError(`Jira configuration invalid: ${message}`);
+    }
+
+    const projects = await client.listProjects(query, maxResults);
+
+    logger.info('Jira project list fetched', {
+      host: normalizedConfig.host.substring(0, MAX_HOST_LOG_LENGTH) + '...',
+      count: projects.length,
+      hasQuery: !!query,
+    });
+
+    return projects.map((p) => ({ id: p.id, key: p.key, name: p.name }));
   }
 
   /**

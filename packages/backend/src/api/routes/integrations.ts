@@ -18,6 +18,32 @@ import { validateSSRFProtection } from '../../integrations/security/ssrf-validat
 const logger = getLogger();
 
 /**
+ * Coerce a Fastify querystring value to a single string.
+ *
+ * Fastify's default parser returns an array when the same key appears
+ * twice (`?maxResults=10&maxResults=20`). We pick the first string so
+ * downstream `.trim()` / regex calls don't throw TypeError and bubble
+ * as 500 on what should be a request-shape issue.
+ */
+function firstString(raw: unknown): string | undefined {
+  if (typeof raw === 'string') {
+    return raw;
+  }
+  if (Array.isArray(raw) && typeof raw[0] === 'string') {
+    return raw[0];
+  }
+  return undefined;
+}
+
+/**
+ * Reasonable upper bound on `?maxResults=`. The Jira client clamps to
+ * 50 per page anyway, but rejecting absurd inputs at the API edge
+ * keeps the error contract honest and avoids silently accepting
+ * values past `Number.MAX_SAFE_INTEGER`.
+ */
+const MAX_LIST_PROJECTS_RESULTS = 1000;
+
+/**
  * Helper function to load a plugin and throw appropriate error if not found
  */
 async function loadPluginOrThrow(registry: PluginRegistry, platform: string) {
@@ -83,6 +109,87 @@ export async function registerIntegrationRoutes(
       return sendSuccess(reply, result);
     }
   );
+
+  /**
+   * List projects on the external platform using caller-provided credentials.
+   * POST /api/v1/integrations/:platform/projects
+   *
+   * Mirrors `/test` shape (flat config in body, no projectId): the signup
+   * wizard calls this after "Test Connection" passes but before the
+   * integration row exists in the DB, so credentials come from the
+   * request, not from decryption. Authenticated users only — the route
+   * performs an outbound HTTPS call to the platform.
+   */
+  server.post<{
+    Params: { platform: string };
+    Body: Record<string, unknown>;
+    // Widen to `string | string[]` so the type matches the runtime
+    // behavior of Fastify's default parser for repeated keys — and so
+    // the `firstString` coercion below isn't seen as dead code by
+    // future maintainers.
+    Querystring: { query?: string | string[]; maxResults?: string | string[] };
+  }>('/api/v1/integrations/:platform/projects', async (request, reply) => {
+    if (!request.authUser && !request.apiKey) {
+      throw new AppError('Authentication required', 401, 'Unauthorized');
+    }
+
+    const { platform } = request.params;
+    const config = request.body;
+    // Trim `query` at the edge so `?query=%20%20` doesn't log
+    // `hasQuery: true` and then quietly get dropped downstream.
+    const rawQuery = firstString(request.query.query);
+    const trimmedQuery = rawQuery?.trim();
+    const query = trimmedQuery ? trimmedQuery : undefined;
+    const maxResultsStr = firstString(request.query.maxResults);
+
+    let maxResults: number | undefined;
+    if (maxResultsStr !== undefined && maxResultsStr.trim() !== '') {
+      // Trim so `?maxResults= 10` doesn't 400 on a stray space. Then
+      // require whole-digits-only — `parseInt` is too permissive and
+      // would accept `"10.5"` (→ 10) or `"10abc"` (→ 10), making the
+      // "must be a positive integer" error message misleading. Cap
+      // string length so values past `Number.MAX_SAFE_INTEGER` don't
+      // sneak past `Number.isInteger` and get silently clamped.
+      const trimmed = maxResultsStr.trim();
+      if (!/^\d+$/.test(trimmed) || trimmed.length > String(MAX_LIST_PROJECTS_RESULTS).length) {
+        throw new AppError(
+          `\`maxResults\` must be a positive integer between 1 and ${MAX_LIST_PROJECTS_RESULTS}`,
+          400,
+          'BadRequest'
+        );
+      }
+      const parsed = Number(trimmed);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_LIST_PROJECTS_RESULTS) {
+        throw new AppError(
+          `\`maxResults\` must be a positive integer between 1 and ${MAX_LIST_PROJECTS_RESULTS}`,
+          400,
+          'BadRequest'
+        );
+      }
+      maxResults = parsed;
+    }
+
+    const service = await loadPluginOrThrow(registry, platform);
+
+    if (!service.listProjects || typeof service.listProjects !== 'function') {
+      throw new AppError(
+        `Project listing not supported for ${platform} integration`,
+        400,
+        'BadRequest'
+      );
+    }
+
+    logger.info('Listing projects for integration', {
+      platform,
+      userId: request.authUser?.id || 'api-key',
+      hasQuery: !!query,
+      maxResults,
+    });
+
+    const projects = await service.listProjects(config, query, maxResults);
+
+    return sendSuccess(reply, { projects });
+  });
 
   /**
    * Save integration configuration for project
