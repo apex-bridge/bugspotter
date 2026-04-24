@@ -20,6 +20,17 @@ export interface ConfigureProjectIntegrationRequest {
   enabled?: boolean;
 }
 
+export interface ExternalProject {
+  id: string;
+  key: string;
+  name: string;
+}
+
+export interface SearchProjectsOptions {
+  query?: string;
+  maxResults?: number;
+}
+
 export const projectIntegrationService = {
   /**
    * Configure integration for a specific project
@@ -84,6 +95,53 @@ export const projectIntegrationService = {
       config
     );
     return response.data.data;
+  },
+
+  /**
+   * Search for projects on the external platform using caller-supplied
+   * credentials — used by the signup wizard's project picker BEFORE the
+   * integration row exists in the DB. Mirrors the POST-with-flat-config
+   * shape of `testConnection`.
+   *
+   * @throws {RangeError} synchronously (before any network call) when
+   *   `options.maxResults` is out of range. Surfacing caller bugs as
+   *   a typed error — rather than silently dropping the param, which
+   *   would serve the server default 50 — keeps "I asked for N"
+   *   honest. Typical callers hard-code a valid value, so the throw
+   *   is a defensive guard, not a path users will hit at runtime.
+   */
+  searchProjects: async (
+    platform: string,
+    config: Record<string, unknown>,
+    options: SearchProjectsOptions = {}
+  ): Promise<ExternalProject[]> => {
+    const params: Record<string, string> = {};
+    if (options.query && options.query.trim() !== '') {
+      params.query = options.query.trim();
+    }
+    // Backend rejects non-integer, non-positive, or >1000 maxResults
+    // with 400 (see MAX_LIST_PROJECTS_RESULTS in the integrations
+    // route). Throw early rather than silently drop the param — a
+    // caller passing 0 probably didn't mean "please use the server
+    // default 50", and swallowing the value would mask the bug.
+    if (options.maxResults !== undefined) {
+      if (
+        !Number.isInteger(options.maxResults) ||
+        options.maxResults <= 0 ||
+        options.maxResults > 1000
+      ) {
+        throw new RangeError(
+          `maxResults must be an integer between 1 and 1000 (received ${options.maxResults})`
+        );
+      }
+      params.maxResults = String(options.maxResults);
+    }
+
+    const response = await api.post<{
+      success: boolean;
+      data: { projects: ExternalProject[] };
+    }>(API_ENDPOINTS.projectIntegrations.searchProjects(platform), config, { params });
+    return response.data.data.projects;
   },
 };
 
