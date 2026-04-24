@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { isJiraConfig } from '../../utils/type-guards';
 import type { JiraConfig } from '../../types';
 import { projectIntegrationService } from '../../services/project-integration-service';
 import { handleApiError } from '../../lib/api-client';
@@ -87,7 +86,29 @@ export function ProjectStep({
 
   // All hooks run unconditionally — the invalid-shape branch renders
   // a fallback view below using values derived from these hooks.
-  const config = isJiraConfig(localConfig) ? (localConfig as JiraConfig) : null;
+  //
+  // Guard is intentionally lighter than `isJiraConfig` (which
+  // requires auth.accessToken when type is oauth2/pat). ConnectionStep
+  // flips `authentication.type` without initializing type-specific
+  // fields, so during an auth-type switch the config momentarily
+  // fails the strict guard. Rendering "Invalid configuration" in
+  // that window would be a worse UX than just rendering the fallback
+  // manual-entry input; `buildProjectSearchConfig` will refuse to
+  // fire the picker anyway unless auth.type === 'basic' with email
+  // and apiToken populated.
+  const isRenderableJiraConfig = (value: unknown): value is JiraConfig => {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+    const c = value as Record<string, unknown>;
+    return (
+      typeof c.authentication === 'object' &&
+      c.authentication !== null &&
+      typeof (c.authentication as Record<string, unknown>).type === 'string'
+    );
+  };
+
+  const config = isRenderableJiraConfig(localConfig) ? (localConfig as JiraConfig) : null;
   const searchConfig = config ? buildProjectSearchConfig(config) : null;
 
   // NEVER put the apiToken in the queryKey: react-query persists keys
@@ -117,6 +138,12 @@ export function ProjectStep({
     // a fresh request; `gcTime: 0` purges the entry on unmount so
     // the old token's data can't flash briefly before the refetch
     // resolves on the next mount.
+    //
+    // NOTE: This is deliberately aggressive. A larger `gcTime` would
+    // give smoother back-and-forth wizard nav, but the token-swap
+    // edge case is security-sensitive (old token's projects briefly
+    // visible) and the extra loader is negligible — projects are
+    // capped at 50 and Jira responds quickly. Prefer correctness.
     staleTime: 0,
     gcTime: 0,
     refetchOnMount: 'always',
@@ -320,9 +347,14 @@ export function ProjectStep({
                 <button
                   {...commonProps}
                   key={opt.id}
+                  // `highlighted` (transient cursor) wins over
+                  // `selected` (persistent choice) for background so
+                  // Tailwind's arbitrary class-merge order can't make
+                  // the highlight invisible on the already-selected
+                  // row. `ring` stacks cleanly on either.
                   className={`w-full text-left px-2 py-1 flex justify-between hover:bg-gray-50 ${
-                    selected ? 'bg-blue-50' : ''
-                  } ${highlighted ? 'ring-2 ring-blue-400 bg-gray-50' : ''}`}
+                    highlighted ? 'ring-2 ring-blue-400 bg-gray-50' : selected ? 'bg-blue-50' : ''
+                  }`}
                   data-testid={`project-option-${opt.key}`}
                 >
                   <span className="font-mono">{opt.key}</span>

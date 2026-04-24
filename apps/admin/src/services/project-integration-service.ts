@@ -102,6 +102,13 @@ export const projectIntegrationService = {
    * credentials — used by the signup wizard's project picker BEFORE the
    * integration row exists in the DB. Mirrors the POST-with-flat-config
    * shape of `testConnection`.
+   *
+   * @throws {RangeError} synchronously (before any network call) when
+   *   `options.maxResults` is out of range. Surfacing caller bugs as
+   *   a typed error — rather than silently dropping the param, which
+   *   would serve the server default 50 — keeps "I asked for N"
+   *   honest. Typical callers hard-code a valid value, so the throw
+   *   is a defensive guard, not a path users will hit at runtime.
    */
   searchProjects: async (
     platform: string,

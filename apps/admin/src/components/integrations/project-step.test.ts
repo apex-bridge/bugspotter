@@ -2,8 +2,8 @@
  * Unit tests for the credential-extraction helper used by ProjectStep.
  *
  * The helper decides whether the searchable project picker should
- * fire a POST to `/integrations/jira/projects` (all three fields
- * present and non-empty) or fall back to the manual-entry input.
+ * fire a POST to `/api/v1/integrations/:platform/projects` (all three
+ * fields present and non-empty) or fall back to the manual-entry input.
  * Keeping these rules pure makes them cheap to test — the component
  * itself is covered by E2E.
  */
