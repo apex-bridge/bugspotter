@@ -20,7 +20,10 @@ interface ProjectStepProps {
   platform?: string;
 }
 
-export interface ProjectSearchConfig {
+// Extends `Record<string, unknown>` so the shape is assignable to
+// the service's deliberately-generic request body without a cast at
+// the call site.
+export interface ProjectSearchConfig extends Record<string, unknown> {
   instanceUrl: string;
   email: string;
   apiToken: string;
@@ -103,14 +106,7 @@ export function ProjectStep({
       if (!searchConfig) {
         return [];
       }
-      return projectIntegrationService.searchProjects(
-        platform,
-        // Narrow typed config to the service's generic Record<> body
-        // shape. TS doesn't auto-widen named interfaces without an
-        // index signature, but the runtime shape is identical.
-        searchConfig as unknown as Record<string, unknown>,
-        { maxResults: 50 }
-      );
+      return projectIntegrationService.searchProjects(platform, searchConfig, { maxResults: 50 });
     },
     enabled: searchConfig !== null,
     // Force a fresh fetch every time ProjectStep mounts. The queryKey
@@ -223,6 +219,12 @@ export function ProjectStep({
         selectProject(typed);
       }
     } else if (event.key === 'Escape') {
+      // Reset both the filter and the highlight. Standard combobox
+      // behavior for an always-expanded listbox: Escape "backs out"
+      // of the current refinement. The listbox itself remains
+      // visible since it's inline in the wizard step.
+      event.preventDefault();
+      setSearch('');
       setHighlightedIndex(-1);
     }
   };
@@ -250,7 +252,10 @@ export function ProjectStep({
             className="w-full border p-2 rounded"
             placeholder={t('integrationConfig.searchProjectsPlaceholder')}
             data-testid="project-search-input"
-            aria-label={t('integrationConfig.searchProjects')}
+            // No explicit `aria-label` — the visible <label> with
+            // `htmlFor="project-search"` provides the accessible
+            // name. Adding a separate `aria-label` overrides the
+            // visible label and violates WCAG 2.5.3 "Label in Name".
             aria-busy={projectsQuery.isLoading}
             aria-controls="project-list"
             aria-activedescendant={
