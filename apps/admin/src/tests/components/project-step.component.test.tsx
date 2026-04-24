@@ -15,7 +15,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
-import { ProjectStep } from './project-step';
+import { ProjectStep } from '../../components/integrations/project-step';
 import type { JiraConfig } from '../../types';
 import { projectIntegrationService } from '../../services/project-integration-service';
 

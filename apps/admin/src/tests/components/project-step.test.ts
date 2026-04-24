@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildProjectSearchConfig } from './project-step';
+import { buildProjectSearchConfig } from '../../components/integrations/project-step';
 import type { JiraConfig } from '../../types';
 
 describe('buildProjectSearchConfig', () => {
