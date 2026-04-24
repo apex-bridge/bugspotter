@@ -20,6 +20,17 @@ export interface ConfigureProjectIntegrationRequest {
   enabled?: boolean;
 }
 
+export interface ExternalProject {
+  id: string;
+  key: string;
+  name: string;
+}
+
+export interface SearchProjectsOptions {
+  query?: string;
+  maxResults?: number;
+}
+
 export const projectIntegrationService = {
   /**
    * Configure integration for a specific project
@@ -84,6 +95,32 @@ export const projectIntegrationService = {
       config
     );
     return response.data.data;
+  },
+
+  /**
+   * Search for projects on the external platform using caller-supplied
+   * credentials — used by the signup wizard's project picker BEFORE the
+   * integration row exists in the DB. Mirrors the POST-with-flat-config
+   * shape of `testConnection`.
+   */
+  searchProjects: async (
+    platform: string,
+    config: Record<string, unknown>,
+    options: SearchProjectsOptions = {}
+  ): Promise<ExternalProject[]> => {
+    const params: Record<string, string> = {};
+    if (options.query && options.query.trim() !== '') {
+      params.query = options.query.trim();
+    }
+    if (options.maxResults !== undefined) {
+      params.maxResults = String(options.maxResults);
+    }
+
+    const response = await api.post<{
+      success: boolean;
+      data: { projects: ExternalProject[] };
+    }>(API_ENDPOINTS.projectIntegrations.searchProjects(platform), config, { params });
+    return response.data.data.projects;
   },
 };
 
