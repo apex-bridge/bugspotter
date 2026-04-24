@@ -114,14 +114,19 @@ export const projectIntegrationService = {
     }
     // Backend rejects non-integer, non-positive, or >1000 maxResults
     // with 400 (see MAX_LIST_PROJECTS_RESULTS in the integrations
-    // route). Mirror the cap client-side so callers don't burn a
-    // round trip on values the server will reject.
-    if (
-      options.maxResults !== undefined &&
-      Number.isInteger(options.maxResults) &&
-      options.maxResults > 0 &&
-      options.maxResults <= 1000
-    ) {
+    // route). Throw early rather than silently drop the param — a
+    // caller passing 0 probably didn't mean "please use the server
+    // default 50", and swallowing the value would mask the bug.
+    if (options.maxResults !== undefined) {
+      if (
+        !Number.isInteger(options.maxResults) ||
+        options.maxResults <= 0 ||
+        options.maxResults > 1000
+      ) {
+        throw new RangeError(
+          `maxResults must be an integer between 1 and 1000 (received ${options.maxResults})`
+        );
+      }
       params.maxResults = String(options.maxResults);
     }
 

@@ -20,6 +20,12 @@ interface ProjectStepProps {
   platform?: string;
 }
 
+export interface ProjectSearchConfig {
+  instanceUrl: string;
+  email: string;
+  apiToken: string;
+}
+
 /**
  * Extract the flat-config shape the backend's
  * `POST /integrations/:platform/projects` route expects.
@@ -30,16 +36,15 @@ interface ProjectStepProps {
  * when anything required is missing so the caller can fall back to
  * manual entry rather than fire a doomed request.
  */
-export function buildProjectSearchConfig(config: JiraConfig): Record<string, unknown> | null {
+export function buildProjectSearchConfig(config: JiraConfig): ProjectSearchConfig | null {
   // Picker only works with Basic Auth today — the backend JiraClient
   // speaks Basic only. Switching to oauth2/pat in ConnectionStep
   // preserves the old email/apiToken fields, so we'd otherwise keep
   // firing the picker with stale Basic creds while the user thinks
-  // they're using a different auth mechanism. Require an explicit
-  // `type === 'basic'` (or unset, for back-compat on legacy configs
-  // that never stored the type).
-  const authType = config.authentication?.type;
-  if (authType && authType !== 'basic') {
+  // they're using a different auth mechanism. `isJiraConfig` already
+  // requires `authentication.type` to be set, so we can check it
+  // strictly here.
+  if (config.authentication?.type !== 'basic') {
     return null;
   }
 
@@ -98,15 +103,26 @@ export function ProjectStep({
       if (!searchConfig) {
         return [];
       }
-      return projectIntegrationService.searchProjects(platform, searchConfig, { maxResults: 50 });
+      return projectIntegrationService.searchProjects(
+        platform,
+        // Narrow typed config to the service's generic Record<> body
+        // shape. TS doesn't auto-widen named interfaces without an
+        // index signature, but the runtime shape is identical.
+        searchConfig as unknown as Record<string, unknown>,
+        { maxResults: 50 }
+      );
     },
     enabled: searchConfig !== null,
     // Force a fresh fetch every time ProjectStep mounts. The queryKey
     // omits the apiToken (to avoid leaking it into the cache), so a
     // user changing ONLY their token — same instanceUrl + email —
     // would otherwise see the previous token's project list served
-    // from cache. Refetching on mount sidesteps that correctness gap.
+    // from cache. `staleTime: 0` + `refetchOnMount: 'always'` forces
+    // a fresh request; `gcTime: 0` purges the entry on unmount so
+    // the old token's data can't flash briefly before the refetch
+    // resolves on the next mount.
     staleTime: 0,
+    gcTime: 0,
     refetchOnMount: 'always',
     retry: false,
   });
@@ -137,6 +153,32 @@ export function ProjectStep({
     );
   }, [projects, search]);
 
+  // Unified option list for the listbox. The synthetic
+  // "Use typed as project key" escape hatch participates in the
+  // same arrow-key/aria-activedescendant cycle as the real project
+  // options — otherwise the keyboard-navigable set silently excludes
+  // it and the user can only reach it via Enter-without-highlight.
+  type ListOption =
+    | { kind: 'project'; id: string; key: string; name: string }
+    | { kind: 'manual'; id: string; key: string };
+
+  const options: ListOption[] = useMemo(() => {
+    const list: ListOption[] = filteredProjects.map((p) => ({
+      kind: 'project',
+      id: `project-option-${p.key}`,
+      key: p.key,
+      name: p.name,
+    }));
+    const typed = search.trim();
+    if (
+      typed.length > 0 &&
+      !filteredProjects.some((p) => p.key.toLowerCase() === typed.toLowerCase())
+    ) {
+      list.push({ kind: 'manual', id: 'project-option-manual', key: typed });
+    }
+    return list;
+  }, [filteredProjects, search]);
+
   if (!config) {
     return (
       <div className="border p-4 rounded text-sm text-red-600">
@@ -148,35 +190,33 @@ export function ProjectStep({
   const pickerAvailable = searchConfig !== null && !projectsQuery.isError;
 
   const selectProject = (key: string) => {
-    setLocalConfig({ ...localConfig, projectKey: key });
+    setLocalConfig((prev) => ({ ...prev, projectKey: key }));
     setSearch('');
     setHighlightedIndex(-1);
   };
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    // Arrow keys only make sense when there are results to highlight;
-    // Enter/Escape must still work on empty lists so keyboard users
-    // can commit a typed key via the manual escape hatch.
-    if (event.key === 'ArrowDown' && filteredProjects.length > 0) {
+    // Arrow keys only make sense when there are options to cycle.
+    // Enter/Escape stay live on empty lists so the user isn't
+    // trapped — though with the synthetic manual-entry option in
+    // `options`, empty-options is rare (non-empty search adds one).
+    if (event.key === 'ArrowDown' && options.length > 0) {
       event.preventDefault();
-      setHighlightedIndex((prev) => (prev + 1) % filteredProjects.length);
-    } else if (event.key === 'ArrowUp' && filteredProjects.length > 0) {
+      setHighlightedIndex((prev) => (prev + 1) % options.length);
+    } else if (event.key === 'ArrowUp' && options.length > 0) {
       event.preventDefault();
-      setHighlightedIndex((prev) => (prev <= 0 ? filteredProjects.length - 1 : prev - 1));
+      setHighlightedIndex((prev) => (prev <= 0 ? options.length - 1 : prev - 1));
     } else if (event.key === 'Enter') {
-      // Guard against a stale index — filteredProjects can shrink
-      // between the keydown and this read (query result arrives,
-      // filter narrows), so pull the entry up front and null-check.
-      const highlighted = highlightedIndex >= 0 ? filteredProjects[highlightedIndex] : undefined;
+      // Guard against a stale index — options can shrink between the
+      // keydown and this read (query result arrives, filter narrows).
+      const highlighted = highlightedIndex >= 0 ? options[highlightedIndex] : undefined;
       if (highlighted) {
         event.preventDefault();
         selectProject(highlighted.key);
         return;
       }
-      // Fallback: no highlight. If the user typed something that
-      // looks like a project key (e.g. their project wasn't in the
-      // first 50), let Enter commit it as a manual entry so the
-      // picker never traps them.
+      // No highlight — commit the typed search as a manual project
+      // key so the picker never traps the user.
       const typed = search.trim();
       if (typed.length > 0) {
         event.preventDefault();
@@ -214,12 +254,15 @@ export function ProjectStep({
             aria-busy={projectsQuery.isLoading}
             aria-controls="project-list"
             aria-activedescendant={
-              highlightedIndex >= 0 && filteredProjects[highlightedIndex]
-                ? `project-option-${filteredProjects[highlightedIndex].key}`
+              highlightedIndex >= 0 && options[highlightedIndex]
+                ? options[highlightedIndex].id
                 : undefined
             }
             role="combobox"
-            aria-expanded={filteredProjects.length > 0}
+            // Listbox is always visible while the picker is shown;
+            // `aria-expanded` must reflect visibility, not the number
+            // of options inside it.
+            aria-expanded={true}
             aria-autocomplete="list"
           />
 
@@ -234,59 +277,51 @@ export function ProjectStep({
               <div className="p-2 text-gray-500">{t('integrationConfig.loadingProjects')}</div>
             )}
 
-            {!projectsQuery.isLoading && filteredProjects.length === 0 && (
+            {!projectsQuery.isLoading && options.length === 0 && (
               <div className="p-2 text-gray-500">{t('integrationConfig.noProjectsFound')}</div>
             )}
 
-            {/* Always-available manual escape hatch: if the user typed
-                something and either nothing matches or they want a key
-                that's past the 50-entry cap / filtered out by
-                permissions, offer the typed string as a selectable
-                option. Keyboard users can Enter on it; mouse users
-                click. Only shown when there's no exact-key match in
-                the list, to avoid a duplicate. */}
-            {!projectsQuery.isLoading &&
-              search.trim().length > 0 &&
-              !filteredProjects.some(
-                (p) => p.key.toLowerCase() === search.trim().toLowerCase()
-              ) && (
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={false}
-                  tabIndex={-1}
-                  onClick={() => selectProject(search.trim())}
-                  className="w-full text-left px-2 py-1 border-t bg-gray-50 hover:bg-gray-100 text-gray-700"
-                  data-testid="project-manual-entry-option"
-                >
-                  {t('integrationConfig.useTypedProjectKey', { key: search.trim() })}
-                </button>
-              )}
-
-            {filteredProjects.map((p, i) => {
-              const selected = config.projectKey === p.key;
+            {options.map((opt, i) => {
+              const selected = config.projectKey === opt.key;
               const highlighted = highlightedIndex === i;
+              // Keyboard users navigate via arrow keys on the search
+              // input, so 50 buttons don't become 50 tab stops between
+              // the picker and Next. Mouse/touch clicks still work.
+              const commonProps = {
+                id: opt.id,
+                type: 'button' as const,
+                role: 'option' as const,
+                'aria-selected': selected,
+                tabIndex: -1,
+                onClick: () => selectProject(opt.key),
+                onMouseEnter: () => setHighlightedIndex(i),
+              };
+
+              if (opt.kind === 'manual') {
+                return (
+                  <button
+                    {...commonProps}
+                    key={opt.id}
+                    className={`w-full text-left px-2 py-1 border-t bg-gray-50 hover:bg-gray-100 text-gray-700 ${
+                      highlighted ? 'ring-2 ring-blue-400' : ''
+                    }`}
+                    data-testid="project-manual-entry-option"
+                  >
+                    {t('integrationConfig.useTypedProjectKey', { key: opt.key })}
+                  </button>
+                );
+              }
               return (
                 <button
-                  key={p.id}
-                  id={`project-option-${p.key}`}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  // Skip in Tab order — keyboard users navigate the list
-                  // via arrow keys on the search input, so 50 buttons
-                  // don't become 50 tab stops between picker and Next.
-                  // Mouse/touch clicks still work.
-                  tabIndex={-1}
-                  onClick={() => selectProject(p.key)}
-                  onMouseEnter={() => setHighlightedIndex(i)}
+                  {...commonProps}
+                  key={opt.id}
                   className={`w-full text-left px-2 py-1 flex justify-between hover:bg-gray-50 ${
                     selected ? 'bg-blue-50' : ''
                   } ${highlighted ? 'ring-2 ring-blue-400 bg-gray-50' : ''}`}
-                  data-testid={`project-option-${p.key}`}
+                  data-testid={`project-option-${opt.key}`}
                 >
-                  <span className="font-mono">{p.key}</span>
-                  <span className="text-gray-600 ml-2 truncate">{p.name}</span>
+                  <span className="font-mono">{opt.key}</span>
+                  <span className="text-gray-600 ml-2 truncate">{opt.name}</span>
                 </button>
               );
             })}
@@ -312,7 +347,10 @@ export function ProjectStep({
             id="project-key"
             type="text"
             value={config.projectKey ?? ''}
-            onChange={(e) => setLocalConfig({ ...localConfig, projectKey: e.target.value })}
+            onChange={(e) => {
+              const value = e.target.value;
+              setLocalConfig((prev) => ({ ...prev, projectKey: value }));
+            }}
             className="w-full border p-2 rounded mt-1"
             placeholder={t('integrationConfig.projectKeyPlaceholder')}
             data-testid="project-key-input"
@@ -337,7 +375,10 @@ export function ProjectStep({
         id="issue-type"
         type="text"
         value={config.issueType ?? 'Bug'}
-        onChange={(e) => setLocalConfig({ ...localConfig, issueType: e.target.value })}
+        onChange={(e) => {
+          const value = e.target.value;
+          setLocalConfig((prev) => ({ ...prev, issueType: value }));
+        }}
         className="w-full border p-2 rounded mt-1"
         placeholder={t('integrationConfig.issueTypePlaceholder')}
       />
