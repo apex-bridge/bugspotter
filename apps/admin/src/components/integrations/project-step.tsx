@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -101,14 +101,20 @@ export function ProjectStep({
       return projectIntegrationService.searchProjects(platform, searchConfig, { maxResults: 50 });
     },
     enabled: searchConfig !== null,
-    staleTime: 5 * 60 * 1000, // 5 min — creds don't change mid-session
+    // Force a fresh fetch every time ProjectStep mounts. The queryKey
+    // omits the apiToken (to avoid leaking it into the cache), so a
+    // user changing ONLY their token — same instanceUrl + email —
+    // would otherwise see the previous token's project list served
+    // from cache. Refetching on mount sidesteps that correctness gap.
+    staleTime: 0,
+    refetchOnMount: 'always',
     retry: false,
   });
 
   // `useQuery` v5 dropped onError; surface via effect instead. A toast
   // is fine here — the UI also falls back to manual entry when the
   // fetch fails.
-  React.useEffect(() => {
+  useEffect(() => {
     if (projectsQuery.isError) {
       toast.error(
         `${t('integrationConfig.failedToLoadProjects')}: ${handleApiError(projectsQuery.error)}`
@@ -148,13 +154,13 @@ export function ProjectStep({
   };
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (filteredProjects.length === 0) {
-      return;
-    }
-    if (event.key === 'ArrowDown') {
+    // Arrow keys only make sense when there are results to highlight;
+    // Enter/Escape must still work on empty lists so keyboard users
+    // can commit a typed key via the manual escape hatch.
+    if (event.key === 'ArrowDown' && filteredProjects.length > 0) {
       event.preventDefault();
       setHighlightedIndex((prev) => (prev + 1) % filteredProjects.length);
-    } else if (event.key === 'ArrowUp') {
+    } else if (event.key === 'ArrowUp' && filteredProjects.length > 0) {
       event.preventDefault();
       setHighlightedIndex((prev) => (prev <= 0 ? filteredProjects.length - 1 : prev - 1));
     } else if (event.key === 'Enter') {

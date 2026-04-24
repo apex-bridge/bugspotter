@@ -112,13 +112,15 @@ export const projectIntegrationService = {
     if (options.query && options.query.trim() !== '') {
       params.query = options.query.trim();
     }
-    // Backend rejects non-integer, non-positive, or oversized
-    // maxResults with 400 — filter out garbage client-side so callers
-    // don't burn a round trip on values the server will reject.
+    // Backend rejects non-integer, non-positive, or >1000 maxResults
+    // with 400 (see MAX_LIST_PROJECTS_RESULTS in the integrations
+    // route). Mirror the cap client-side so callers don't burn a
+    // round trip on values the server will reject.
     if (
       options.maxResults !== undefined &&
       Number.isInteger(options.maxResults) &&
-      options.maxResults > 0
+      options.maxResults > 0 &&
+      options.maxResults <= 1000
     ) {
       params.maxResults = String(options.maxResults);
     }
