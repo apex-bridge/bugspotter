@@ -184,8 +184,11 @@ export default function OnboardingPage() {
     }
 
     // URL fragment: parse existing hash as kv pairs, drop only
-    // `handoff`, keep any other unrelated fragment state.
-    if (sanitized.hash.includes('handoff')) {
+    // `handoff`, keep any other unrelated fragment state. Don't
+    // pre-filter with `.includes('handoff')` — that would also
+    // match `#other_handoff=...` and trigger unnecessary work;
+    // the `hashParams.has('handoff')` check below is authoritative.
+    if (sanitized.hash.length > 1) {
       const hashParams = new URLSearchParams(sanitized.hash.slice(1));
       if (hashParams.has('handoff')) {
         hashParams.delete('handoff');
@@ -196,7 +199,14 @@ export default function OnboardingPage() {
     }
 
     if (dirty) {
-      window.history.replaceState({}, '', sanitized.pathname + sanitized.search + sanitized.hash);
+      // Preserve `window.history.state` — React Router v6 stores its
+      // own state there (scroll-restoration keys, idx). Passing `{}`
+      // would wipe it and break back/forward navigation.
+      window.history.replaceState(
+        window.history.state,
+        '',
+        sanitized.pathname + sanitized.search + sanitized.hash
+      );
     }
     // Run once per unique handoff — the normal case is a one-shot
     // mount, but a future remount would re-sanitize if somehow the
