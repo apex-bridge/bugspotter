@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -109,9 +109,18 @@ export default function OnboardingPage() {
   // `replaceState` URL changes into `searchParams`. A stale/empty
   // handoff after strip-on-mount would otherwise flip to null and
   // re-trigger the /login-redirect branch.
-  const [handoff] = useState<OnboardingHandoff | null>(() =>
-    decodeHandoff(searchParams.get('handoff'))
-  );
+  //
+  // Fragment (`#handoff=`) is the PREFERRED source — fragments are
+  // never sent to servers or included in `Referer` headers, so the
+  // plaintext API key doesn't leak to access logs, CDNs, or any
+  // third-party resource the page loads. Query (`?handoff=`) is
+  // accepted as a fallback for backward compatibility; the landing
+  // signup form should emit fragment form when shipped.
+  const [handoff] = useState<OnboardingHandoff | null>(() => {
+    const fromHash = new URLSearchParams(window.location.hash.slice(1)).get('handoff');
+    const fromQuery = searchParams.get('handoff');
+    return decodeHandoff(fromHash || fromQuery);
+  });
 
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
@@ -122,20 +131,41 @@ export default function OnboardingPage() {
   // so it can't grow unbounded over a long session.
   const copyTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  // Strip the handoff param BEFORE the first paint so it can't be
+  // Strip the handoff value BEFORE the first paint so it can't be
   // copy-pasted out of the address bar even for a single frame.
   // `useEffect` fires after commit/paint; `useLayoutEffect` fires
   // synchronously after DOM mutations but before the browser paints.
+  //
+  // Runs regardless of whether decode succeeded — even a malformed
+  // `handoff=` value shouldn't linger in the URL during the redirect
+  // to /login. Also cleans both query and fragment sources.
   useLayoutEffect(() => {
-    if (!handoff) {
-      return;
-    }
-    // Keep other query params and the hash — nuking everything past
-    // the pathname would also drop analytics/utm tags the landing
-    // page might legitimately attach.
     const sanitized = new URL(window.location.href);
-    sanitized.searchParams.delete('handoff');
-    window.history.replaceState({}, '', sanitized.pathname + sanitized.search + sanitized.hash);
+    let dirty = false;
+
+    if (sanitized.searchParams.has('handoff')) {
+      sanitized.searchParams.delete('handoff');
+      dirty = true;
+    }
+
+    // URL fragment: parse existing hash as kv pairs, drop only
+    // `handoff`, keep any other unrelated fragment state.
+    if (sanitized.hash.includes('handoff')) {
+      const hashParams = new URLSearchParams(sanitized.hash.slice(1));
+      if (hashParams.has('handoff')) {
+        hashParams.delete('handoff');
+        const remaining = hashParams.toString();
+        sanitized.hash = remaining ? `#${remaining}` : '';
+        dirty = true;
+      }
+    }
+
+    if (dirty) {
+      window.history.replaceState({}, '', sanitized.pathname + sanitized.search + sanitized.hash);
+    }
+    // Run once per unique handoff — the normal case is a one-shot
+    // mount, but a future remount would re-sanitize if somehow the
+    // param came back.
   }, [handoff]);
 
   // Seed auth context and handle the missing-handoff redirect after
@@ -169,41 +199,42 @@ export default function OnboardingPage() {
 
   const installSnippet = useMemo(
     () =>
+      // `JSON.stringify` so single-quotes, backslashes, or newlines
+      // in a key / id (unlikely, but cheap defense) don't break the
+      // generated snippet or enable string-injection into the copy.
       `import { BugSpotter } from '@bugspotter/sdk';
 
 BugSpotter.init({
-  apiKey: '${handoff.api_key}',
-  projectId: '${handoff.project.id}',
+  apiKey: ${JSON.stringify(handoff.api_key)},
+  projectId: ${JSON.stringify(handoff.project.id)},
 });`,
     [handoff.api_key, handoff.project.id]
   );
 
-  const copyToClipboard = async (
-    fieldId: string,
-    value: string,
-    setCopied: (v: boolean) => void,
-    successKey: string
-  ) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      toast.success(t(successKey));
-      // Cancel any pending revert from a previous click on the same
-      // button so rapid re-clicks don't cause the "Copied" label to
-      // flicker back to "Copy" while the user is still reading it.
-      const existing = copyTimersRef.current[fieldId];
-      if (existing) {
-        clearTimeout(existing);
+  const copyToClipboard = useCallback(
+    async (fieldId: string, value: string, setCopied: (v: boolean) => void, successKey: string) => {
+      try {
+        await navigator.clipboard.writeText(value);
+        setCopied(true);
+        toast.success(t(successKey));
+        // Cancel any pending revert from a previous click on the same
+        // button so rapid re-clicks don't cause the "Copied" label to
+        // flicker back to "Copy" while the user is still reading it.
+        const existing = copyTimersRef.current[fieldId];
+        if (existing) {
+          clearTimeout(existing);
+        }
+        const id = setTimeout(() => {
+          setCopied(false);
+          delete copyTimersRef.current[fieldId];
+        }, 2000);
+        copyTimersRef.current[fieldId] = id;
+      } catch {
+        toast.error(t('errors.failedToCopyToClipboard'));
       }
-      const id = setTimeout(() => {
-        setCopied(false);
-        delete copyTimersRef.current[fieldId];
-      }, 2000);
-      copyTimersRef.current[fieldId] = id;
-    } catch {
-      toast.error(t('errors.failedToCopyToClipboard'));
-    }
-  };
+    },
+    [t]
+  );
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6" data-testid="onboarding-page">

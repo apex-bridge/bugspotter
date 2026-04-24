@@ -63,12 +63,16 @@ function App() {
                 <Route path="/register" element={<RegisterPage />} />
                 {/*
                   `/onboarding` is intentionally outside ProtectedRoute.
-                  It reads a `?handoff=<base64>` param handed off by
-                  the landing signup form (cross-origin redirect from
-                  `bugspotter.io`), decodes it, and seeds the auth
-                  context. No auth cookie/access-token present on mount
-                  because the refresh cookie is still being set by the
-                  browser as this page loads.
+                  It reads a handoff blob passed by the landing signup
+                  form (cross-origin redirect from `bugspotter.io`) via
+                  URL fragment (`#handoff=`) or query (`?handoff=`),
+                  decodes it, and seeds the auth context.
+                  The handoff param IS the bootstrap access token; no
+                  existing app session is loaded from storage on mount
+                  yet, and the refresh cookie may still be arriving
+                  from the signup response. AuthProvider's initAuth
+                  has `/onboarding` in its public-route allowlist so
+                  it doesn't race the page's own `login()` call.
                 */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route path="/setup" element={<SetupWizard />} />

@@ -19,7 +19,6 @@ import type { User } from '../../types';
 
 const mockNavigate = vi.fn();
 const mockLogin = vi.fn();
-const mockReplaceState = vi.fn();
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
@@ -111,39 +110,47 @@ function renderWithHandoff(raw?: string) {
 }
 
 describe('OnboardingPage', () => {
-  // Capture jsdom's original `replaceState` so the override doesn't
-  // leak into other test files (which would make failures
-  // order-dependent on the shared jsdom global).
-  const originalReplaceState = window.history.replaceState.bind(window.history);
+  // `vi.spyOn` on `window.history.replaceState` captures the original
+  // for us and restores it automatically when we call `mockRestore()`
+  // in afterEach — no leak into other test files.
+  let replaceStateSpy: ReturnType<typeof vi.spyOn>;
+
+  // Capture jsdom's original navigator.clipboard descriptor so the
+  // copy-test override doesn't leak into other test files that share
+  // the navigator global. jsdom doesn't ship a clipboard by default,
+  // so `getOwnPropertyDescriptor` may return `undefined` — restore
+  // by deleting the property in that case.
+  const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // `window.history.replaceState` is called once on successful mount;
-    // spy so we can verify (and prevent it mutating jsdom's URL).
-    Object.defineProperty(window.history, 'replaceState', {
-      value: mockReplaceState,
-      configurable: true,
-      writable: true,
+    replaceStateSpy = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {
+      // Intentionally a no-op — we only want to observe calls, not
+      // actually mutate jsdom's URL across tests.
     });
   });
 
   afterEach(() => {
-    Object.defineProperty(window.history, 'replaceState', {
-      value: originalReplaceState,
-      configurable: true,
-      writable: true,
-    });
+    replaceStateSpy.mockRestore();
+    if (originalClipboardDescriptor) {
+      Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (navigator as any).clipboard;
+    }
   });
 
   it('renders the API key and install snippet after decoding a valid handoff', async () => {
     renderWithHandoff(encodeHandoff(validHandoff));
 
     expect(await screen.findByTestId('onboarding-api-key-value')).toHaveTextContent('bgs_abc123');
+    // `JSON.stringify` emits double-quotes — belt-and-braces defense
+    // against special chars breaking the generated snippet.
     expect(screen.getByTestId('onboarding-install-snippet')).toHaveTextContent(
-      "apiKey: 'bgs_abc123'"
+      'apiKey: "bgs_abc123"'
     );
     expect(screen.getByTestId('onboarding-install-snippet')).toHaveTextContent(
-      "projectId: 'proj-1'"
+      'projectId: "proj-1"'
     );
   });
 
@@ -160,18 +167,35 @@ describe('OnboardingPage', () => {
   });
 
   it('strips the handoff param from history so the API key does not linger in the URL', async () => {
-    renderWithHandoff(encodeHandoff(validHandoff));
-
-    await waitFor(() => {
-      expect(mockReplaceState).toHaveBeenCalled();
+    // Strip logic reads from `window.location.href`, not MemoryRouter.
+    // Stub the whole `location` object (setting `href` directly is a
+    // no-op in jsdom's location) so `new URL(...)` sees our planted
+    // query. `keep=yes` tests that unrelated params survive the strip.
+    const encoded = encodeHandoff(validHandoff);
+    const originalLocation = window.location;
+    const plantedUrl = `http://localhost:3000/onboarding?handoff=${encoded}&keep=yes`;
+    Object.defineProperty(window, 'location', {
+      value: new URL(plantedUrl),
+      configurable: true,
+      writable: true,
     });
-    // The stripped URL must not include `handoff=` — the whole point
-    // of the replace is to get the one-time plaintext key out of the
-    // browser's address bar and referer chain. We don't assert the
-    // exact path because jsdom's `window.location.pathname` and
-    // MemoryRouter's route are decoupled.
-    const stripped = mockReplaceState.mock.calls[0][2] as string;
-    expect(stripped).not.toContain('handoff=');
+
+    try {
+      renderWithHandoff(encoded);
+
+      await waitFor(() => {
+        expect(replaceStateSpy).toHaveBeenCalled();
+      });
+      const stripped = replaceStateSpy.mock.calls[0][2] as string;
+      expect(stripped).not.toContain('handoff=');
+      expect(stripped).toContain('keep=yes');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        value: originalLocation,
+        configurable: true,
+        writable: true,
+      });
+    }
   });
 
   it('redirects to /login and renders nothing when handoff is missing', async () => {
@@ -254,6 +278,25 @@ describe('OnboardingPage', () => {
     await user.click(screen.getByTestId('onboarding-api-key-copy'));
 
     expect(writeText).toHaveBeenCalledWith('bgs_abc123');
+  });
+
+  it('decodes handoff from URL fragment (#handoff=) as the preferred source', async () => {
+    // Fragment stays client-side — never leaks to servers or Referer
+    // headers — so it's the preferred location for the plaintext API
+    // key. The page must read it before falling back to the query.
+    const encoded = encodeHandoff(validHandoff);
+    const originalHash = window.location.hash;
+    window.location.hash = `#handoff=${encoded}`;
+    try {
+      render(
+        <MemoryRouter initialEntries={['/onboarding']}>
+          <OnboardingPage />
+        </MemoryRouter>
+      );
+      expect(await screen.findByTestId('onboarding-api-key-value')).toHaveTextContent('bgs_abc123');
+    } finally {
+      window.location.hash = originalHash;
+    }
   });
 
   it('Go-to-Dashboard button navigates to root', async () => {
