@@ -74,6 +74,36 @@ describe('buildProjectSearchConfig', () => {
     expect(buildProjectSearchConfig({ ...fullConfig, authentication: undefined })).toBeNull();
   });
 
+  it('returns null when auth.type is oauth2, even if email/apiToken linger from an earlier Basic config', () => {
+    // ConnectionStep preserves old auth fields when the user switches
+    // type; without this gate the picker would silently fire Basic
+    // requests while the user thinks they're on OAuth2.
+    expect(
+      buildProjectSearchConfig({
+        ...fullConfig,
+        authentication: {
+          type: 'oauth2',
+          email: 'user@example.com',
+          apiToken: 'tok-xyz',
+          accessToken: 'oauth-token',
+        },
+      })
+    ).toBeNull();
+  });
+
+  it('returns null when auth.type is pat', () => {
+    expect(
+      buildProjectSearchConfig({
+        ...fullConfig,
+        authentication: {
+          type: 'pat',
+          email: 'user@example.com',
+          apiToken: 'tok-xyz',
+        },
+      })
+    ).toBeNull();
+  });
+
   it('treats whitespace-only values as missing (fallback to manual entry)', () => {
     expect(
       buildProjectSearchConfig({

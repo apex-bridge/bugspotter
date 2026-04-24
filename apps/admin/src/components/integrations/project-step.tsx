@@ -31,6 +31,18 @@ interface ProjectStepProps {
  * manual entry rather than fire a doomed request.
  */
 export function buildProjectSearchConfig(config: JiraConfig): Record<string, unknown> | null {
+  // Picker only works with Basic Auth today — the backend JiraClient
+  // speaks Basic only. Switching to oauth2/pat in ConnectionStep
+  // preserves the old email/apiToken fields, so we'd otherwise keep
+  // firing the picker with stale Basic creds while the user thinks
+  // they're using a different auth mechanism. Require an explicit
+  // `type === 'basic'` (or unset, for back-compat on legacy configs
+  // that never stored the type).
+  const authType = config.authentication?.type;
+  if (authType && authType !== 'basic') {
+    return null;
+  }
+
   const instanceUrl = config.instanceUrl?.trim();
   const email = config.authentication?.email?.trim();
   const apiToken = config.authentication?.apiToken?.trim();
@@ -145,9 +157,25 @@ export function ProjectStep({
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
       setHighlightedIndex((prev) => (prev <= 0 ? filteredProjects.length - 1 : prev - 1));
-    } else if (event.key === 'Enter' && highlightedIndex >= 0) {
-      event.preventDefault();
-      selectProject(filteredProjects[highlightedIndex].key);
+    } else if (event.key === 'Enter') {
+      // Guard against a stale index — filteredProjects can shrink
+      // between the keydown and this read (query result arrives,
+      // filter narrows), so pull the entry up front and null-check.
+      const highlighted = highlightedIndex >= 0 ? filteredProjects[highlightedIndex] : undefined;
+      if (highlighted) {
+        event.preventDefault();
+        selectProject(highlighted.key);
+        return;
+      }
+      // Fallback: no highlight. If the user typed something that
+      // looks like a project key (e.g. their project wasn't in the
+      // first 50), let Enter commit it as a manual entry so the
+      // picker never traps them.
+      const typed = search.trim();
+      if (typed.length > 0) {
+        event.preventDefault();
+        selectProject(typed);
+      }
     } else if (event.key === 'Escape') {
       setHighlightedIndex(-1);
     }
@@ -203,6 +231,31 @@ export function ProjectStep({
             {!projectsQuery.isLoading && filteredProjects.length === 0 && (
               <div className="p-2 text-gray-500">{t('integrationConfig.noProjectsFound')}</div>
             )}
+
+            {/* Always-available manual escape hatch: if the user typed
+                something and either nothing matches or they want a key
+                that's past the 50-entry cap / filtered out by
+                permissions, offer the typed string as a selectable
+                option. Keyboard users can Enter on it; mouse users
+                click. Only shown when there's no exact-key match in
+                the list, to avoid a duplicate. */}
+            {!projectsQuery.isLoading &&
+              search.trim().length > 0 &&
+              !filteredProjects.some(
+                (p) => p.key.toLowerCase() === search.trim().toLowerCase()
+              ) && (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  tabIndex={-1}
+                  onClick={() => selectProject(search.trim())}
+                  className="w-full text-left px-2 py-1 border-t bg-gray-50 hover:bg-gray-100 text-gray-700"
+                  data-testid="project-manual-entry-option"
+                >
+                  {t('integrationConfig.useTypedProjectKey', { key: search.trim() })}
+                </button>
+              )}
 
             {filteredProjects.map((p, i) => {
               const selected = config.projectKey === p.key;
