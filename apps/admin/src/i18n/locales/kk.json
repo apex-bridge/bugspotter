@@ -409,6 +409,7 @@
     "failedToLoadProjects": "Жобаларды жүктеу сәтсіз",
     "selectProject": "Жобаны таңдаңыз",
     "selectedProject": "Таңдалды",
+    "projectPickerBasicAuthOnly": "Жобалардың автоматты тізімі тек Basic Auth (email + API-токен) үшін қолжетімді. Жоба кілтін қолмен енгізіңіз немесе алдыңғы қадамда түпнұсқалық растау түрін өзгертіңіз.",
     "testConnection": "Қосылымды сынау",
     "nextProject": "Келесі: Жоба",
     "issueType": "Мәселе түрі",

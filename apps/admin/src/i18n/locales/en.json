@@ -409,6 +409,7 @@
     "failedToLoadProjects": "Failed to load projects",
     "selectProject": "Select a project",
     "selectedProject": "Selected",
+    "projectPickerBasicAuthOnly": "Automatic project listing is only available for Basic Auth (email + API token). Enter the project key manually, or switch authentication type in the previous step.",
     "testConnection": "Test Connection",
     "nextProject": "Next: Project",
     "issueType": "Issue Type",

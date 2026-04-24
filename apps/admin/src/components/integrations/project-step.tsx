@@ -59,14 +59,29 @@ export function ProjectStep({
 }: ProjectStepProps) {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
+  // Tracks the currently-highlighted option so arrow keys on the
+  // search input can move a single focus ring through the list
+  // instead of leaving 50 tab stops in the page. Index into
+  // filteredProjects; -1 means "nothing highlighted".
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   // All hooks run unconditionally — the invalid-shape branch renders
   // a fallback view below using values derived from these hooks.
   const config = isJiraConfig(localConfig) ? (localConfig as JiraConfig) : null;
   const searchConfig = config ? buildProjectSearchConfig(config) : null;
 
+  // NEVER put the apiToken in the queryKey: react-query persists keys
+  // in its in-memory cache and surfaces them via devtools. Key on
+  // non-secret identity (platform + instanceUrl + email) so the cache
+  // still invalidates on creds change; the secret travels in the
+  // request body only.
   const projectsQuery = useQuery({
-    queryKey: ['integration-projects', platform, searchConfig],
+    queryKey: [
+      'integration-projects',
+      platform,
+      searchConfig?.instanceUrl ?? null,
+      searchConfig?.email ?? null,
+    ],
     queryFn: async () => {
       if (!searchConfig) {
         return [];
@@ -117,11 +132,33 @@ export function ProjectStep({
   const selectProject = (key: string) => {
     setLocalConfig({ ...localConfig, projectKey: key });
     setSearch('');
+    setHighlightedIndex(-1);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (filteredProjects.length === 0) {
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setHighlightedIndex((prev) => (prev + 1) % filteredProjects.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlightedIndex((prev) => (prev <= 0 ? filteredProjects.length - 1 : prev - 1));
+    } else if (event.key === 'Enter' && highlightedIndex >= 0) {
+      event.preventDefault();
+      selectProject(filteredProjects[highlightedIndex].key);
+    } else if (event.key === 'Escape') {
+      setHighlightedIndex(-1);
+    }
   };
 
   return (
     <div className="border p-4 rounded" data-testid="project-step">
-      <label htmlFor="project-key" className="block text-sm font-medium">
+      <label
+        htmlFor={pickerAvailable ? 'project-search' : 'project-key'}
+        className="block text-sm font-medium"
+      >
         {t('integrationConfig.projectKey')}
       </label>
 
@@ -131,15 +168,29 @@ export function ProjectStep({
             id="project-search"
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setHighlightedIndex(-1);
+            }}
+            onKeyDown={handleSearchKeyDown}
             className="w-full border p-2 rounded"
             placeholder={t('integrationConfig.searchProjectsPlaceholder')}
             data-testid="project-search-input"
             aria-label={t('integrationConfig.searchProjects')}
             aria-busy={projectsQuery.isLoading}
+            aria-controls="project-list"
+            aria-activedescendant={
+              highlightedIndex >= 0 && filteredProjects[highlightedIndex]
+                ? `project-option-${filteredProjects[highlightedIndex].key}`
+                : undefined
+            }
+            role="combobox"
+            aria-expanded={filteredProjects.length > 0}
+            aria-autocomplete="list"
           />
 
           <div
+            id="project-list"
             className="mt-2 border rounded max-h-64 overflow-y-auto text-sm"
             role="listbox"
             aria-label={t('integrationConfig.selectProject')}
@@ -153,18 +204,26 @@ export function ProjectStep({
               <div className="p-2 text-gray-500">{t('integrationConfig.noProjectsFound')}</div>
             )}
 
-            {filteredProjects.map((p) => {
+            {filteredProjects.map((p, i) => {
               const selected = config.projectKey === p.key;
+              const highlighted = highlightedIndex === i;
               return (
                 <button
                   key={p.id}
+                  id={`project-option-${p.key}`}
                   type="button"
                   role="option"
                   aria-selected={selected}
+                  // Skip in Tab order — keyboard users navigate the list
+                  // via arrow keys on the search input, so 50 buttons
+                  // don't become 50 tab stops between picker and Next.
+                  // Mouse/touch clicks still work.
+                  tabIndex={-1}
                   onClick={() => selectProject(p.key)}
+                  onMouseEnter={() => setHighlightedIndex(i)}
                   className={`w-full text-left px-2 py-1 flex justify-between hover:bg-gray-50 ${
                     selected ? 'bg-blue-50' : ''
-                  }`}
+                  } ${highlighted ? 'ring-2 ring-blue-400 bg-gray-50' : ''}`}
                   data-testid={`project-option-${p.key}`}
                 >
                   <span className="font-mono">{p.key}</span>
@@ -189,15 +248,27 @@ export function ProjectStep({
         // Fallback: manual entry. Same input as before, so users who
         // skip straight to step 2 or whose creds aren't complete can
         // still type a key.
-        <input
-          id="project-key"
-          type="text"
-          value={config.projectKey ?? ''}
-          onChange={(e) => setLocalConfig({ ...localConfig, projectKey: e.target.value })}
-          className="w-full border p-2 rounded mt-1"
-          placeholder={t('integrationConfig.projectKeyPlaceholder')}
-          data-testid="project-key-input"
-        />
+        <>
+          <input
+            id="project-key"
+            type="text"
+            value={config.projectKey ?? ''}
+            onChange={(e) => setLocalConfig({ ...localConfig, projectKey: e.target.value })}
+            className="w-full border p-2 rounded mt-1"
+            placeholder={t('integrationConfig.projectKeyPlaceholder')}
+            data-testid="project-key-input"
+          />
+          {/* Explain the fallback when it's the auth type — not an
+              incomplete form — that's driving it. `JiraClient` today
+              only speaks Basic Auth, so the picker endpoint can't
+              authenticate OAuth2/PAT users. Telling them up front is
+              better than a silent downgrade. */}
+          {(config.authentication?.type === 'oauth2' || config.authentication?.type === 'pat') && (
+            <p className="mt-2 text-xs text-gray-500" data-testid="project-picker-basic-auth-only">
+              {t('integrationConfig.projectPickerBasicAuthOnly')}
+            </p>
+          )}
+        </>
       )}
 
       <label htmlFor="issue-type" className="block text-sm font-medium mt-3">

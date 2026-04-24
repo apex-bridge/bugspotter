@@ -409,6 +409,7 @@
     "failedToLoadProjects": "Не удалось загрузить проекты",
     "selectProject": "Выберите проект",
     "selectedProject": "Выбрано",
+    "projectPickerBasicAuthOnly": "Автоматический список проектов доступен только для Basic Auth (email + API-токен). Введите ключ проекта вручную или смените способ аутентификации на предыдущем шаге.",
     "testConnection": "Проверить подключение",
     "nextProject": "Далее: Проект",
     "issueType": "Тип проблемы",
