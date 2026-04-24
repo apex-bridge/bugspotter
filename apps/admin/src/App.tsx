@@ -12,6 +12,7 @@ import { SaaSRoute } from './components/saas-route';
 import { DefaultRedirect } from './components/default-redirect';
 import LoginPage from './pages/login';
 import RegisterPage from './pages/register';
+import OnboardingPage from './pages/onboarding';
 import SetupWizard from './pages/setup';
 import DashboardLayout from './components/dashboard-layout';
 import DashboardPage from './pages/dashboard';
@@ -60,6 +61,16 @@ function App() {
 
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
+                {/*
+                  `/onboarding` is intentionally outside ProtectedRoute.
+                  It reads a `?handoff=<base64>` param handed off by
+                  the landing signup form (cross-origin redirect from
+                  `bugspotter.io`), decodes it, and seeds the auth
+                  context. No auth cookie/access-token present on mount
+                  because the refresh cookie is still being set by the
+                  browser as this page loads.
+                */}
+                <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route path="/setup" element={<SetupWizard />} />
                 <Route path="/invitations/accept" element={<AcceptInvitationPage />} />
                 <Route
