@@ -144,6 +144,12 @@ describe('OnboardingPage', () => {
     renderWithHandoff(encodeHandoff(validHandoff));
 
     expect(await screen.findByTestId('onboarding-api-key-value')).toHaveTextContent('bgs_abc123');
+    // Default import — matches README.md. A user copy-pasting this
+    // snippet needs it to work against the real SDK (which ships a
+    // default export, not a named one).
+    expect(screen.getByTestId('onboarding-install-snippet')).toHaveTextContent(
+      "import BugSpotter from '@bugspotter/sdk'"
+    );
     // `JSON.stringify` emits double-quotes — belt-and-braces defense
     // against special chars breaking the generated snippet.
     expect(screen.getByTestId('onboarding-install-snippet')).toHaveTextContent(
@@ -242,6 +248,11 @@ describe('OnboardingPage', () => {
       },
     ],
     ['project.id as array', { ...validHandoff, project: { id: [], name: 'x' } }],
+    // The admin `User` type requires `name`. If validation doesn't
+    // check it, `as OnboardingHandoff` is a lie and downstream code
+    // gets a structurally invalid user.
+    ['user.name missing', { ...validHandoff, user: { ...validHandoff.user, name: undefined } }],
+    ['project.name missing', { ...validHandoff, project: { id: 'proj-1' } }],
   ])('redirects to /login when %s (type-mismatched shape)', async (_label, payload) => {
     // Truthy-only validation would accept these (truthy numbers,
     // objects, arrays) and crash later at render or feed garbage

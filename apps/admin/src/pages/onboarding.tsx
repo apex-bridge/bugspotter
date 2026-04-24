@@ -64,10 +64,11 @@ function decodeHandoff(raw: string | null): OnboardingHandoff | null {
   }
   try {
     const binary = atob(normalizeBase64(raw));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
+    // `atob` produces a binary string — every char has code point
+    // < 256, so iterating character-by-character is safe (no
+    // surrogate pairs). `Uint8Array.from` with a map function is
+    // the idiomatic single-expression form for this conversion.
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
     const json = new TextDecoder().decode(bytes);
     const parsed: unknown = JSON.parse(json);
 
@@ -83,6 +84,11 @@ function decodeHandoff(raw: string | null): OnboardingHandoff | null {
     const organization = p.organization as Record<string, unknown> | undefined;
     const project = p.project as Record<string, unknown> | undefined;
 
+    // Check every field declared required by `OnboardingHandoff` +
+    // the admin `User` interface. Without this, `as OnboardingHandoff`
+    // below is a lie and downstream code (render, auth context
+    // consumers) could receive structurally invalid data — e.g. a
+    // `User` with no `name`, or an organization with no `name`.
     if (
       typeof p.access_token !== 'string' ||
       typeof p.api_key !== 'string' ||
@@ -90,6 +96,7 @@ function decodeHandoff(raw: string | null): OnboardingHandoff | null {
       typeof user !== 'object' ||
       typeof user.id !== 'string' ||
       typeof user.email !== 'string' ||
+      typeof user.name !== 'string' ||
       !organization ||
       typeof organization !== 'object' ||
       typeof organization.id !== 'string' ||
@@ -97,7 +104,8 @@ function decodeHandoff(raw: string | null): OnboardingHandoff | null {
       typeof organization.subdomain !== 'string' ||
       !project ||
       typeof project !== 'object' ||
-      typeof project.id !== 'string'
+      typeof project.id !== 'string' ||
+      typeof project.name !== 'string'
     ) {
       return null;
     }
@@ -226,10 +234,13 @@ export default function OnboardingPage() {
 
   const installSnippet = useMemo(
     () =>
+      // Default import to match the documented usage in README.md:96
+      // and API_DOCUMENTATION.md — the SDK ships as a default export,
+      // so a named import would break for anyone copy-pasting this.
       // `JSON.stringify` so single-quotes, backslashes, or newlines
       // in a key / id (unlikely, but cheap defense) don't break the
       // generated snippet or enable string-injection into the copy.
-      `import { BugSpotter } from '@bugspotter/sdk';
+      `import BugSpotter from '@bugspotter/sdk';
 
 BugSpotter.init({
   apiKey: ${JSON.stringify(handoff.api_key)},
