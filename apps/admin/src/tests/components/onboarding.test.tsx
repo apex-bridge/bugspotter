@@ -10,7 +10,7 @@
  * half-rendered page.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -111,12 +111,26 @@ function renderWithHandoff(raw?: string) {
 }
 
 describe('OnboardingPage', () => {
+  // Capture jsdom's original `replaceState` so the override doesn't
+  // leak into other test files (which would make failures
+  // order-dependent on the shared jsdom global).
+  const originalReplaceState = window.history.replaceState.bind(window.history);
+
   beforeEach(() => {
     vi.clearAllMocks();
     // `window.history.replaceState` is called once on successful mount;
     // spy so we can verify (and prevent it mutating jsdom's URL).
     Object.defineProperty(window.history, 'replaceState', {
       value: mockReplaceState,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window.history, 'replaceState', {
+      value: originalReplaceState,
+      configurable: true,
       writable: true,
     });
   });

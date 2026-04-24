@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -115,14 +115,32 @@ export default function OnboardingPage() {
 
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
-  // Track outstanding copy-feedback timers so they can be cleared on
-  // unmount — otherwise a fast navigation after copying produces a
-  // setState-on-unmounted warning.
-  const copyTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // Keyed by a short field id (`'key'`, `'snippet'`) so a second
+  // click on the same button cancels the pending "revert to Copy
+  // state" timer from the first click instead of racing it. Using a
+  // record also keeps the ref bounded — timers self-delete on fire,
+  // so it can't grow unbounded over a long session.
+  const copyTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  // Seed auth context + strip sensitive params from the URL on mount.
-  // `handoff` is captured via a useState initializer so it's stable,
-  // and `login`/`navigate` come from providers as stable refs.
+  // Strip the handoff param BEFORE the first paint so it can't be
+  // copy-pasted out of the address bar even for a single frame.
+  // `useEffect` fires after commit/paint; `useLayoutEffect` fires
+  // synchronously after DOM mutations but before the browser paints.
+  useLayoutEffect(() => {
+    if (!handoff) {
+      return;
+    }
+    // Keep other query params and the hash — nuking everything past
+    // the pathname would also drop analytics/utm tags the landing
+    // page might legitimately attach.
+    const sanitized = new URL(window.location.href);
+    sanitized.searchParams.delete('handoff');
+    window.history.replaceState({}, '', sanitized.pathname + sanitized.search + sanitized.hash);
+  }, [handoff]);
+
+  // Seed auth context and handle the missing-handoff redirect after
+  // commit. Separate from the URL strip above because `login()`
+  // triggers context updates that shouldn't block paint.
   useEffect(() => {
     if (!handoff) {
       navigate('/login', { replace: true });
@@ -132,23 +150,15 @@ export default function OnboardingPage() {
     // refresh cookie is already set on `.kz.bugspotter.io` by the
     // backend, so a page refresh will still recover via /auth/refresh.
     login(handoff.access_token, '', handoff.user);
-    // Strip only the handoff param from history (keep other query
-    // params and the hash). `window.location.pathname` alone would
-    // also drop analytics/utm params that might legitimately be
-    // attached by the landing page.
-    const sanitized = new URL(window.location.href);
-    sanitized.searchParams.delete('handoff');
-    window.history.replaceState({}, '', sanitized.pathname + sanitized.search + sanitized.hash);
   }, [handoff, login, navigate]);
 
   // Clear any pending copy-feedback timers on unmount.
   useEffect(() => {
     const timers = copyTimersRef.current;
     return () => {
-      for (const id of timers) {
+      for (const id of Object.values(timers)) {
         clearTimeout(id);
       }
-      timers.length = 0;
     };
   }, []);
 
@@ -169,6 +179,7 @@ BugSpotter.init({
   );
 
   const copyToClipboard = async (
+    fieldId: string,
     value: string,
     setCopied: (v: boolean) => void,
     successKey: string
@@ -177,8 +188,18 @@ BugSpotter.init({
       await navigator.clipboard.writeText(value);
       setCopied(true);
       toast.success(t(successKey));
-      const id = setTimeout(() => setCopied(false), 2000);
-      copyTimersRef.current.push(id);
+      // Cancel any pending revert from a previous click on the same
+      // button so rapid re-clicks don't cause the "Copied" label to
+      // flicker back to "Copy" while the user is still reading it.
+      const existing = copyTimersRef.current[fieldId];
+      if (existing) {
+        clearTimeout(existing);
+      }
+      const id = setTimeout(() => {
+        setCopied(false);
+        delete copyTimersRef.current[fieldId];
+      }, 2000);
+      copyTimersRef.current[fieldId] = id;
     } catch {
       toast.error(t('errors.failedToCopyToClipboard'));
     }
@@ -232,7 +253,7 @@ BugSpotter.init({
               type="button"
               variant="outline"
               onClick={() =>
-                copyToClipboard(handoff.api_key, setCopiedKey, 'onboarding.apiKey.copied')
+                copyToClipboard('key', handoff.api_key, setCopiedKey, 'onboarding.apiKey.copied')
               }
               data-testid="onboarding-api-key-copy"
             >
@@ -259,7 +280,12 @@ BugSpotter.init({
             type="button"
             variant="outline"
             onClick={() =>
-              copyToClipboard(installSnippet, setCopiedSnippet, 'onboarding.install.copied')
+              copyToClipboard(
+                'snippet',
+                installSnippet,
+                setCopiedSnippet,
+                'onboarding.install.copied'
+              )
             }
             data-testid="onboarding-install-copy"
           >
