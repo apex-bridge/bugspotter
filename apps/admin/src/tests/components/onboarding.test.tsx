@@ -230,6 +230,30 @@ describe('OnboardingPage', () => {
     expect(mockLogin).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['access_token as non-string', { ...validHandoff, access_token: 42 }],
+    ['api_key as object', { ...validHandoff, api_key: {} }],
+    ['user.email as number', { ...validHandoff, user: { ...validHandoff.user, email: 123 } }],
+    [
+      'organization.subdomain as null',
+      {
+        ...validHandoff,
+        organization: { ...validHandoff.organization, subdomain: null },
+      },
+    ],
+    ['project.id as array', { ...validHandoff, project: { id: [], name: 'x' } }],
+  ])('redirects to /login when %s (type-mismatched shape)', async (_label, payload) => {
+    // Truthy-only validation would accept these (truthy numbers,
+    // objects, arrays) and crash later at render or feed garbage
+    // to `login()`. Strict typeof checks must reject them.
+    renderWithHandoff(encodeHandoff(payload));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
+    });
+    expect(mockLogin).not.toHaveBeenCalled();
+  });
+
   it('redirects to /login when handoff is missing user.email (renderable-shape check)', async () => {
     const incompleteUser = encodeHandoff({
       ...validHandoff,

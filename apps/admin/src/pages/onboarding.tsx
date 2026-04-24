@@ -69,22 +69,40 @@ function decodeHandoff(raw: string | null): OnboardingHandoff | null {
       bytes[i] = binary.charCodeAt(i);
     }
     const json = new TextDecoder().decode(bytes);
-    const parsed = JSON.parse(json) as OnboardingHandoff;
-    // Validate every field the page actually renders so a malformed
-    // payload lands on /login instead of crashing mid-render.
+    const parsed: unknown = JSON.parse(json);
+
+    // Strict `typeof` checks on every field the page actually renders
+    // or passes to the auth context. Truthy-only checks would let a
+    // payload with `user.email: 123` or `access_token: {}` through
+    // and then crash at `.split('@')` or seed auth with garbage.
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    const p = parsed as Record<string, unknown>;
+    const user = p.user as Record<string, unknown> | undefined;
+    const organization = p.organization as Record<string, unknown> | undefined;
+    const project = p.project as Record<string, unknown> | undefined;
+
     if (
-      !parsed.access_token ||
-      !parsed.api_key ||
-      !parsed.user?.id ||
-      !parsed.user?.email ||
-      !parsed.organization?.id ||
-      !parsed.organization?.name ||
-      !parsed.organization?.subdomain ||
-      !parsed.project?.id
+      typeof p.access_token !== 'string' ||
+      typeof p.api_key !== 'string' ||
+      !user ||
+      typeof user !== 'object' ||
+      typeof user.id !== 'string' ||
+      typeof user.email !== 'string' ||
+      !organization ||
+      typeof organization !== 'object' ||
+      typeof organization.id !== 'string' ||
+      typeof organization.name !== 'string' ||
+      typeof organization.subdomain !== 'string' ||
+      !project ||
+      typeof project !== 'object' ||
+      typeof project.id !== 'string'
     ) {
       return null;
     }
-    return parsed;
+
+    return parsed as OnboardingHandoff;
   } catch {
     return null;
   }
@@ -139,6 +157,15 @@ export default function OnboardingPage() {
   // Runs regardless of whether decode succeeded — even a malformed
   // `handoff=` value shouldn't linger in the URL during the redirect
   // to /login. Also cleans both query and fragment sources.
+  //
+  // Using `window.history.replaceState` directly (rather than
+  // `setSearchParams({...}, { replace: true })`) because the
+  // fragment is the PRIMARY source of the handoff and react-router's
+  // hooks don't touch the hash — a clean strip of both pieces
+  // requires URL surgery. The router's internal location stays
+  // unsynced with the scrubbed URL until the next navigation, but
+  // nothing in this flow re-reads the URL via the router after
+  // mount (handoff was captured via useState initializer already).
   useLayoutEffect(() => {
     const sanitized = new URL(window.location.href);
     let dirty = false;
