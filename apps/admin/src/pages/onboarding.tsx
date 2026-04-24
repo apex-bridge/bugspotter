@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -11,16 +11,30 @@ import type { User } from '../types';
 
 /**
  * Shape of the handoff payload the landing page passes in via
- * `?handoff=<base64-json>`. Mirrors the important fields of the
- * `POST /api/v1/auth/signup` response. Keep this in sync with
- * `packages/backend/src/api/routes/signup.ts`.
+ * `?handoff=<base64-json>`. Mirrors the `POST /api/v1/auth/signup`
+ * response EXACTLY (snake_case field names, full `user` object). Keep
+ * this in sync with `packages/backend/src/api/routes/signup.ts`.
  */
 interface OnboardingHandoff {
-  accessToken: string;
-  apiKey: string;
-  user: Pick<User, 'id' | 'email' | 'name' | 'role'>;
-  organization: { id: string; name: string; subdomain: string };
+  access_token: string;
+  api_key: string;
+  user: User;
+  organization: { id: string; name: string; subdomain: string; trial_ends_at?: string };
   project: { id: string; name: string };
+}
+
+/**
+ * Normalize a base64-encoded querystring value so `atob` accepts it.
+ *
+ * `URLSearchParams` decodes `+` to a space, and if the producer used
+ * URL-safe base64 (`-`/`_` instead of `+`/`/`) we need to map it
+ * back. Re-pad to a multiple of 4 since URL-safe encoders often
+ * drop padding.
+ */
+function normalizeBase64(raw: string): string {
+  const normalized = raw.replace(/ /g, '+').replace(/-/g, '+').replace(/_/g, '/');
+  const padLen = (4 - (normalized.length % 4)) % 4;
+  return normalized + '='.repeat(padLen);
 }
 
 /**
@@ -38,19 +52,33 @@ interface OnboardingHandoff {
  * API key doesn't linger in history. A follow-up (R6 hardening) can
  * replace this with a short-lived server-side claim token if the
  * brief in-URL exposure proves unacceptable.
+ *
+ * UTF-8 handling: `atob` returns a binary string, so for non-ASCII
+ * names (Cyrillic, Kazakh) we go through `TextDecoder` to reinterpret
+ * the bytes as UTF-8 — otherwise JSON.parse either throws or returns
+ * mojibake for ru/kk users.
  */
 function decodeHandoff(raw: string | null): OnboardingHandoff | null {
   if (!raw) {
     return null;
   }
   try {
-    const json = atob(raw);
+    const binary = atob(normalizeBase64(raw));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const json = new TextDecoder().decode(bytes);
     const parsed = JSON.parse(json) as OnboardingHandoff;
-    // Minimal shape check — anything missing means malformed handoff.
+    // Validate every field the page actually renders so a malformed
+    // payload lands on /login instead of crashing mid-render.
     if (
-      !parsed.accessToken ||
-      !parsed.apiKey ||
+      !parsed.access_token ||
+      !parsed.api_key ||
       !parsed.user?.id ||
+      !parsed.user?.email ||
+      !parsed.organization?.id ||
+      !parsed.organization?.name ||
       !parsed.organization?.subdomain ||
       !parsed.project?.id
     ) {
@@ -75,14 +103,26 @@ export default function OnboardingPage() {
   const [searchParams] = useSearchParams();
   const { login } = useAuth();
 
-  const handoff = useMemo(() => decodeHandoff(searchParams.get('handoff')), [searchParams]);
+  // Capture the handoff ONCE on first render. Using `useState` with
+  // an initializer (not `useMemo`) guarantees a stable value across
+  // re-renders even if React Router ever starts reflecting
+  // `replaceState` URL changes into `searchParams`. A stale/empty
+  // handoff after strip-on-mount would otherwise flip to null and
+  // re-trigger the /login-redirect branch.
+  const [handoff] = useState<OnboardingHandoff | null>(() =>
+    decodeHandoff(searchParams.get('handoff'))
+  );
 
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
+  // Track outstanding copy-feedback timers so they can be cleared on
+  // unmount — otherwise a fast navigation after copying produces a
+  // setState-on-unmounted warning.
+  const copyTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // Seed auth context + strip sensitive params from the URL once we
-  // have the handoff. No deps on `login` / `navigate` (stable refs
-  // from providers) because we only want to run this once per mount.
+  // Seed auth context + strip sensitive params from the URL on mount.
+  // `handoff` is captured via a useState initializer so it's stable,
+  // and `login`/`navigate` come from providers as stable refs.
   useEffect(() => {
     if (!handoff) {
       navigate('/login', { replace: true });
@@ -91,16 +131,26 @@ export default function OnboardingPage() {
     // Replay the signup-response auth tokens into the context. The
     // refresh cookie is already set on `.kz.bugspotter.io` by the
     // backend, so a page refresh will still recover via /auth/refresh.
-    login(handoff.accessToken, '', handoff.user as User);
-    // Strip the handoff param from history so the API key can't be
-    // copy-pasted out of the address bar or picked up by referer-
-    // logging on subsequent navigations.
-    window.history.replaceState({}, '', window.location.pathname);
-    // Intentionally runs once on mount — `login` and `navigate` come
-    // from stable context refs and adding them would re-trigger the
-    // effect after the context update and reset the URL to its
-    // already-stripped form.
+    login(handoff.access_token, '', handoff.user);
+    // Strip only the handoff param from history (keep other query
+    // params and the hash). `window.location.pathname` alone would
+    // also drop analytics/utm params that might legitimately be
+    // attached by the landing page.
+    const sanitized = new URL(window.location.href);
+    sanitized.searchParams.delete('handoff');
+    window.history.replaceState({}, '', sanitized.pathname + sanitized.search + sanitized.hash);
   }, [handoff, login, navigate]);
+
+  // Clear any pending copy-feedback timers on unmount.
+  useEffect(() => {
+    const timers = copyTimersRef.current;
+    return () => {
+      for (const id of timers) {
+        clearTimeout(id);
+      }
+      timers.length = 0;
+    };
+  }, []);
 
   // Empty shell while the effect above redirects.
   if (!handoff) {
@@ -112,10 +162,10 @@ export default function OnboardingPage() {
       `import { BugSpotter } from '@bugspotter/sdk';
 
 BugSpotter.init({
-  apiKey: '${handoff.apiKey}',
+  apiKey: '${handoff.api_key}',
   projectId: '${handoff.project.id}',
 });`,
-    [handoff.apiKey, handoff.project.id]
+    [handoff.api_key, handoff.project.id]
   );
 
   const copyToClipboard = async (
@@ -127,7 +177,8 @@ BugSpotter.init({
       await navigator.clipboard.writeText(value);
       setCopied(true);
       toast.success(t(successKey));
-      setTimeout(() => setCopied(false), 2000);
+      const id = setTimeout(() => setCopied(false), 2000);
+      copyTimersRef.current.push(id);
     } catch {
       toast.error(t('errors.failedToCopyToClipboard'));
     }
@@ -175,13 +226,13 @@ BugSpotter.init({
               className="flex-1 font-mono text-sm bg-muted px-3 py-2 rounded border break-all"
               data-testid="onboarding-api-key-value"
             >
-              {handoff.apiKey}
+              {handoff.api_key}
             </code>
             <Button
               type="button"
               variant="outline"
               onClick={() =>
-                copyToClipboard(handoff.apiKey, setCopiedKey, 'onboarding.apiKey.copied')
+                copyToClipboard(handoff.api_key, setCopiedKey, 'onboarding.apiKey.copied')
               }
               data-testid="onboarding-api-key-copy"
             >

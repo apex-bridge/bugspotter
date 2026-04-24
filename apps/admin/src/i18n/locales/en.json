@@ -15,6 +15,7 @@
     "export": "Export",
     "import": "Import",
     "copy": "Copy",
+    "copied": "Copied",
     "copyFailed": "Failed to copy to clipboard",
     "close": "Close",
     "confirm": "Confirm",

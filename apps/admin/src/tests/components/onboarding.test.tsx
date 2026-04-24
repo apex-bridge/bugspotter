@@ -71,18 +71,25 @@ vi.mock('react-i18next', async () => {
 });
 
 const validHandoff = {
-  accessToken: 'jwt-access-token',
-  apiKey: 'bgs_abc123',
+  // Field names match the `POST /api/v1/auth/signup` response exactly
+  // (snake_case). If these drift from the backend shape the page
+  // silently redirects to /login in production — keep them in lockstep
+  // with `packages/backend/src/api/routes/signup.ts`.
+  access_token: 'jwt-access-token',
+  api_key: 'bgs_abc123',
   user: {
     id: 'user-1',
     email: 'alice@example.com',
     name: 'Alice',
     role: 'admin' as const,
-  } satisfies Pick<User, 'id' | 'email' | 'name' | 'role'>,
+    created_at: '2026-04-24T00:00:00Z',
+    updated_at: '2026-04-24T00:00:00Z',
+  } satisfies User,
   organization: {
     id: 'org-1',
     name: 'Acme',
     subdomain: 'acme',
+    trial_ends_at: '2026-05-08T00:00:00Z',
   },
   project: {
     id: 'proj-1',
@@ -174,8 +181,8 @@ describe('OnboardingPage', () => {
 
   it('redirects to /login when handoff is missing required fields', async () => {
     const incomplete = encodeHandoff({
-      // missing apiKey, user, organization, project
-      accessToken: 'jwt-access-token',
+      // missing api_key, user, organization, project
+      access_token: 'jwt-access-token',
     });
     renderWithHandoff(incomplete);
 
@@ -183,6 +190,36 @@ describe('OnboardingPage', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
     });
     expect(mockLogin).not.toHaveBeenCalled();
+  });
+
+  it('redirects to /login when handoff is missing user.email (renderable-shape check)', async () => {
+    const incompleteUser = encodeHandoff({
+      ...validHandoff,
+      user: { id: 'user-1', name: 'Alice' },
+    });
+    renderWithHandoff(incompleteUser);
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
+    });
+  });
+
+  it('decodes UTF-8 names (Cyrillic) correctly', async () => {
+    const payload = {
+      ...validHandoff,
+      user: { ...validHandoff.user, name: 'Ерлан' },
+    };
+    const json = JSON.stringify(payload);
+    // Encode via TextEncoder → btoa(binaryString) so the UTF-8 bytes
+    // survive the atob → TextDecoder round trip on the read side.
+    const bytes = new TextEncoder().encode(json);
+    let binary = '';
+    for (const b of bytes) {
+      binary += String.fromCharCode(b);
+    }
+    renderWithHandoff(btoa(binary));
+
+    expect(await screen.findByText(/Ерлан/)).toBeInTheDocument();
   });
 
   it('copies the API key to the clipboard when the copy button is clicked', async () => {
