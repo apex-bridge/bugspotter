@@ -206,6 +206,16 @@ describe('ProjectStep', () => {
     expect(screen.getByTestId('project-next-button')).not.toBeDisabled();
   });
 
+  it('Next button stays disabled when projectKey is whitespace-only', async () => {
+    // Whitespace strings are truthy in JS, but validateJiraConfig
+    // rejects them downstream. Trim before gating to avoid the
+    // wizard advancing with an effectively-empty key.
+    renderStep({ projectKey: '   ' });
+    await screen.findByTestId('project-option-ALPHA');
+
+    expect(screen.getByTestId('project-next-button')).toBeDisabled();
+  });
+
   it('falls back to the manual-entry input when auth.type is oauth2', async () => {
     renderStep({
       authentication: {

@@ -202,6 +202,16 @@ export function ProjectStep({
     return list;
   }, [filteredProjects, search]);
 
+  // When `options` shrinks — e.g. a refetch returns fewer entries or
+  // the filter narrows — a stale `highlightedIndex` can end up past
+  // the new end. Reset to -1 so arrow keys don't walk through a dead
+  // range, and `aria-activedescendant` doesn't dangle.
+  useEffect(() => {
+    if (highlightedIndex >= options.length) {
+      setHighlightedIndex(-1);
+    }
+  }, [options.length, highlightedIndex]);
+
   if (!config) {
     return (
       <div className="border p-4 rounded text-sm text-red-600">
@@ -427,7 +437,9 @@ export function ProjectStep({
         <button
           className="px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-50"
           onClick={onNext}
-          disabled={!config.projectKey}
+          // Trim so a whitespace-only key — which `validateJiraConfig`
+          // rejects downstream — doesn't enable Next.
+          disabled={!config.projectKey?.trim()}
           data-testid="project-next-button"
         >
           {t('integrationConfig.nextFieldMapping')}
