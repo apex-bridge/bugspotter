@@ -130,6 +130,7 @@ export const API_ENDPOINTS = {
     delete: (platform: string, projectId: string) =>
       `${API_VERSION}/integrations/${platform}/${projectId}`,
     testConnection: (platform: string) => `${API_VERSION}/integrations/${platform}/test`,
+    searchProjects: (platform: string) => `${API_VERSION}/integrations/${platform}/projects`,
   },
 
   // Notification endpoints
