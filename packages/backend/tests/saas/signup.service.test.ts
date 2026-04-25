@@ -11,7 +11,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { SignupService } from '../../src/saas/services/signup.service.js';
+import {
+  SignupService,
+  type IVerificationEmailSender,
+} from '../../src/saas/services/signup.service.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 import { DATA_RESIDENCY_REGION } from '../../src/db/types.js';
 import { hashKey } from '../../src/services/api-key/key-crypto.js';
@@ -37,6 +40,7 @@ interface InsertLog {
   projects: unknown[];
   apiKeys: unknown[];
   apiKeyAudits: unknown[];
+  emailVerificationTokens: unknown[];
 }
 
 function validInput() {
@@ -52,6 +56,11 @@ function validInput() {
 
 interface DbOverrides {
   findByEmail?: () => Promise<unknown>;
+  findById?: () => Promise<unknown>;
+  findActiveByToken?: () => Promise<unknown>;
+  consumeToken?: () => Promise<boolean>;
+  invalidateUnconsumed?: () => Promise<number>;
+  markVerified?: () => Promise<boolean>;
   countRecentByIp?: () => Promise<number>;
   findPendingByEmail?: () => Promise<unknown>;
   isSubdomainTaken?: () => Promise<boolean>;
@@ -74,6 +83,7 @@ function createMockDb(overrides: DbOverrides = {}): {
     projects: [],
     apiKeys: [],
     apiKeyAudits: [],
+    emailVerificationTokens: [],
   };
   const transactionCalled = { value: 0 };
 
@@ -142,11 +152,37 @@ function createMockDb(overrides: DbOverrides = {}): {
         log.apiKeyAudits.push(data);
       }),
     },
+    emailVerificationTokens: {
+      create: vi.fn(async (data: unknown) => {
+        const row = {
+          id: 'evt-uuid',
+          consumed_at: null,
+          created_at: new Date(),
+          ...(data as object),
+        };
+        log.emailVerificationTokens.push(row);
+        return row;
+      }),
+      findActiveByToken: vi.fn(overrides.findActiveByToken ?? (async () => null)),
+      consume: vi.fn(overrides.consumeToken ?? (async () => true)),
+      invalidateUnconsumedForUser: vi.fn(overrides.invalidateUnconsumed ?? (async () => 0)),
+    },
   };
+
+  // Extend tx.users with the methods used outside signup() — verifyEmail
+  // reads + atomic-stamps; resendVerification locks first then reads.
+  // markEmailVerified default returns true (success); tests that need
+  // the race-loser branch override via `overrides.markVerified`.
+  const txUsers = (tx as unknown as { users: Record<string, unknown> }).users;
+  txUsers.update = vi.fn(async (id: string, data: unknown) => ({ id, ...(data as object) }));
+  txUsers.findById = vi.fn(overrides.findById ?? (async () => null));
+  txUsers.lockForUpdate = vi.fn(async () => undefined);
+  txUsers.markEmailVerified = vi.fn(overrides.markVerified ?? (async () => true));
 
   const db = {
     users: {
       findByEmail: vi.fn(overrides.findByEmail ?? (async () => null)),
+      findById: vi.fn(overrides.findById ?? (async () => null)),
     },
     organizations: {
       isSubdomainAvailable: vi.fn(overrides.orgIsSubdomainAvailable ?? (async () => true)),
@@ -181,13 +217,31 @@ function createMockDb(overrides: DbOverrides = {}): {
 // Tests
 // ---------------------------------------------------------------------------
 
+// Stub email service — using the real service would try to construct
+// an SMTP transporter from env vars (the real `send()` catches
+// ConfigurationError internally and returns false, so it wouldn't
+// throw). The stub avoids the SMTP/log noise and lets us assert
+// deterministically on call counts.
+function createMockEmailService(): {
+  send: ReturnType<typeof vi.fn>;
+  service: IVerificationEmailSender;
+} {
+  const send = vi.fn(async () => true);
+  return {
+    send,
+    service: { sendVerificationEmail: send },
+  };
+}
+
 describe('SignupService', () => {
   let mock: ReturnType<typeof createMockDb>;
   let service: SignupService;
+  let email: ReturnType<typeof createMockEmailService>;
 
   beforeEach(() => {
     mock = createMockDb();
-    service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ);
+    email = createMockEmailService();
+    service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
   });
 
   describe('happy path', () => {
@@ -467,6 +521,251 @@ describe('SignupService', () => {
       service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ);
 
       await expect(service.signup(validInput())).rejects.toThrow(/simulated commit failure/);
+    });
+  });
+
+  describe('email verification', () => {
+    describe('signup → verification token row', () => {
+      it('creates exactly one verification token row inside the signup transaction', async () => {
+        await service.signup(validInput());
+
+        expect(mock.log.emailVerificationTokens).toHaveLength(1);
+        const row = mock.log.emailVerificationTokens[0] as Record<string, unknown>;
+        // user_id binds to the user just created in the same transaction
+        expect(row.user_id).toBe('user-uuid');
+        expect(typeof row.token).toBe('string');
+        // 24h TTL — defensively assert it's in the future, not exactly 24h
+        // (so a small clock-drift in tests doesn't flake the assertion).
+        expect((row.expires_at as Date).getTime()).toBeGreaterThan(Date.now());
+      });
+
+      it('fires the verification email exactly once on success', async () => {
+        await service.signup(validInput());
+        expect(email.send).toHaveBeenCalledTimes(1);
+        const arg = email.send.mock.calls[0][0] as Record<string, unknown>;
+        expect(arg.recipientEmail).toBe('founder@acme.com');
+        expect(typeof arg.token).toBe('string');
+      });
+
+      it('does not fail signup when email send rejects (non-blocking)', async () => {
+        email.send.mockRejectedValueOnce(new Error('smtp down'));
+        // signup must still resolve with the API key — Sentry-style.
+        await expect(service.signup(validInput())).resolves.toMatchObject({
+          api_key: expect.any(String),
+        });
+      });
+    });
+
+    describe('verifyEmail', () => {
+      it('marks the token consumed and stamps users.email_verified_at on success', async () => {
+        const fakeUserId = 'user-uuid';
+        mock = createMockDb({
+          findActiveByToken: async () => ({
+            id: 'evt-1',
+            user_id: fakeUserId,
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          consumeToken: async () => true,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        const result = await service.verifyEmail('good');
+        expect(result).toEqual({ user_id: fakeUserId });
+      });
+
+      it('rejects an unknown token with 400', async () => {
+        mock = createMockDb({ findActiveByToken: async () => null });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('nope')).rejects.toMatchObject({
+          statusCode: 400,
+        });
+      });
+
+      it('treats whitespace as a normal not-found lookup — does not silently trim', async () => {
+        // We deliberately do NOT normalize input: cryptographic tokens
+        // never contain whitespace, so a whitespace-bearing token is
+        // a client bug. Schema-level minLength rejects empty/short
+        // tokens at the route edge; reaching the service implies a
+        // direct caller, in which case the lookup-and-fail path
+        // produces the correct generic 400.
+        const findSpy = vi.fn(async () => null);
+        mock = createMockDb({ findActiveByToken: findSpy });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('   ')).rejects.toMatchObject({ statusCode: 400 });
+        expect(findSpy).toHaveBeenCalledWith('   ');
+      });
+
+      it('refuses with 400 when the user is already verified (no token consume)', async () => {
+        // The guard fires BEFORE the consume — leaving an active token
+        // alone (it'll expire) is preferable to silently consuming it
+        // and re-stamping email_verified_at.
+        const consumeSpy = vi.fn(async () => true);
+        mock = createMockDb({
+          findActiveByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: new Date('2026-04-01T00:00:00Z'),
+          }),
+          consumeToken: consumeSpy,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+        expect(consumeSpy).not.toHaveBeenCalled();
+      });
+
+      it('refuses with 400 when the atomic UPDATE finds no row (race-lost stamp)', async () => {
+        // markEmailVerified returns false when another tx beat us to
+        // setting email_verified_at. We've already consumed our token,
+        // but THIS request didn't contribute the verification — so we
+        // surface the same generic 400 for symmetry with the guard.
+        mock = createMockDb({
+          findActiveByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+          }),
+          consumeToken: async () => true,
+          markVerified: async () => false,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+      });
+
+      it('treats a race-lost consume as already-used and returns 400', async () => {
+        // findActiveByToken returns a row, but consume() returns false —
+        // simulates two parallel verify-email requests for the same token
+        // where the other side already won. Caller must not proceed to
+        // marking the user verified.
+        mock = createMockDb({
+          findActiveByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          consumeToken: async () => false,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+      });
+    });
+
+    describe('resendVerification', () => {
+      it('invalidates prior tokens, issues a fresh one, and sends the email', async () => {
+        const invalidate = vi.fn(async () => 1);
+        mock = createMockDb({
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+          }),
+          invalidateUnconsumed: invalidate,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await service.resendVerification('user-uuid');
+
+        expect(invalidate).toHaveBeenCalledWith('user-uuid');
+        expect(mock.log.emailVerificationTokens).toHaveLength(1);
+        // Fire-and-forget — the .catch inside resendVerification means
+        // the await on resendVerification resolves before the send promise
+        // settles. Wait a microtask tick for the dispatch.
+        await new Promise((r) => setImmediate(r));
+        expect(email.send).toHaveBeenCalledTimes(1);
+      });
+
+      it('no-ops silently when the user is already verified (no leak of state)', async () => {
+        mock = createMockDb({
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: new Date(),
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.resendVerification('user-uuid')).resolves.toBeUndefined();
+        expect(mock.log.emailVerificationTokens).toHaveLength(0);
+        expect(email.send).not.toHaveBeenCalled();
+      });
+
+      it('throws 404 when the user no longer exists (stale JWT)', async () => {
+        mock = createMockDb({ findById: async () => null });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.resendVerification('ghost-uuid')).rejects.toMatchObject({
+          statusCode: 404,
+        });
+      });
+
+      it('uses user.preferences.language as locale fallback when none is provided', async () => {
+        mock = createMockDb({
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+            preferences: { language: 'ru' },
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await service.resendVerification('user-uuid');
+        await new Promise((r) => setImmediate(r));
+
+        expect(email.send).toHaveBeenCalledTimes(1);
+        const arg = email.send.mock.calls[0][0] as { locale?: string };
+        expect(arg.locale).toBe('ru');
+      });
+
+      it('explicit `locale` arg wins over user.preferences.language', async () => {
+        mock = createMockDb({
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+            preferences: { language: 'ru' },
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await service.resendVerification('user-uuid', 'kk');
+        await new Promise((r) => setImmediate(r));
+
+        const arg = email.send.mock.calls[0][0] as { locale?: string };
+        expect(arg.locale).toBe('kk');
+      });
     });
   });
 });

@@ -237,3 +237,55 @@ export const registrationStatusSchema = {
     },
   },
 } as const;
+
+// Bounds: tokens come from `generateShareToken()` which produces 43
+// base64url chars (32 bytes encoded). Allow a small range so a future
+// length tweak doesn't immediately break the schema.
+export const verifyEmailSchema = {
+  body: {
+    type: 'object',
+    required: ['token'],
+    properties: {
+      token: { type: 'string', minLength: 32, maxLength: 128 },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: 'object',
+      required: ['success', 'data', 'timestamp'],
+      properties: {
+        success: { type: 'boolean', enum: [true] },
+        data: {
+          type: 'object',
+          required: ['email_verified'],
+          properties: {
+            email_verified: { type: 'boolean', enum: [true] },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+} as const;
+
+export const resendVerificationSchema = {
+  // No body — resend acts on the authenticated user.
+  response: {
+    200: {
+      type: 'object',
+      required: ['success', 'data', 'timestamp'],
+      properties: {
+        success: { type: 'boolean', enum: [true] },
+        data: {
+          type: 'object',
+          required: ['message'],
+          properties: {
+            message: { type: 'string' },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+} as const;
