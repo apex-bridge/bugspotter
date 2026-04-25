@@ -314,9 +314,12 @@ export class SignupService {
    * Otherwise an active token would still flip `email_verified_at`,
    * overwriting the prior verification timestamp for no reason.
    */
-  async verifyEmail(rawToken: string): Promise<{ user_id: string }> {
-    const token = rawToken.trim();
-    if (token.length === 0) {
+  async verifyEmail(token: string): Promise<{ user_id: string }> {
+    // Don't trim: cryptographic base64url tokens never contain
+    // whitespace. Whitespace would be a client bug that an exact-
+    // match check surfaces with the same generic 400 — silent
+    // normalization would mask it.
+    if (!token || token.length === 0) {
       throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
     }
 
@@ -326,11 +329,13 @@ export class SignupService {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
-      // Already-verified guard. Match the docstring: refuse rather
+      // Already-verified guard (read-side fast-path). Refuse rather
       // than re-stamp `email_verified_at`. We don't consume the
-      // token in this branch — leaving it active is harmless (it'll
-      // expire) and consuming silently would be a side effect with
-      // no observable benefit.
+      // token here — leaving it active is harmless (it'll expire),
+      // and consuming silently would be a side effect with no
+      // observable benefit. The atomic UPDATE below is the
+      // authoritative race-safe check; this just avoids consuming a
+      // valid token unnecessarily in the non-racy case.
       const user = await tx.users.findById(tokenRow.user_id);
       if (user?.email_verified_at) {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
@@ -345,9 +350,18 @@ export class SignupService {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
-      await tx.users.update(tokenRow.user_id, {
-        email_verified_at: new Date(),
-      });
+      // Atomic stamp via DB `NOW()` (consistent clock with token
+      // tables) and a `WHERE email_verified_at IS NULL` guard
+      // (closes the read-vs-update race — two concurrent verifies
+      // can't both re-stamp the column). If markEmailVerified
+      // returns false, another transaction won the race; the
+      // current user is still verified, but THIS request didn't
+      // contribute the stamp, so we surface the same generic 400
+      // for symmetry with the upfront guard.
+      const stamped = await tx.users.markEmailVerified(tokenRow.user_id);
+      if (!stamped) {
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      }
 
       return { user_id: tokenRow.user_id };
     });

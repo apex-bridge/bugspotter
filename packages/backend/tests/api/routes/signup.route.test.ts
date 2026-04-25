@@ -123,11 +123,12 @@ function createHappyMockDb(): DatabaseClient {
   };
 
   // Extend tx.users with the methods used outside signup() — verifyEmail
-  // reads + writes; resendVerification locks first, then reads.
+  // reads + atomic-stamps; resendVerification locks first, then reads.
   const txUsers = (tx as unknown as { users: Record<string, unknown> }).users;
   txUsers.update = vi.fn(async (id: string, d: Record<string, unknown>) => ({ id, ...d }));
   txUsers.findById = vi.fn(async () => null);
   txUsers.lockForUpdate = vi.fn(async () => undefined);
+  txUsers.markEmailVerified = vi.fn(async () => true);
 
   return {
     users: {
@@ -324,6 +325,8 @@ describe('POST /api/v1/auth/verify-email (route smoke)', () => {
           email_verified_at: null,
         })),
         lockForUpdate: vi.fn(async () => undefined),
+        // Atomic stamp succeeds — happy path.
+        markEmailVerified: vi.fn(async () => true),
       },
       emailVerificationTokens: {
         findActiveByToken: vi.fn(async () => ({

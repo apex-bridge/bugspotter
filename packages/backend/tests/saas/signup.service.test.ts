@@ -60,6 +60,7 @@ interface DbOverrides {
   findActiveByToken?: () => Promise<unknown>;
   consumeToken?: () => Promise<boolean>;
   invalidateUnconsumed?: () => Promise<number>;
+  markVerified?: () => Promise<boolean>;
   countRecentByIp?: () => Promise<number>;
   findPendingByEmail?: () => Promise<unknown>;
   isSubdomainTaken?: () => Promise<boolean>;
@@ -169,12 +170,14 @@ function createMockDb(overrides: DbOverrides = {}): {
   };
 
   // Extend tx.users with the methods used outside signup() — verifyEmail
-  // reads + writes, resendVerification locks first then reads. Each
-  // delegates to the same override-aware function as the db-level repo.
+  // reads + atomic-stamps; resendVerification locks first then reads.
+  // markEmailVerified default returns true (success); tests that need
+  // the race-loser branch override via `overrides.markVerified`.
   const txUsers = (tx as unknown as { users: Record<string, unknown> }).users;
   txUsers.update = vi.fn(async (id: string, data: unknown) => ({ id, ...(data as object) }));
   txUsers.findById = vi.fn(overrides.findById ?? (async () => null));
   txUsers.lockForUpdate = vi.fn(async () => undefined);
+  txUsers.markEmailVerified = vi.fn(overrides.markVerified ?? (async () => true));
 
   const db = {
     users: {
@@ -582,13 +585,85 @@ describe('SignupService', () => {
         });
       });
 
-      it('rejects an empty/whitespace token with 400 without hitting the DB', async () => {
+      it('rejects an empty token with 400 without hitting the DB', async () => {
+        // We deliberately do NOT trim — a whitespace token is treated
+        // as a normal lookup (it won't match any cryptographic
+        // base64url token in the DB). Only the empty string short-
+        // circuits before the lookup.
         const findSpy = vi.fn();
         mock = createMockDb({ findActiveByToken: findSpy });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
-        await expect(service.verifyEmail('   ')).rejects.toMatchObject({ statusCode: 400 });
+        await expect(service.verifyEmail('')).rejects.toMatchObject({ statusCode: 400 });
         expect(findSpy).not.toHaveBeenCalled();
+      });
+
+      it('treats a whitespace-only token as not-found (400) — does not silently trim', async () => {
+        // The lookup runs (non-empty string), the DB returns null, 400.
+        // Important to lock in: trimming would have been a silent
+        // client-bug masker.
+        const findSpy = vi.fn(async () => null);
+        mock = createMockDb({ findActiveByToken: findSpy });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('   ')).rejects.toMatchObject({ statusCode: 400 });
+        expect(findSpy).toHaveBeenCalledWith('   ');
+      });
+
+      it('refuses with 400 when the user is already verified (no token consume)', async () => {
+        // The guard fires BEFORE the consume — leaving an active token
+        // alone (it'll expire) is preferable to silently consuming it
+        // and re-stamping email_verified_at.
+        const consumeSpy = vi.fn(async () => true);
+        mock = createMockDb({
+          findActiveByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: new Date('2026-04-01T00:00:00Z'),
+          }),
+          consumeToken: consumeSpy,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+        expect(consumeSpy).not.toHaveBeenCalled();
+      });
+
+      it('refuses with 400 when the atomic UPDATE finds no row (race-lost stamp)', async () => {
+        // markEmailVerified returns false when another tx beat us to
+        // setting email_verified_at. We've already consumed our token,
+        // but THIS request didn't contribute the verification — so we
+        // surface the same generic 400 for symmetry with the guard.
+        mock = createMockDb({
+          findActiveByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+          }),
+          consumeToken: async () => true,
+          markVerified: async () => false,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
       });
 
       it('treats a race-lost consume as already-used and returns 400', async () => {

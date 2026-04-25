@@ -34,6 +34,28 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
   }
 
   /**
+   * Atomically mark a user's email as verified, using `NOW()` from the
+   * database (so timestamps in `users` and `email_verification_tokens`
+   * come from the same clock — the app server's clock can drift).
+   *
+   * Returns true on first verification, false when the user was
+   * already verified by a concurrent transaction. Combined with the
+   * `findActiveByToken` + `consume` flow, this closes a race where
+   * two verify-email requests for the same user could both pass the
+   * upfront guard and re-stamp `email_verified_at`.
+   */
+  async markEmailVerified(id: string): Promise<boolean> {
+    const result = await this.getClient().query(
+      `UPDATE application.users
+         SET email_verified_at = NOW()
+       WHERE id = $1
+         AND email_verified_at IS NULL`,
+      [id]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
    * Override serialization to handle defaults
    */
   protected serializeForInsert(data: UserInsert): Record<string, unknown> {
@@ -138,9 +160,12 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
       metadata,
     } = pagination.build(total, paramCount);
 
-    // Get users (exclude password hash)
+    // Get users (exclude password hash). `email_verified_at` is required
+    // on the `User` type — omitting it from the SELECT would type-claim
+    // a non-undefined Date|null while returning undefined from pg.
     const result = await this.pool.query<Omit<User, 'password_hash'>>(
-      `SELECT id, email, name, role, security, oauth_provider, oauth_id, preferences, created_at
+      `SELECT id, email, name, role, security, oauth_provider, oauth_id, preferences,
+              email_verified_at, created_at
        FROM users ${whereClause}
        ${orderByClause}
        ${limitClause}`,

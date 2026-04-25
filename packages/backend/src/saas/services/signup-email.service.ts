@@ -134,7 +134,12 @@ export class SignupEmailService {
    * later if the email never arrives.
    */
   async sendVerificationEmail(params: SendVerificationEmailParams): Promise<boolean> {
-    const locale = params.locale ?? 'en';
+    // Defend the "never throws" contract: an unknown locale slipping
+    // through (e.g. via an untyped caller or a future header-driven
+    // path) would otherwise hit `VERIFICATION_STRINGS[locale]` as
+    // undefined and crash. Fall back to English.
+    const requested = params.locale ?? 'en';
+    const locale: EmailLocale = requested in VERIFICATION_STRINGS ? requested : 'en';
     const strings = VERIFICATION_STRINGS[locale];
     const frontendUrl = config.frontend.url;
 
