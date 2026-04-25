@@ -68,4 +68,33 @@ export const authService = {
     );
     return response.data.data.access_token;
   },
+
+  /**
+   * Consume a verification token sent by `POST /auth/signup`'s
+   * verification email. The token IS the auth — no session required —
+   * which is why this is wired through a public route on the admin.
+   *
+   * Returns nothing on success; throws on 400 (invalid/expired) or
+   * 403 (signup disabled). Callers map the exception to a user-facing
+   * "invalid or expired link" state.
+   */
+  verifyEmail: async (token: string): Promise<void> => {
+    await api.post<{ success: boolean; data: { email_verified: true } }>(
+      API_ENDPOINTS.auth.verifyEmail(),
+      { token }
+    );
+  },
+
+  /**
+   * Request a new verification email for the currently-authed user.
+   * Backend silent-no-ops if the user is already verified — same 200
+   * either way, no probe-able state leak. 401 if not authed, 403 if
+   * signup is disabled.
+   */
+  resendVerification: async (): Promise<void> => {
+    await api.post<{ success: boolean; data: { message: string } }>(
+      API_ENDPOINTS.auth.resendVerification(),
+      {}
+    );
+  },
 };
