@@ -109,10 +109,29 @@ function createHappyMockDb(): DatabaseClient {
       })),
       logAudit: vi.fn(async () => undefined),
     },
+    emailVerificationTokens: {
+      create: vi.fn(async (d: Record<string, unknown>) => ({
+        id: 'evt-uuid',
+        consumed_at: null,
+        created_at: new Date(),
+        ...d,
+      })),
+      findActiveByToken: vi.fn(async () => null),
+      consume: vi.fn(async () => true),
+      invalidateUnconsumedForUser: vi.fn(async () => 0),
+    },
   };
 
+  // tx.users.update is used by verifyEmail to stamp users.email_verified_at.
+  (tx as unknown as { users: Record<string, unknown> }).users.update = vi.fn(
+    async (id: string, d: Record<string, unknown>) => ({ id, ...d })
+  );
+
   return {
-    users: { findByEmail: vi.fn(async () => null) },
+    users: {
+      findByEmail: vi.fn(async () => null),
+      findById: vi.fn(async () => null),
+    },
     organizations: { isSubdomainAvailable: vi.fn(async () => true) },
     organizationRequests: {
       countRecentByIp: vi.fn(async () => 0),
@@ -136,6 +155,12 @@ async function buildServer(db: DatabaseClient): Promise<FastifyInstance> {
     timeWindow: '1 minute',
   });
   await server.register(jwt, { secret: mockConfig.jwt.secret });
+  // Mirror production: an onRequest hook reads the Bearer token (if
+  // present) and populates request.authUser. Public routes still work
+  // without one — `authUser` is just undefined. We need this for the
+  // resend-verification tests, which gate on requireUser.
+  const { createAuthMiddleware } = await import('../../../src/api/middleware/auth.js');
+  server.addHook('onRequest', createAuthMiddleware(db));
   server.setErrorHandler(errorHandler);
   signupRoutes(server, db);
   await server.ready();
@@ -263,5 +288,189 @@ describe('POST /api/v1/auth/signup (route smoke)', () => {
     });
 
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('POST /api/v1/auth/verify-email (route smoke)', () => {
+  let server: FastifyInstance;
+
+  beforeEach(() => {
+    mockConfig.auth.selfServiceSignupEnabled = true;
+  });
+
+  afterEach(async () => {
+    if (server) {
+      await server.close();
+    }
+  });
+
+  it('returns 200 with email_verified=true when the token is valid', async () => {
+    const db = createHappyMockDb();
+    // Wire findActiveByToken on the in-memory tx object the mock uses.
+    // The mock's `transaction` callback is the only path that sees `tx`,
+    // so we reach into the same closure's tx by replacing the
+    // transaction implementation with one that exposes the same shape.
+    const tx = {
+      users: {
+        update: vi.fn(async (id: string, d: Record<string, unknown>) => ({ id, ...d })),
+      },
+      emailVerificationTokens: {
+        findActiveByToken: vi.fn(async () => ({
+          id: 'evt-1',
+          user_id: 'user-uuid',
+          token: 'a'.repeat(43),
+          expires_at: new Date(Date.now() + 60_000),
+          consumed_at: null,
+          created_at: new Date(),
+        })),
+        consume: vi.fn(async () => true),
+        create: vi.fn(),
+        invalidateUnconsumedForUser: vi.fn(),
+      },
+    };
+    (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(
+      async (cb: (t: unknown) => Promise<unknown>) => cb(tx)
+    );
+
+    server = await buildServer(db);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/verify-email',
+      payload: { token: 'a'.repeat(43) },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.email_verified).toBe(true);
+  });
+
+  it('returns 400 for an unknown token', async () => {
+    server = await buildServer(createHappyMockDb());
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/verify-email',
+      payload: { token: 'a'.repeat(43) },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 403 when SELF_SERVICE_SIGNUP_ENABLED is false', async () => {
+    mockConfig.auth.selfServiceSignupEnabled = false;
+    server = await buildServer(createHappyMockDb());
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/verify-email',
+      payload: { token: 'a'.repeat(43) },
+    });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('returns 400 when token is shorter than the minLength', async () => {
+    server = await buildServer(createHappyMockDb());
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/verify-email',
+      payload: { token: 'too-short' },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('POST /api/v1/auth/resend-verification (route smoke)', () => {
+  let server: FastifyInstance;
+
+  beforeEach(() => {
+    mockConfig.auth.selfServiceSignupEnabled = true;
+  });
+
+  afterEach(async () => {
+    if (server) {
+      await server.close();
+    }
+  });
+
+  function makeAuthHeader(s: FastifyInstance) {
+    // handleJwtAuth (api/middleware/auth/handlers.ts) reads
+    // `decoded.userId`. Match that, not `id`.
+    return `Bearer ${s.jwt.sign({ userId: 'user-uuid' })}`;
+  }
+
+  it('returns 401 without an Authorization header', async () => {
+    server = await buildServer(createHappyMockDb());
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/resend-verification',
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 200 + generic message when user is unverified', async () => {
+    const db = createHappyMockDb();
+    (db.users.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'user-uuid',
+      email: 'founder@acme.com',
+      name: 'Jane',
+      email_verified_at: null,
+    });
+    server = await buildServer(db);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/resend-verification',
+      headers: { authorization: makeAuthHeader(server) },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(typeof res.json().data.message).toBe('string');
+  });
+
+  it('returns 200 + generic message when user is already verified (no leak)', async () => {
+    const db = createHappyMockDb();
+    (db.users.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'user-uuid',
+      email: 'founder@acme.com',
+      name: 'Jane',
+      email_verified_at: new Date(),
+    });
+    server = await buildServer(db);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/resend-verification',
+      headers: { authorization: makeAuthHeader(server) },
+    });
+
+    // SAME response shape and status whether verified or not — prevents
+    // a probe that distinguishes unverified accounts from verified ones.
+    expect(res.statusCode).toBe(200);
+    expect(typeof res.json().data.message).toBe('string');
+  });
+
+  it('returns 403 when SELF_SERVICE_SIGNUP_ENABLED is false', async () => {
+    mockConfig.auth.selfServiceSignupEnabled = false;
+    const db = createHappyMockDb();
+    (db.users.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'user-uuid',
+      email: 'founder@acme.com',
+      name: 'Jane',
+      email_verified_at: null,
+    });
+    server = await buildServer(db);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/resend-verification',
+      headers: { authorization: makeAuthHeader(server) },
+    });
+
+    expect(res.statusCode).toBe(403);
   });
 });

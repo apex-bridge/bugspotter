@@ -10,6 +10,7 @@ import { BugReportRepository } from './bug-report.repository.js';
 import { UserRepository } from './user.repository.js';
 import { TicketRepository } from './ticket.repository.js';
 import { ShareTokenRepository } from './share-token.repository.js';
+import { EmailVerificationTokenRepository } from './email-verification-token.repository.js';
 import { SystemConfigRepository } from './system-config.repository.js';
 import { AuditLogRepository } from './audit-log.repository.js';
 import { ProjectIntegrationRepository } from '../project-integration.repository.js';
@@ -45,6 +46,7 @@ export interface RepositoryRegistry {
   users: UserRepository;
   tickets: TicketRepository;
   shareTokens: ShareTokenRepository;
+  emailVerificationTokens: EmailVerificationTokenRepository;
   projectIntegrations: ProjectIntegrationRepository;
   systemConfig: SystemConfigRepository;
   auditLogs: AuditLogRepository;
@@ -91,6 +93,7 @@ export function createRepositories(pool: Pool | PoolClient): RepositoryRegistry 
     users: new UserRepository(pool),
     tickets: new TicketRepository(pool),
     shareTokens: new ShareTokenRepository(pool),
+    emailVerificationTokens: new EmailVerificationTokenRepository(pool),
     projectIntegrations: new ProjectIntegrationRepository(pool),
     systemConfig: new SystemConfigRepository(pool),
     auditLogs: new AuditLogRepository(pool),

@@ -28,10 +28,15 @@ import type { DatabaseClient } from '../../db/client.js';
 import { config } from '../../config.js';
 import { AppError } from '../middleware/error.js';
 import { omitFields } from '../utils/resource.js';
-import { sendCreated } from '../utils/response.js';
+import { sendCreated, sendSuccess } from '../utils/response.js';
 import { buildRefreshCookieOptions } from '../utils/auth-cookies.js';
 import { generateAuthTokens } from '../utils/auth-tokens.js';
-import { signupSchema } from '../schemas/auth-schema.js';
+import {
+  signupSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
+} from '../schemas/auth-schema.js';
+import { requireUser } from '../middleware/auth.js';
 import {
   SignupService,
   parseDataResidencyRegion,
@@ -116,6 +121,70 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
         access_token: tokens.access_token,
         expires_in: tokens.expires_in,
         token_type: tokens.token_type,
+      });
+    }
+  );
+
+  /**
+   * POST /api/v1/auth/verify-email
+   *
+   * Public — the user clicks a link in their email after signup. The
+   * token IS the auth, so we don't require a session here. Validates
+   * + consumes the token, sets users.email_verified_at = NOW().
+   *
+   * Rate-limited the same way as signup: a malicious client trying to
+   * brute-force valid tokens would have to do so behind the per-IP
+   * cap. Token entropy (32 bytes) makes guessing infeasible anyway,
+   * but a low cap is cheap defense in depth.
+   */
+  fastify.post<{ Body: { token: string } }>(
+    '/api/v1/auth/verify-email',
+    {
+      schema: verifyEmailSchema,
+      config: {
+        public: true,
+        rateLimit: { max: 5, timeWindow: '1 minute' },
+      },
+    },
+    async (request, reply) => {
+      if (!config.auth.selfServiceSignupEnabled) {
+        throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
+      }
+      await service.verifyEmail(request.body.token);
+      return sendSuccess(reply, { email_verified: true });
+    }
+  );
+
+  /**
+   * POST /api/v1/auth/resend-verification
+   *
+   * Authenticated — only the signed-in user can ask to resend their
+   * own verification email. Tighter rate limit than signup: an authed
+   * user pressing the button repeatedly should hit a low cap fast,
+   * which both protects SMTP capacity and discourages email-bombing.
+   */
+  fastify.post(
+    '/api/v1/auth/resend-verification',
+    {
+      schema: resendVerificationSchema,
+      preHandler: [requireUser],
+      config: {
+        rateLimit: { max: 3, timeWindow: '1 minute' },
+      },
+    },
+    async (request, reply) => {
+      if (!config.auth.selfServiceSignupEnabled) {
+        throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
+      }
+      // requireUser guarantees authUser is present; non-null assertion
+      // mirrors the pattern used elsewhere in this file.
+      const user = request.authUser!;
+      await service.resendVerification(user.id);
+      // Same 200 whether the user was already verified or we just sent
+      // a fresh token — keeping the response shape stable avoids
+      // leaking verification state in a probe-able way.
+      return sendSuccess(reply, {
+        message: 'If your email is unverified, a new link has been sent.',
       });
     }
   );
