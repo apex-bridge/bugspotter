@@ -12,6 +12,7 @@ import { SaaSRoute } from './components/saas-route';
 import { DefaultRedirect } from './components/default-redirect';
 import LoginPage from './pages/login';
 import RegisterPage from './pages/register';
+import OnboardingPage from './pages/onboarding';
 import SetupWizard from './pages/setup';
 import DashboardLayout from './components/dashboard-layout';
 import DashboardPage from './pages/dashboard';
@@ -60,6 +61,20 @@ function App() {
 
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
+                {/*
+                  `/onboarding` is intentionally outside ProtectedRoute.
+                  It reads a handoff blob passed by the landing signup
+                  form (cross-origin redirect from `bugspotter.io`) via
+                  URL fragment (`#handoff=`) or query (`?handoff=`),
+                  decodes it, and seeds the auth context.
+                  The handoff param IS the bootstrap access token; no
+                  existing app session is loaded from storage on mount
+                  yet, and the refresh cookie may still be arriving
+                  from the signup response. AuthProvider's initAuth
+                  has `/onboarding` in its public-route allowlist so
+                  it doesn't race the page's own `login()` call.
+                */}
+                <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route path="/setup" element={<SetupWizard />} />
                 <Route path="/invitations/accept" element={<AcceptInvitationPage />} />
                 <Route

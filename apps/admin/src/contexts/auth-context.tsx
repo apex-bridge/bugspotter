@@ -111,12 +111,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const abortController = new AbortController();
 
     const initAuth = async () => {
-      // Skip auth check for public routes
+      // Skip auth check for public routes. `/onboarding` is listed
+      // because it bootstraps the auth session itself from a URL
+      // handoff param on first load — if initAuth ran here it would
+      // race the page's `login()` call and a failed refresh could
+      // redirect to /login before onboarding finishes seeding state.
       const isPublicRoute =
         location.pathname.startsWith('/shared/') ||
         location.pathname === '/login' ||
         location.pathname === '/register' ||
-        location.pathname === '/setup';
+        location.pathname === '/setup' ||
+        location.pathname === '/onboarding';
 
       if (isPublicRoute) {
         setIsLoading(false);
