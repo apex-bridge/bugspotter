@@ -42,12 +42,41 @@ import {
   hashKey,
   extractKeyMetadata,
 } from '../../services/api-key/key-crypto.js';
+import { generateShareToken } from '../../utils/token-generator.js';
 import { getLogger } from '../../logger.js';
+import {
+  SignupEmailService,
+  type EmailLocale,
+  type SendVerificationEmailParams,
+} from './signup-email.service.js';
+
+/**
+ * Minimal interface so tests can pass a stub without casting through
+ * `as never`. The concrete `SignupEmailService` has private fields that
+ * structural mocks can't satisfy; depending on the interface keeps the
+ * test API clean.
+ */
+export interface IVerificationEmailSender {
+  sendVerificationEmail(params: SendVerificationEmailParams): Promise<boolean>;
+}
 
 const logger = getLogger();
 
 const TRIAL_DURATION_DAYS = 14;
 const DEFAULT_PROJECT_NAME = 'My First Project';
+// 24-hour TTL on verification tokens. Long enough that a user can come
+// back the next morning, short enough that an unread message in a
+// shared inbox doesn't stay valid for weeks.
+//
+// TWO drift surfaces if you change this number:
+//   1. `VERIFICATION_STRINGS[*].expiryNotice` in
+//      `signup-email.service.ts` — each locale's "expires in 24
+//      hours" copy is hand-translated with grammatical agreement,
+//      so substituting the constant at runtime would break Russian/
+//      Kazakh plural rules. Update each string when the TTL moves.
+//   2. The header comment on migration 019 mentions "24-hour TTL"
+//      for context. Refresh it for the next reader.
+const VERIFICATION_TOKEN_TTL_HOURS = 24;
 
 export interface SignupInput {
   email: string;
@@ -78,13 +107,30 @@ export interface SignupResult {
 export class SignupService {
   private readonly subdomainService: SubdomainService;
   private readonly spamFilter: SpamFilterService;
+  private readonly emailService: IVerificationEmailSender;
 
   constructor(
     private readonly db: DatabaseClient,
-    private readonly region: DataResidencyRegion
+    private readonly region: DataResidencyRegion,
+    /**
+     * Override hook for tests — mocks the email service so unit tests
+     * don't need SMTP env vars. Production wiring uses the default.
+     * Typed as the narrow interface so test stubs don't need casts.
+     */
+    emailService?: IVerificationEmailSender
   ) {
     this.subdomainService = new SubdomainService(db);
     this.spamFilter = new SpamFilterService(db);
+    this.emailService = emailService ?? new SignupEmailService();
+  }
+
+  /**
+   * Build a friendly display name for verification emails. Falls back
+   * to the local-part of the email, then to "there" so a missing name
+   * never produces a creepy "Hi ," greeting.
+   */
+  private getContactNameForEmail(user: { name: string | null; email: string }): string {
+    return user.name || user.email.split('@')[0] || 'there';
   }
 
   /**
@@ -115,6 +161,11 @@ export class SignupService {
     const now = new Date();
     const trialEnd = addDays(now, TRIAL_DURATION_DAYS);
 
+    // Generated outside the transaction so the same value is shared
+    // between the in-txn DB row and the post-commit email.
+    const verificationToken = generateShareToken();
+    const verificationExpiresAt = addHours(now, VERIFICATION_TOKEN_TTL_HOURS);
+
     let result: SignupResult;
     try {
       result = await this.db.transaction(async (tx) => {
@@ -123,6 +174,16 @@ export class SignupService {
           name: input.name?.trim() || null,
           password_hash: passwordHash,
           role: 'user',
+        });
+
+        // Insert the verification token in the same transaction as the
+        // user create, so we can never end up with a user that has no
+        // way to verify (and never with a token row referencing a
+        // user that doesn't exist if the txn rolls back).
+        await tx.emailVerificationTokens.create({
+          user_id: user.id,
+          token: verificationToken,
+          expires_at: verificationExpiresAt,
         });
 
         const organization = await tx.organizations.create({
@@ -228,7 +289,180 @@ export class SignupService {
       projectId: result.project.id,
     });
 
+    // Fire-and-forget verification email. Non-blocking by design:
+    // signup is "Sentry-style" — a transient SMTP outage must never
+    // roll back the user's API key. The user can hit
+    // /auth/resend-verification later if the email never arrives.
+    void this.emailService
+      .sendVerificationEmail({
+        recipientEmail: result.user.email,
+        contactName: this.getContactNameForEmail(result.user),
+        token: verificationToken,
+      })
+      .catch((err) => {
+        logger.error('Failed to send signup verification email (non-blocking)', {
+          userId: result.user.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+
     return result;
+  }
+
+  /**
+   * Consume a verification token: mark it used, set
+   * `users.email_verified_at = NOW()`, return the user id.
+   *
+   * Returns 400 with the same generic "invalid or expired" message in
+   * every failure case (unknown token, expired, already consumed,
+   * consume race) so we don't leak which tokens previously existed.
+   *
+   * If the user was already verified via some other path (admin
+   * backfill, or a stale unconsumed token surviving an unclean state),
+   * we refuse to consume the token and return the same generic 400.
+   * Otherwise an active token would still flip `email_verified_at`,
+   * overwriting the prior verification timestamp for no reason.
+   */
+  async verifyEmail(token: string): Promise<{ user_id: string }> {
+    // Input validation lives at the route schema (`verifyEmailSchema`
+    // enforces `minLength: 32`), so the service can assume non-empty
+    // input. We deliberately don't trim here — cryptographic
+    // base64url tokens never contain whitespace, and silent
+    // normalization would mask client bugs by turning them into
+    // successful "not found" lookups.
+    return this.db.transaction(async (tx) => {
+      const tokenRow = await tx.emailVerificationTokens.findActiveByToken(token);
+      if (!tokenRow) {
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      }
+
+      // Already-verified guard (read-side fast-path). Refuse rather
+      // than re-stamp `email_verified_at`. We don't consume the
+      // token here — leaving it active is harmless (it'll expire),
+      // and consuming silently would be a side effect with no
+      // observable benefit. The atomic UPDATE below is the
+      // authoritative race-safe check; this just avoids consuming a
+      // valid token unnecessarily in the non-racy case.
+      const user = await tx.users.findById(tokenRow.user_id);
+      if (user?.email_verified_at) {
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      }
+
+      const consumed = await tx.emailVerificationTokens.consume(tokenRow.id);
+      if (!consumed) {
+        // Race with another verify-email request for the same token,
+        // OR the token expired in the gap between findActive and
+        // consume (which now also rechecks expires_at). Same generic
+        // 400 either way.
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      }
+
+      // Atomic stamp via DB `NOW()` (consistent clock with token
+      // tables) and a `WHERE email_verified_at IS NULL` guard
+      // (closes the read-vs-update race — two concurrent verifies
+      // can't both re-stamp the column). If markEmailVerified
+      // returns false, another transaction won the race; the
+      // current user is still verified, but THIS request didn't
+      // contribute the stamp, so we surface the same generic 400
+      // for symmetry with the upfront guard.
+      const stamped = await tx.users.markEmailVerified(tokenRow.user_id);
+      if (!stamped) {
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      }
+
+      return { user_id: tokenRow.user_id };
+    });
+  }
+
+  /**
+   * Issue a fresh verification token + email for a user. Called from
+   * /auth/resend-verification after the user clicks "Didn't receive
+   * the email?" in onboarding.
+   *
+   * Invalidates prior unconsumed tokens so the most recent email is
+   * the only one that works — prevents an attacker who intercepted
+   * an old token from using it after the user re-requests.
+   *
+   * Returns silently when the user is already verified; the caller
+   * (route handler) treats both verified and not-yet-verified as the
+   * same 200 response so we don't leak verification state.
+   */
+  async resendVerification(userId: string, locale?: EmailLocale): Promise<void> {
+    const newToken = generateShareToken();
+    const expiresAt = addHours(new Date(), VERIFICATION_TOKEN_TTL_HOURS);
+
+    // Capture data we need for the post-commit email send. Set inside
+    // the txn only when we actually issued a new token; otherwise the
+    // post-commit branch below skips the send.
+    let recipientEmail: string | null = null;
+    let contactName = 'there';
+    // Resolved locale: explicit caller arg wins; otherwise fall back
+    // to the user's stored language preference; otherwise 'en' (the
+    // signup-email service's default).
+    let resolvedLocale: EmailLocale | undefined = locale;
+
+    await this.db.transaction(async (tx) => {
+      // Lock the user row for the duration of this transaction. Two
+      // concurrent resend requests for the same user without this
+      // lock can both invalidate prior tokens (each seeing 0 active
+      // tokens) and each insert a new one — leaving the user with
+      // multiple "active" tokens and breaking the "latest link is
+      // the only one that works" guarantee. Adding a partial UNIQUE
+      // index would make the second insert fail visibly with 500;
+      // serializing here keeps both succeed-paths and last-writer
+      // semantics.
+      await tx.users.lockForUpdate(userId);
+
+      const user = await tx.users.findById(userId);
+      if (!user) {
+        // JWT carries a user id that no longer resolves — session is
+        // stale. Throw inside the txn so it rolls back cleanly.
+        throw new AppError('User not found', 404, 'NotFound');
+      }
+      if (user.email_verified_at) {
+        // Already verified — silently no-op. The route returns 200
+        // in both cases so the client UI doesn't have to branch.
+        return;
+      }
+
+      await tx.emailVerificationTokens.invalidateUnconsumedForUser(user.id);
+      await tx.emailVerificationTokens.create({
+        user_id: user.id,
+        token: newToken,
+        expires_at: expiresAt,
+      });
+
+      recipientEmail = user.email;
+      contactName = this.getContactNameForEmail(user);
+      // `user.preferences` is required on the type but defaults to {}
+      // in the DB — `language` is optional inside it.
+      if (!resolvedLocale) {
+        const stored = user.preferences?.language;
+        if (stored === 'en' || stored === 'ru' || stored === 'kk') {
+          resolvedLocale = stored;
+        }
+      }
+    });
+
+    if (!recipientEmail) {
+      // Already-verified branch — nothing to send.
+      return;
+    }
+
+    // Fire-and-forget — same non-blocking rationale as signup.
+    void this.emailService
+      .sendVerificationEmail({
+        recipientEmail,
+        contactName,
+        token: newToken,
+        locale: resolvedLocale,
+      })
+      .catch((err) => {
+        logger.error('Failed to send resend verification email (non-blocking)', {
+          userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
 
   /**
@@ -310,6 +544,12 @@ export class SignupService {
 function addDays(base: Date, days: number): Date {
   const end = new Date(base);
   end.setDate(end.getDate() + days);
+  return end;
+}
+
+function addHours(base: Date, hours: number): Date {
+  const end = new Date(base);
+  end.setHours(end.getHours() + hours);
   return end;
 }
 

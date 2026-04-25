@@ -23,15 +23,20 @@
  * pre-prod blocker.
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import { config } from '../../config.js';
 import { AppError } from '../middleware/error.js';
 import { omitFields } from '../utils/resource.js';
-import { sendCreated } from '../utils/response.js';
+import { sendCreated, sendSuccess } from '../utils/response.js';
 import { buildRefreshCookieOptions } from '../utils/auth-cookies.js';
 import { generateAuthTokens } from '../utils/auth-tokens.js';
-import { signupSchema } from '../schemas/auth-schema.js';
+import {
+  signupSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
+} from '../schemas/auth-schema.js';
+import { requireUser } from '../middleware/auth.js';
 import {
   SignupService,
   parseDataResidencyRegion,
@@ -57,10 +62,26 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
   const region = parseDataResidencyRegion(config.dataResidency.region);
   const service = new SignupService(db, region);
 
+  /**
+   * Shared 403-gate for all three self-service-signup routes. Replaces
+   * the inline `if (!config.auth.selfServiceSignupEnabled)` that used to
+   * sit at the top of each handler — single source of truth that flips
+   * with the env var, no chance of a new sibling route forgetting it.
+   */
+  const requireSelfServiceSignupEnabled = async (
+    _request: FastifyRequest,
+    _reply: FastifyReply
+  ) => {
+    if (!config.auth.selfServiceSignupEnabled) {
+      throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
+    }
+  };
+
   fastify.post<{ Body: SignupBody }>(
     '/api/v1/auth/signup',
     {
       schema: signupSchema,
+      preHandler: [requireSelfServiceSignupEnabled],
       config: {
         public: true,
         // Per-IP burst cap — tighter than the global default because this
@@ -71,10 +92,6 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
       },
     },
     async (request, reply) => {
-      if (!config.auth.selfServiceSignupEnabled) {
-        throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
-      }
-
       const input: SignupInput = {
         email: request.body.email,
         password: request.body.password,
@@ -116,6 +133,73 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
         access_token: tokens.access_token,
         expires_in: tokens.expires_in,
         token_type: tokens.token_type,
+      });
+    }
+  );
+
+  /**
+   * POST /api/v1/auth/verify-email
+   *
+   * Public — the user clicks a link in their email after signup. The
+   * token IS the auth, so we don't require a session here. Validates
+   * + consumes the token, sets users.email_verified_at = NOW().
+   *
+   * Rate-limited the same way as signup: a malicious client trying to
+   * brute-force valid tokens would have to do so behind the per-IP
+   * cap. Token entropy (32 bytes) makes guessing infeasible anyway,
+   * but a low cap is cheap defense in depth.
+   */
+  fastify.post<{ Body: { token: string } }>(
+    '/api/v1/auth/verify-email',
+    {
+      schema: verifyEmailSchema,
+      preHandler: [requireSelfServiceSignupEnabled],
+      config: {
+        public: true,
+        rateLimit: { max: 5, timeWindow: '1 minute' },
+      },
+    },
+    async (request, reply) => {
+      await service.verifyEmail(request.body.token);
+      return sendSuccess(reply, { email_verified: true });
+    }
+  );
+
+  /**
+   * POST /api/v1/auth/resend-verification
+   *
+   * Authenticated — only the signed-in user can ask to resend their
+   * own verification email. Tighter rate limit than signup: an authed
+   * user pressing the button repeatedly should hit a low cap fast,
+   * which both protects SMTP capacity and discourages email-bombing.
+   */
+  fastify.post(
+    '/api/v1/auth/resend-verification',
+    {
+      schema: resendVerificationSchema,
+      // Within this route's preHandler chain, `requireSelfServiceSignupEnabled`
+      // runs before `requireUser` so disabled mode returns 403 instead
+      // of 401 for a missing or merely-absent session. The global
+      // `createAuthMiddleware` (registered as `onRequest`) still runs
+      // earlier per Fastify's hook order and can short-circuit with
+      // 401 if the request carries an explicitly-invalid token —
+      // that's an acceptable inconsistency since invalid creds are a
+      // request-shape problem, not a feature-flag question.
+      preHandler: [requireSelfServiceSignupEnabled, requireUser],
+      config: {
+        rateLimit: { max: 3, timeWindow: '1 minute' },
+      },
+    },
+    async (request, reply) => {
+      // requireUser guarantees authUser is present; non-null assertion
+      // mirrors the pattern used elsewhere in this file.
+      const user = request.authUser!;
+      await service.resendVerification(user.id);
+      // Same 200 whether the user was already verified or we just sent
+      // a fresh token — keeping the response shape stable avoids
+      // leaking verification state in a probe-able way.
+      return sendSuccess(reply, {
+        message: 'If your email is unverified, a new link has been sent.',
       });
     }
   );

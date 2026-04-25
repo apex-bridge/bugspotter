@@ -19,6 +19,7 @@ import type {
   ShareTokenRepository,
   SystemConfigRepository,
 } from './repositories.js';
+import type { EmailVerificationTokenRepository } from './repositories/email-verification-token.repository.js';
 import type { AuditLogRepository } from './repositories/audit-log.repository.js';
 import type { ProjectIntegrationRepository } from './project-integration.repository.js';
 import type { IntegrationRuleRepository } from './integration-rule.repository.js';
@@ -81,6 +82,7 @@ export interface CoreRepositories {
   users: UserRepository;
   tickets: TicketRepository;
   shareTokens: ShareTokenRepository;
+  emailVerificationTokens: EmailVerificationTokenRepository;
   systemConfig: SystemConfigRepository;
   auditLogs: AuditLogRepository;
   retention: BugReportRepository;
@@ -152,6 +154,7 @@ export class DatabaseClient implements RepositoryRegistry {
   public readonly users!: UserRepository;
   public readonly tickets!: TicketRepository;
   public readonly shareTokens!: ShareTokenRepository;
+  public readonly emailVerificationTokens!: EmailVerificationTokenRepository;
   public readonly projectIntegrations!: ProjectIntegrationRepository;
   public readonly systemConfig!: SystemConfigRepository;
   public readonly auditLogs!: AuditLogRepository;
@@ -204,6 +207,7 @@ export class DatabaseClient implements RepositoryRegistry {
     this.users = this.wrapWithRetry(repositories.users);
     this.tickets = this.wrapWithRetry(repositories.tickets);
     this.shareTokens = this.wrapWithRetry(repositories.shareTokens);
+    this.emailVerificationTokens = this.wrapWithRetry(repositories.emailVerificationTokens);
     this.projectIntegrations = this.wrapWithRetry(repositories.projectIntegrations);
     this.analytics = new AnalyticsService(pool);
     // Data residency repository

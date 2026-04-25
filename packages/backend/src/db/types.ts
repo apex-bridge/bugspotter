@@ -68,8 +68,33 @@ export interface User {
   oauth_provider: string | null;
   oauth_id: string | null;
   preferences: UserPreferences;
+  // Set when the user clicks the link in the verification email sent by
+  // self-service signup. Null until verified. Sentry-style non-blocking
+  // — features stay available while this is null; the onboarding banner
+  // dismisses once it's set. See migration 019.
+  email_verified_at: Date | null;
   created_at: Date;
 }
+
+export interface EmailVerificationToken {
+  id: string;
+  user_id: string;
+  token: string;
+  expires_at: Date;
+  consumed_at: Date | null;
+  created_at: Date;
+}
+
+export type EmailVerificationTokenInsert = Omit<
+  EmailVerificationToken,
+  'id' | 'created_at' | 'consumed_at'
+> & {
+  id?: string;
+  created_at?: Date;
+  consumed_at?: Date | null;
+};
+
+export type EmailVerificationTokenUpdate = Partial<Pick<EmailVerificationToken, 'consumed_at'>>;
 
 export interface BugReport {
   id: string;
