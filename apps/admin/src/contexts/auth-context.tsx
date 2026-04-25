@@ -116,12 +116,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // handoff param on first load — if initAuth ran here it would
       // race the page's `login()` call and a failed refresh could
       // redirect to /login before onboarding finishes seeding state.
+      // `/verify-email` is listed for the same reason, plus it's
+      // routinely opened in a different browser from signup, so the
+      // refresh-cookie probe is expected to fail and shouldn't bounce
+      // the user away before the page renders the verify outcome.
       const isPublicRoute =
         location.pathname.startsWith('/shared/') ||
         location.pathname === '/login' ||
         location.pathname === '/register' ||
         location.pathname === '/setup' ||
-        location.pathname === '/onboarding';
+        location.pathname === '/onboarding' ||
+        location.pathname === '/verify-email';
 
       if (isPublicRoute) {
         setIsLoading(false);

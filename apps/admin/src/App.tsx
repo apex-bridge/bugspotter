@@ -13,6 +13,7 @@ import { DefaultRedirect } from './components/default-redirect';
 import LoginPage from './pages/login';
 import RegisterPage from './pages/register';
 import OnboardingPage from './pages/onboarding';
+import VerifyEmailPage from './pages/verify-email';
 import SetupWizard from './pages/setup';
 import DashboardLayout from './components/dashboard-layout';
 import DashboardPage from './pages/dashboard';
@@ -75,6 +76,18 @@ function App() {
                   it doesn't race the page's own `login()` call.
                 */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
+                {/*
+                  `/verify-email` is intentionally outside ProtectedRoute.
+                  The token in `?token=` IS the auth for this single
+                  call — the user clicks the link from their email,
+                  often in a different browser than the one they signed
+                  up in, so requiring a session would lock them out of
+                  the recovery path. AuthProvider's initAuth has
+                  `/verify-email` in its public-route allowlist so a
+                  failed silent refresh on this page doesn't bounce the
+                  user to /login before they see the verify outcome.
+                */}
+                <Route path="/verify-email" element={<VerifyEmailPage />} />
                 <Route path="/setup" element={<SetupWizard />} />
                 <Route path="/invitations/accept" element={<AcceptInvitationPage />} />
                 <Route
