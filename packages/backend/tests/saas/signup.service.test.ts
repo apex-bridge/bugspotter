@@ -585,23 +585,13 @@ describe('SignupService', () => {
         });
       });
 
-      it('rejects an empty token with 400 without hitting the DB', async () => {
-        // We deliberately do NOT trim — a whitespace token is treated
-        // as a normal lookup (it won't match any cryptographic
-        // base64url token in the DB). Only the empty string short-
-        // circuits before the lookup.
-        const findSpy = vi.fn();
-        mock = createMockDb({ findActiveByToken: findSpy });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
-
-        await expect(service.verifyEmail('')).rejects.toMatchObject({ statusCode: 400 });
-        expect(findSpy).not.toHaveBeenCalled();
-      });
-
-      it('treats a whitespace-only token as not-found (400) — does not silently trim', async () => {
-        // The lookup runs (non-empty string), the DB returns null, 400.
-        // Important to lock in: trimming would have been a silent
-        // client-bug masker.
+      it('treats whitespace as a normal not-found lookup — does not silently trim', async () => {
+        // We deliberately do NOT normalize input: cryptographic tokens
+        // never contain whitespace, so a whitespace-bearing token is
+        // a client bug. Schema-level minLength rejects empty/short
+        // tokens at the route edge; reaching the service implies a
+        // direct caller, in which case the lookup-and-fail path
+        // produces the correct generic 400.
         const findSpy = vi.fn(async () => null);
         mock = createMockDb({ findActiveByToken: findSpy });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
@@ -736,6 +726,45 @@ describe('SignupService', () => {
         await expect(service.resendVerification('ghost-uuid')).rejects.toMatchObject({
           statusCode: 404,
         });
+      });
+
+      it('uses user.preferences.language as locale fallback when none is provided', async () => {
+        mock = createMockDb({
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+            preferences: { language: 'ru' },
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await service.resendVerification('user-uuid');
+        await new Promise((r) => setImmediate(r));
+
+        expect(email.send).toHaveBeenCalledTimes(1);
+        const arg = email.send.mock.calls[0][0] as { locale?: string };
+        expect(arg.locale).toBe('ru');
+      });
+
+      it('explicit `locale` arg wins over user.preferences.language', async () => {
+        mock = createMockDb({
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+            preferences: { language: 'ru' },
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await service.resendVerification('user-uuid', 'kk');
+        await new Promise((r) => setImmediate(r));
+
+        const arg = email.send.mock.calls[0][0] as { locale?: string };
+        expect(arg.locale).toBe('kk');
       });
     });
   });

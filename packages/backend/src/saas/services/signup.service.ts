@@ -67,6 +67,15 @@ const DEFAULT_PROJECT_NAME = 'My First Project';
 // 24-hour TTL on verification tokens. Long enough that a user can come
 // back the next morning, short enough that an unread message in a
 // shared inbox doesn't stay valid for weeks.
+//
+// TWO drift surfaces if you change this number:
+//   1. `VERIFICATION_STRINGS[*].expiryNotice` in
+//      `signup-email.service.ts` — each locale's "expires in 24
+//      hours" copy is hand-translated with grammatical agreement,
+//      so substituting the constant at runtime would break Russian/
+//      Kazakh plural rules. Update each string when the TTL moves.
+//   2. The header comment on migration 019 mentions "24-hour TTL"
+//      for context. Refresh it for the next reader.
 const VERIFICATION_TOKEN_TTL_HOURS = 24;
 
 export interface SignupInput {
@@ -315,14 +324,12 @@ export class SignupService {
    * overwriting the prior verification timestamp for no reason.
    */
   async verifyEmail(token: string): Promise<{ user_id: string }> {
-    // Don't trim: cryptographic base64url tokens never contain
-    // whitespace. Whitespace would be a client bug that an exact-
-    // match check surfaces with the same generic 400 — silent
-    // normalization would mask it.
-    if (!token || token.length === 0) {
-      throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
-    }
-
+    // Input validation lives at the route schema (`verifyEmailSchema`
+    // enforces `minLength: 32`), so the service can assume non-empty
+    // input. We deliberately don't trim here — cryptographic
+    // base64url tokens never contain whitespace, and silent
+    // normalization would mask client bugs by turning them into
+    // successful "not found" lookups.
     return this.db.transaction(async (tx) => {
       const tokenRow = await tx.emailVerificationTokens.findActiveByToken(token);
       if (!tokenRow) {
@@ -389,6 +396,10 @@ export class SignupService {
     // post-commit branch below skips the send.
     let recipientEmail: string | null = null;
     let contactName = 'there';
+    // Resolved locale: explicit caller arg wins; otherwise fall back
+    // to the user's stored language preference; otherwise 'en' (the
+    // signup-email service's default).
+    let resolvedLocale: EmailLocale | undefined = locale;
 
     await this.db.transaction(async (tx) => {
       // Lock the user row for the duration of this transaction. Two
@@ -423,6 +434,14 @@ export class SignupService {
 
       recipientEmail = user.email;
       contactName = this.getContactNameForEmail(user);
+      // `user.preferences` is required on the type but defaults to {}
+      // in the DB — `language` is optional inside it.
+      if (!resolvedLocale) {
+        const stored = user.preferences?.language;
+        if (stored === 'en' || stored === 'ru' || stored === 'kk') {
+          resolvedLocale = stored;
+        }
+      }
     });
 
     if (!recipientEmail) {
@@ -436,7 +455,7 @@ export class SignupService {
         recipientEmail,
         contactName,
         token: newToken,
-        locale,
+        locale: resolvedLocale,
       })
       .catch((err) => {
         logger.error('Failed to send resend verification email (non-blocking)', {
