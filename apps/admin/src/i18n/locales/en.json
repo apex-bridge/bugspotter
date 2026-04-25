@@ -15,6 +15,7 @@
     "export": "Export",
     "import": "Import",
     "copy": "Copy",
+    "copied": "Copied",
     "copyFailed": "Failed to copy to clipboard",
     "close": "Close",
     "confirm": "Confirm",
@@ -1722,6 +1723,30 @@
       "inputLabel": "Subdomain confirmation",
       "submit": "Delete permanently",
       "deleting": "Deleting..."
+    }
+  },
+  "onboarding": {
+    "title": "Welcome, {{name}}!",
+    "subtitle": "Your workspace \"{{org}}\" is ready.",
+    "goToDashboard": "Go to Dashboard",
+    "verifyEmail": {
+      "title": "Verify your email",
+      "description": "We sent a verification link to {{email}}. Click it to confirm your account; until then some actions stay limited."
+    },
+    "apiKey": {
+      "title": "Your API key",
+      "description": "Use this key to send bug reports from your app to BugSpotter.",
+      "copied": "API key copied",
+      "onceWarning": {
+        "title": "Save it now — this is the only time you'll see it",
+        "description": "For your security we don't store the plaintext key. If you lose it, generate a new one from API Keys."
+      }
+    },
+    "install": {
+      "title": "Install the SDK",
+      "description": "Drop this into your app's entry file to start capturing bug reports.",
+      "copyButton": "Copy snippet",
+      "copied": "Snippet copied"
     }
   }
 }
