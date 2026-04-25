@@ -261,6 +261,13 @@ BugSpotter.init({
 
   const copyToClipboard = useCallback(
     async (fieldId: string, value: string, setCopied: (v: boolean) => void, successKey: string) => {
+      // `navigator.clipboard` only exists in secure contexts (HTTPS,
+      // localhost). Fail-fast with the toast rather than relying on
+      // the try/catch to swallow a TypeError on `.writeText`.
+      if (!navigator.clipboard) {
+        toast.error(t('errors.failedToCopyToClipboard'));
+        return;
+      }
       try {
         await navigator.clipboard.writeText(value);
         setCopied(true);

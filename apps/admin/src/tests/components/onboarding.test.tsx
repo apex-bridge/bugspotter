@@ -315,6 +315,27 @@ describe('OnboardingPage', () => {
     expect(writeText).toHaveBeenCalledWith('bgs_abc123');
   });
 
+  it('shows an error toast when navigator.clipboard is unavailable (insecure context)', async () => {
+    // `navigator.clipboard` is undefined over plain HTTP. Fail-fast
+    // path must surface the same error toast as a writeText reject
+    // — silently doing nothing on click would be a worse UX than
+    // telling the user copying is broken in their context.
+    const { toast } = await import('sonner');
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+
+    renderWithHandoff(encodeHandoff(validHandoff));
+    await screen.findByTestId('onboarding-api-key-value');
+
+    await user.click(screen.getByTestId('onboarding-api-key-copy'));
+
+    expect(toast.error).toHaveBeenCalled();
+  });
+
   it('decodes handoff from URL fragment (#handoff=) as the preferred source', async () => {
     // Fragment stays client-side — never leaks to servers or Referer
     // headers — so it's the preferred location for the plaintext API
