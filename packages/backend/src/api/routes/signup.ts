@@ -177,10 +177,14 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
     '/api/v1/auth/resend-verification',
     {
       schema: resendVerificationSchema,
-      // requireSelfServiceSignupEnabled runs FIRST so a 403 is
-      // returned before we touch auth state — keeps the disabled-
-      // mode response uniform with the other two routes regardless
-      // of session.
+      // Within this route's preHandler chain, `requireSelfServiceSignupEnabled`
+      // runs before `requireUser` so disabled mode returns 403 instead
+      // of 401 for a missing or merely-absent session. The global
+      // `createAuthMiddleware` (registered as `onRequest`) still runs
+      // earlier per Fastify's hook order and can short-circuit with
+      // 401 if the request carries an explicitly-invalid token —
+      // that's an acceptable inconsistency since invalid creds are a
+      // request-shape problem, not a feature-flag question.
       preHandler: [requireSelfServiceSignupEnabled, requireUser],
       config: {
         rateLimit: { max: 3, timeWindow: '1 minute' },

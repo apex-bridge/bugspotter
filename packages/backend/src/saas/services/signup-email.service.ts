@@ -137,9 +137,16 @@ export class SignupEmailService {
     // Defend the "never throws" contract: an unknown locale slipping
     // through (e.g. via an untyped caller or a future header-driven
     // path) would otherwise hit `VERIFICATION_STRINGS[locale]` as
-    // undefined and crash. Fall back to English.
+    // undefined and crash. Fall back to English. Use a strict
+    // own-property check — `in` would return true for inherited keys
+    // like 'toString' and silently produce a broken `strings` object.
     const requested = params.locale ?? 'en';
-    const locale: EmailLocale = requested in VERIFICATION_STRINGS ? requested : 'en';
+    const locale: EmailLocale = Object.prototype.hasOwnProperty.call(
+      VERIFICATION_STRINGS,
+      requested
+    )
+      ? requested
+      : 'en';
     const strings = VERIFICATION_STRINGS[locale];
     const frontendUrl = config.frontend.url;
 
@@ -150,7 +157,12 @@ export class SignupEmailService {
       return false;
     }
 
-    const verifyUrl = `${frontendUrl}/verify-email?token=${encodeURIComponent(params.token)}`;
+    // Strip trailing slash on `frontendUrl` so a config of
+    // `https://app.bugspotter.io/` doesn't produce
+    // `https://app.bugspotter.io//verify-email` — some routers and
+    // CDNs collapse the double slash, others 404.
+    const baseUrl = frontendUrl.endsWith('/') ? frontendUrl.slice(0, -1) : frontendUrl;
+    const verifyUrl = `${baseUrl}/verify-email?token=${encodeURIComponent(params.token)}`;
     const safeName = escapeHtml(params.contactName);
     const safeUrl = escapeHtml(verifyUrl);
 
