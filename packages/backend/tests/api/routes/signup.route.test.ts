@@ -122,10 +122,12 @@ function createHappyMockDb(): DatabaseClient {
     },
   };
 
-  // tx.users.update is used by verifyEmail to stamp users.email_verified_at.
-  (tx as unknown as { users: Record<string, unknown> }).users.update = vi.fn(
-    async (id: string, d: Record<string, unknown>) => ({ id, ...d })
-  );
+  // Extend tx.users with the methods used outside signup() — verifyEmail
+  // reads + writes; resendVerification locks first, then reads.
+  const txUsers = (tx as unknown as { users: Record<string, unknown> }).users;
+  txUsers.update = vi.fn(async (id: string, d: Record<string, unknown>) => ({ id, ...d }));
+  txUsers.findById = vi.fn(async () => null);
+  txUsers.lockForUpdate = vi.fn(async () => undefined);
 
   return {
     users: {
@@ -313,6 +315,15 @@ describe('POST /api/v1/auth/verify-email (route smoke)', () => {
     const tx = {
       users: {
         update: vi.fn(async (id: string, d: Record<string, unknown>) => ({ id, ...d })),
+        // verifyEmail's already-verified guard reads the user. Return
+        // an unverified user so we proceed past the guard.
+        findById: vi.fn(async () => ({
+          id: 'user-uuid',
+          email: 'founder@acme.com',
+          name: 'Jane',
+          email_verified_at: null,
+        })),
+        lockForUpdate: vi.fn(async () => undefined),
       },
       emailVerificationTokens: {
         findActiveByToken: vi.fn(async () => ({
@@ -401,6 +412,49 @@ describe('POST /api/v1/auth/resend-verification (route smoke)', () => {
     return `Bearer ${s.jwt.sign({ userId: 'user-uuid' })}`;
   }
 
+  /**
+   * Replace `db.transaction` with one that runs the callback against
+   * a tx object whose `users.findById` returns the supplied user
+   * shape. The service's `resendVerification` reads via tx (so it
+   * sees consistent state under the row lock), so a top-level
+   * `db.users.findById` mock wouldn't be exercised.
+   */
+  function buildResendDb(verified: boolean): DatabaseClient {
+    const db = createHappyMockDb();
+    const txUser = {
+      id: 'user-uuid',
+      email: 'founder@acme.com',
+      name: 'Jane',
+      email_verified_at: verified ? new Date() : null,
+    };
+    // The auth middleware (handleJwtAuth) reads via db.users.findById,
+    // NOT through a transaction — has to succeed before the route
+    // body runs at all, otherwise we'd get 401 instead of 200/403.
+    (db.users.findById as ReturnType<typeof vi.fn>).mockResolvedValue(txUser);
+    const tx = {
+      users: {
+        lockForUpdate: vi.fn(async () => undefined),
+        findById: vi.fn(async () => txUser),
+        update: vi.fn(async (id: string, d: Record<string, unknown>) => ({ id, ...d })),
+      },
+      emailVerificationTokens: {
+        invalidateUnconsumedForUser: vi.fn(async () => 0),
+        create: vi.fn(async (d: Record<string, unknown>) => ({
+          id: 'evt-uuid',
+          consumed_at: null,
+          created_at: new Date(),
+          ...d,
+        })),
+        findActiveByToken: vi.fn(),
+        consume: vi.fn(),
+      },
+    };
+    (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(
+      async (cb: (t: unknown) => Promise<unknown>) => cb(tx)
+    );
+    return db;
+  }
+
   it('returns 401 without an Authorization header', async () => {
     server = await buildServer(createHappyMockDb());
 
@@ -413,14 +467,7 @@ describe('POST /api/v1/auth/resend-verification (route smoke)', () => {
   });
 
   it('returns 200 + generic message when user is unverified', async () => {
-    const db = createHappyMockDb();
-    (db.users.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: 'user-uuid',
-      email: 'founder@acme.com',
-      name: 'Jane',
-      email_verified_at: null,
-    });
-    server = await buildServer(db);
+    server = await buildServer(buildResendDb(false));
 
     const res = await server.inject({
       method: 'POST',
@@ -433,14 +480,7 @@ describe('POST /api/v1/auth/resend-verification (route smoke)', () => {
   });
 
   it('returns 200 + generic message when user is already verified (no leak)', async () => {
-    const db = createHappyMockDb();
-    (db.users.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: 'user-uuid',
-      email: 'founder@acme.com',
-      name: 'Jane',
-      email_verified_at: new Date(),
-    });
-    server = await buildServer(db);
+    server = await buildServer(buildResendDb(true));
 
     const res = await server.inject({
       method: 'POST',
@@ -456,14 +496,7 @@ describe('POST /api/v1/auth/resend-verification (route smoke)', () => {
 
   it('returns 403 when SELF_SERVICE_SIGNUP_ENABLED is false', async () => {
     mockConfig.auth.selfServiceSignupEnabled = false;
-    const db = createHappyMockDb();
-    (db.users.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: 'user-uuid',
-      email: 'founder@acme.com',
-      name: 'Jane',
-      email_verified_at: null,
-    });
-    server = await buildServer(db);
+    server = await buildServer(buildResendDb(false));
 
     const res = await server.inject({
       method: 'POST',

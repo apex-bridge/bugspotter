@@ -50,9 +50,13 @@ export class EmailVerificationTokenRepository extends BaseRepository<
   }
 
   /**
-   * Mark a token consumed. Returns true on success. Idempotent — a second
-   * call with the same id returns false because consumed_at is already set.
-   * The route layer treats false as "already used" and produces 400.
+   * Mark a token consumed. Returns true on success. Returns false when:
+   *  - the token was already consumed, OR
+   *  - the token has expired (defends the race window between
+   *    `findActiveByToken` and this call — without the `expires_at`
+   *    check here, a token that crossed its TTL between the two calls
+   *    would still be marked verified).
+   * The route layer treats false as "invalid or expired" and produces 400.
    */
   async consume(id: string): Promise<boolean> {
     const query = `
@@ -60,6 +64,7 @@ export class EmailVerificationTokenRepository extends BaseRepository<
       SET consumed_at = NOW()
       WHERE id = $1
         AND consumed_at IS NULL
+        AND expires_at > NOW()
     `;
     const result = await this.getClient().query(query, [id]);
     return (result.rowCount ?? 0) > 0;

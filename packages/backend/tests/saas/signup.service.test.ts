@@ -11,7 +11,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { SignupService } from '../../src/saas/services/signup.service.js';
+import {
+  SignupService,
+  type IVerificationEmailSender,
+} from '../../src/saas/services/signup.service.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 import { DATA_RESIDENCY_REGION } from '../../src/db/types.js';
 import { hashKey } from '../../src/services/api-key/key-crypto.js';
@@ -165,10 +168,13 @@ function createMockDb(overrides: DbOverrides = {}): {
     },
   };
 
-  // Make `tx.users.update` available for verifyEmail's email_verified_at write.
-  (tx as unknown as { users: Record<string, unknown> }).users.update = vi.fn(
-    async (id: string, data: unknown) => ({ id, ...(data as object) })
-  );
+  // Extend tx.users with the methods used outside signup() — verifyEmail
+  // reads + writes, resendVerification locks first then reads. Each
+  // delegates to the same override-aware function as the db-level repo.
+  const txUsers = (tx as unknown as { users: Record<string, unknown> }).users;
+  txUsers.update = vi.fn(async (id: string, data: unknown) => ({ id, ...(data as object) }));
+  txUsers.findById = vi.fn(overrides.findById ?? (async () => null));
+  txUsers.lockForUpdate = vi.fn(async () => undefined);
 
   const db = {
     users: {
@@ -208,13 +214,14 @@ function createMockDb(overrides: DbOverrides = {}): {
 // Tests
 // ---------------------------------------------------------------------------
 
-// Stub email service — real one tries to construct an SMTP transporter
-// from env vars and would throw `ConfigurationError` in unit tests
-// (the .catch in signup.service swallows it, but using a stub keeps
-// the test output clean and lets us assert on call counts).
+// Stub email service — using the real service would try to construct
+// an SMTP transporter from env vars (the real `send()` catches
+// ConfigurationError internally and returns false, so it wouldn't
+// throw). The stub avoids the SMTP/log noise and lets us assert
+// deterministically on call counts.
 function createMockEmailService(): {
   send: ReturnType<typeof vi.fn>;
-  service: { sendVerificationEmail: (params: unknown) => Promise<boolean> };
+  service: IVerificationEmailSender;
 } {
   const send = vi.fn(async () => true);
   return {
@@ -231,7 +238,7 @@ describe('SignupService', () => {
   beforeEach(() => {
     mock = createMockDb();
     email = createMockEmailService();
-    service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+    service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
   });
 
   describe('happy path', () => {
@@ -560,7 +567,7 @@ describe('SignupService', () => {
           }),
           consumeToken: async () => true,
         });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         const result = await service.verifyEmail('good');
         expect(result).toEqual({ user_id: fakeUserId });
@@ -568,7 +575,7 @@ describe('SignupService', () => {
 
       it('rejects an unknown token with 400', async () => {
         mock = createMockDb({ findActiveByToken: async () => null });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('nope')).rejects.toMatchObject({
           statusCode: 400,
@@ -578,7 +585,7 @@ describe('SignupService', () => {
       it('rejects an empty/whitespace token with 400 without hitting the DB', async () => {
         const findSpy = vi.fn();
         mock = createMockDb({ findActiveByToken: findSpy });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('   ')).rejects.toMatchObject({ statusCode: 400 });
         expect(findSpy).not.toHaveBeenCalled();
@@ -600,7 +607,7 @@ describe('SignupService', () => {
           }),
           consumeToken: async () => false,
         });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
       });
@@ -618,7 +625,7 @@ describe('SignupService', () => {
           }),
           invalidateUnconsumed: invalidate,
         });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await service.resendVerification('user-uuid');
 
@@ -640,7 +647,7 @@ describe('SignupService', () => {
             email_verified_at: new Date(),
           }),
         });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.resendVerification('user-uuid')).resolves.toBeUndefined();
         expect(mock.log.emailVerificationTokens).toHaveLength(0);
@@ -649,7 +656,7 @@ describe('SignupService', () => {
 
       it('throws 404 when the user no longer exists (stale JWT)', async () => {
         mock = createMockDb({ findById: async () => null });
-        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service as never);
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.resendVerification('ghost-uuid')).rejects.toMatchObject({
           statusCode: 404,

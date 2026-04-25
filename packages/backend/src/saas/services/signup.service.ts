@@ -44,7 +44,21 @@ import {
 } from '../../services/api-key/key-crypto.js';
 import { generateShareToken } from '../../utils/token-generator.js';
 import { getLogger } from '../../logger.js';
-import { SignupEmailService, type EmailLocale } from './signup-email.service.js';
+import {
+  SignupEmailService,
+  type EmailLocale,
+  type SendVerificationEmailParams,
+} from './signup-email.service.js';
+
+/**
+ * Minimal interface so tests can pass a stub without casting through
+ * `as never`. The concrete `SignupEmailService` has private fields that
+ * structural mocks can't satisfy; depending on the interface keeps the
+ * test API clean.
+ */
+export interface IVerificationEmailSender {
+  sendVerificationEmail(params: SendVerificationEmailParams): Promise<boolean>;
+}
 
 const logger = getLogger();
 
@@ -84,7 +98,7 @@ export interface SignupResult {
 export class SignupService {
   private readonly subdomainService: SubdomainService;
   private readonly spamFilter: SpamFilterService;
-  private readonly emailService: SignupEmailService;
+  private readonly emailService: IVerificationEmailSender;
 
   constructor(
     private readonly db: DatabaseClient,
@@ -92,12 +106,22 @@ export class SignupService {
     /**
      * Override hook for tests — mocks the email service so unit tests
      * don't need SMTP env vars. Production wiring uses the default.
+     * Typed as the narrow interface so test stubs don't need casts.
      */
-    emailService?: SignupEmailService
+    emailService?: IVerificationEmailSender
   ) {
     this.subdomainService = new SubdomainService(db);
     this.spamFilter = new SpamFilterService(db);
     this.emailService = emailService ?? new SignupEmailService();
+  }
+
+  /**
+   * Build a friendly display name for verification emails. Falls back
+   * to the local-part of the email, then to "there" so a missing name
+   * never produces a creepy "Hi ," greeting.
+   */
+  private getContactNameForEmail(user: { name: string | null; email: string }): string {
+    return user.name || user.email.split('@')[0] || 'there';
   }
 
   /**
@@ -263,7 +287,7 @@ export class SignupService {
     void this.emailService
       .sendVerificationEmail({
         recipientEmail: result.user.email,
-        contactName: result.user.name || result.user.email.split('@')[0] || 'there',
+        contactName: this.getContactNameForEmail(result.user),
         token: verificationToken,
       })
       .catch((err) => {
@@ -280,12 +304,15 @@ export class SignupService {
    * Consume a verification token: mark it used, set
    * `users.email_verified_at = NOW()`, return the user id.
    *
-   * Idempotent only in the "already verified" sense — calling twice
-   * with the same valid token, the second call returns 400 because
-   * the token is single-use. Calling /verify-email after the user is
-   * already verified via a different token also returns 400. Both
-   * cases produce the same generic message to avoid leaking which
-   * tokens previously existed.
+   * Returns 400 with the same generic "invalid or expired" message in
+   * every failure case (unknown token, expired, already consumed,
+   * consume race) so we don't leak which tokens previously existed.
+   *
+   * If the user was already verified via some other path (admin
+   * backfill, or a stale unconsumed token surviving an unclean state),
+   * we refuse to consume the token and return the same generic 400.
+   * Otherwise an active token would still flip `email_verified_at`,
+   * overwriting the prior verification timestamp for no reason.
    */
   async verifyEmail(rawToken: string): Promise<{ user_id: string }> {
     const token = rawToken.trim();
@@ -299,11 +326,22 @@ export class SignupService {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
+      // Already-verified guard. Match the docstring: refuse rather
+      // than re-stamp `email_verified_at`. We don't consume the
+      // token in this branch — leaving it active is harmless (it'll
+      // expire) and consuming silently would be a side effect with
+      // no observable benefit.
+      const user = await tx.users.findById(tokenRow.user_id);
+      if (user?.email_verified_at) {
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      }
+
       const consumed = await tx.emailVerificationTokens.consume(tokenRow.id);
       if (!consumed) {
-        // Race with another verify-email request for the same token.
-        // The other side wins; we behave as though the token was already
-        // consumed, which it was.
+        // Race with another verify-email request for the same token,
+        // OR the token expired in the gap between findActive and
+        // consume (which now also rechecks expires_at). Same generic
+        // 400 either way.
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
@@ -329,41 +367,66 @@ export class SignupService {
    * same 200 response so we don't leak verification state.
    */
   async resendVerification(userId: string, locale?: EmailLocale): Promise<void> {
-    const user = await this.db.users.findById(userId);
-    if (!user) {
-      // Tighten down — if the JWT carries a user id that no longer
-      // resolves, something is wrong with the session. Don't reveal.
-      throw new AppError('User not found', 404, 'NotFound');
-    }
-    if (user.email_verified_at) {
-      // Already verified — silently no-op. The route returns 200 in
-      // both cases so the client UI doesn't have to branch.
-      return;
-    }
-
     const newToken = generateShareToken();
     const expiresAt = addHours(new Date(), VERIFICATION_TOKEN_TTL_HOURS);
 
+    // Capture data we need for the post-commit email send. Set inside
+    // the txn only when we actually issued a new token; otherwise the
+    // post-commit branch below skips the send.
+    let recipientEmail: string | null = null;
+    let contactName = 'there';
+
     await this.db.transaction(async (tx) => {
+      // Lock the user row for the duration of this transaction. Two
+      // concurrent resend requests for the same user without this
+      // lock can both invalidate prior tokens (each seeing 0 active
+      // tokens) and each insert a new one — leaving the user with
+      // multiple "active" tokens and breaking the "latest link is
+      // the only one that works" guarantee. Adding a partial UNIQUE
+      // index would make the second insert fail visibly with 500;
+      // serializing here keeps both succeed-paths and last-writer
+      // semantics.
+      await tx.users.lockForUpdate(userId);
+
+      const user = await tx.users.findById(userId);
+      if (!user) {
+        // JWT carries a user id that no longer resolves — session is
+        // stale. Throw inside the txn so it rolls back cleanly.
+        throw new AppError('User not found', 404, 'NotFound');
+      }
+      if (user.email_verified_at) {
+        // Already verified — silently no-op. The route returns 200
+        // in both cases so the client UI doesn't have to branch.
+        return;
+      }
+
       await tx.emailVerificationTokens.invalidateUnconsumedForUser(user.id);
       await tx.emailVerificationTokens.create({
         user_id: user.id,
         token: newToken,
         expires_at: expiresAt,
       });
+
+      recipientEmail = user.email;
+      contactName = this.getContactNameForEmail(user);
     });
+
+    if (!recipientEmail) {
+      // Already-verified branch — nothing to send.
+      return;
+    }
 
     // Fire-and-forget — same non-blocking rationale as signup.
     void this.emailService
       .sendVerificationEmail({
-        recipientEmail: user.email,
-        contactName: user.name || user.email.split('@')[0] || 'there',
+        recipientEmail,
+        contactName,
         token: newToken,
         locale,
       })
       .catch((err) => {
         logger.error('Failed to send resend verification email (non-blocking)', {
-          userId: user.id,
+          userId,
           error: err instanceof Error ? err.message : String(err),
         });
       });

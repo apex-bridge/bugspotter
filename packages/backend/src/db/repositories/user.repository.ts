@@ -17,6 +17,23 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
   }
 
   /**
+   * Take a row-level lock on the user record, scoped to the current
+   * transaction. Used by flows that need to serialize per-user
+   * mutations (e.g. `resendVerification` — without serialization, two
+   * concurrent resend requests can both invalidate prior tokens and
+   * each insert a new one, leaving multiple "active" tokens for the
+   * same user and breaking the "latest link is the only one that
+   * works" guarantee).
+   *
+   * Must be called inside a `db.transaction(...)` callback — otherwise
+   * the lock is released immediately on statement completion and the
+   * call has no serializing effect.
+   */
+  async lockForUpdate(id: string): Promise<void> {
+    await this.getClient().query('SELECT id FROM application.users WHERE id = $1 FOR UPDATE', [id]);
+  }
+
+  /**
    * Override serialization to handle defaults
    */
   protected serializeForInsert(data: UserInsert): Record<string, unknown> {

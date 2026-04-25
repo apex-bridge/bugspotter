@@ -23,7 +23,7 @@
  * pre-prod blocker.
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import { config } from '../../config.js';
 import { AppError } from '../middleware/error.js';
@@ -62,10 +62,26 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
   const region = parseDataResidencyRegion(config.dataResidency.region);
   const service = new SignupService(db, region);
 
+  /**
+   * Shared 403-gate for all three self-service-signup routes. Replaces
+   * the inline `if (!config.auth.selfServiceSignupEnabled)` that used to
+   * sit at the top of each handler — single source of truth that flips
+   * with the env var, no chance of a new sibling route forgetting it.
+   */
+  const requireSelfServiceSignupEnabled = async (
+    _request: FastifyRequest,
+    _reply: FastifyReply
+  ) => {
+    if (!config.auth.selfServiceSignupEnabled) {
+      throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
+    }
+  };
+
   fastify.post<{ Body: SignupBody }>(
     '/api/v1/auth/signup',
     {
       schema: signupSchema,
+      preHandler: [requireSelfServiceSignupEnabled],
       config: {
         public: true,
         // Per-IP burst cap — tighter than the global default because this
@@ -76,10 +92,6 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
       },
     },
     async (request, reply) => {
-      if (!config.auth.selfServiceSignupEnabled) {
-        throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
-      }
-
       const input: SignupInput = {
         email: request.body.email,
         password: request.body.password,
@@ -141,15 +153,13 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
     '/api/v1/auth/verify-email',
     {
       schema: verifyEmailSchema,
+      preHandler: [requireSelfServiceSignupEnabled],
       config: {
         public: true,
         rateLimit: { max: 5, timeWindow: '1 minute' },
       },
     },
     async (request, reply) => {
-      if (!config.auth.selfServiceSignupEnabled) {
-        throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
-      }
       await service.verifyEmail(request.body.token);
       return sendSuccess(reply, { email_verified: true });
     }
@@ -167,15 +177,16 @@ export function signupRoutes(fastify: FastifyInstance, db: DatabaseClient): void
     '/api/v1/auth/resend-verification',
     {
       schema: resendVerificationSchema,
-      preHandler: [requireUser],
+      // requireSelfServiceSignupEnabled runs FIRST so a 403 is
+      // returned before we touch auth state — keeps the disabled-
+      // mode response uniform with the other two routes regardless
+      // of session.
+      preHandler: [requireSelfServiceSignupEnabled, requireUser],
       config: {
         rateLimit: { max: 3, timeWindow: '1 minute' },
       },
     },
     async (request, reply) => {
-      if (!config.auth.selfServiceSignupEnabled) {
-        throw new AppError('Self-service signup is disabled', 403, 'Forbidden');
-      }
       // requireUser guarantees authUser is present; non-null assertion
       // mirrors the pattern used elsewhere in this file.
       const user = request.authUser!;
