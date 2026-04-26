@@ -101,15 +101,59 @@ describe('VerifyEmailPage', () => {
     expect(mockVerifyEmail).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the invalid state when the verify call rejects', async () => {
-    mockVerifyEmail.mockRejectedValue(new Error('400'));
+  it('renders the invalid state on a 4xx response (token genuinely dead)', async () => {
+    const axiosLikeError = Object.assign(new Error('400'), {
+      isAxiosError: true,
+      response: { status: 400 },
+    });
+    mockVerifyEmail.mockRejectedValue(axiosLikeError);
     renderWithToken('abc123');
 
     expect(await screen.findByTestId('verify-email-error')).toBeInTheDocument();
+    expect(screen.getByText('Verification link is invalid or expired')).toBeInTheDocument();
     // `auth.signIn` CTA is the unauth recovery — visible because
     // `isAuthenticated` defaults to false in this test suite.
     expect(screen.getByTestId('verify-email-sign-in')).toBeInTheDocument();
     expect(screen.queryByTestId('verify-email-resend')).not.toBeInTheDocument();
+  });
+
+  it('renders the transientError state on a 5xx response', async () => {
+    // 5xx means the server hiccupped — the token may still be valid.
+    // The user should see retry-oriented copy instead of "your link
+    // is dead."
+    const axiosLikeError = Object.assign(new Error('503'), {
+      isAxiosError: true,
+      response: { status: 503 },
+    });
+    mockVerifyEmail.mockRejectedValue(axiosLikeError);
+    renderWithToken('abc123');
+
+    expect(await screen.findByTestId('verify-email-error')).toBeInTheDocument();
+    expect(screen.getByText("Couldn't verify your email")).toBeInTheDocument();
+  });
+
+  it('renders the transientError state when the request never reaches the server', async () => {
+    // No `response` field on the error → axios couldn't get a reply
+    // (CORS, DNS, offline). Treat as retryable rather than terminal.
+    const axiosLikeError = Object.assign(new Error('Network Error'), {
+      isAxiosError: true,
+    });
+    mockVerifyEmail.mockRejectedValue(axiosLikeError);
+    renderWithToken('abc123');
+
+    expect(await screen.findByTestId('verify-email-error')).toBeInTheDocument();
+    expect(screen.getByText("Couldn't verify your email")).toBeInTheDocument();
+  });
+
+  it('defaults to transientError for non-axios errors of unknown shape', async () => {
+    // The conservative default — we don't know whether the token is
+    // dead, so don't tell the user it is. "Couldn't verify, try
+    // again" is correct under uncertainty.
+    mockVerifyEmail.mockRejectedValue(new Error('something weird'));
+    renderWithToken('abc123');
+
+    expect(await screen.findByTestId('verify-email-error')).toBeInTheDocument();
+    expect(screen.getByText("Couldn't verify your email")).toBeInTheDocument();
   });
 
   it('renders the no-token state when ?token= is missing and skips the verify call', async () => {
@@ -136,15 +180,15 @@ describe('VerifyEmailPage', () => {
     });
   });
 
-  it('strips ?token= from the URL after verify succeeds', async () => {
+  it('strips ?token= from the URL on mount, before verify resolves', async () => {
+    // Strip is unconditional — runs as soon as the page sees a
+    // `?token=` param, regardless of the verify outcome. The token
+    // is auth-equivalent and shouldn't linger in the address bar
+    // (browser history, Referer leaks). Recovery from transient
+    // failures is via re-clicking the email link, not refreshing.
     mockVerifyEmail.mockResolvedValue(undefined);
     const { locations } = renderWithRouter('/verify-email?token=abc123&keep=yes');
 
-    await screen.findByTestId('verify-email-success');
-
-    // The strip runs in a useEffect gated on status === 'success', a
-    // separate flush from the success render that findByTestId waits
-    // on. Wrap in waitFor to bridge the gap and avoid timing flakes.
     await waitFor(() => {
       const last = locations[locations.length - 1];
       expect(last.search).not.toContain('token=');
@@ -154,19 +198,40 @@ describe('VerifyEmailPage', () => {
     });
   });
 
-  it('keeps ?token= in the URL when verify fails so refresh can retry', async () => {
-    // A transient network error during verify must NOT strip the
-    // token: stripping would force the user back to their email
-    // client to recover. After a real 400 the token is dead, but
-    // leaving it in the URL is still harmless — refresh just shows
-    // the same invalid state again.
-    mockVerifyEmail.mockRejectedValue(new Error('400'));
+  it('strips ?token= even when verify fails (terminal 400)', async () => {
+    // A 4xx means the token is dead, no point keeping it in the URL.
+    const axiosLikeError = Object.assign(new Error('400'), {
+      isAxiosError: true,
+      response: { status: 400 },
+    });
+    mockVerifyEmail.mockRejectedValue(axiosLikeError);
     const { locations } = renderWithRouter('/verify-email?token=bogus');
 
     await screen.findByTestId('verify-email-error');
 
-    const last = locations[locations.length - 1];
-    expect(last.search).toContain('token=bogus');
+    await waitFor(() => {
+      const last = locations[locations.length - 1];
+      expect(last.search).not.toContain('token');
+    });
+  });
+
+  it('strips ?token= even when verify fails transiently (5xx)', async () => {
+    // Even when the token might still be valid (server hiccup), we
+    // strip rather than leak it via history/referrer. Recovery is by
+    // re-clicking the email link.
+    const axiosLikeError = Object.assign(new Error('502'), {
+      isAxiosError: true,
+      response: { status: 502 },
+    });
+    mockVerifyEmail.mockRejectedValue(axiosLikeError);
+    const { locations } = renderWithRouter('/verify-email?token=abc123');
+
+    await screen.findByTestId('verify-email-error');
+
+    await waitFor(() => {
+      const last = locations[locations.length - 1];
+      expect(last.search).not.toContain('token');
+    });
   });
 
   it('does not modify the URL when no token param is present', async () => {
@@ -202,9 +267,11 @@ describe('VerifyEmailPage', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
   });
 
-  it('shows the resend button for authenticated users on the invalid state', async () => {
+  it('shows the resend button for authenticated users on an error state', async () => {
     mockIsAuthenticated = true;
-    mockVerifyEmail.mockRejectedValue(new Error('400'));
+    mockVerifyEmail.mockRejectedValue(
+      Object.assign(new Error('400'), { isAxiosError: true, response: { status: 400 } })
+    );
     mockResendVerification.mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderWithToken('abc123');
@@ -223,7 +290,9 @@ describe('VerifyEmailPage', () => {
 
   it('surfaces an error toast when resend fails', async () => {
     mockIsAuthenticated = true;
-    mockVerifyEmail.mockRejectedValue(new Error('400'));
+    mockVerifyEmail.mockRejectedValue(
+      Object.assign(new Error('400'), { isAxiosError: true, response: { status: 400 } })
+    );
     mockResendVerification.mockRejectedValue(new Error('500'));
     const user = userEvent.setup();
     renderWithToken('abc123');
@@ -237,7 +306,9 @@ describe('VerifyEmailPage', () => {
   });
 
   it('navigates to /login from the sign-in CTA when unauthenticated', async () => {
-    mockVerifyEmail.mockRejectedValue(new Error('400'));
+    mockVerifyEmail.mockRejectedValue(
+      Object.assign(new Error('400'), { isAxiosError: true, response: { status: 400 } })
+    );
     const user = userEvent.setup();
     renderWithToken('abc123');
 

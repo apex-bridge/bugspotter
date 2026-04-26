@@ -2,20 +2,44 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { CheckCircle2, AlertTriangle, Loader2, Mail } from 'lucide-react';
+import axios from 'axios';
+import { CheckCircle2, AlertTriangle, Loader2, Mail, CloudOff } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { authService } from '../services/api';
 import { handleApiError } from '../lib/api-client';
 import { useAuth } from '../contexts/auth-context';
 
-type Status = 'verifying' | 'success' | 'invalid' | 'noToken';
+type Status = 'verifying' | 'success' | 'invalid' | 'transientError' | 'noToken';
+
+/**
+ * Classify a thrown verifyEmail error into terminal vs. retryable.
+ *
+ * Terminal (4xx): the token is genuinely dead — already used, expired,
+ * or never existed. The "invalid or expired" message is correct.
+ *
+ * Retryable: 5xx responses (server hiccup) or no response at all
+ * (network/CORS failure). The token may still be valid; we shouldn't
+ * tell the user their link is dead. We also default to retryable for
+ * non-axios errors of unknown shape — the conservative choice is to
+ * suggest a retry rather than declare the link dead.
+ */
+function isTransientError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) {
+    return true;
+  }
+  const status = error.response?.status;
+  if (typeof status !== 'number') {
+    return true;
+  }
+  return status >= 500;
+}
 
 /**
  * Public landing for the `?token=...` link sent in the post-signup
  * verification email. Consumes the token via `POST /auth/verify-email`,
- * then renders one of three terminal states (success / invalid /
- * no-token).
+ * then renders one of four terminal states (success / invalid /
+ * transientError / noToken).
  *
  * Authentication is irrelevant for the verify call itself — the token
  * IS the auth — but matters for the recovery affordance: if the user
@@ -31,9 +55,9 @@ export default function VerifyEmailPage() {
 
   // Capture both the token VALUE and whether the param was PRESENT,
   // once on first render. We need to distinguish:
-  //   - `/verify-email`           → param missing → render no-token UI, don't strip
-  //   - `/verify-email?token=`    → param present but empty → render invalid UI, still strip
-  //   - `/verify-email?token=abc` → present + non-empty → verify, then render success/invalid, strip
+  //   - `/verify-email`           → param missing → render no-token UI
+  //   - `/verify-email?token=`    → param present but empty → render invalid UI
+  //   - `/verify-email?token=abc` → present + non-empty → verify, then render terminal state
   // `searchParams.get` returns '' for an empty value, which would
   // collapse cases 1 and 2 if we relied on a single string variable.
   // Capturing in `useState` initializers keeps both stable across the
@@ -60,19 +84,17 @@ export default function VerifyEmailPage() {
   // per component instance.
   const startedRef = useRef(false);
   // Latches once the URL has been stripped so the strip effect can
-  // never re-fire. Today react-router's `setSearchParams` is
-  // useCallback-stable so the effect's deps don't change after the
-  // strip — but that's a router internal detail; a future version
-  // that recreates the callback per render would otherwise put us in
-  // an unbounded re-strip loop.
+  // never re-fire under any future router behavior change.
   const strippedRef = useRef(false);
 
-  // Strip `?token=` from the address bar — but only after the verify
-  // call settles successfully, so a transient network error during
-  // the in-flight call leaves the token in the URL and the user can
-  // recover by refreshing the page instead of returning to their
-  // email client. The empty-`?token=` case (param present, no value)
-  // strips immediately because there's nothing to retry.
+  // Strip `?token=` from the address bar on mount, regardless of the
+  // verify outcome. The token is auth-equivalent and shouldn't linger
+  // in the URL — browser history persists it across sessions, and
+  // (for cross-origin requests with non-strict referrer policies) it
+  // can leak via `Referer`. Recovery from a transient verify failure
+  // is via re-clicking the email link rather than refreshing this
+  // page; the backend's `verifyEmail` is idempotent for an
+  // already-verified user, so the email-reclick path is clean.
   //
   // We use `setSearchParams` (rather than `window.history.replaceState`)
   // to keep React Router's location in sync with the URL; the prev-
@@ -81,8 +103,7 @@ export default function VerifyEmailPage() {
     if (strippedRef.current) {
       return;
     }
-    const shouldStrip = status === 'success' || (hasTokenParam && !token);
-    if (!shouldStrip) {
+    if (!hasTokenParam) {
       return;
     }
     strippedRef.current = true;
@@ -94,7 +115,7 @@ export default function VerifyEmailPage() {
       },
       { replace: true }
     );
-  }, [status, hasTokenParam, token, setSearchParams]);
+  }, [hasTokenParam, setSearchParams]);
 
   useEffect(() => {
     if (!token || startedRef.current) {
@@ -115,8 +136,11 @@ export default function VerifyEmailPage() {
       try {
         await authService.verifyEmail(token);
         setStatus('success');
-      } catch {
-        setStatus('invalid');
+      } catch (error) {
+        // Distinguish terminal failures (4xx — token dead) from
+        // transient ones (5xx, network) so we don't tell the user
+        // their link is dead when the server just had a hiccup.
+        setStatus(isTransientError(error) ? 'transientError' : 'invalid');
       }
     })();
   }, [token]);
@@ -172,23 +196,33 @@ export default function VerifyEmailPage() {
     );
   }
 
-  // status === 'invalid' || status === 'noToken'
-  const isInvalid = status === 'invalid';
-  const titleKey = isInvalid ? 'verifyEmailPage.invalid.title' : 'verifyEmailPage.noToken.title';
-  const descKey = isInvalid
-    ? 'verifyEmailPage.invalid.description'
-    : 'verifyEmailPage.noToken.description';
+  // Three error-shaped states share the same card layout. Pick the
+  // copy and icon up front; the auth-state recovery affordance
+  // (resend vs. sign-in) is shared across all three.
+  let titleKey: string;
+  let descKey: string;
+  let icon: React.ReactNode;
+  if (status === 'invalid') {
+    titleKey = 'verifyEmailPage.invalid.title';
+    descKey = 'verifyEmailPage.invalid.description';
+    icon = <AlertTriangle className="h-5 w-5 text-destructive" />;
+  } else if (status === 'transientError') {
+    titleKey = 'verifyEmailPage.transientError.title';
+    descKey = 'verifyEmailPage.transientError.description';
+    icon = <CloudOff className="h-5 w-5 text-destructive" />;
+  } else {
+    // status === 'noToken'
+    titleKey = 'verifyEmailPage.noToken.title';
+    descKey = 'verifyEmailPage.noToken.description';
+    icon = <Mail className="h-5 w-5 text-muted-foreground" />;
+  }
 
   return (
     <div className="max-w-xl mx-auto p-6" data-testid="verify-email-error">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            {isInvalid ? (
-              <AlertTriangle className="h-5 w-5 text-destructive" />
-            ) : (
-              <Mail className="h-5 w-5 text-muted-foreground" />
-            )}
+            {icon}
             {t(titleKey)}
           </CardTitle>
           <CardDescription>{t(descKey)}</CardDescription>

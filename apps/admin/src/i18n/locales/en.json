@@ -1758,7 +1758,11 @@
     },
     "invalid": {
       "title": "Verification link is invalid or expired",
-      "description": "This link has already been used, has expired, or is not valid. Sign in to request a new one."
+      "description": "This link has already been used, has expired, or is not valid."
+    },
+    "transientError": {
+      "title": "Couldn't verify your email",
+      "description": "Something went wrong on our end. Please try again — click the verification link from your email, or request a new one."
     },
     "noToken": {
       "title": "Missing verification link",
