@@ -23,6 +23,8 @@ export const API_ENDPOINTS = {
     register: () => `${API_VERSION}/auth/register`,
     registrationStatus: () => `${API_VERSION}/auth/registration-status`,
     me: () => `${API_VERSION}/auth/me`,
+    verifyEmail: () => `${API_VERSION}/auth/verify-email`,
+    resendVerification: () => `${API_VERSION}/auth/resend-verification`,
   },
 
   // Deployment config

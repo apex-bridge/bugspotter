@@ -1748,5 +1748,27 @@
       "copyButton": "Copy snippet",
       "copied": "Snippet copied"
     }
+  },
+  "verifyEmailPage": {
+    "verifying": "Verifying your email...",
+    "success": {
+      "title": "Email verified",
+      "description": "Your email has been confirmed. You can now use all BugSpotter features.",
+      "cta": "Continue to dashboard"
+    },
+    "invalid": {
+      "title": "Verification link is invalid or expired",
+      "description": "This link has already been used, has expired, or is not valid. Sign in to request a new one."
+    },
+    "noToken": {
+      "title": "Missing verification link",
+      "description": "Open the verification link from your email to confirm your account."
+    },
+    "resend": {
+      "button": "Resend verification email",
+      "sending": "Sending...",
+      "success": "A new verification email has been sent.",
+      "error": "Could not send verification email. Please try again."
+    }
   }
 }

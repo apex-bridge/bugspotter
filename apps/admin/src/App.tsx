@@ -13,6 +13,7 @@ import { DefaultRedirect } from './components/default-redirect';
 import LoginPage from './pages/login';
 import RegisterPage from './pages/register';
 import OnboardingPage from './pages/onboarding';
+import VerifyEmailPage from './pages/verify-email';
 import SetupWizard from './pages/setup';
 import DashboardLayout from './components/dashboard-layout';
 import DashboardPage from './pages/dashboard';
@@ -75,6 +76,18 @@ function App() {
                   it doesn't race the page's own `login()` call.
                 */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
+                {/*
+                  `/verify-email` is intentionally outside ProtectedRoute.
+                  The `?token=` value IS the auth for the verify call,
+                  so requiring a session would lock out users who click
+                  the link in a different browser from the one they
+                  signed up in. The page does still consult `useAuth`
+                  to show a one-click resend button when a session
+                  happens to be available — initAuth's session-restore
+                  branch is gated on sessionStorage and is a no-op for
+                  fresh tabs from email links.
+                */}
+                <Route path="/verify-email" element={<VerifyEmailPage />} />
                 <Route path="/setup" element={<SetupWizard />} />
                 <Route path="/invitations/accept" element={<AcceptInvitationPage />} />
                 <Route
