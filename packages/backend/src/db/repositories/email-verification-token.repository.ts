@@ -29,21 +29,18 @@ export class EmailVerificationTokenRepository extends BaseRepository<
   }
 
   /**
-   * Find a verification token row by token string. Returns null when:
-   *  - the token doesn't exist,
-   *  - the token has already been consumed (single-use), OR
-   *  - the token has expired.
-   *
-   * The combined check lets the route caller produce a single
-   * "invalid or expired" 400 without having to disambiguate.
+   * Find a verification token row by token string. Returns null only
+   * when the token doesn't exist; consumed and expired rows are still
+   * returned so the caller can distinguish "never existed" from
+   * "exists but unusable" — the verifyEmail service uses that
+   * distinction to respond idempotently when the underlying user is
+   * already verified.
    */
-  async findActiveByToken(token: string): Promise<EmailVerificationToken | null> {
+  async findByToken(token: string): Promise<EmailVerificationToken | null> {
     const query = `
       SELECT *
-      FROM application.email_verification_tokens
+      FROM ${this.schema}.${this.tableName}
       WHERE token = $1
-        AND consumed_at IS NULL
-        AND expires_at > NOW()
     `;
     const result = await this.getClient().query<EmailVerificationToken>(query, [token]);
     return result.rows[0] || null;
@@ -53,14 +50,18 @@ export class EmailVerificationTokenRepository extends BaseRepository<
    * Mark a token consumed. Returns true on success. Returns false when:
    *  - the token was already consumed, OR
    *  - the token has expired (defends the race window between
-   *    `findActiveByToken` and this call — without the `expires_at`
+   *    `findByToken` and this call — without the `expires_at`
    *    check here, a token that crossed its TTL between the two calls
    *    would still be marked verified).
-   * The route layer treats false as "invalid or expired" and produces 400.
+   *
+   * `verifyEmail` interprets `false` together with the user's
+   * verification state — an already-verified user receives an
+   * idempotent 200 (the winning tx of a race already stamped them),
+   * an unverified user receives a 400.
    */
   async consume(id: string): Promise<boolean> {
     const query = `
-      UPDATE application.email_verification_tokens
+      UPDATE ${this.schema}.${this.tableName}
       SET consumed_at = NOW()
       WHERE id = $1
         AND consumed_at IS NULL
@@ -78,7 +79,7 @@ export class EmailVerificationTokenRepository extends BaseRepository<
    */
   async invalidateUnconsumedForUser(userId: string): Promise<number> {
     const query = `
-      UPDATE application.email_verification_tokens
+      UPDATE ${this.schema}.${this.tableName}
       SET consumed_at = NOW()
       WHERE user_id = $1
         AND consumed_at IS NULL

@@ -116,7 +116,7 @@ function createHappyMockDb(): DatabaseClient {
         created_at: new Date(),
         ...d,
       })),
-      findActiveByToken: vi.fn(async () => null),
+      findByToken: vi.fn(async () => null),
       consume: vi.fn(async () => true),
       invalidateUnconsumedForUser: vi.fn(async () => 0),
     },
@@ -309,7 +309,7 @@ describe('POST /api/v1/auth/verify-email (route smoke)', () => {
 
   it('returns 200 with email_verified=true when the token is valid', async () => {
     const db = createHappyMockDb();
-    // Wire findActiveByToken on the in-memory tx object the mock uses.
+    // Wire findByToken on the in-memory tx object the mock uses.
     // The mock's `transaction` callback is the only path that sees `tx`,
     // so we reach into the same closure's tx by replacing the
     // transaction implementation with one that exposes the same shape.
@@ -329,7 +329,7 @@ describe('POST /api/v1/auth/verify-email (route smoke)', () => {
         markEmailVerified: vi.fn(async () => true),
       },
       emailVerificationTokens: {
-        findActiveByToken: vi.fn(async () => ({
+        findByToken: vi.fn(async () => ({
           id: 'evt-1',
           user_id: 'user-uuid',
           token: 'a'.repeat(43),
@@ -448,7 +448,7 @@ describe('POST /api/v1/auth/resend-verification (route smoke)', () => {
           created_at: new Date(),
           ...d,
         })),
-        findActiveByToken: vi.fn(),
+        findByToken: vi.fn(),
         consume: vi.fn(),
       },
     };
