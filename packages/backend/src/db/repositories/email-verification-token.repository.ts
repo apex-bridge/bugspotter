@@ -29,21 +29,18 @@ export class EmailVerificationTokenRepository extends BaseRepository<
   }
 
   /**
-   * Find a verification token row by token string. Returns null when:
-   *  - the token doesn't exist,
-   *  - the token has already been consumed (single-use), OR
-   *  - the token has expired.
-   *
-   * The combined check lets the route caller produce a single
-   * "invalid or expired" 400 without having to disambiguate.
+   * Find a verification token row by token string. Returns null only
+   * when the token doesn't exist; consumed and expired rows are still
+   * returned so the caller can distinguish "never existed" from
+   * "exists but unusable" — the verifyEmail service uses that
+   * distinction to respond idempotently when the underlying user is
+   * already verified.
    */
-  async findActiveByToken(token: string): Promise<EmailVerificationToken | null> {
+  async findByToken(token: string): Promise<EmailVerificationToken | null> {
     const query = `
       SELECT *
       FROM application.email_verification_tokens
       WHERE token = $1
-        AND consumed_at IS NULL
-        AND expires_at > NOW()
     `;
     const result = await this.getClient().query<EmailVerificationToken>(query, [token]);
     return result.rows[0] || null;
@@ -53,7 +50,7 @@ export class EmailVerificationTokenRepository extends BaseRepository<
    * Mark a token consumed. Returns true on success. Returns false when:
    *  - the token was already consumed, OR
    *  - the token has expired (defends the race window between
-   *    `findActiveByToken` and this call — without the `expires_at`
+   *    `findByToken` and this call — without the `expires_at`
    *    check here, a token that crossed its TTL between the two calls
    *    would still be marked verified).
    * The route layer treats false as "invalid or expired" and produces 400.

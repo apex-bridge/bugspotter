@@ -57,7 +57,7 @@ function validInput() {
 interface DbOverrides {
   findByEmail?: () => Promise<unknown>;
   findById?: () => Promise<unknown>;
-  findActiveByToken?: () => Promise<unknown>;
+  findByToken?: () => Promise<unknown>;
   consumeToken?: () => Promise<boolean>;
   invalidateUnconsumed?: () => Promise<number>;
   markVerified?: () => Promise<boolean>;
@@ -163,7 +163,7 @@ function createMockDb(overrides: DbOverrides = {}): {
         log.emailVerificationTokens.push(row);
         return row;
       }),
-      findActiveByToken: vi.fn(overrides.findActiveByToken ?? (async () => null)),
+      findByToken: vi.fn(overrides.findByToken ?? (async () => null)),
       consume: vi.fn(overrides.consumeToken ?? (async () => true)),
       invalidateUnconsumedForUser: vi.fn(overrides.invalidateUnconsumed ?? (async () => 0)),
     },
@@ -560,7 +560,7 @@ describe('SignupService', () => {
       it('marks the token consumed and stamps users.email_verified_at on success', async () => {
         const fakeUserId = 'user-uuid';
         mock = createMockDb({
-          findActiveByToken: async () => ({
+          findByToken: async () => ({
             id: 'evt-1',
             user_id: fakeUserId,
             token: 'good',
@@ -577,7 +577,7 @@ describe('SignupService', () => {
       });
 
       it('rejects an unknown token with 400', async () => {
-        mock = createMockDb({ findActiveByToken: async () => null });
+        mock = createMockDb({ findByToken: async () => null });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('nope')).rejects.toMatchObject({
@@ -593,20 +593,24 @@ describe('SignupService', () => {
         // direct caller, in which case the lookup-and-fail path
         // produces the correct generic 400.
         const findSpy = vi.fn(async () => null);
-        mock = createMockDb({ findActiveByToken: findSpy });
+        mock = createMockDb({ findByToken: findSpy });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('   ')).rejects.toMatchObject({ statusCode: 400 });
         expect(findSpy).toHaveBeenCalledWith('   ');
       });
 
-      it('refuses with 400 when the user is already verified (no token consume)', async () => {
-        // The guard fires BEFORE the consume — leaving an active token
-        // alone (it'll expire) is preferable to silently consuming it
-        // and re-stamping email_verified_at.
+      it('idempotent: returns success without consuming when the user is already verified', async () => {
+        // Re-clicking a verification link (refresh-mid-flight, two
+        // tabs, an email-link pre-fetcher) shouldn't surface "invalid"
+        // when the underlying user is already verified. We don't
+        // consume the row — if it's still active it'll expire on its
+        // own; consuming it silently is a side effect with no
+        // observable benefit.
         const consumeSpy = vi.fn(async () => true);
+        const markSpy = vi.fn(async () => true);
         mock = createMockDb({
-          findActiveByToken: async () => ({
+          findByToken: async () => ({
             id: 'evt-1',
             user_id: 'user-uuid',
             token: 'good',
@@ -621,20 +625,101 @@ describe('SignupService', () => {
             email_verified_at: new Date('2026-04-01T00:00:00Z'),
           }),
           consumeToken: consumeSpy,
+          markVerified: markSpy,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        const result = await service.verifyEmail('good');
+        expect(result).toEqual({ user_id: 'user-uuid' });
+        expect(consumeSpy).not.toHaveBeenCalled();
+        expect(markSpy).not.toHaveBeenCalled();
+      });
+
+      it('idempotent: a previously-consumed token still returns success when the user is verified', async () => {
+        // The realistic path that motivates idempotency: an email-
+        // link pre-fetcher (or a duplicate browser tab) consumed the
+        // token. The legitimate user clicks → row is consumed_at-set
+        // and the user is verified → return 200 instead of 400.
+        const consumeSpy = vi.fn(async () => false);
+        mock = createMockDb({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: new Date('2026-04-01T00:00:00Z'),
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: new Date('2026-04-01T00:00:00Z'),
+          }),
+          consumeToken: consumeSpy,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        const result = await service.verifyEmail('good');
+        expect(result).toEqual({ user_id: 'user-uuid' });
+        expect(consumeSpy).not.toHaveBeenCalled();
+      });
+
+      it('rejects a consumed token with 400 when the user is NOT verified (partial-failure state)', async () => {
+        // Consumed-but-not-verified means the previous verifyEmail
+        // crashed between consume and stamp. There's nothing to do
+        // here — the user must request a fresh /resend-verification.
+        mock = createMockDb({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: new Date('2026-04-01T00:00:00Z'),
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+          }),
         });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
-        expect(consumeSpy).not.toHaveBeenCalled();
       });
 
-      it('refuses with 400 when the atomic UPDATE finds no row (race-lost stamp)', async () => {
-        // markEmailVerified returns false when another tx beat us to
-        // setting email_verified_at. We've already consumed our token,
-        // but THIS request didn't contribute the verification — so we
-        // surface the same generic 400 for symmetry with the guard.
+      it('rejects an expired token with 400', async () => {
         mock = createMockDb({
-          findActiveByToken: async () => ({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() - 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+      });
+
+      it('treats a race-lost markEmailVerified as success (someone else stamped first)', async () => {
+        // markEmailVerified returns false when another tx beat us
+        // setting email_verified_at. The user IS verified now — that's
+        // the same observable outcome as a fresh success, so under
+        // idempotency we return success. (Pre-idempotency this was a
+        // 400 for symmetry with the upfront guard.)
+        mock = createMockDb({
+          findByToken: async () => ({
             id: 'evt-1',
             user_id: 'user-uuid',
             token: 'good',
@@ -653,22 +738,29 @@ describe('SignupService', () => {
         });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
-        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+        const result = await service.verifyEmail('good');
+        expect(result).toEqual({ user_id: 'user-uuid' });
       });
 
       it('treats a race-lost consume as already-used and returns 400', async () => {
-        // findActiveByToken returns a row, but consume() returns false —
-        // simulates two parallel verify-email requests for the same token
-        // where the other side already won. Caller must not proceed to
-        // marking the user verified.
+        // findByToken returns an active row, but consume() returns false
+        // — simulates two parallel verify-email requests for the same
+        // token where the other side already won. Caller must not
+        // proceed to marking the user verified.
         mock = createMockDb({
-          findActiveByToken: async () => ({
+          findByToken: async () => ({
             id: 'evt-1',
             user_id: 'user-uuid',
             token: 'good',
             expires_at: new Date(Date.now() + 60_000),
             consumed_at: null,
             created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
           }),
           consumeToken: async () => false,
         });
