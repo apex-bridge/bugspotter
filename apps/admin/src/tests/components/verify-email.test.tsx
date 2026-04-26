@@ -2,11 +2,12 @@
  * VerifyEmailPage component tests.
  *
  * The page's job is narrow: read `?token=` on mount, call
- * `POST /auth/verify-email`, and render success / invalid / no-token
- * terminal states. These tests lock down the verify-once contract,
- * the URL strip (so a verified token doesn't sit in the address bar),
- * and the recovery branches (signed-in user gets resend; signed-out
- * user gets a sign-in CTA).
+ * `POST /auth/verify-email`, and render one of four terminal states:
+ * success / invalid (terminal 4xx) / transientError (5xx / 429 /
+ * network) / noToken. These tests lock down the verify-once
+ * contract, the unconditional URL strip (so the token doesn't sit in
+ * the address bar after the page loads), and the recovery branches
+ * (signed-in user gets resend; signed-out user gets a sign-in CTA).
  */
 
 import { StrictMode, useEffect } from 'react';
@@ -124,6 +125,22 @@ describe('VerifyEmailPage', () => {
     const axiosLikeError = Object.assign(new Error('503'), {
       isAxiosError: true,
       response: { status: 503 },
+    });
+    mockVerifyEmail.mockRejectedValue(axiosLikeError);
+    renderWithToken('abc123');
+
+    expect(await screen.findByTestId('verify-email-error')).toBeInTheDocument();
+    expect(screen.getByText("Couldn't verify your email")).toBeInTheDocument();
+  });
+
+  it('renders the transientError state on a 429 response (rate limit)', async () => {
+    // The verify-email route is rate-limited at 5/min per IP. A user
+    // who triggers the cap (e.g., flaky network → page re-mounts
+    // multiple times) shouldn't be told their link is dead — they
+    // just need to wait.
+    const axiosLikeError = Object.assign(new Error('429'), {
+      isAxiosError: true,
+      response: { status: 429 },
     });
     mockVerifyEmail.mockRejectedValue(axiosLikeError);
     renderWithToken('abc123');
@@ -254,16 +271,22 @@ describe('VerifyEmailPage', () => {
     const user = userEvent.setup();
     renderWithToken('abc123');
 
-    await user.click(await screen.findByTestId('verify-email-success-cta'));
+    const cta = await screen.findByTestId('verify-email-success-cta');
+    expect(cta).toHaveTextContent('Continue to dashboard');
+    await user.click(cta);
     expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
   });
 
-  it('routes the success CTA to /login when unauthenticated', async () => {
+  it('routes the success CTA to /login and labels it Sign in when unauthenticated', async () => {
+    // Label must match the action — "Continue to dashboard" would
+    // mislead an unauth user about where the click takes them.
     mockVerifyEmail.mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderWithToken('abc123');
 
-    await user.click(await screen.findByTestId('verify-email-success-cta'));
+    const cta = await screen.findByTestId('verify-email-success-cta');
+    expect(cta).toHaveTextContent('Sign in');
+    await user.click(cta);
     expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
   });
 

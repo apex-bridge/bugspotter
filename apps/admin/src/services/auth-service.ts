@@ -74,9 +74,13 @@ export const authService = {
    * verification email. The token IS the auth — no session required —
    * which is why this is wired through a public route on the admin.
    *
-   * Returns nothing on success; throws on 400 (invalid/expired) or
-   * 403 (signup disabled). Callers map the exception to a user-facing
-   * "invalid or expired link" state.
+   * Returns nothing on success; throws for non-2xx responses. Callers
+   * are expected to distinguish terminal failures (4xx — token dead,
+   * already used / expired / signup disabled) from retryable ones
+   * (5xx, 429, network) so a transient server hiccup doesn't surface
+   * as "your link is dead." See `isTransientError` in `verify-email.tsx`
+   * for the classification used by the admin landing page; missing-
+   * token handling is a separate concern handled before the call.
    */
   verifyEmail: async (token: string): Promise<void> => {
     await api.post<{ success: boolean; data: { email_verified: true } }>(

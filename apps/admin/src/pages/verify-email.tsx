@@ -18,11 +18,13 @@ type Status = 'verifying' | 'success' | 'invalid' | 'transientError' | 'noToken'
  * Terminal (4xx): the token is genuinely dead — already used, expired,
  * or never existed. The "invalid or expired" message is correct.
  *
- * Retryable: 5xx responses (server hiccup) or no response at all
- * (network/CORS failure). The token may still be valid; we shouldn't
- * tell the user their link is dead. We also default to retryable for
- * non-axios errors of unknown shape — the conservative choice is to
- * suggest a retry rather than declare the link dead.
+ * Retryable: 5xx responses (server hiccup), 429 (rate-limit hit — the
+ * verify-email route is capped at 5/min per IP), or no response at
+ * all (network/CORS failure). The token may still be valid in any of
+ * these cases; we shouldn't tell the user their link is dead. We
+ * also default to retryable for non-axios errors of unknown shape —
+ * the conservative choice is to suggest a retry rather than declare
+ * the link dead.
  */
 function isTransientError(error: unknown): boolean {
   if (!axios.isAxiosError(error)) {
@@ -32,7 +34,7 @@ function isTransientError(error: unknown): boolean {
   if (typeof status !== 'number') {
     return true;
   }
-  return status >= 500;
+  return status === 429 || status >= 500;
 }
 
 /**
@@ -151,7 +153,11 @@ export default function VerifyEmailPage() {
       await authService.resendVerification();
       toast.success(t('verifyEmailPage.resend.success'));
     } catch (error) {
-      toast.error(handleApiError(error) || t('verifyEmailPage.resend.error'));
+      // `handleApiError` always returns a non-empty string (it falls
+      // back to a generic English message when no axios response is
+      // available), so a `|| t(...)` fallback would be dead code.
+      // Match the pattern used in login.tsx and other admin pages.
+      toast.error(handleApiError(error));
     } finally {
       setResending(false);
     }
@@ -188,7 +194,7 @@ export default function VerifyEmailPage() {
               onClick={() => navigate(isAuthenticated ? '/' : '/login', { replace: true })}
               data-testid="verify-email-success-cta"
             >
-              {t('verifyEmailPage.success.cta')}
+              {t(isAuthenticated ? 'verifyEmailPage.success.cta' : 'auth.signIn')}
             </Button>
           </CardContent>
         </Card>

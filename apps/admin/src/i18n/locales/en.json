@@ -1771,8 +1771,7 @@
     "resend": {
       "button": "Resend verification email",
       "sending": "Sending...",
-      "success": "A new verification email has been sent.",
-      "error": "Could not send verification email. Please try again."
+      "success": "A new verification email has been sent."
     }
   }
 }
