@@ -68,4 +68,37 @@ export const authService = {
     );
     return response.data.data.access_token;
   },
+
+  /**
+   * Consume a verification token sent by `POST /auth/signup`'s
+   * verification email. The token IS the auth — no session required —
+   * which is why this is wired through a public route on the admin.
+   *
+   * Returns nothing on success; throws for non-2xx responses. Callers
+   * are expected to distinguish terminal failures (4xx — token dead,
+   * already used / expired / signup disabled) from retryable ones
+   * (5xx, 429, network) so a transient server hiccup doesn't surface
+   * as "your link is dead." See `isTransientError` in `verify-email.tsx`
+   * for the classification used by the admin landing page; missing-
+   * token handling is a separate concern handled before the call.
+   */
+  verifyEmail: async (token: string): Promise<void> => {
+    await api.post<{ success: boolean; data: { email_verified: true } }>(
+      API_ENDPOINTS.auth.verifyEmail(),
+      { token }
+    );
+  },
+
+  /**
+   * Request a new verification email for the currently-authed user.
+   * Backend silent-no-ops if the user is already verified — same 200
+   * either way, no probe-able state leak. 401 if not authed, 403 if
+   * signup is disabled.
+   */
+  resendVerification: async (): Promise<void> => {
+    await api.post<{ success: boolean; data: { message: string } }>(
+      API_ENDPOINTS.auth.resendVerification(),
+      {}
+    );
+  },
 };
