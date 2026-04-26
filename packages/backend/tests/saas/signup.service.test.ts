@@ -18,6 +18,7 @@ import {
 import type { DatabaseClient } from '../../src/db/client.js';
 import { DATA_RESIDENCY_REGION } from '../../src/db/types.js';
 import { hashKey } from '../../src/services/api-key/key-crypto.js';
+import { signupAttemptsTotal, signupEmailVerificationTotal } from '../../src/metrics/registry.js';
 
 vi.mock('../../src/logger.js', () => ({
   getLogger: () => ({
@@ -41,6 +42,7 @@ interface InsertLog {
   apiKeys: unknown[];
   apiKeyAudits: unknown[];
   emailVerificationTokens: unknown[];
+  auditLogs: unknown[];
 }
 
 function validInput() {
@@ -84,6 +86,7 @@ function createMockDb(overrides: DbOverrides = {}): {
     apiKeys: [],
     apiKeyAudits: [],
     emailVerificationTokens: [],
+    auditLogs: [],
   };
   const transactionCalled = { value: 0 };
 
@@ -167,6 +170,17 @@ function createMockDb(overrides: DbOverrides = {}): {
       consume: vi.fn(overrides.consumeToken ?? (async () => true)),
       invalidateUnconsumedForUser: vi.fn(overrides.invalidateUnconsumed ?? (async () => 0)),
     },
+    auditLogs: {
+      create: vi.fn(async (data: unknown) => {
+        const row = {
+          id: 'audit-uuid',
+          timestamp: new Date(),
+          ...(data as object),
+        };
+        log.auditLogs.push(row);
+        return row;
+      }),
+    },
   };
 
   // Extend tx.users with the methods used outside signup() — verifyEmail
@@ -237,11 +251,19 @@ describe('SignupService', () => {
   let mock: ReturnType<typeof createMockDb>;
   let service: SignupService;
   let email: ReturnType<typeof createMockEmailService>;
+  // Spy on the Prometheus counters so tests can assert which outcome
+  // bucket each path lands in. The spies use `vi.spyOn` so the real
+  // counters still increment in-process — harmless across tests, and
+  // we don't need to mock the registry module wholesale.
+  let attemptsIncSpy: ReturnType<typeof vi.spyOn>;
+  let verifyIncSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     mock = createMockDb();
     email = createMockEmailService();
     service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+    attemptsIncSpy = vi.spyOn(signupAttemptsTotal, 'inc');
+    verifyIncSpy = vi.spyOn(signupEmailVerificationTotal, 'inc');
   });
 
   describe('happy path', () => {
@@ -262,6 +284,25 @@ describe('SignupService', () => {
       expect(result.project.id).toBe('project-uuid');
       expect(result.api_key).toMatch(/^bgs_/);
       expect(result.api_key_id).toBe('apikey-uuid');
+    });
+
+    it('writes a signup_completed audit row inside the transaction', async () => {
+      // The audit row lives in the same tx as the user/org/project
+      // inserts. Locking it in here ensures a future refactor that
+      // accidentally moves it post-commit (or drops it entirely)
+      // surfaces as a test failure rather than silent data loss.
+      const result = await service.signup(validInput());
+
+      expect(mock.log.auditLogs).toHaveLength(1);
+      expect(mock.log.auditLogs[0]).toMatchObject({
+        action: 'signup_completed',
+        resource: 'auth/signup',
+        resource_id: result.user.id,
+        user_id: result.user.id,
+        organization_id: result.organization.id,
+        ip_address: '203.0.113.7',
+        success: true,
+      });
     });
 
     it('stores the API key as a SHA-256 hex hash (not plaintext, not bcrypt)', async () => {
@@ -580,6 +621,45 @@ describe('SignupService', () => {
 
         const result = await service.verifyEmail('good');
         expect(result).toEqual({ user_id: fakeUserId });
+        // Audit row written inside the tx, only on the path that
+        // actually contributed the stamp. Idempotent fast-paths
+        // (already-verified user, race-lost stamp) skip it — those
+        // are exercised by other tests in this describe block.
+        expect(mock.log.auditLogs).toHaveLength(1);
+        expect(mock.log.auditLogs[0]).toMatchObject({
+          action: 'email_verified',
+          resource: 'auth/verify-email',
+          resource_id: fakeUserId,
+          user_id: fakeUserId,
+          success: true,
+        });
+      });
+
+      it('skips the audit row on the idempotent fast-path (user already verified)', async () => {
+        // The fast-path is: token row exists, user.email_verified_at
+        // already set → return success. No new stamp, no audit row.
+        // The original verification already produced one; a second
+        // would just be noise.
+        mock = createMockDb({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: new Date(),
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await service.verifyEmail('good');
+        expect(mock.log.auditLogs).toHaveLength(0);
       });
 
       it('rejects an unknown token with 400', async () => {
@@ -1000,6 +1080,15 @@ describe('SignupService', () => {
 
         expect(invalidate).toHaveBeenCalledWith('user-uuid');
         expect(mock.log.emailVerificationTokens).toHaveLength(1);
+        // Audit row written inside the tx, alongside the new token.
+        expect(mock.log.auditLogs).toHaveLength(1);
+        expect(mock.log.auditLogs[0]).toMatchObject({
+          action: 'verification_resent',
+          resource: 'auth/resend-verification',
+          resource_id: 'user-uuid',
+          user_id: 'user-uuid',
+          success: true,
+        });
         // Fire-and-forget — the .catch inside resendVerification means
         // the await on resendVerification resolves before the send promise
         // settles. Wait a microtask tick for the dispatch.
@@ -1020,6 +1109,9 @@ describe('SignupService', () => {
 
         await expect(service.resendVerification('user-uuid')).resolves.toBeUndefined();
         expect(mock.log.emailVerificationTokens).toHaveLength(0);
+        // Already-verified branch skips the audit row — same response
+        // shape to the client, no work done, nothing to record.
+        expect(mock.log.auditLogs).toHaveLength(0);
         expect(email.send).not.toHaveBeenCalled();
       });
 
@@ -1070,6 +1162,143 @@ describe('SignupService', () => {
         const arg = email.send.mock.calls[0][0] as { locale?: string };
         expect(arg.locale).toBe('kk');
       });
+    });
+  });
+
+  describe('telemetry: outcome classification', () => {
+    // The funnel counter (`signup_attempts_total`) and the email-
+    // verification counter MUST distinguish "user did something we
+    // rejected" (4xx AppErrors → invalid_input / duplicate_email /
+    // spam_rejected / invalid) from "system broke" (503 from spam
+    // infra, DB outage, txn abort, anything else → 'error'). These
+    // tests lock that classification in so a future refactor can't
+    // silently re-bucket operational failures into user-facing
+    // funnel buckets — exactly the regression that would skew the
+    // dashboards we'd build hCaptcha / disposable-email comparisons
+    // on top of.
+
+    it("classifies a 503 from spam-filter infra as 'error', not 'spam_rejected'", async () => {
+      mock = createMockDb({ spamFilterThrows: true });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      attemptsIncSpy.mockClear();
+
+      await expect(service.signup(validInput())).rejects.toMatchObject({ statusCode: 503 });
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'error' });
+      expect(attemptsIncSpy).not.toHaveBeenCalledWith({ outcome: 'spam_rejected' });
+    });
+
+    it("classifies a 409 PendingEnterpriseRequest as 'duplicate_email', not 'spam_rejected'", async () => {
+      mock = createMockDb({
+        findPendingByEmail: async () => ({
+          id: 'existing-request',
+          status: 'pending_verification',
+        }),
+      });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      attemptsIncSpy.mockClear();
+
+      await expect(service.signup(validInput())).rejects.toMatchObject({ statusCode: 409 });
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'duplicate_email' });
+      expect(attemptsIncSpy).not.toHaveBeenCalledWith({ outcome: 'spam_rejected' });
+    });
+
+    it("classifies a 403 honeypot rejection as 'spam_rejected'", async () => {
+      attemptsIncSpy.mockClear();
+
+      await expect(
+        service.signup({ ...validInput(), honeypot: 'spam-bot-filled-this' })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'spam_rejected' });
+    });
+
+    it("classifies a successful signup as 'success'", async () => {
+      attemptsIncSpy.mockClear();
+
+      await service.signup(validInput());
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'success' });
+    });
+
+    it("classifies a duplicate findByEmail as 'duplicate_email'", async () => {
+      mock = createMockDb({ findByEmail: async () => ({ id: 'existing' }) });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      attemptsIncSpy.mockClear();
+
+      await expect(service.signup(validInput())).rejects.toMatchObject({ statusCode: 409 });
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'duplicate_email' });
+    });
+
+    it("classifies an empty company name as 'invalid_input'", async () => {
+      attemptsIncSpy.mockClear();
+
+      await expect(service.signup({ ...validInput(), company_name: '' })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'invalid_input' });
+    });
+
+    it("classifies a non-unique-violation throw inside the tx as 'error'", async () => {
+      // Simulates an unexpected DB-side failure mid-tx (timeout,
+      // connection drop, anything that isn't 23505). Without the
+      // catch-all 'error' bucket this case used to rethrow without
+      // counting, leaving the funnel total < total attempts.
+      mock = createMockDb({ transactionThrows: true });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      attemptsIncSpy.mockClear();
+
+      await expect(service.signup(validInput())).rejects.toThrow('simulated commit failure');
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'error' });
+    });
+
+    it("classifies a 4xx verifyEmail failure as 'invalid'", async () => {
+      mock = createMockDb({ findByToken: async () => null });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      verifyIncSpy.mockClear();
+
+      await expect(service.verifyEmail('nope')).rejects.toMatchObject({ statusCode: 400 });
+      expect(verifyIncSpy).toHaveBeenCalledWith({ outcome: 'invalid' });
+    });
+
+    it("classifies an unexpected verifyEmail failure as 'error'", async () => {
+      // Throw a non-AppError from the tx so the catch sees a raw
+      // Error. With the old logic this got bucketed into 'invalid';
+      // now it lands in 'error' so dashboards can distinguish dead
+      // tokens from a misbehaving DB.
+      mock = createMockDb({
+        findByToken: async () => {
+          throw new Error('simulated DB outage');
+        },
+      });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      verifyIncSpy.mockClear();
+
+      await expect(service.verifyEmail('whatever')).rejects.toThrow('simulated DB outage');
+      expect(verifyIncSpy).toHaveBeenCalledWith({ outcome: 'error' });
+      expect(verifyIncSpy).not.toHaveBeenCalledWith({ outcome: 'invalid' });
+    });
+
+    it("classifies a successful verifyEmail as 'success'", async () => {
+      mock = createMockDb({
+        findByToken: async () => ({
+          id: 'evt-1',
+          user_id: 'user-uuid',
+          token: 'good',
+          expires_at: new Date(Date.now() + 60_000),
+          consumed_at: null,
+          created_at: new Date(),
+        }),
+        findById: async () => ({
+          id: 'user-uuid',
+          email: 'founder@acme.com',
+          name: 'Jane',
+          email_verified_at: null,
+        }),
+        consumeToken: async () => true,
+      });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      verifyIncSpy.mockClear();
+
+      await service.verifyEmail('good');
+      expect(verifyIncSpy).toHaveBeenCalledWith({ outcome: 'success' });
     });
   });
 });

@@ -7,6 +7,7 @@
 
 import type { DatabaseClient } from '../../db/client.js';
 import { getLogger } from '../../logger.js';
+import { signupSpamCheckTotal } from '../../metrics/registry.js';
 import { DISPOSABLE_EMAIL_DOMAINS } from '../data/disposable-email-domains.js';
 
 const logger = getLogger();
@@ -45,6 +46,7 @@ export class SpamFilterService {
 
     // 1. Honeypot — instant reject
     if (input.honeypot && input.honeypot.trim().length > 0) {
+      signupSpamCheckTotal.inc({ check: 'honeypot' });
       logger.info('Spam check: honeypot triggered', { ip: input.ip_address });
       return { rejected: true, spam_score: 100, reasons: ['honeypot'] };
     }
@@ -55,6 +57,7 @@ export class SpamFilterService {
       RATE_LIMIT_WINDOW_MINUTES
     );
     if (recentCount >= RATE_LIMIT_MAX) {
+      signupSpamCheckTotal.inc({ check: 'rate_limit' });
       logger.info('Spam check: rate limit exceeded', {
         ip: input.ip_address,
         count: recentCount,
@@ -65,6 +68,7 @@ export class SpamFilterService {
     // 3. Duplicate pending request — instant reject
     const existing = await this.db.organizationRequests.findPendingByEmail(input.contact_email);
     if (existing) {
+      signupSpamCheckTotal.inc({ check: 'duplicate_pending' });
       logger.info('Spam check: duplicate pending request', {
         email: input.contact_email,
         existingId: existing.id,
@@ -77,6 +81,7 @@ export class SpamFilterService {
     if (emailDomain && DISPOSABLE_EMAIL_DOMAINS.has(emailDomain)) {
       score += 50;
       reasons.push('disposable_email');
+      signupSpamCheckTotal.inc({ check: 'disposable_email' });
       logger.info('Spam check: disposable email detected', { domain: emailDomain });
     }
 
@@ -85,6 +90,7 @@ export class SpamFilterService {
     if (suspiciousScore > 0) {
       score += suspiciousScore;
       reasons.push('suspicious_pattern');
+      signupSpamCheckTotal.inc({ check: 'suspicious_pattern' });
     }
 
     const rejected = score >= SPAM_THRESHOLD;
