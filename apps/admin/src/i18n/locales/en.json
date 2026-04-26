@@ -1731,7 +1731,10 @@
     "goToDashboard": "Go to Dashboard",
     "verifyEmail": {
       "title": "Verify your email",
-      "description": "We sent a verification link to {{email}}. Click it to confirm your account; until then some actions stay limited."
+      "description": "We sent a verification link to {{email}}. Click it to confirm your account; until then some actions stay limited.",
+      "resendButton": "Resend verification email",
+      "resending": "Sending...",
+      "resendSuccess": "A new verification email has been sent."
     },
     "apiKey": {
       "title": "Your API key",

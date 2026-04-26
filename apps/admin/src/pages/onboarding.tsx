@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { useAuth } from '../contexts/auth-context';
+import { authService } from '../services/api';
+import { handleApiError } from '../lib/api-client';
 import type { User } from '../types';
 
 /**
@@ -150,6 +152,7 @@ export default function OnboardingPage() {
 
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
+  const [resending, setResending] = useState(false);
   // Keyed by a short field id (`'key'`, `'snippet'`) so a second
   // click on the same button cancels the pending "revert to Copy
   // state" timer from the first click instead of racing it. Using a
@@ -291,6 +294,18 @@ BugSpotter.init({
     [t]
   );
 
+  const handleResend = useCallback(async () => {
+    setResending(true);
+    try {
+      await authService.resendVerification();
+      toast.success(t('onboarding.verifyEmail.resendSuccess'));
+    } catch (error) {
+      toast.error(handleApiError(error));
+    } finally {
+      setResending(false);
+    }
+  }, [t]);
+
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6" data-testid="onboarding-page">
       <div>
@@ -302,16 +317,33 @@ BugSpotter.init({
         </p>
       </div>
 
-      {/* Verification banner — display-only until backend ships
-          `/auth/verify-email` + `/auth/resend-verification`. Tracked as
-          a Phase-1 follow-up. */}
-      <Alert data-testid="onboarding-verify-email">
-        <Mail className="h-4 w-4" />
-        <AlertTitle>{t('onboarding.verifyEmail.title')}</AlertTitle>
-        <AlertDescription>
-          {t('onboarding.verifyEmail.description', { email: handoff.user.email })}
-        </AlertDescription>
-      </Alert>
+      {/* Verification banner — only shown while the user is unverified.
+          The handoff carries `email_verified_at` straight from the
+          signup response, so a fresh signup always sees this; users
+          who somehow re-land on /onboarding post-verification (rare)
+          get the banner hidden. Cross-tab freshness (verify in tab A,
+          banner hides in tab B) is a separate slice. */}
+      {!handoff.user.email_verified_at && (
+        <Alert data-testid="onboarding-verify-email">
+          <Mail className="h-4 w-4" />
+          <AlertTitle>{t('onboarding.verifyEmail.title')}</AlertTitle>
+          <AlertDescription className="space-y-3">
+            <p>{t('onboarding.verifyEmail.description', { email: handoff.user.email })}</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleResend}
+              disabled={resending}
+              data-testid="onboarding-verify-email-resend"
+            >
+              {resending
+                ? t('onboarding.verifyEmail.resending')
+                : t('onboarding.verifyEmail.resendButton')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card data-testid="onboarding-api-key-card">
         <CardHeader>

@@ -19,6 +19,7 @@ import type { User } from '../../types';
 
 const mockNavigate = vi.fn();
 const mockLogin = vi.fn();
+const mockResendVerification = vi.fn();
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
@@ -30,6 +31,12 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../../contexts/auth-context', () => ({
   useAuth: () => ({ login: mockLogin }),
+}));
+
+vi.mock('../../services/api', () => ({
+  authService: {
+    resendVerification: (...args: unknown[]) => mockResendVerification(...args),
+  },
 }));
 
 vi.mock('sonner', () => ({
@@ -362,5 +369,90 @@ describe('OnboardingPage', () => {
 
     await user.click(screen.getByTestId('onboarding-go-to-dashboard'));
     expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
+  });
+
+  describe('verification banner', () => {
+    it('renders the banner when the handoff user is unverified', async () => {
+      // The fresh-signup case: backend returns email_verified_at=null
+      // in the signup response, the landing page passes that through,
+      // and the banner needs to be visible so the user sees the
+      // "verify your email" prompt.
+      renderWithHandoff(encodeHandoff(validHandoff));
+
+      expect(await screen.findByTestId('onboarding-verify-email')).toBeInTheDocument();
+      expect(screen.getByTestId('onboarding-verify-email-resend')).toBeInTheDocument();
+    });
+
+    it('hides the banner when the handoff user is already verified', async () => {
+      // Defense for the rare path where a user re-lands on /onboarding
+      // after verifying (e.g., re-clicking the post-signup share link).
+      // The banner should not nag a verified user.
+      const verifiedHandoff = {
+        ...validHandoff,
+        user: { ...validHandoff.user, email_verified_at: '2026-04-26T10:00:00Z' },
+      };
+      renderWithHandoff(encodeHandoff(verifiedHandoff));
+
+      // The page itself still mounts; only the banner is gone.
+      await screen.findByTestId('onboarding-page');
+      expect(screen.queryByTestId('onboarding-verify-email')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('onboarding-verify-email-resend')).not.toBeInTheDocument();
+    });
+
+    it('calls resendVerification and shows a success toast when the resend button is clicked', async () => {
+      mockResendVerification.mockResolvedValue(undefined);
+      const { toast } = await import('sonner');
+      const user = userEvent.setup();
+      renderWithHandoff(encodeHandoff(validHandoff));
+
+      await user.click(await screen.findByTestId('onboarding-verify-email-resend'));
+
+      expect(mockResendVerification).toHaveBeenCalledTimes(1);
+      // toast.success fires after the awaited resendVerification
+      // resolves on a later microtask — wrap in waitFor.
+      await waitFor(() => {
+        expect(toast.success).toHaveBeenCalled();
+      });
+    });
+
+    it('shows an error toast when resend fails', async () => {
+      mockResendVerification.mockRejectedValue(new Error('429'));
+      const { toast } = await import('sonner');
+      const user = userEvent.setup();
+      renderWithHandoff(encodeHandoff(validHandoff));
+
+      await user.click(await screen.findByTestId('onboarding-verify-email-resend'));
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalled();
+      });
+    });
+
+    it('disables the resend button while a request is in flight', async () => {
+      // Hold the resend promise pending so we can observe the
+      // disabled state mid-request. Resolving it later lets the test
+      // tear down cleanly.
+      let resolveResend: (() => void) | undefined;
+      mockResendVerification.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveResend = resolve;
+          })
+      );
+      const user = userEvent.setup();
+      renderWithHandoff(encodeHandoff(validHandoff));
+
+      const button = await screen.findByTestId('onboarding-verify-email-resend');
+      await user.click(button);
+
+      await waitFor(() => {
+        expect(button).toBeDisabled();
+      });
+
+      resolveResend?.();
+      await waitFor(() => {
+        expect(button).not.toBeDisabled();
+      });
+    });
   });
 });
