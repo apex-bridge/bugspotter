@@ -690,7 +690,12 @@ describe('SignupService', () => {
         await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
       });
 
-      it('rejects an expired token with 400', async () => {
+      it('rejects an expired token with 400 when the user is NOT verified', async () => {
+        // Service no longer does a JS-side expiry check; rejection
+        // comes from consume()'s SQL guard (`expires_at > NOW()`),
+        // which the mock simulates by returning false. The
+        // post-consume re-read of user state confirms the user is
+        // still unverified — 400 is the correct outcome.
         mock = createMockDb({
           findByToken: async () => ({
             id: 'evt-1',
@@ -706,10 +711,40 @@ describe('SignupService', () => {
             name: 'Jane',
             email_verified_at: null,
           }),
+          consumeToken: async () => false,
         });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+      });
+
+      it('idempotent: an expired token still returns success when the user is already verified', async () => {
+        // Locks in the contract that the verified-user fast-path
+        // wins over token state — once the user is verified, the
+        // observable outcome is the same regardless of whether the
+        // token is active, consumed, or expired. Without this test,
+        // reordering the fast-path vs expiry/consumed checks could
+        // silently flip behavior.
+        mock = createMockDb({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() - 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: new Date('2026-04-01T00:00:00Z'),
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        const result = await service.verifyEmail('good');
+        expect(result).toEqual({ user_id: 'user-uuid' });
       });
 
       it('treats a race-lost markEmailVerified as success (someone else stamped first)', async () => {
@@ -742,11 +777,12 @@ describe('SignupService', () => {
         expect(result).toEqual({ user_id: 'user-uuid' });
       });
 
-      it('treats a race-lost consume as already-used and returns 400', async () => {
-        // findByToken returns an active row, but consume() returns false
-        // — simulates two parallel verify-email requests for the same
-        // token where the other side already won. Caller must not
-        // proceed to marking the user verified.
+      it('rejects a race-lost consume with 400 when the user is still unverified', async () => {
+        // findByToken returns an active row, consume() returns false
+        // (the other side won), and a re-read of user state still
+        // shows them unverified — meaning the winning tx hasn't
+        // committed the stamp yet, OR the false was caused by token
+        // expiry rather than a race. Either way, 400 is correct.
         mock = createMockDb({
           findByToken: async () => ({
             id: 'evt-1',
@@ -767,6 +803,51 @@ describe('SignupService', () => {
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
 
         await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+      });
+
+      it('treats a race-lost consume as success when the user is now verified by the winning tx', async () => {
+        // The fast-path didn't fire on first read (the winning tx
+        // hadn't stamped yet from this snapshot's perspective), but
+        // by the time consume() returns false the winning tx has
+        // committed and the user IS verified. The post-consume
+        // re-read catches up and returns success — same observable
+        // outcome as the idempotent fast-path.
+        let findByIdCalls = 0;
+        mock = createMockDb({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => {
+            findByIdCalls++;
+            // First read (pre-consume fast-path): user is unverified.
+            // Second read (post-consume re-check): user has been
+            // verified by the winning concurrent transaction.
+            return findByIdCalls === 1
+              ? {
+                  id: 'user-uuid',
+                  email: 'founder@acme.com',
+                  name: 'Jane',
+                  email_verified_at: null,
+                }
+              : {
+                  id: 'user-uuid',
+                  email: 'founder@acme.com',
+                  name: 'Jane',
+                  email_verified_at: new Date('2026-04-01T00:00:00Z'),
+                };
+          },
+          consumeToken: async () => false,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        const result = await service.verifyEmail('good');
+        expect(result).toEqual({ user_id: 'user-uuid' });
+        expect(findByIdCalls).toBe(2);
       });
     });
 

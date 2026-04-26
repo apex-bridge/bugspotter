@@ -313,20 +313,27 @@ export class SignupService {
    * Consume a verification token: mark it used, set
    * `users.email_verified_at = NOW()`, return the user id.
    *
-   * Idempotent on already-verified users — clicking the link a second
-   * time (refresh-mid-flight, two browser tabs, an email-link
-   * pre-fetcher that already consumed it) returns success rather
-   * than a confusing "invalid" error. This trades a tiny information-
-   * leak window (an attacker who captured the token can confirm the
-   * user is verified by observing 200 vs 400) for a meaningful UX
-   * improvement; possession of the token already implies access to
-   * the user's email or in-flight URL, so the leak isn't materially
-   * actionable.
+   * Idempotent for already-verified users. Once a user is verified,
+   * the observable outcome is the same regardless of the token's own
+   * state — active, consumed, or expired all return success. This
+   * makes link re-clicks (refresh-mid-flight, two browser tabs,
+   * email-link pre-fetchers) and post-consume races resolve to a
+   * consistent 200 instead of a confusing "invalid" error.
    *
-   * Returns 400 with a generic "invalid or expired" message for the
-   * remaining failure modes (unknown token, expired, partial-failure
-   * consumed-but-not-verified state, consume race) so we don't leak
-   * which tokens previously existed.
+   * Returns 400 (with a generic "invalid or expired" message that
+   * doesn't disambiguate which sub-case fired) when:
+   *   - the token doesn't exist, OR
+   *   - the user is unverified AND the token has been consumed
+   *     (partial-failure state — caller must re-request via
+   *     /auth/resend-verification), OR
+   *   - the user is unverified AND the token expired before any
+   *     verify call could consume it.
+   *
+   * Trades a tiny information-leak window (an attacker who captured
+   * the token can confirm the user is verified by observing 200 vs
+   * 400) for a meaningful UX improvement; possession of the token
+   * already implies access to the user's email or in-flight URL, so
+   * the leak isn't materially actionable.
    */
   async verifyEmail(token: string): Promise<{ user_id: string }> {
     // Input validation lives at the route schema (`verifyEmailSchema`
@@ -346,10 +353,10 @@ export class SignupService {
 
       // Idempotent fast-path: user is already verified. Return the
       // same shape as a fresh successful verify regardless of
-      // whether THIS token was the one that did it. Don't consume
-      // the row here — if it's still active it'll expire on its own,
-      // and consuming it silently would be a side effect with no
-      // observable benefit.
+      // whether THIS token was the one that did it, or whether it's
+      // still active. Don't consume the row — if it's active it'll
+      // expire on its own, and consuming silently would be a side
+      // effect with no observable benefit.
       const user = await tx.users.findById(tokenRow.user_id);
       if (user?.email_verified_at) {
         return { user_id: tokenRow.user_id };
@@ -363,15 +370,28 @@ export class SignupService {
       if (tokenRow.consumed_at !== null) {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
-      if (tokenRow.expires_at <= new Date()) {
-        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
-      }
 
+      // Don't perform a JS-side expiry check here — `consume()`'s
+      // SQL guard (`expires_at > NOW()`) is authoritative and uses
+      // the same Postgres clock that wrote `expires_at` in the
+      // first place. A JS-side check against the app server clock
+      // could prematurely reject still-valid tokens under NTP/
+      // container clock skew between the app and the database.
       const consumed = await tx.emailVerificationTokens.consume(tokenRow.id);
       if (!consumed) {
-        // Race with another verify-email request for the same token,
-        // OR the token expired in the gap between findByToken and
-        // consume (which rechecks expires_at).
+        // !consumed means either:
+        //  - Expiry: the SQL guard rejected because expires_at <=
+        //    NOW(). The user was unverified above and remains so;
+        //    400 is correct.
+        //  - Race-loss: a concurrent verify-email request for the
+        //    same token won consume() and may already have stamped
+        //    the user. Re-read user state — if verified, return
+        //    success too (consistent with the idempotent fast-path
+        //    above; the observable outcome is the same).
+        const refreshed = await tx.users.findById(tokenRow.user_id);
+        if (refreshed?.email_verified_at) {
+          return { user_id: tokenRow.user_id };
+        }
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
@@ -379,8 +399,7 @@ export class SignupService {
       // NULL` guard. If markEmailVerified returns false another
       // transaction won the race and the user IS verified now —
       // treat that as success too (consistent with the idempotent
-      // fast-path above; this request still observed a verified
-      // outcome for the user, just didn't contribute the stamp).
+      // fast-path above).
       await tx.users.markEmailVerified(tokenRow.user_id);
       return { user_id: tokenRow.user_id };
     });
