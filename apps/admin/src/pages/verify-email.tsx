@@ -59,6 +59,13 @@ export default function VerifyEmailPage() {
   // reverting to 'invalid'. The ref guard fires verify exactly once
   // per component instance.
   const startedRef = useRef(false);
+  // Latches once the URL has been stripped so the strip effect can
+  // never re-fire. Today react-router's `setSearchParams` is
+  // useCallback-stable so the effect's deps don't change after the
+  // strip — but that's a router internal detail; a future version
+  // that recreates the callback per render would otherwise put us in
+  // an unbounded re-strip loop.
+  const strippedRef = useRef(false);
 
   // Strip `?token=` from the address bar — but only after the verify
   // call settles successfully, so a transient network error during
@@ -71,10 +78,14 @@ export default function VerifyEmailPage() {
   // to keep React Router's location in sync with the URL; the prev-
   // function form preserves any unrelated query params.
   useEffect(() => {
+    if (strippedRef.current) {
+      return;
+    }
     const shouldStrip = status === 'success' || (hasTokenParam && !token);
     if (!shouldStrip) {
       return;
     }
+    strippedRef.current = true;
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);

@@ -213,7 +213,12 @@ describe('VerifyEmailPage', () => {
     expect(mockResendVerification).toHaveBeenCalledTimes(1);
 
     const { toast } = await import('sonner');
-    expect(toast.success).toHaveBeenCalled();
+    // toast.success fires after `await authService.resendVerification()`
+    // resolves on a later microtask. Wrap in waitFor so the assertion
+    // doesn't race the async handler.
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalled();
+    });
   });
 
   it('surfaces an error toast when resend fails', async () => {
