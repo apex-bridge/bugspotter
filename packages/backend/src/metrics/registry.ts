@@ -78,7 +78,7 @@ export const orgHardDeleteTotal = new client.Counter({
 //                        spam signal); per-check breakdown lives on
 //                        `signup_spam_check_total`
 //   'duplicate_email' — findByEmail found an existing user, OR a unique-
-//                        violation race-loss on users.email_key, OR a 409
+//                        violation race-loss on users_email_key, OR a 409
 //                        PendingEnterpriseRequest from runSpamChecks
 //                        (existing org_requests row blocks self-service)
 //   'invalid_input'   — empty company_name, invalid/taken subdomain

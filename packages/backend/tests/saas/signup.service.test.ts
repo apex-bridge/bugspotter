@@ -10,7 +10,7 @@
  * - API key returned in plaintext; stored as SHA-256 hash
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   SignupService,
   type IVerificationEmailSender,
@@ -264,6 +264,19 @@ describe('SignupService', () => {
     service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
     attemptsIncSpy = vi.spyOn(signupAttemptsTotal, 'inc');
     verifyIncSpy = vi.spyOn(signupEmailVerificationTotal, 'inc');
+  });
+
+  afterEach(() => {
+    // Restore the prom-client `inc` spies so they don't accumulate
+    // across tests in this file. Each call to `vi.spyOn` wraps the
+    // underlying method, and without restoration the wrapping piles
+    // up — harmless functionally, but leaks the indirection across
+    // tests and confuses any future test that checks the method
+    // identity directly. `restoreAllMocks` also clears the call
+    // history captured by these spies; per-test `mockClear()` calls
+    // remain in place so an individual test's assertions don't see
+    // counts from `beforeEach` setup.
+    vi.restoreAllMocks();
   });
 
   describe('happy path', () => {
@@ -1247,6 +1260,32 @@ describe('SignupService', () => {
 
       await expect(service.signup(validInput())).rejects.toThrow('simulated commit failure');
       expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'error' });
+    });
+
+    it("classifies a unique-violation on an unknown constraint as 'error'", async () => {
+      // Defense-in-depth for a future migration that adds a unique
+      // constraint to a signup-touched table without updating
+      // UNIQUE_CONSTRAINT_OUTCOME_BUCKETS. The remapped 409 still
+      // surfaces to the caller (with a generic message), but the
+      // funnel correctly buckets it as operational rather than
+      // silently calling it duplicate_email.
+      const { db, transactionCalled } = createMockDb();
+      (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        transactionCalled.value++;
+        const err = new Error('duplicate key value violates unique constraint') as Error & {
+          code: string;
+          constraint: string;
+        };
+        err.code = '23505';
+        err.constraint = 'some_future_unique_key';
+        throw err;
+      });
+      service = new SignupService(db, DATA_RESIDENCY_REGION.KZ, email.service);
+      attemptsIncSpy.mockClear();
+
+      await expect(service.signup(validInput())).rejects.toMatchObject({ statusCode: 409 });
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'error' });
+      expect(attemptsIncSpy).not.toHaveBeenCalledWith({ outcome: 'duplicate_email' });
     });
 
     it("classifies a 4xx verifyEmail failure as 'invalid'", async () => {

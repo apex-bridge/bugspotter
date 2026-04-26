@@ -342,26 +342,24 @@ export class SignupService {
       // the proper 409 Conflict they'd get from the read-side checks.
       const remapped = remapUniqueViolation(err);
       if (remapped) {
-        // Both unique-violation paths produce a 409 from the remapper,
-        // but for the funnel we distinguish:
-        //  - users_email_key  → 'duplicate_email' (matches the read-
-        //                        side findByEmail bucket above).
-        //  - organizations_subdomain_key → 'invalid_input' (the user
-        //                        supplied an unavailable subdomain;
-        //                        same bucket as resolveSubdomain
-        //                        validation failures).
-        // Inspect the original error's constraint rather than the
-        // remapped AppError, since remapping flattens both into
-        // code='Conflict'.
-        const constraint =
-          typeof (err as { constraint?: unknown })?.constraint === 'string'
-            ? (err as { constraint: string }).constraint
-            : '';
+        // Bucket by the underlying constraint name. The remapped
+        // AppError flattens both known violations into code='Conflict',
+        // so we'd lose the distinction without the constraint:
+        //  - users_email_key             → duplicate_email (matches
+        //                                   the read-side findByEmail
+        //                                   bucket above).
+        //  - organizations_subdomain_key → invalid_input  (same
+        //                                   bucket as resolveSubdomain
+        //                                   validation failures).
+        //  - any other unique constraint → 'error'  (defensive default
+        //                                   so a future migration that
+        //                                   adds a new unique key
+        //                                   doesn't silently mis-bucket
+        //                                   into duplicate_email).
         signupAttemptsTotal.inc({
-          outcome:
-            constraint === 'organizations_subdomain_key' ? 'invalid_input' : 'duplicate_email',
+          outcome: UNIQUE_CONSTRAINT_OUTCOME_BUCKETS[remapped.constraint] ?? 'error',
         });
-        throw remapped;
+        throw remapped.error;
       }
       // Anything else from inside the tx (DB outage, txn abort,
       // unexpected Postgres error) is operational — count it as
@@ -809,11 +807,28 @@ const UNIQUE_CONSTRAINT_MESSAGES: Readonly<Record<string, string>> = Object.free
 });
 
 /**
- * If `err` is a Postgres unique_violation, return a user-facing 409 AppError
- * identifying the specific field that collided; otherwise return null so the
- * caller can rethrow the original error.
+ * Funnel-bucket mapping for the unique-violation race-loss path. Lives next
+ * to `UNIQUE_CONSTRAINT_MESSAGES` so the constraint-name knowledge stays in
+ * one place — adding a new unique constraint to the signup tables means
+ * extending both maps together. Unknown constraints intentionally fall
+ * through to the `error` outcome at the call site so a future migration
+ * doesn't silently mis-bucket a new race-loss into `duplicate_email`.
  */
-function remapUniqueViolation(err: unknown): AppError | null {
+const UNIQUE_CONSTRAINT_OUTCOME_BUCKETS: Readonly<
+  Record<string, 'duplicate_email' | 'invalid_input'>
+> = Object.freeze({
+  users_email_key: 'duplicate_email',
+  organizations_subdomain_key: 'invalid_input',
+});
+
+/**
+ * If `err` is a Postgres unique_violation, return the remapped 409 AppError
+ * AND the underlying constraint name so the caller can both (a) surface the
+ * user-facing message and (b) bucket the failure into the funnel without
+ * having to re-parse the original error. Returns null when `err` is not a
+ * unique_violation; the caller rethrows in that case.
+ */
+function remapUniqueViolation(err: unknown): { error: AppError; constraint: string } | null {
   if (!err || typeof err !== 'object') {
     return null;
   }
@@ -824,7 +839,7 @@ function remapUniqueViolation(err: unknown): AppError | null {
 
   const constraint = typeof candidate.constraint === 'string' ? candidate.constraint : '';
   const message = UNIQUE_CONSTRAINT_MESSAGES[constraint] ?? 'A conflicting record already exists';
-  return new AppError(message, 409, 'Conflict');
+  return { error: new AppError(message, 409, 'Conflict'), constraint };
 }
 
 /** Resolve a region string from config into the DataResidencyRegion enum, or throw. */
