@@ -256,6 +256,14 @@ describe('VerifyEmailPage', () => {
 
     await screen.findByTestId('verify-email-error');
 
+    // Wait for at least one location snapshot before iterating —
+    // the for-of loop would pass vacuously if `LocationCapture`'s
+    // effect hadn't fired yet, so the assertions below would
+    // silently skip.
+    await waitFor(() => {
+      expect(locations.length).toBeGreaterThan(0);
+    });
+
     // Captured locations should all preserve `keep=yes` and never
     // gain or lose any param — the page makes zero URL changes when
     // there's no `?token=` to strip.
@@ -340,12 +348,14 @@ describe('VerifyEmailPage', () => {
   });
 
   it('fires verify exactly once even when wrapped in StrictMode', async () => {
-    // StrictMode double-invokes effects on mount in dev to surface
-    // missing cleanup. Without the `startedRef` guard, the second
-    // invocation would issue a duplicate POST /auth/verify-email,
-    // and the user would briefly see success before the second call
-    // (now consuming a freshly-invalidated token) flipped the screen
-    // to invalid.
+    // StrictMode double-invokes effects on mount in dev. Without
+    // the `startedRef` guard, the second invocation would issue a
+    // duplicate POST /auth/verify-email. With backend idempotency
+    // landed (PR #52) the duplicate would still resolve 200, so
+    // the page wouldn't visibly break — but the redundant call
+    // wastes a DB transaction and burns a slot in the route's
+    // 5/min per-IP rate limit. This test locks the perf
+    // optimization in.
     mockVerifyEmail.mockResolvedValue(undefined);
     renderWithRouter('/verify-email?token=abc123', { strictMode: true });
 

@@ -79,11 +79,13 @@ export default function VerifyEmailPage() {
     return hasTokenParam ? 'invalid' : 'noToken';
   });
   const [resending, setResending] = useState(false);
-  // StrictMode runs effects twice in dev. Without a guard, the
-  // duplicate verify POST consumes the token on the first call and
-  // then fails on the second, briefly flashing 'success' before
-  // reverting to 'invalid'. The ref guard fires verify exactly once
-  // per component instance.
+  // StrictMode runs effects twice in dev. The ref guard avoids
+  // duplicate verify POSTs from the same component instance —
+  // backend `verifyEmail` is idempotent (already-verified user
+  // returns 200 even on a second call), so this is a perf
+  // optimization rather than a UI-correctness fence: it spares
+  // unnecessary DB work and avoids chewing into the route's 5/min
+  // per-IP rate limit on a single page load.
   const startedRef = useRef(false);
   // Latches once the URL has been stripped so the strip effect can
   // never re-fire under any future router behavior change.
