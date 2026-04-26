@@ -22,6 +22,14 @@ export interface User {
   oauth_provider?: string | null;
   oauth_id?: string | null;
   preferences?: UserPreferences;
+  /**
+   * ISO-8601 timestamp set when the user verifies their email via
+   * `/auth/verify-email`. `null` until verified. Self-service signup
+   * is non-blocking — features stay available before this is set —
+   * but UI surfaces (e.g., the onboarding "verify your email"
+   * banner) gate themselves on this field.
+   */
+  email_verified_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }
