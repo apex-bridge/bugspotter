@@ -41,6 +41,7 @@ interface InsertLog {
   apiKeys: unknown[];
   apiKeyAudits: unknown[];
   emailVerificationTokens: unknown[];
+  auditLogs: unknown[];
 }
 
 function validInput() {
@@ -84,6 +85,7 @@ function createMockDb(overrides: DbOverrides = {}): {
     apiKeys: [],
     apiKeyAudits: [],
     emailVerificationTokens: [],
+    auditLogs: [],
   };
   const transactionCalled = { value: 0 };
 
@@ -166,6 +168,17 @@ function createMockDb(overrides: DbOverrides = {}): {
       findByToken: vi.fn(overrides.findByToken ?? (async () => null)),
       consume: vi.fn(overrides.consumeToken ?? (async () => true)),
       invalidateUnconsumedForUser: vi.fn(overrides.invalidateUnconsumed ?? (async () => 0)),
+    },
+    auditLogs: {
+      create: vi.fn(async (data: unknown) => {
+        const row = {
+          id: 'audit-uuid',
+          timestamp: new Date(),
+          ...(data as object),
+        };
+        log.auditLogs.push(row);
+        return row;
+      }),
     },
   };
 
@@ -262,6 +275,25 @@ describe('SignupService', () => {
       expect(result.project.id).toBe('project-uuid');
       expect(result.api_key).toMatch(/^bgs_/);
       expect(result.api_key_id).toBe('apikey-uuid');
+    });
+
+    it('writes a signup_completed audit row inside the transaction', async () => {
+      // The audit row lives in the same tx as the user/org/project
+      // inserts. Locking it in here ensures a future refactor that
+      // accidentally moves it post-commit (or drops it entirely)
+      // surfaces as a test failure rather than silent data loss.
+      const result = await service.signup(validInput());
+
+      expect(mock.log.auditLogs).toHaveLength(1);
+      expect(mock.log.auditLogs[0]).toMatchObject({
+        action: 'signup_completed',
+        resource: 'auth/signup',
+        resource_id: result.user.id,
+        user_id: result.user.id,
+        organization_id: result.organization.id,
+        ip_address: '203.0.113.7',
+        success: true,
+      });
     });
 
     it('stores the API key as a SHA-256 hex hash (not plaintext, not bcrypt)', async () => {
@@ -580,6 +612,45 @@ describe('SignupService', () => {
 
         const result = await service.verifyEmail('good');
         expect(result).toEqual({ user_id: fakeUserId });
+        // Audit row written inside the tx, only on the path that
+        // actually contributed the stamp. Idempotent fast-paths
+        // (already-verified user, race-lost stamp) skip it — those
+        // are exercised by other tests in this describe block.
+        expect(mock.log.auditLogs).toHaveLength(1);
+        expect(mock.log.auditLogs[0]).toMatchObject({
+          action: 'email_verified',
+          resource: 'auth/verify-email',
+          resource_id: fakeUserId,
+          user_id: fakeUserId,
+          success: true,
+        });
+      });
+
+      it('skips the audit row on the idempotent fast-path (user already verified)', async () => {
+        // The fast-path is: token row exists, user.email_verified_at
+        // already set → return success. No new stamp, no audit row.
+        // The original verification already produced one; a second
+        // would just be noise.
+        mock = createMockDb({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => ({
+            id: 'user-uuid',
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: new Date(),
+          }),
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await service.verifyEmail('good');
+        expect(mock.log.auditLogs).toHaveLength(0);
       });
 
       it('rejects an unknown token with 400', async () => {
@@ -1000,6 +1071,15 @@ describe('SignupService', () => {
 
         expect(invalidate).toHaveBeenCalledWith('user-uuid');
         expect(mock.log.emailVerificationTokens).toHaveLength(1);
+        // Audit row written inside the tx, alongside the new token.
+        expect(mock.log.auditLogs).toHaveLength(1);
+        expect(mock.log.auditLogs[0]).toMatchObject({
+          action: 'verification_resent',
+          resource: 'auth/resend-verification',
+          resource_id: 'user-uuid',
+          user_id: 'user-uuid',
+          success: true,
+        });
         // Fire-and-forget — the .catch inside resendVerification means
         // the await on resendVerification resolves before the send promise
         // settles. Wait a microtask tick for the dispatch.
@@ -1020,6 +1100,9 @@ describe('SignupService', () => {
 
         await expect(service.resendVerification('user-uuid')).resolves.toBeUndefined();
         expect(mock.log.emailVerificationTokens).toHaveLength(0);
+        // Already-verified branch skips the audit row — same response
+        // shape to the client, no work done, nothing to record.
+        expect(mock.log.auditLogs).toHaveLength(0);
         expect(email.send).not.toHaveBeenCalled();
       });
 
