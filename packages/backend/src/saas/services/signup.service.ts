@@ -351,14 +351,27 @@ export class SignupService {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
+      // Defense-in-depth: the FK has `ON DELETE CASCADE` so a token
+      // for a non-existent user shouldn't reach this point under
+      // normal DB operation. If it does (replication oddity, manual
+      // FK mutation, future schema change that loosens cascade),
+      // falling through to consume + markEmailVerified would silently
+      // return success for a user_id that resolves to nothing —
+      // markEmailVerified's WHERE clause matches no rows but we
+      // don't check its return value. Throw the same generic 400 as
+      // the other failure modes so we don't leak orphan-token state.
+      const user = await tx.users.findById(tokenRow.user_id);
+      if (!user) {
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      }
+
       // Idempotent fast-path: user is already verified. Return the
       // same shape as a fresh successful verify regardless of
       // whether THIS token was the one that did it, or whether it's
       // still active. Don't consume the row — if it's active it'll
       // expire on its own, and consuming silently would be a side
       // effect with no observable benefit.
-      const user = await tx.users.findById(tokenRow.user_id);
-      if (user?.email_verified_at) {
+      if (user.email_verified_at) {
         return { user_id: tokenRow.user_id };
       }
 

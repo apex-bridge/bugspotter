@@ -53,7 +53,11 @@ export class EmailVerificationTokenRepository extends BaseRepository<
    *    `findByToken` and this call — without the `expires_at`
    *    check here, a token that crossed its TTL between the two calls
    *    would still be marked verified).
-   * The route layer treats false as "invalid or expired" and produces 400.
+   *
+   * `verifyEmail` interprets `false` together with the user's
+   * verification state — an already-verified user receives an
+   * idempotent 200 (the winning tx of a race already stamped them),
+   * an unverified user receives a 400.
    */
   async consume(id: string): Promise<boolean> {
     const query = `

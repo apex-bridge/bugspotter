@@ -568,6 +568,12 @@ describe('SignupService', () => {
             consumed_at: null,
             created_at: new Date(),
           }),
+          findById: async () => ({
+            id: fakeUserId,
+            email: 'founder@acme.com',
+            name: 'Jane',
+            email_verified_at: null,
+          }),
           consumeToken: async () => true,
         });
         service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
@@ -583,6 +589,32 @@ describe('SignupService', () => {
         await expect(service.verifyEmail('nope')).rejects.toMatchObject({
           statusCode: 400,
         });
+      });
+
+      it('rejects with 400 when the token row exists but the user does not (defense-in-depth)', async () => {
+        // The schema's ON DELETE CASCADE FK should prevent this from
+        // happening in practice — but the service must not silently
+        // return success for an orphan token if the invariant is
+        // ever violated. Same generic 400 as other failure modes so
+        // we don't expose orphan-token state via the response code.
+        const consumeSpy = vi.fn(async () => true);
+        mock = createMockDb({
+          findByToken: async () => ({
+            id: 'evt-1',
+            user_id: 'user-uuid',
+            token: 'good',
+            expires_at: new Date(Date.now() + 60_000),
+            consumed_at: null,
+            created_at: new Date(),
+          }),
+          findById: async () => null,
+          consumeToken: consumeSpy,
+        });
+        service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+
+        await expect(service.verifyEmail('good')).rejects.toMatchObject({ statusCode: 400 });
+        // Throw before consume — no DB write side-effects on this path.
+        expect(consumeSpy).not.toHaveBeenCalled();
       });
 
       it('treats whitespace as a normal not-found lookup — does not silently trim', async () => {
