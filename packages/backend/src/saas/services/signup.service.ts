@@ -313,15 +313,37 @@ export class SignupService {
    * Consume a verification token: mark it used, set
    * `users.email_verified_at = NOW()`, return the user id.
    *
-   * Returns 400 with the same generic "invalid or expired" message in
-   * every failure case (unknown token, expired, already consumed,
-   * consume race) so we don't leak which tokens previously existed.
+   * Idempotent for already-verified users. Once a user is verified,
+   * the observable outcome is the same regardless of the token's own
+   * state — active, consumed, or expired all return success. This
+   * makes link re-clicks (refresh-mid-flight, two browser tabs,
+   * email-link pre-fetchers) and post-consume races resolve to a
+   * consistent 200 instead of a confusing "invalid" error.
    *
-   * If the user was already verified via some other path (admin
-   * backfill, or a stale unconsumed token surviving an unclean state),
-   * we refuse to consume the token and return the same generic 400.
-   * Otherwise an active token would still flip `email_verified_at`,
-   * overwriting the prior verification timestamp for no reason.
+   * The "verified user wins over token state" contract is enforced
+   * at every potential race point. Postgres runs at READ COMMITTED
+   * by default, so between any two reads in this transaction a
+   * concurrent verify-email request could commit a stamp our cached
+   * `user` snapshot doesn't reflect. Each failure path therefore
+   * re-reads user state and returns success if a concurrent
+   * transaction verified the user in the meantime.
+   *
+   * Returns 400 (with a generic "invalid or expired" message that
+   * doesn't disambiguate which sub-case fired) when:
+   *   - the token doesn't exist, OR
+   *   - the token row references a non-existent user (defense-in-
+   *     depth — the FK CASCADE should prevent this), OR
+   *   - the user is unverified AND the token has been consumed
+   *     (partial-failure state — caller must re-request via
+   *     /auth/resend-verification), OR
+   *   - the user is unverified AND the token expired before any
+   *     verify call could consume it.
+   *
+   * Trades a tiny information-leak window (an attacker who captured
+   * the token can confirm the user is verified by observing 200 vs
+   * 400) for a meaningful UX improvement; possession of the token
+   * already implies access to the user's email or in-flight URL, so
+   * the leak isn't materially actionable.
    */
   async verifyEmail(token: string): Promise<{ user_id: string }> {
     // Input validation lives at the route schema (`verifyEmailSchema`
@@ -331,46 +353,90 @@ export class SignupService {
     // normalization would mask client bugs by turning them into
     // successful "not found" lookups.
     return this.db.transaction(async (tx) => {
-      const tokenRow = await tx.emailVerificationTokens.findActiveByToken(token);
+      // Look up the row WITHOUT the active filter so we can recognize
+      // a re-submission of an already-consumed token and respond
+      // idempotently when the underlying user is verified.
+      const tokenRow = await tx.emailVerificationTokens.findByToken(token);
       if (!tokenRow) {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
-      // Already-verified guard (read-side fast-path). Refuse rather
-      // than re-stamp `email_verified_at`. We don't consume the
-      // token here — leaving it active is harmless (it'll expire),
-      // and consuming silently would be a side effect with no
-      // observable benefit. The atomic UPDATE below is the
-      // authoritative race-safe check; this just avoids consuming a
-      // valid token unnecessarily in the non-racy case.
+      // Helper for the "the path I tried failed; succeed only if a
+      // concurrent transaction verified the user in the meantime"
+      // pattern. Each potential race point below routes failures
+      // through this so the "verified user wins" contract holds at
+      // every step under READ COMMITTED.
+      const succeedIfNowVerified = async (): Promise<{ user_id: string }> => {
+        const refreshed = await tx.users.findById(tokenRow.user_id);
+        if (refreshed?.email_verified_at) {
+          return { user_id: tokenRow.user_id };
+        }
+        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      };
+
+      // Defense-in-depth: the FK has `ON DELETE CASCADE` so a token
+      // for a non-existent user shouldn't reach this point under
+      // normal DB operation. If it does (replication oddity, manual
+      // FK mutation, future schema change), throw rather than fall
+      // through — the rest of the function assumes a real user
+      // exists. Same generic 400 as other failure modes so we don't
+      // leak orphan-token state.
       const user = await tx.users.findById(tokenRow.user_id);
-      if (user?.email_verified_at) {
+      if (!user) {
         throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
       }
 
+      // Idempotent fast-path: user is already verified. Return the
+      // same shape as a fresh successful verify regardless of
+      // whether THIS token was the one that did it, or whether it's
+      // still active. Don't consume the row — if it's active it'll
+      // expire on its own, and consuming silently would be a side
+      // effect with no observable benefit.
+      if (user.email_verified_at) {
+        return { user_id: tokenRow.user_id };
+      }
+
+      // From here the user is NOT yet verified at our snapshot — we
+      // need a real consume + stamp to make progress. Reject
+      // already-consumed tokens — but route through
+      // succeedIfNowVerified so a concurrent verify of the SAME user
+      // via a DIFFERENT token (committed between our findById and
+      // here) still wins over the token-state rejection.
+      if (tokenRow.consumed_at !== null) {
+        return succeedIfNowVerified();
+      }
+
+      // Don't perform a JS-side expiry check here — `consume()`'s
+      // SQL guard (`expires_at > NOW()`) is authoritative and uses
+      // the same Postgres clock that wrote `expires_at` in the
+      // first place. A JS-side check against the app server clock
+      // could prematurely reject still-valid tokens under NTP/
+      // container clock skew between the app and the database.
       const consumed = await tx.emailVerificationTokens.consume(tokenRow.id);
       if (!consumed) {
-        // Race with another verify-email request for the same token,
-        // OR the token expired in the gap between findActive and
-        // consume (which now also rechecks expires_at). Same generic
-        // 400 either way.
-        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+        // !consumed means either:
+        //  - Expiry: the SQL guard rejected because expires_at <=
+        //    NOW(). The user was unverified above and remains so —
+        //    succeedIfNowVerified will throw 400.
+        //  - Race-loss: a concurrent verify-email request for the
+        //    same token won consume() and may already have stamped
+        //    the user. The re-read returns success in that case.
+        return succeedIfNowVerified();
       }
 
-      // Atomic stamp via DB `NOW()` (consistent clock with token
-      // tables) and a `WHERE email_verified_at IS NULL` guard
-      // (closes the read-vs-update race — two concurrent verifies
-      // can't both re-stamp the column). If markEmailVerified
-      // returns false, another transaction won the race; the
-      // current user is still verified, but THIS request didn't
-      // contribute the stamp, so we surface the same generic 400
-      // for symmetry with the upfront guard.
-      const stamped = await tx.users.markEmailVerified(tokenRow.user_id);
-      if (!stamped) {
-        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+      // Atomic stamp via DB `NOW()` and a `WHERE email_verified_at
+      // IS NULL` guard. False return means the UPDATE matched no
+      // rows: either another transaction won the race and stamped
+      // the user (return success via the re-read), or the user was
+      // deleted between our findById and the stamp (re-read returns
+      // null, throw 400). Capturing the boolean instead of dropping
+      // it on the floor avoids the silent-success-for-deleted-user
+      // failure mode.
+      const verified = await tx.users.markEmailVerified(tokenRow.user_id);
+      if (verified) {
+        return { user_id: tokenRow.user_id };
       }
-
-      return { user_id: tokenRow.user_id };
+      return succeedIfNowVerified();
     });
   }
 

@@ -40,8 +40,8 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
    *
    * Returns true on first verification, false when the user was
    * already verified by a concurrent transaction. Combined with the
-   * `findActiveByToken` + `consume` flow, this closes a race where
-   * two verify-email requests for the same user could both pass the
+   * `findByToken` + `consume` flow, this closes a race where two
+   * verify-email requests for the same user could both pass the
    * upfront guard and re-stamp `email_verified_at`.
    */
   async markEmailVerified(id: string): Promise<boolean> {
