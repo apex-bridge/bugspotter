@@ -53,11 +53,11 @@ export default function VerifyEmailPage() {
     return hasTokenParam ? 'invalid' : 'noToken';
   });
   const [resending, setResending] = useState(false);
-  // StrictMode runs effects twice in dev; verify-email is idempotent
-  // server-side (already-verified is a generic 400) but a double-fire
-  // would briefly flash the success state before the second call
-  // resolves to invalid. Guard with a ref so only the first attempt
-  // drives the UI.
+  // StrictMode runs effects twice in dev. Without a guard, the
+  // duplicate verify POST consumes the token on the first call and
+  // then fails on the second, briefly flashing 'success' before
+  // reverting to 'invalid'. The ref guard fires verify exactly once
+  // per component instance.
   const startedRef = useRef(false);
 
   // Strip `?token=` from the address bar — but only after the verify

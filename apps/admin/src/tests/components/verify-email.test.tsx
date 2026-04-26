@@ -47,35 +47,9 @@ vi.mock('sonner', () => ({
   },
 }));
 
-// Resolve keys against en.json with {{var}} interpolation so assertions
-// can match rendered user-facing text.
-vi.mock('react-i18next', async () => {
-  const en = (await import('../../i18n/locales/en.json')).default;
-  const getTranslation = (key: string): string | undefined => {
-    const result = key
-      .split('.')
-      .reduce<unknown>(
-        (obj, part) =>
-          obj != null && typeof obj === 'object'
-            ? (obj as Record<string, unknown>)[part]
-            : undefined,
-        en
-      );
-    return typeof result === 'string' ? result : undefined;
-  };
-  return {
-    useTranslation: () => ({
-      t: (key: string, opts?: Record<string, unknown>) => {
-        const raw = getTranslation(key) ?? key;
-        if (!opts) {
-          return raw;
-        }
-        return raw.replace(/\{\{(\w+)\}\}/g, (_, k) => String(opts[k] ?? ''));
-      },
-      i18n: { language: 'en' },
-    }),
-  };
-});
+// `react-i18next` is mocked globally in `apps/admin/src/tests/setup.ts`
+// (resolves keys from en.json + `{{var}}` interpolation), so we don't
+// re-mock it here.
 
 /**
  * Captures every `useLocation` snapshot the router reports during the
@@ -168,11 +142,16 @@ describe('VerifyEmailPage', () => {
 
     await screen.findByTestId('verify-email-success');
 
-    const last = locations[locations.length - 1];
-    expect(last.search).not.toContain('token=');
-    // Unrelated params survive the strip — the prev-function form of
-    // `setSearchParams` preserves any keys other than `token`.
-    expect(last.search).toContain('keep=yes');
+    // The strip runs in a useEffect gated on status === 'success', a
+    // separate flush from the success render that findByTestId waits
+    // on. Wrap in waitFor to bridge the gap and avoid timing flakes.
+    await waitFor(() => {
+      const last = locations[locations.length - 1];
+      expect(last.search).not.toContain('token=');
+      // Unrelated params survive the strip — the prev-function form
+      // of `setSearchParams` preserves any keys other than `token`.
+      expect(last.search).toContain('keep=yes');
+    });
   });
 
   it('keeps ?token= in the URL when verify fails so refresh can retry', async () => {
