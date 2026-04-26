@@ -99,6 +99,15 @@ function decodeHandoff(raw: string | null): OnboardingHandoff | null {
       typeof user.id !== 'string' ||
       typeof user.email !== 'string' ||
       typeof user.name !== 'string' ||
+      // `email_verified_at` is optional on the wire (the backend
+      // sends `null` for fresh signups, may omit on older shapes).
+      // It gates the verify-email banner via a truthy check, so a
+      // tampered payload with a truthy non-string value (e.g. a
+      // number, an object) would silently hide the banner. Allow
+      // only `string | null | undefined`; reject anything else.
+      (user.email_verified_at !== undefined &&
+        user.email_verified_at !== null &&
+        typeof user.email_verified_at !== 'string') ||
       !organization ||
       typeof organization !== 'object' ||
       typeof organization.id !== 'string' ||

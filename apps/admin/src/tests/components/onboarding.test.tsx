@@ -80,7 +80,10 @@ const validHandoff = {
   // Field names match the `POST /api/v1/auth/signup` response exactly
   // (snake_case). If these drift from the backend shape the page
   // silently redirects to /login in production — keep them in lockstep
-  // with `packages/backend/src/api/routes/signup.ts`.
+  // with `packages/backend/src/api/routes/signup.ts`. Note:
+  // `email_verified_at` is set to `null` (not omitted) to match the
+  // real fresh-signup wire format — the column has no DB default and
+  // the JSON serializer emits the explicit null.
   access_token: 'jwt-access-token',
   api_key: 'bgs_abc123',
   user: {
@@ -88,6 +91,7 @@ const validHandoff = {
     email: 'alice@example.com',
     name: 'Alice',
     role: 'admin' as const,
+    email_verified_at: null,
     created_at: '2026-04-24T00:00:00Z',
     updated_at: '2026-04-24T00:00:00Z',
   } satisfies User,
@@ -260,6 +264,19 @@ describe('OnboardingPage', () => {
     // gets a structurally invalid user.
     ['user.name missing', { ...validHandoff, user: { ...validHandoff.user, name: undefined } }],
     ['project.name missing', { ...validHandoff, project: { id: 'proj-1' } }],
+    // `email_verified_at` gates the verify-email banner via a truthy
+    // check. A tampered payload with a truthy non-string value would
+    // silently hide the banner if the decoder didn't validate the
+    // type. Reject these explicitly; `null` and `undefined` remain
+    // valid (fresh-signup case).
+    [
+      'user.email_verified_at as truthy number',
+      { ...validHandoff, user: { ...validHandoff.user, email_verified_at: 1 } },
+    ],
+    [
+      'user.email_verified_at as object',
+      { ...validHandoff, user: { ...validHandoff.user, email_verified_at: {} } },
+    ],
   ])('redirects to /login when %s (type-mismatched shape)', async (_label, payload) => {
     // Truthy-only validation would accept these (truthy numbers,
     // objects, arrays) and crash later at render or feed garbage
