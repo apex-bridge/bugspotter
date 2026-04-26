@@ -39,7 +39,7 @@ export class EmailVerificationTokenRepository extends BaseRepository<
   async findByToken(token: string): Promise<EmailVerificationToken | null> {
     const query = `
       SELECT *
-      FROM application.email_verification_tokens
+      FROM ${this.schema}.${this.tableName}
       WHERE token = $1
     `;
     const result = await this.getClient().query<EmailVerificationToken>(query, [token]);
@@ -61,7 +61,7 @@ export class EmailVerificationTokenRepository extends BaseRepository<
    */
   async consume(id: string): Promise<boolean> {
     const query = `
-      UPDATE application.email_verification_tokens
+      UPDATE ${this.schema}.${this.tableName}
       SET consumed_at = NOW()
       WHERE id = $1
         AND consumed_at IS NULL
@@ -79,7 +79,7 @@ export class EmailVerificationTokenRepository extends BaseRepository<
    */
   async invalidateUnconsumedForUser(userId: string): Promise<number> {
     const query = `
-      UPDATE application.email_verification_tokens
+      UPDATE ${this.schema}.${this.tableName}
       SET consumed_at = NOW()
       WHERE user_id = $1
         AND consumed_at IS NULL
