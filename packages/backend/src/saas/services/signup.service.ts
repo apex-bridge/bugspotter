@@ -151,15 +151,28 @@ export class SignupService {
       throw new AppError('Company name is required', 400, 'ValidationError');
     }
 
-    // runSpamChecks throws on rejection (it also increments the
-    // per-check counters at each tripped rule). Surface a single
-    // top-level "spam_rejected" funnel increment here so dashboards
-    // can compare success vs. spam-rejected without summing the
-    // per-check breakdown.
+    // runSpamChecks can throw three distinct AppError shapes plus
+    // arbitrary operational errors. Classify so the funnel doesn't
+    // silently absorb infra failures into the spam bucket:
+    //   - 403 Forbidden          — real spam rejection
+    //   - 409 PendingEnterpriseRequest — existing org_requests row
+    //                              blocks self-service; not bot
+    //                              traffic, closer to "duplicate"
+    //                              for funnel semantics
+    //   - 503 ServiceUnavailable — spam-check infra failed (DB, etc.)
+    //   - anything else          — unexpected, count as error too
     try {
       await this.runSpamChecks(email, companyName, input);
     } catch (err) {
-      signupAttemptsTotal.inc({ outcome: 'spam_rejected' });
+      let outcome: 'spam_rejected' | 'duplicate_email' | 'error';
+      if (err instanceof AppError && err.statusCode === 403) {
+        outcome = 'spam_rejected';
+      } else if (err instanceof AppError && err.statusCode === 409) {
+        outcome = 'duplicate_email';
+      } else {
+        outcome = 'error';
+      }
+      signupAttemptsTotal.inc({ outcome });
       throw err;
     }
 
@@ -173,10 +186,16 @@ export class SignupService {
     try {
       subdomain = await this.resolveSubdomain(companyName, input.subdomain);
     } catch (err) {
-      // Subdomain validation / availability failures (invalid format,
-      // taken slug). These fall under "invalid_input" — the user
-      // supplied something we can't accept.
-      signupAttemptsTotal.inc({ outcome: 'invalid_input' });
+      // 4xx AppErrors — the user supplied something we can't accept
+      // (invalid format, taken slug). 5xx and unexpected throws
+      // (availability check hits a DB outage, etc.) belong in the
+      // 'error' bucket; classifying them as user input would make the
+      // funnel show false-positive user drop-off during outages.
+      const outcome =
+        err instanceof AppError && err.statusCode >= 400 && err.statusCode < 500
+          ? 'invalid_input'
+          : 'error';
+      signupAttemptsTotal.inc({ outcome });
       throw err;
     }
 
@@ -344,6 +363,10 @@ export class SignupService {
         });
         throw remapped;
       }
+      // Anything else from inside the tx (DB outage, txn abort,
+      // unexpected Postgres error) is operational — count it as
+      // 'error' so the funnel doesn't silently drop these requests.
+      signupAttemptsTotal.inc({ outcome: 'error' });
       throw err;
     }
 
@@ -528,7 +551,16 @@ export class SignupService {
         return { user_id: tokenRow.user_id };
       });
     } catch (err) {
-      signupEmailVerificationTotal.inc({ outcome: 'invalid' });
+      // 4xx AppErrors are user-facing terminal failures (unknown /
+      // consumed-but-not-verified / expired). Anything else (5xx
+      // AppError, DB outage, unexpected throw) is operational —
+      // count under 'error' so dashboards don't conflate "your link
+      // is dead" with "the database died."
+      const outcome =
+        err instanceof AppError && err.statusCode >= 400 && err.statusCode < 500
+          ? 'invalid'
+          : 'error';
+      signupEmailVerificationTotal.inc({ outcome });
       throw err;
     }
 

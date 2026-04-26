@@ -74,11 +74,22 @@ export const orgHardDeleteTotal = new client.Counter({
 //
 // Outcomes for `signup_attempts_total`:
 //   'success'         — user, org, project, API key, verification token all committed
-//   'spam_rejected'   — runSpamChecks returned rejected=true (any reason);
-//                        per-check breakdown lives on `signup_spam_check_total`
-//   'duplicate_email' — findByEmail found an existing user (read-side check)
-//   'invalid_input'   — empty company_name, invalid subdomain, or
-//                        otherwise rejected at the validation gate
+//   'spam_rejected'   — runSpamChecks rejected with 403 Forbidden (real
+//                        spam signal); per-check breakdown lives on
+//                        `signup_spam_check_total`
+//   'duplicate_email' — findByEmail found an existing user, OR a unique-
+//                        violation race-loss on users.email_key, OR a 409
+//                        PendingEnterpriseRequest from runSpamChecks
+//                        (existing org_requests row blocks self-service)
+//   'invalid_input'   — empty company_name, invalid/taken subdomain
+//                        (4xx AppError from resolveSubdomain or the
+//                        organizations_subdomain_key race-loss path)
+//   'error'           — operational failure not caused by the user:
+//                        503 from spam-filter infra, DB outage, txn abort,
+//                        any non-AppError or 5xx exception. Distinguishes
+//                        "system broke" from "user did something we
+//                        rejected" so dashboards / alerts can fire on the
+//                        right one.
 // Keep dashboards/alerts in sync when adding new outcomes.
 export const signupAttemptsTotal = new client.Counter({
   name: 'bugspotter_signup_attempts_total',
@@ -105,7 +116,8 @@ export const signupSpamCheckTotal = new client.Counter({
 
 // Outcomes for email verification:
 //   'success' — token consumed (or idempotent 200 for already-verified user)
-//   'invalid' — terminal 4xx (unknown / consumed-but-not-verified / expired)
+//   'invalid' — terminal 4xx AppError (unknown / consumed-but-not-verified / expired)
+//   'error'   — anything else (DB outage, txn abort, unexpected throw)
 export const signupEmailVerificationTotal = new client.Counter({
   name: 'bugspotter_signup_email_verification_total',
   help: 'Email verification attempts by outcome',
