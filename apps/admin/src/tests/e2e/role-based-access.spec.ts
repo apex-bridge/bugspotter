@@ -69,8 +69,18 @@ const ORG_ROUTES = ['/my-organization', '/my-organization/members'];
 /** Base path shared by all org routes */
 const ORG_BASE_PATH = '/my-organization';
 
-/** Routes accessible to all authenticated users */
-const GENERAL_ROUTES = ['/projects', '/bug-reports', '/notifications'];
+/** Routes accessible to all authenticated users.
+ *
+ * `/audit-logs` is here because the route is no longer wrapped in
+ * AdminRoute — the backend's `requireAuditAccess` is now the sole
+ * gate (platform admin OR org owner/admin, per-org scoped). For users
+ * with no qualifying membership the URL stays at `/audit-logs` and
+ * the page renders a localized error block — the assertion in this
+ * suite (URL contains the route, no redirect) still holds. Adding
+ * this entry would have caught the original AdminRoute gating bug
+ * where org owners were silently redirected to `/projects`.
+ */
+const GENERAL_ROUTES = ['/projects', '/bug-reports', '/notifications', '/audit-logs'];
 
 test.describe('Role-based page access', () => {
   test.describe.configure({ mode: 'serial' });
