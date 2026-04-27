@@ -16,17 +16,14 @@ import type { AuditLog, AuditLogFilters as AuditLogFiltersType } from '../types/
 import type { FilterInputs } from '../components/audit/audit-log-filters';
 
 /**
- * Detect the specific 400 the backend returns when a user is admin
- * of multiple organizations and didn't pass `organization_id` — see
- * `requireAuditAccess` in the backend's audit-logs route. The same
- * route uses two different error-response shapes: `AppError` lands
- * the human text in `data.message`, while ad-hoc `reply.send({ error })`
- * paths land it in `data.error`. We check both, case-insensitively,
- * so a future refactor between shapes (or a small wording tweak)
- * doesn't silently regress this hint to the generic error block.
- *
- * The proper UX (an org-selector dropdown for multi-org admins) is
- * a separate, larger follow-up.
+ * Detect the backend's "Specify organization_id" 400 from
+ * `requireAuditAccess` (multi-org user, no org filter). Brittle by
+ * design: a substring match against the English message regresses
+ * to the generic error block on any wording change. A stable backend
+ * error code would be sturdier — tracked as a follow-up. We match
+ * both `data.message` (AppError shape) and `data.error` (ad-hoc
+ * `reply.send` shape) so a backend refactor between the two doesn't
+ * silently break the detection.
  */
 function isMultiOrgAdminError(error: unknown): boolean {
   if (!axios.isAxiosError(error)) {
@@ -36,10 +33,8 @@ function isMultiOrgAdminError(error: unknown): boolean {
     return false;
   }
   const data = error.response?.data;
-  const messageCandidates = [data?.message, data?.error].filter(
-    (v): v is string => typeof v === 'string'
-  );
-  return messageCandidates.some((m) => m.toLowerCase().includes('multiple organizations'));
+  const candidates = [data?.message, data?.error].filter((v): v is string => typeof v === 'string');
+  return candidates.some((m) => m.toLowerCase().includes('specify organization_id'));
 }
 
 export default function AuditLogsPage() {

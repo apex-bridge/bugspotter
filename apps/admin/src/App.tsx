@@ -134,13 +134,10 @@ function App() {
                       </AdminRoute>
                     }
                   />
-                  {/*
-                    Audit logs are accessible to platform admins and
-                    organization admins. Backend handles scoping and
-                    authorization; the page renders an error state
-                    on denial (detail text may come through from the
-                    API response, so it is not always localized).
-                  */}
+                  {/* Backend gates audit logs (platform admin, or org
+                      owner/admin). Page renders an error block on
+                      denial; some detail text passes through from
+                      the API and is not always localized. */}
                   <Route path="audit-logs" element={<AuditLogsPage />} />
 
                   <Route
