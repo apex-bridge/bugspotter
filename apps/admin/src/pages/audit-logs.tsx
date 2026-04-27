@@ -1,8 +1,29 @@
 import { useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import axios from 'axios';
 import { auditLogService } from '../services/audit-logs';
 import { handleApiError } from '../lib/api-client';
+
+/**
+ * Detect the specific 400 the backend returns when a user is admin
+ * of multiple organizations and didn't pass `organization_id` —
+ * see `requireAuditAccess` in `audit-logs.ts` route. Brittle by
+ * design: tied to the backend's exact phrasing so a wording change
+ * drops to the generic error rather than showing a stale hint. The
+ * proper UX (an org-selector dropdown for multi-org admins) is a
+ * separate, larger follow-up.
+ */
+function isMultiOrgAdminError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+  if (error.response?.status !== 400) {
+    return false;
+  }
+  const message = error.response?.data?.message;
+  return typeof message === 'string' && message.includes('multiple organizations');
+}
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Filter, ChevronLeft, ChevronRight, CheckCircle, XCircle, Eye } from 'lucide-react';
@@ -99,15 +120,26 @@ export default function AuditLogsPage() {
 
   // Show error state if logs fail to load
   if (logsError) {
+    const multiOrg = isMultiOrgAdminError(logsError);
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
           <h1 className="text-2xl font-bold">{t('auditLogs.title')}</h1>
         </div>
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
-          <p className="font-semibold">{t('auditLogs.errorLoadingLogs')}</p>
-          <p className="text-sm mt-1">{handleApiError(logsError)}</p>
-        </div>
+        {multiOrg ? (
+          // Distinct (amber, not red) styling: this isn't a user
+          // error or a server failure — it's a known UI gap that
+          // users hit when they're admin of multiple orgs.
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-800">
+            <p className="font-semibold">{t('auditLogs.multiOrgTitle')}</p>
+            <p className="text-sm mt-1">{t('auditLogs.multiOrgMessage')}</p>
+          </div>
+        ) : (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
+            <p className="font-semibold">{t('auditLogs.errorLoadingLogs')}</p>
+            <p className="text-sm mt-1">{handleApiError(logsError)}</p>
+          </div>
+        )}
       </div>
     );
   }

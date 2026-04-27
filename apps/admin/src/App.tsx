@@ -135,18 +135,10 @@ function App() {
                     }
                   />
                   {/*
-                    `audit-logs` is intentionally NOT wrapped in
-                    AdminRoute. The backend `requireAuditAccess`
-                    preHandler at packages/backend/src/api/routes/
-                    audit-logs.ts already enforces the right policy:
-                    platform admin OR org owner/admin (per-org scoped).
-                    AdminRoute only checks `user.role === 'admin'`
-                    (legacy platform-admin column), which would
-                    redirect org owners away even though the backend
-                    is willing to serve them their own org's logs.
-                    The page itself renders a localized error state
-                    if the backend returns 403 for users with no
-                    qualifying membership.
+                    Audit logs are accessible to platform admins and
+                    org owners/admins. Backend handles auth + scoping;
+                    the page renders a localized error state when the
+                    user lacks access.
                   */}
                   <Route path="audit-logs" element={<AuditLogsPage />} />
 
