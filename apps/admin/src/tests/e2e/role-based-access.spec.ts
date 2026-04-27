@@ -69,8 +69,12 @@ const ORG_ROUTES = ['/my-organization', '/my-organization/members'];
 /** Base path shared by all org routes */
 const ORG_BASE_PATH = '/my-organization';
 
-/** Routes accessible to all authenticated users */
-const GENERAL_ROUTES = ['/projects', '/bug-reports', '/notifications'];
+/** Routes not gated by AdminRoute/OrgRoute (no frontend redirect).
+ * The assertion is "URL stays", not "page rendered cleanly" —
+ * `/audit-logs` and `/api-keys` may 4xx from the backend and still
+ * stay put.
+ */
+const GENERAL_ROUTES = ['/projects', '/bug-reports', '/notifications', '/audit-logs', '/api-keys'];
 
 test.describe('Role-based page access', () => {
   test.describe.configure({ mode: 'serial' });
