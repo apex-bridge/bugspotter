@@ -7,6 +7,7 @@
 
 import type { DatabaseClient } from '../../db/client.js';
 import { getLogger } from '../../logger.js';
+import { signupSpamCheckTotal } from '../../metrics/registry.js';
 import { DISPOSABLE_EMAIL_DOMAINS } from '../data/disposable-email-domains.js';
 
 const logger = getLogger();
@@ -45,6 +46,7 @@ export class SpamFilterService {
 
     // 1. Honeypot — instant reject
     if (input.honeypot && input.honeypot.trim().length > 0) {
+      signupSpamCheckTotal.inc({ check: 'honeypot' });
       logger.info('Spam check: honeypot triggered', { ip: input.ip_address });
       return { rejected: true, spam_score: 100, reasons: ['honeypot'] };
     }
@@ -55,6 +57,7 @@ export class SpamFilterService {
       RATE_LIMIT_WINDOW_MINUTES
     );
     if (recentCount >= RATE_LIMIT_MAX) {
+      signupSpamCheckTotal.inc({ check: 'rate_limit' });
       logger.info('Spam check: rate limit exceeded', {
         ip: input.ip_address,
         count: recentCount,
@@ -65,6 +68,7 @@ export class SpamFilterService {
     // 3. Duplicate pending request — instant reject
     const existing = await this.db.organizationRequests.findPendingByEmail(input.contact_email);
     if (existing) {
+      signupSpamCheckTotal.inc({ check: 'duplicate_pending' });
       logger.info('Spam check: duplicate pending request', {
         email: input.contact_email,
         existingId: existing.id,
@@ -89,6 +93,19 @@ export class SpamFilterService {
 
     const rejected = score >= SPAM_THRESHOLD;
     if (rejected) {
+      // Per-check breakdown for the score-based contributors only
+      // counts when the request is actually rejected. Hard-reject
+      // checks above (honeypot, rate_limit, duplicate_pending)
+      // increment inline because they always coincide with their
+      // early-return rejection; score-based reasons need this
+      // post-decision check so the counter doesn't fire for
+      // sub-threshold heuristic hits the request ultimately
+      // survives. Keeps `signup_spam_check_total` interpretable as
+      // a "rejection reason breakdown" rather than a "heuristic hit
+      // rate".
+      for (const reason of reasons) {
+        signupSpamCheckTotal.inc({ check: reason });
+      }
       logger.info('Spam check: request rejected', {
         score,
         reasons,
