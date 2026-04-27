@@ -45,6 +45,11 @@ import {
 import { generateShareToken } from '../../utils/token-generator.js';
 import { getLogger } from '../../logger.js';
 import {
+  signupAttemptsTotal,
+  signupEmailVerificationTotal,
+  signupVerificationResendTotal,
+} from '../../metrics/registry.js';
+import {
   SignupEmailService,
   type EmailLocale,
   type SendVerificationEmailParams,
@@ -142,17 +147,67 @@ export class SignupService {
     const companyName = input.company_name.trim();
 
     if (companyName.length === 0) {
+      signupAttemptsTotal.inc({ outcome: 'invalid_input' });
       throw new AppError('Company name is required', 400, 'ValidationError');
     }
 
-    await this.runSpamChecks(email, companyName, input);
+    // runSpamChecks can throw three distinct AppError shapes plus
+    // arbitrary operational errors. Classify so the funnel doesn't
+    // silently absorb infra failures into the spam bucket:
+    //   - 403 Forbidden          — real spam rejection
+    //   - 409 PendingEnterpriseRequest — existing org_requests row
+    //                              blocks self-service; not bot
+    //                              traffic, closer to "duplicate"
+    //                              for funnel semantics
+    //   - 503 ServiceUnavailable — spam-check infra failed (DB, etc.)
+    //   - anything else          — unexpected, count as error too
+    try {
+      await this.runSpamChecks(email, companyName, input);
+    } catch (err) {
+      let outcome: 'spam_rejected' | 'duplicate_email' | 'error';
+      if (err instanceof AppError && err.statusCode === 403) {
+        outcome = 'spam_rejected';
+      } else if (err instanceof AppError && err.statusCode === 409) {
+        outcome = 'duplicate_email';
+      } else {
+        outcome = 'error';
+      }
+      signupAttemptsTotal.inc({ outcome });
+      throw err;
+    }
 
-    const existingUser = await this.db.users.findByEmail(email);
+    let existingUser: Awaited<ReturnType<typeof this.db.users.findByEmail>>;
+    try {
+      existingUser = await this.db.users.findByEmail(email);
+    } catch (err) {
+      // DB outage / pool exhaustion on the duplicate-check read.
+      // Without this catch the request rethrows uncounted, so the
+      // funnel total dips below total attempts during incidents —
+      // exactly the case the 'error' bucket exists to make visible.
+      signupAttemptsTotal.inc({ outcome: 'error' });
+      throw err;
+    }
     if (existingUser) {
+      signupAttemptsTotal.inc({ outcome: 'duplicate_email' });
       throw new AppError('User with this email already exists', 409, 'Conflict');
     }
 
-    const subdomain = await this.resolveSubdomain(companyName, input.subdomain);
+    let subdomain: string;
+    try {
+      subdomain = await this.resolveSubdomain(companyName, input.subdomain);
+    } catch (err) {
+      // 4xx AppErrors — the user supplied something we can't accept
+      // (invalid format, taken slug). 5xx and unexpected throws
+      // (availability check hits a DB outage, etc.) belong in the
+      // 'error' bucket; classifying them as user input would make the
+      // funnel show false-positive user drop-off during outages.
+      const outcome =
+        err instanceof AppError && err.statusCode >= 400 && err.statusCode < 500
+          ? 'invalid_input'
+          : 'error';
+      signupAttemptsTotal.inc({ outcome });
+      throw err;
+    }
 
     const passwordHash = await bcrypt.hash(input.password, PASSWORD.SALT_ROUNDS);
 
@@ -258,6 +313,28 @@ export class SignupService {
           },
         });
 
+        // Audit row for the user-facing signup event itself. Inside
+        // the tx so a COMMIT failure rolls back the audit alongside
+        // the user/org/project/key inserts — same pattern as the
+        // api_key audit above. Spam-rejected attempts deliberately
+        // do NOT get audit rows: those are bot traffic and would
+        // bloat the table; the metric counters provide the
+        // aggregate view there.
+        await tx.auditLogs.create({
+          action: 'signup_completed',
+          resource: 'auth/signup',
+          resource_id: user.id,
+          user_id: user.id,
+          organization_id: organization.id,
+          ip_address: input.ip_address,
+          details: {
+            subdomain,
+            project_id: project.id,
+            data_residency_region: this.region,
+          },
+          success: true,
+        });
+
         return {
           user,
           organization,
@@ -275,14 +352,37 @@ export class SignupService {
       // the proper 409 Conflict they'd get from the read-side checks.
       const remapped = remapUniqueViolation(err);
       if (remapped) {
-        throw remapped;
+        // Bucket by the underlying constraint name. The remapped
+        // AppError flattens both known violations into code='Conflict',
+        // so we'd lose the distinction without the constraint:
+        //  - users_email_key             → duplicate_email (matches
+        //                                   the read-side findByEmail
+        //                                   bucket above).
+        //  - organizations_subdomain_key → invalid_input  (same
+        //                                   bucket as resolveSubdomain
+        //                                   validation failures).
+        //  - any other unique constraint → 'error'  (defensive default
+        //                                   so a future migration that
+        //                                   adds a new unique key
+        //                                   doesn't silently mis-bucket
+        //                                   into duplicate_email).
+        signupAttemptsTotal.inc({
+          outcome: UNIQUE_CONSTRAINT_OUTCOME_BUCKETS[remapped.constraint] ?? 'error',
+        });
+        throw remapped.error;
       }
+      // Anything else from inside the tx (DB outage, txn abort,
+      // unexpected Postgres error) is operational — count it as
+      // 'error' so the funnel doesn't silently drop these requests.
+      signupAttemptsTotal.inc({ outcome: 'error' });
       throw err;
     }
 
-    // Log AFTER commit — logging inside the tx callback would record
-    // success even if the COMMIT itself fails.
+    // Log + count AFTER commit — incrementing inside the tx callback
+    // would record success even if the COMMIT itself fails.
+    signupAttemptsTotal.inc({ outcome: 'success' });
     logger.info('Self-service signup completed', {
+      event: 'signup_completed',
       userId: result.user.id,
       organizationId: result.organization.id,
       subdomain,
@@ -352,92 +452,134 @@ export class SignupService {
     // base64url tokens never contain whitespace, and silent
     // normalization would mask client bugs by turning them into
     // successful "not found" lookups.
-    return this.db.transaction(async (tx) => {
-      // Look up the row WITHOUT the active filter so we can recognize
-      // a re-submission of an already-consumed token and respond
-      // idempotently when the underlying user is verified.
-      const tokenRow = await tx.emailVerificationTokens.findByToken(token);
-      if (!tokenRow) {
-        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
-      }
+    let result: { user_id: string };
+    try {
+      result = await this.db.transaction(async (tx) => {
+        // Look up the row WITHOUT the active filter so we can recognize
+        // a re-submission of an already-consumed token and respond
+        // idempotently when the underlying user is verified.
+        const tokenRow = await tx.emailVerificationTokens.findByToken(token);
+        if (!tokenRow) {
+          throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+        }
 
-      // Helper for the "the path I tried failed; succeed only if a
-      // concurrent transaction verified the user in the meantime"
-      // pattern. Each potential race point below routes failures
-      // through this so the "verified user wins" contract holds at
-      // every step under READ COMMITTED.
-      const succeedIfNowVerified = async (): Promise<{ user_id: string }> => {
-        const refreshed = await tx.users.findById(tokenRow.user_id);
-        if (refreshed?.email_verified_at) {
+        // Helper for the "the path I tried failed; succeed only if a
+        // concurrent transaction verified the user in the meantime"
+        // pattern. Each potential race point below routes failures
+        // through this so the "verified user wins" contract holds at
+        // every step under READ COMMITTED.
+        const succeedIfNowVerified = async (): Promise<{ user_id: string }> => {
+          const refreshed = await tx.users.findById(tokenRow.user_id);
+          if (refreshed?.email_verified_at) {
+            return { user_id: tokenRow.user_id };
+          }
+          throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+        };
+
+        // Defense-in-depth: the FK has `ON DELETE CASCADE` so a token
+        // for a non-existent user shouldn't reach this point under
+        // normal DB operation. If it does (replication oddity, manual
+        // FK mutation, future schema change), throw rather than fall
+        // through — the rest of the function assumes a real user
+        // exists. Same generic 400 as other failure modes so we don't
+        // leak orphan-token state.
+        const user = await tx.users.findById(tokenRow.user_id);
+        if (!user) {
+          throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
+        }
+
+        // Idempotent fast-path: user is already verified. Return the
+        // same shape as a fresh successful verify regardless of
+        // whether THIS token was the one that did it, or whether it's
+        // still active. Don't consume the row — if it's active it'll
+        // expire on its own, and consuming silently would be a side
+        // effect with no observable benefit.
+        if (user.email_verified_at) {
           return { user_id: tokenRow.user_id };
         }
-        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
-      };
 
-      // Defense-in-depth: the FK has `ON DELETE CASCADE` so a token
-      // for a non-existent user shouldn't reach this point under
-      // normal DB operation. If it does (replication oddity, manual
-      // FK mutation, future schema change), throw rather than fall
-      // through — the rest of the function assumes a real user
-      // exists. Same generic 400 as other failure modes so we don't
-      // leak orphan-token state.
-      const user = await tx.users.findById(tokenRow.user_id);
-      if (!user) {
-        throw new AppError('Invalid or expired verification token', 400, 'BadRequest');
-      }
+        // From here the user is NOT yet verified at our snapshot — we
+        // need a real consume + stamp to make progress. Reject
+        // already-consumed tokens — but route through
+        // succeedIfNowVerified so a concurrent verify of the SAME user
+        // via a DIFFERENT token (committed between our findById and
+        // here) still wins over the token-state rejection.
+        if (tokenRow.consumed_at !== null) {
+          return succeedIfNowVerified();
+        }
 
-      // Idempotent fast-path: user is already verified. Return the
-      // same shape as a fresh successful verify regardless of
-      // whether THIS token was the one that did it, or whether it's
-      // still active. Don't consume the row — if it's active it'll
-      // expire on its own, and consuming silently would be a side
-      // effect with no observable benefit.
-      if (user.email_verified_at) {
+        // Don't perform a JS-side expiry check here — `consume()`'s
+        // SQL guard (`expires_at > NOW()`) is authoritative and uses
+        // the same Postgres clock that wrote `expires_at` in the
+        // first place. A JS-side check against the app server clock
+        // could prematurely reject still-valid tokens under NTP/
+        // container clock skew between the app and the database.
+        const consumed = await tx.emailVerificationTokens.consume(tokenRow.id);
+        if (!consumed) {
+          // !consumed means either:
+          //  - Expiry: the SQL guard rejected because expires_at <=
+          //    NOW(). The user was unverified above and remains so —
+          //    succeedIfNowVerified will throw 400.
+          //  - Race-loss: a concurrent verify-email request for the
+          //    same token won consume() and may already have stamped
+          //    the user. The re-read returns success in that case.
+          return succeedIfNowVerified();
+        }
+
+        // Atomic stamp via DB `NOW()` and a `WHERE email_verified_at
+        // IS NULL` guard. False return means the UPDATE matched no
+        // rows: either another transaction won the race and stamped
+        // the user (return success via the re-read), or the user was
+        // deleted between our findById and the stamp (re-read returns
+        // null, throw 400). Capturing the boolean instead of dropping
+        // it on the floor avoids the silent-success-for-deleted-user
+        // failure mode.
+        const verified = await tx.users.markEmailVerified(tokenRow.user_id);
+        if (!verified) {
+          return succeedIfNowVerified();
+        }
+
+        // Audit row for the user-facing terminal action. Inside the
+        // tx so a COMMIT failure rolls it back together with the stamp.
+        // Idempotent fast-path returns (already-verified user) skip
+        // the audit row — the original verification already produced
+        // one and a duplicate would just be noise. ip_address /
+        // user_agent are not threaded through to this service today;
+        // omitting rather than wiring them up keeps this slice
+        // focused. Tracked as a follow-up.
+        await tx.auditLogs.create({
+          action: 'email_verified',
+          resource: 'auth/verify-email',
+          resource_id: tokenRow.user_id,
+          user_id: tokenRow.user_id,
+          details: { token_id: tokenRow.id },
+          success: true,
+        });
+
         return { user_id: tokenRow.user_id };
-      }
+      });
+    } catch (err) {
+      // 4xx AppErrors are user-facing terminal failures (unknown /
+      // consumed-but-not-verified / expired). Anything else (5xx
+      // AppError, DB outage, unexpected throw) is operational —
+      // count under 'error' so dashboards don't conflate "your link
+      // is dead" with "the database died."
+      const outcome =
+        err instanceof AppError && err.statusCode >= 400 && err.statusCode < 500
+          ? 'invalid'
+          : 'error';
+      signupEmailVerificationTotal.inc({ outcome });
+      throw err;
+    }
 
-      // From here the user is NOT yet verified at our snapshot — we
-      // need a real consume + stamp to make progress. Reject
-      // already-consumed tokens — but route through
-      // succeedIfNowVerified so a concurrent verify of the SAME user
-      // via a DIFFERENT token (committed between our findById and
-      // here) still wins over the token-state rejection.
-      if (tokenRow.consumed_at !== null) {
-        return succeedIfNowVerified();
-      }
-
-      // Don't perform a JS-side expiry check here — `consume()`'s
-      // SQL guard (`expires_at > NOW()`) is authoritative and uses
-      // the same Postgres clock that wrote `expires_at` in the
-      // first place. A JS-side check against the app server clock
-      // could prematurely reject still-valid tokens under NTP/
-      // container clock skew between the app and the database.
-      const consumed = await tx.emailVerificationTokens.consume(tokenRow.id);
-      if (!consumed) {
-        // !consumed means either:
-        //  - Expiry: the SQL guard rejected because expires_at <=
-        //    NOW(). The user was unverified above and remains so —
-        //    succeedIfNowVerified will throw 400.
-        //  - Race-loss: a concurrent verify-email request for the
-        //    same token won consume() and may already have stamped
-        //    the user. The re-read returns success in that case.
-        return succeedIfNowVerified();
-      }
-
-      // Atomic stamp via DB `NOW()` and a `WHERE email_verified_at
-      // IS NULL` guard. False return means the UPDATE matched no
-      // rows: either another transaction won the race and stamped
-      // the user (return success via the re-read), or the user was
-      // deleted between our findById and the stamp (re-read returns
-      // null, throw 400). Capturing the boolean instead of dropping
-      // it on the floor avoids the silent-success-for-deleted-user
-      // failure mode.
-      const verified = await tx.users.markEmailVerified(tokenRow.user_id);
-      if (verified) {
-        return { user_id: tokenRow.user_id };
-      }
-      return succeedIfNowVerified();
+    // Successful or idempotent fast-path — both observable as
+    // "user is verified now."
+    signupEmailVerificationTotal.inc({ outcome: 'success' });
+    logger.info('Email verification succeeded', {
+      event: 'email_verified',
+      userId: result.user_id,
     });
+    return result;
   }
 
   /**
@@ -467,47 +609,80 @@ export class SignupService {
     // signup-email service's default).
     let resolvedLocale: EmailLocale | undefined = locale;
 
-    await this.db.transaction(async (tx) => {
-      // Lock the user row for the duration of this transaction. Two
-      // concurrent resend requests for the same user without this
-      // lock can both invalidate prior tokens (each seeing 0 active
-      // tokens) and each insert a new one — leaving the user with
-      // multiple "active" tokens and breaking the "latest link is
-      // the only one that works" guarantee. Adding a partial UNIQUE
-      // index would make the second insert fail visibly with 500;
-      // serializing here keeps both succeed-paths and last-writer
-      // semantics.
-      await tx.users.lockForUpdate(userId);
+    try {
+      await this.db.transaction(async (tx) => {
+        // Lock the user row for the duration of this transaction. Two
+        // concurrent resend requests for the same user without this
+        // lock can both invalidate prior tokens (each seeing 0 active
+        // tokens) and each insert a new one — leaving the user with
+        // multiple "active" tokens and breaking the "latest link is
+        // the only one that works" guarantee. Adding a partial UNIQUE
+        // index would make the second insert fail visibly with 500;
+        // serializing here keeps both succeed-paths and last-writer
+        // semantics.
+        await tx.users.lockForUpdate(userId);
 
-      const user = await tx.users.findById(userId);
-      if (!user) {
-        // JWT carries a user id that no longer resolves — session is
-        // stale. Throw inside the txn so it rolls back cleanly.
-        throw new AppError('User not found', 404, 'NotFound');
-      }
-      if (user.email_verified_at) {
-        // Already verified — silently no-op. The route returns 200
-        // in both cases so the client UI doesn't have to branch.
-        return;
-      }
-
-      await tx.emailVerificationTokens.invalidateUnconsumedForUser(user.id);
-      await tx.emailVerificationTokens.create({
-        user_id: user.id,
-        token: newToken,
-        expires_at: expiresAt,
-      });
-
-      recipientEmail = user.email;
-      contactName = this.getContactNameForEmail(user);
-      // `user.preferences` is required on the type but defaults to {}
-      // in the DB — `language` is optional inside it.
-      if (!resolvedLocale) {
-        const stored = user.preferences?.language;
-        if (stored === 'en' || stored === 'ru' || stored === 'kk') {
-          resolvedLocale = stored;
+        const user = await tx.users.findById(userId);
+        if (!user) {
+          // JWT carries a user id that no longer resolves — session is
+          // stale. Throw inside the txn so it rolls back cleanly.
+          throw new AppError('User not found', 404, 'NotFound');
         }
+        if (user.email_verified_at) {
+          // Already verified — silently no-op. The route returns 200
+          // in both cases so the client UI doesn't have to branch.
+          return;
+        }
+
+        await tx.emailVerificationTokens.invalidateUnconsumedForUser(user.id);
+        await tx.emailVerificationTokens.create({
+          user_id: user.id,
+          token: newToken,
+          expires_at: expiresAt,
+        });
+
+        // Audit row for the resend action. Inside the tx so a COMMIT
+        // failure rolls it back together with the new token. Skipped
+        // for the already-verified silent no-op above (no work to
+        // record; would just be noise).
+        await tx.auditLogs.create({
+          action: 'verification_resent',
+          resource: 'auth/resend-verification',
+          resource_id: user.id,
+          user_id: user.id,
+          details: {},
+          success: true,
+        });
+
+        recipientEmail = user.email;
+        contactName = this.getContactNameForEmail(user);
+        // `user.preferences` is required on the type but defaults to {}
+        // in the DB — `language` is optional inside it.
+        if (!resolvedLocale) {
+          const stored = user.preferences?.language;
+          if (stored === 'en' || stored === 'ru' || stored === 'kk') {
+            resolvedLocale = stored;
+          }
+        }
+      });
+    } catch (err) {
+      if (err instanceof AppError && err.statusCode === 404) {
+        signupVerificationResendTotal.inc({ outcome: 'user_not_found' });
+      } else {
+        signupVerificationResendTotal.inc({ outcome: 'error' });
       }
+      throw err;
+    }
+
+    // Either a new token was issued OR the user was already verified
+    // (silent no-op). Both surface as 200 to the client; we count
+    // them under 'success' since the user-observable outcome is
+    // "your request was processed."
+    signupVerificationResendTotal.inc({ outcome: 'success' });
+    logger.info('Verification email resend processed', {
+      event: 'verification_resent',
+      userId,
+      sentEmail: recipientEmail !== null,
     });
 
     if (!recipientEmail) {
@@ -642,11 +817,28 @@ const UNIQUE_CONSTRAINT_MESSAGES: Readonly<Record<string, string>> = Object.free
 });
 
 /**
- * If `err` is a Postgres unique_violation, return a user-facing 409 AppError
- * identifying the specific field that collided; otherwise return null so the
- * caller can rethrow the original error.
+ * Funnel-bucket mapping for the unique-violation race-loss path. Lives next
+ * to `UNIQUE_CONSTRAINT_MESSAGES` so the constraint-name knowledge stays in
+ * one place — adding a new unique constraint to the signup tables means
+ * extending both maps together. Unknown constraints intentionally fall
+ * through to the `error` outcome at the call site so a future migration
+ * doesn't silently mis-bucket a new race-loss into `duplicate_email`.
  */
-function remapUniqueViolation(err: unknown): AppError | null {
+const UNIQUE_CONSTRAINT_OUTCOME_BUCKETS: Readonly<
+  Record<string, 'duplicate_email' | 'invalid_input'>
+> = Object.freeze({
+  users_email_key: 'duplicate_email',
+  organizations_subdomain_key: 'invalid_input',
+});
+
+/**
+ * If `err` is a Postgres unique_violation, return the remapped 409 AppError
+ * AND the underlying constraint name so the caller can both (a) surface the
+ * user-facing message and (b) bucket the failure into the funnel without
+ * having to re-parse the original error. Returns null when `err` is not a
+ * unique_violation; the caller rethrows in that case.
+ */
+function remapUniqueViolation(err: unknown): { error: AppError; constraint: string } | null {
   if (!err || typeof err !== 'object') {
     return null;
   }
@@ -657,7 +849,7 @@ function remapUniqueViolation(err: unknown): AppError | null {
 
   const constraint = typeof candidate.constraint === 'string' ? candidate.constraint : '';
   const message = UNIQUE_CONSTRAINT_MESSAGES[constraint] ?? 'A conflicting record already exists';
-  return new AppError(message, 409, 'Conflict');
+  return { error: new AppError(message, 409, 'Conflict'), constraint };
 }
 
 /** Resolve a region string from config into the DataResidencyRegion enum, or throw. */

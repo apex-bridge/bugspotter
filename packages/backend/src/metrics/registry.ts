@@ -65,5 +65,86 @@ export const orgHardDeleteTotal = new client.Counter({
   registers: [register],
 });
 
+// === Self-service signup ===
+// Funnel + abuse-mitigation telemetry. Lets ops dashboards answer
+// questions like "did adding hCaptcha drop bot rejections?" or "what
+// fraction of signups complete email verification?". Per-event audit
+// log rows live in `application.audit_logs`; counters here are the
+// rate-of-change view that pairs with them.
+//
+// Outcomes for `signup_attempts_total`:
+//   'success'         — user, org, project, API key, verification token all committed
+//   'spam_rejected'   — runSpamChecks rejected with 403 Forbidden (real
+//                        spam signal); per-check breakdown lives on
+//                        `signup_spam_check_total`
+//   'duplicate_email' — findByEmail found an existing user, OR a unique-
+//                        violation race-loss on users_email_key, OR a 409
+//                        PendingEnterpriseRequest from runSpamChecks
+//                        (existing org_requests row blocks self-service)
+//   'invalid_input'   — empty company_name, invalid/taken subdomain
+//                        (4xx AppError from resolveSubdomain or the
+//                        organizations_subdomain_key race-loss path)
+//   'error'           — operational failure not caused by the user:
+//                        503 from spam-filter infra, DB outage, txn abort,
+//                        any non-AppError or 5xx exception. Distinguishes
+//                        "system broke" from "user did something we
+//                        rejected" so dashboards / alerts can fire on the
+//                        right one.
+// Keep dashboards/alerts in sync when adding new outcomes.
+export const signupAttemptsTotal = new client.Counter({
+  name: 'bugspotter_signup_attempts_total',
+  help: 'Self-service signup attempts by terminal outcome',
+  labelNames: ['outcome'] as const,
+  registers: [register],
+});
+
+// Per-check rejection breakdown for the spam filter. Counts only
+// fire when the request is actually rejected — sub-threshold
+// heuristic hits (e.g. a request whose suspicious_pattern alone
+// scored 20, below the 50 threshold) do NOT increment, so the
+// metric is interpretable as "what fraction of rejections involved
+// each check?" rather than "how often does each heuristic fire?".
+//
+// A single rejected attempt can trip multiple checks (e.g.
+// disposable_email + suspicious_pattern summing past the score
+// threshold), so totals here can exceed the `spam_rejected` count
+// on `signup_attempts_total`. That's intentional — it lets the
+// disposable-email blocklist Tier-B PR be evaluated independently
+// of other checks also firing on the same request.
+//
+// Checks: 'honeypot' | 'rate_limit' | 'duplicate_pending' |
+//         'disposable_email' | 'suspicious_pattern'
+export const signupSpamCheckTotal = new client.Counter({
+  name: 'bugspotter_signup_spam_check_total',
+  help: 'Self-service signup spam-check fires (per check, not per request)',
+  labelNames: ['check'] as const,
+  registers: [register],
+});
+
+// Outcomes for email verification:
+//   'success' — token consumed (or idempotent 200 for already-verified user)
+//   'invalid' — terminal 4xx AppError (unknown / consumed-but-not-verified / expired)
+//   'error'   — anything else (DB outage, txn abort, unexpected throw)
+export const signupEmailVerificationTotal = new client.Counter({
+  name: 'bugspotter_signup_email_verification_total',
+  help: 'Email verification attempts by outcome',
+  labelNames: ['outcome'] as const,
+  registers: [register],
+});
+
+// Outcomes for verification email resend:
+//   'success'           — new token issued + email dispatched (or silent
+//                          no-op when user is already verified — same
+//                          response shape, no probe-able state leak)
+//   'user_not_found'    — JWT carries a stale user id (rare; normally
+//                          requireUser would have rejected upstream)
+//   'error'             — anything else (DB outage, unexpected throw)
+export const signupVerificationResendTotal = new client.Counter({
+  name: 'bugspotter_signup_verification_resend_total',
+  help: 'Verification email resend requests by outcome',
+  labelNames: ['outcome'] as const,
+  registers: [register],
+});
+
 // Note: queueDepth and dbPoolSize gauges are created in collectors.ts
 // with async collect callbacks (populated on each /metrics scrape).

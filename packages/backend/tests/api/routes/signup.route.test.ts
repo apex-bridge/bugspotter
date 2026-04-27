@@ -120,6 +120,13 @@ function createHappyMockDb(): DatabaseClient {
       consume: vi.fn(async () => true),
       invalidateUnconsumedForUser: vi.fn(async () => 0),
     },
+    auditLogs: {
+      create: vi.fn(async (d: Record<string, unknown>) => ({
+        id: 'audit-uuid',
+        timestamp: new Date(),
+        ...d,
+      })),
+    },
   };
 
   // Extend tx.users with the methods used outside signup() — verifyEmail
@@ -341,6 +348,9 @@ describe('POST /api/v1/auth/verify-email (route smoke)', () => {
         create: vi.fn(),
         invalidateUnconsumedForUser: vi.fn(),
       },
+      auditLogs: {
+        create: vi.fn(async () => undefined),
+      },
     };
     (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(
       async (cb: (t: unknown) => Promise<unknown>) => cb(tx)
@@ -450,6 +460,9 @@ describe('POST /api/v1/auth/resend-verification (route smoke)', () => {
         })),
         findByToken: vi.fn(),
         consume: vi.fn(),
+      },
+      auditLogs: {
+        create: vi.fn(async () => undefined),
       },
     };
     (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(
