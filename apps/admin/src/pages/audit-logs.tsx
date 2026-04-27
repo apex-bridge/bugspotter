@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { auditLogService } from '../services/audit-logs';
-import { handleApiError } from '../lib/api-client';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Filter, ChevronLeft, ChevronRight, CheckCircle, XCircle, Eye } from 'lucide-react';
@@ -16,14 +15,33 @@ import type { AuditLog, AuditLogFilters as AuditLogFiltersType } from '../types/
 import type { FilterInputs } from '../components/audit/audit-log-filters';
 
 /**
+ * Pull the best human-readable text out of an Axios error. Backend
+ * uses two shapes (`AppError` → `data.message`, ad-hoc `reply.send`
+ * → `data.error`) and very rarely a raw string body. Falls back to
+ * Axios's own message and a generic last resort.
+ */
+function getErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data;
+    if (typeof data === 'string') {
+      return data;
+    }
+    if (typeof data?.message === 'string') {
+      return data.message;
+    }
+    if (typeof data?.error === 'string') {
+      return data.error;
+    }
+    return error.message || 'An error occurred';
+  }
+  return 'An unexpected error occurred';
+}
+
+/**
  * Detect the backend's "Specify organization_id" 400 from
- * `requireAuditAccess` (multi-org user, no org filter). Brittle by
- * design: a substring match against the English message regresses
- * to the generic error block on any wording change. A stable backend
- * error code would be sturdier — tracked as a follow-up. We match
- * both `data.message` (AppError shape) and `data.error` (ad-hoc
- * `reply.send` shape) so a backend refactor between the two doesn't
- * silently break the detection.
+ * `requireAuditAccess` (multi-org user, no org filter). Substring
+ * match — brittle on wording change; backend error code would be
+ * sturdier (tracked as follow-up).
  */
 function isMultiOrgAdminError(error: unknown): boolean {
   if (!axios.isAxiosError(error)) {
@@ -32,9 +50,7 @@ function isMultiOrgAdminError(error: unknown): boolean {
   if (error.response?.status !== 400) {
     return false;
   }
-  const data = error.response?.data;
-  const candidates = [data?.message, data?.error].filter((v): v is string => typeof v === 'string');
-  return candidates.some((m) => m.toLowerCase().includes('specify organization_id'));
+  return getErrorMessage(error).toLowerCase().includes('specify organization_id');
 }
 
 export default function AuditLogsPage() {
@@ -139,7 +155,7 @@ export default function AuditLogsPage() {
         ) : (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
             <p className="font-semibold">{t('auditLogs.errorLoadingLogs')}</p>
-            <p className="text-sm mt-1">{handleApiError(logsError)}</p>
+            <p className="text-sm mt-1">{getErrorMessage(logsError)}</p>
           </div>
         )}
       </div>

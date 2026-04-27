@@ -71,10 +71,10 @@ const ORG_BASE_PATH = '/my-organization';
 
 /** Routes not gated by AdminRoute/OrgRoute (no frontend redirect).
  * The assertion is "URL stays", not "page rendered cleanly" —
- * `/audit-logs` may 4xx from the backend (no qualifying membership,
- * or multi-org without `organization_id`) and still stay put.
+ * `/audit-logs` and `/api-keys` may 4xx from the backend and still
+ * stay put.
  */
-const GENERAL_ROUTES = ['/projects', '/bug-reports', '/notifications', '/audit-logs'];
+const GENERAL_ROUTES = ['/projects', '/bug-reports', '/notifications', '/audit-logs', '/api-keys'];
 
 test.describe('Role-based page access', () => {
   test.describe.configure({ mode: 'serial' });
