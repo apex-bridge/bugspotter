@@ -4,6 +4,16 @@ import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { auditLogService } from '../services/audit-logs';
 import { handleApiError } from '../lib/api-client';
+import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Button } from '../components/ui/button';
+import { Filter, ChevronLeft, ChevronRight, CheckCircle, XCircle, Eye } from 'lucide-react';
+import { formatDate, getActionBadgeColor } from '../utils/audit-utils';
+import { formatNumber } from '../utils/format';
+import { StatisticsCards } from '../components/audit/statistics-cards';
+import { AuditLogFilters } from '../components/audit/audit-log-filters';
+import { AuditLogDetailModal } from '../components/audit/audit-log-detail-modal';
+import type { AuditLog, AuditLogFilters as AuditLogFiltersType } from '../types/audit';
+import type { FilterInputs } from '../components/audit/audit-log-filters';
 
 /**
  * Detect the specific 400 the backend returns when a user is admin
@@ -24,16 +34,6 @@ function isMultiOrgAdminError(error: unknown): boolean {
   const message = error.response?.data?.message;
   return typeof message === 'string' && message.includes('multiple organizations');
 }
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
-import { Button } from '../components/ui/button';
-import { Filter, ChevronLeft, ChevronRight, CheckCircle, XCircle, Eye } from 'lucide-react';
-import { formatDate, getActionBadgeColor } from '../utils/audit-utils';
-import { formatNumber } from '../utils/format';
-import { StatisticsCards } from '../components/audit/statistics-cards';
-import { AuditLogFilters } from '../components/audit/audit-log-filters';
-import { AuditLogDetailModal } from '../components/audit/audit-log-detail-modal';
-import type { AuditLog, AuditLogFilters as AuditLogFiltersType } from '../types/audit';
-import type { FilterInputs } from '../components/audit/audit-log-filters';
 
 export default function AuditLogsPage() {
   const { t } = useTranslation();
