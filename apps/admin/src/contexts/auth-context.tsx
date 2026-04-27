@@ -5,15 +5,43 @@ import {
   useEffect,
   useLayoutEffect,
   useCallback,
+  useRef,
   ReactNode,
 } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { setAuthTokenAccessors } from '../lib/api-client';
 import { authService } from '../services/api';
 import { setupService } from '../services/setup-service';
 import { userService } from '../services/user-service';
 import type { User, LanguageCode } from '../types';
+
+/**
+ * Channel name for cross-tab session-replacement notifications.
+ * Same-origin only — BroadcastChannel can't cross subdomains. The
+ * cross-subdomain case (e.g. info@org-a.kz.bugspotter.io tab still
+ * open while a new session starts on org-b.kz.bugspotter.io) needs
+ * server-side session-id versioning to close, tracked separately.
+ */
+const AUTH_BROADCAST_CHANNEL = 'bugspotter-auth';
+
+interface SessionReplacedMessage {
+  type: 'session-replaced';
+  userId: string | null;
+  /** Sender tab's monotonic id, used to ignore self-echo on same tab. */
+  senderTabId: string;
+}
+
+/**
+ * Stable per-tab id so a tab can ignore its own broadcasts without
+ * needing user-id equality (which would fail to dedupe a relogin
+ * as the same user from the same tab — cheap but worth getting right).
+ */
+const TAB_ID =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `tab-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 
 // Validate language code against supported languages
 const isValidLanguage = (code: unknown): code is LanguageCode => {
@@ -39,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   // Load user language preference
   const loadUserPreferences = useCallback(
@@ -205,8 +233,80 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [navigate, location.pathname, applyToken, loadUserPreferences]);
 
+  /**
+   * Wipe all client-side auth state (memory + sessionStorage +
+   * legacy localStorage keys). Does NOT call the backend logout
+   * endpoint and does NOT navigate — those are layered on top by
+   * `logout()` and the broadcast listener for their own reasons
+   * (logout: invalidate the refresh cookie server-side; broadcast
+   * listener: avoid recursive logout-API calls when another tab
+   * already invalidated the cookie).
+   */
+  const clearLocalSession = useCallback(() => {
+    setAccessToken(null);
+    setUser(null);
+    sessionStorage.removeItem('user');
+    sessionStorage.removeItem('refresh_token');
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user');
+  }, []);
+
+  /**
+   * Broadcast channel for cross-tab session-replacement signals.
+   * Lazily initialized — feature-detect for environments without
+   * BroadcastChannel (older Safari, jsdom test env). When unavailable
+   * we silently degrade: same-tab login still works correctly,
+   * cross-tab invalidation just doesn't fire.
+   */
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') {
+      return;
+    }
+    const channel = new BroadcastChannel(AUTH_BROADCAST_CHANNEL);
+    broadcastChannelRef.current = channel;
+
+    channel.onmessage = (event: MessageEvent<SessionReplacedMessage>) => {
+      const data = event.data;
+      if (!data || data.type !== 'session-replaced') {
+        return;
+      }
+      // Ignore our own broadcasts. We use a per-tab id rather than
+      // user-id equality so that a relogin as the SAME user from
+      // a different tab still triggers our cleanup — different tab
+      // means we have a different in-memory access_token that needs
+      // replacing.
+      if (data.senderTabId === TAB_ID) {
+        return;
+      }
+      // Another tab on this origin just installed a different
+      // identity. Our in-memory access_token is now stale (and
+      // dangerous if it had elevated privileges that the new identity
+      // doesn't). Wipe local state and bounce to /login so the next
+      // page load re-authenticates against whatever cookie is now
+      // in place.
+      clearLocalSession();
+      toast.info(t('auth.sessionReplacedByOtherTab'));
+      navigate('/login', { replace: true });
+    };
+
+    return () => {
+      channel.close();
+      broadcastChannelRef.current = null;
+    };
+  }, [clearLocalSession, navigate, t]);
+
   const login = useCallback(
     (accessToken: string, _refreshToken: string, userData: User, onComplete?: () => void) => {
+      // Wipe any stale state from a prior session BEFORE installing
+      // the new identity. Without this, legacy localStorage keys
+      // (`access_token` / `user` / `refresh_token`) from older
+      // versions of the app, or stale `sessionStorage.user` from a
+      // prior identity, could survive into the new session and bleed
+      // through on the next storage-restore path.
+      clearLocalSession();
+
       // Store access token in memory only (XSS protection)
       applyToken(accessToken);
 
@@ -226,12 +326,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Refresh token is now stored in httpOnly cookie by backend
       // No need to store it in frontend storage (XSS protection)
 
+      // Tell every other same-origin tab on this device that the
+      // session for this app has been replaced — they should bail
+      // out of any in-memory token they were holding. This is the
+      // critical fix for the post-self-service-signup cross-identity
+      // bleed where a stale platform-admin token in another tab kept
+      // operating as platform admin against the newly-issued user's
+      // refresh cookie. See AUTH_BROADCAST_CHANNEL doc above for the
+      // (significant) cross-origin limitation.
+      broadcastChannelRef.current?.postMessage({
+        type: 'session-replaced',
+        userId: userData?.id ?? null,
+        senderTabId: TAB_ID,
+      } satisfies SessionReplacedMessage);
+
       // Call completion callback if provided
       if (onComplete) {
         setTimeout(onComplete, 100);
       }
     },
-    [applyToken, loadUserPreferences]
+    [applyToken, clearLocalSession, loadUserPreferences]
   );
 
   const updateAccessToken = useCallback((newAccessToken: string) => {
@@ -247,21 +361,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Continue with local cleanup even if API fails
     }
 
-    // Clear memory
-    setAccessToken(null);
-    setUser(null);
-
-    // Clear sessionStorage
-    sessionStorage.removeItem('user');
-
-    // Clear any legacy storage items
-    sessionStorage.removeItem('refresh_token');
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('user');
-
+    clearLocalSession();
     navigate('/login');
-  }, [navigate]);
+  }, [clearLocalSession, navigate]);
 
   return (
     <AuthContext.Provider
