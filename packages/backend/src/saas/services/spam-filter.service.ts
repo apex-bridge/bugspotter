@@ -81,7 +81,6 @@ export class SpamFilterService {
     if (emailDomain && DISPOSABLE_EMAIL_DOMAINS.has(emailDomain)) {
       score += 50;
       reasons.push('disposable_email');
-      signupSpamCheckTotal.inc({ check: 'disposable_email' });
       logger.info('Spam check: disposable email detected', { domain: emailDomain });
     }
 
@@ -90,11 +89,23 @@ export class SpamFilterService {
     if (suspiciousScore > 0) {
       score += suspiciousScore;
       reasons.push('suspicious_pattern');
-      signupSpamCheckTotal.inc({ check: 'suspicious_pattern' });
     }
 
     const rejected = score >= SPAM_THRESHOLD;
     if (rejected) {
+      // Per-check breakdown for the score-based contributors only
+      // counts when the request is actually rejected. Hard-reject
+      // checks above (honeypot, rate_limit, duplicate_pending)
+      // increment inline because they always coincide with their
+      // early-return rejection; score-based reasons need this
+      // post-decision check so the counter doesn't fire for
+      // sub-threshold heuristic hits the request ultimately
+      // survives. Keeps `signup_spam_check_total` interpretable as
+      // a "rejection reason breakdown" rather than a "heuristic hit
+      // rate".
+      for (const reason of reasons) {
+        signupSpamCheckTotal.inc({ check: reason });
+      }
       logger.info('Spam check: request rejected', {
         score,
         reasons,

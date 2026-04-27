@@ -98,12 +98,19 @@ export const signupAttemptsTotal = new client.Counter({
   registers: [register],
 });
 
-// Per-check fire rate for the spam filter. A single rejected attempt
-// can trip multiple checks (e.g. disposable_email + suspicious_pattern
-// summing past the score threshold), so totals here can exceed the
-// `spam_rejected` count on `signup_attempts_total`. That's intentional —
-// this counter answers "is the disposable-email blocklist actually
-// catching anything?" independently of whether other checks also fired.
+// Per-check rejection breakdown for the spam filter. Counts only
+// fire when the request is actually rejected — sub-threshold
+// heuristic hits (e.g. a request whose suspicious_pattern alone
+// scored 20, below the 50 threshold) do NOT increment, so the
+// metric is interpretable as "what fraction of rejections involved
+// each check?" rather than "how often does each heuristic fire?".
+//
+// A single rejected attempt can trip multiple checks (e.g.
+// disposable_email + suspicious_pattern summing past the score
+// threshold), so totals here can exceed the `spam_rejected` count
+// on `signup_attempts_total`. That's intentional — it lets the
+// disposable-email blocklist Tier-B PR be evaluated independently
+// of other checks also firing on the same request.
 //
 // Checks: 'honeypot' | 'rate_limit' | 'duplicate_pending' |
 //         'disposable_email' | 'suspicious_pattern'

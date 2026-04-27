@@ -1262,6 +1262,25 @@ describe('SignupService', () => {
       expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'error' });
     });
 
+    it("classifies a findByEmail DB outage as 'error'", async () => {
+      // findByEmail runs OUTSIDE the tx — its own dedicated read on
+      // the duplicate-check path. Without the catch this case used
+      // to rethrow uncounted, leaving the funnel total < total
+      // attempts during incidents (which is exactly the case the
+      // 'error' bucket exists to make visible).
+      mock = createMockDb({
+        findByEmail: async () => {
+          throw new Error('simulated DB pool exhaustion');
+        },
+      });
+      service = new SignupService(mock.db, DATA_RESIDENCY_REGION.KZ, email.service);
+      attemptsIncSpy.mockClear();
+
+      await expect(service.signup(validInput())).rejects.toThrow(/DB pool exhaustion/);
+      expect(attemptsIncSpy).toHaveBeenCalledWith({ outcome: 'error' });
+      expect(attemptsIncSpy).not.toHaveBeenCalledWith({ outcome: 'duplicate_email' });
+    });
+
     it("classifies a unique-violation on an unknown constraint as 'error'", async () => {
       // Defense-in-depth for a future migration that adds a unique
       // constraint to a signup-touched table without updating

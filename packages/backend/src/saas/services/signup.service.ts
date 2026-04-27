@@ -176,7 +176,17 @@ export class SignupService {
       throw err;
     }
 
-    const existingUser = await this.db.users.findByEmail(email);
+    let existingUser: Awaited<ReturnType<typeof this.db.users.findByEmail>>;
+    try {
+      existingUser = await this.db.users.findByEmail(email);
+    } catch (err) {
+      // DB outage / pool exhaustion on the duplicate-check read.
+      // Without this catch the request rethrows uncounted, so the
+      // funnel total dips below total attempts during incidents —
+      // exactly the case the 'error' bucket exists to make visible.
+      signupAttemptsTotal.inc({ outcome: 'error' });
+      throw err;
+    }
     if (existingUser) {
       signupAttemptsTotal.inc({ outcome: 'duplicate_email' });
       throw new AppError('User with this email already exists', 409, 'Conflict');
