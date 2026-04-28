@@ -269,7 +269,7 @@ describe('AuthContext', () => {
         expect(result.current.isLoading).toBe(false);
       });
 
-      expect(mockNavigate).toHaveBeenCalledWith('/login');
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
       expect(result.current.isAuthenticated).toBe(false);
       expect(result.current.user).toBeNull();
       expect(sessionStorage.getItem('user')).toBeNull();
@@ -421,7 +421,7 @@ describe('AuthContext', () => {
         expect(result.current.user).toBeNull();
         expect(result.current.accessToken).toBeNull();
         expect(sessionStorage.getItem('user')).toBeNull();
-        expect(mockNavigate).toHaveBeenCalledWith('/login');
+        expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
       });
     });
   });

@@ -199,7 +199,7 @@ describe('Auth Context Integration Tests', () => {
 
       expect(result.current.isAuthenticated).toBe(false);
       expect(result.current.user).toBeNull();
-      expect(mockNavigate).toHaveBeenCalledWith('/login');
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
       expect(sessionStorage.getItem('user')).toBeNull();
     });
 
@@ -238,7 +238,7 @@ describe('Auth Context Integration Tests', () => {
         expect(result.current.isAuthenticated).toBe(false);
       });
 
-      expect(mockNavigate).toHaveBeenCalledWith('/login');
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
       expect(sessionStorage.getItem('user')).toBeNull();
     });
 
@@ -324,7 +324,7 @@ describe('Auth Context Integration Tests', () => {
       expect(logoutCalled).toBe(true);
       expect(result.current.user).toBeNull();
       expect(result.current.accessToken).toBeNull();
-      expect(mockNavigate).toHaveBeenCalledWith('/login');
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
     });
 
     it('should clear state even if logout API fails', async () => {
@@ -355,7 +355,7 @@ describe('Auth Context Integration Tests', () => {
 
       expect(result.current.isAuthenticated).toBe(false);
       expect(result.current.user).toBeNull();
-      expect(mockNavigate).toHaveBeenCalledWith('/login');
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
     });
   });
 
