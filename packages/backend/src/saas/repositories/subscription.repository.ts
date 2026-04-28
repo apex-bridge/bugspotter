@@ -66,15 +66,18 @@ export class SubscriptionRepository extends BaseRepository<
 
   /**
    * Cancel an organization's subscription locally — sets status to
-   * `canceled`. Idempotent: returns the row unchanged if it's already
-   * canceled. Returns null if no subscription exists.
+   * `canceled`. Idempotent.
    *
-   * Used by the org soft-delete cascade to stop the invoice scheduler
-   * (which only generates invoices for subscriptions in active /
-   * past_due / incomplete states). The caller is responsible for
-   * dispatching any external-provider cancellation (e.g. via the
-   * `payments` queue) — this method only mutates local state, so it's
-   * safe to call inside a transaction.
+   * Returns the just-canceled row, or `null` if there was nothing to
+   * cancel (no subscription, or already canceled). The null-on-no-op
+   * shape lets callers like the org soft-delete cascade enqueue a
+   * provider cancel job *only* when state actually transitioned —
+   * matches `BillingService.cancelSubscription`'s idempotency contract
+   * and avoids duplicate provider calls / noisy retry loops.
+   *
+   * Local-state-only by design: doesn't dispatch the external
+   * provider cancel, so it's safe to call inside a transaction. The
+   * caller is responsible for forwarding to the payments queue.
    */
   async cancelByOrganizationId(organizationId: string): Promise<Subscription | null> {
     const query = `
@@ -84,11 +87,6 @@ export class SubscriptionRepository extends BaseRepository<
       RETURNING *
     `;
     const result = await this.getClient().query(query, [organizationId]);
-    if (result.rows.length > 0) {
-      return this.deserialize(result.rows[0]);
-    }
-    // Either no subscription, or already canceled. Surface the existing
-    // row (if any) so the caller can still inspect external IDs etc.
-    return this.findByOrganizationId(organizationId);
+    return result.rows.length > 0 ? this.deserialize(result.rows[0]) : null;
   }
 }

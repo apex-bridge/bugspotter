@@ -34,6 +34,7 @@ import { InvitationService } from './invitation.service.js';
 import { getLogger } from '../../logger.js';
 import { getQueueManager } from '../../queue/queue-manager.js';
 import { QUEUE_NAMES, type PaymentJobData } from '../../queue/types.js';
+import { getCacheService } from '../../cache/index.js';
 
 const logger = getLogger();
 
@@ -701,21 +702,27 @@ export class OrganizationService {
     // org keeps accumulating data via active SDK keys and keeps
     // generating invoices despite the user having deleted it.
     //
-    // External-provider cancellation (Stripe, etc.) is dispatched
-    // AFTER the local transaction commits — the broker job is
-    // at-least-once with retries, so it tolerates eventual delivery
-    // and shouldn't block the user-visible delete.
-    const { deleted, subscription, revokedKeyCount } = await this.db.transaction(async (tx) => {
+    // Two side-effects fire AFTER the tx commits:
+    //   1. Provider cancel job (Stripe, etc.) on the payments queue —
+    //      at-least-once with retries; only dispatched when the local
+    //      cancel actually transitioned state, mirroring
+    //      BillingService.cancelSubscription's idempotency contract so
+    //      a redundant soft-delete (or tx retry) doesn't enqueue dups.
+    //   2. Per-key api-key cache invalidation — the auth path caches
+    //      keys for 30s by key_hash, so without explicit invalidation
+    //      a revoked key would keep authenticating from cache for up
+    //      to the TTL window.
+    const { deleted, canceledSubscription, revokedKeys } = await this.db.transaction(async (tx) => {
       const orgDeleted = await tx.organizations.softDelete(organizationId, deletedBy);
       if (!orgDeleted) {
-        return { deleted: false, subscription: null, revokedKeyCount: 0 };
+        return { deleted: false, canceledSubscription: null, revokedKeys: [] };
       }
 
-      const sub = await tx.subscriptions.cancelByOrganizationId(organizationId);
+      const transitioned = await tx.subscriptions.cancelByOrganizationId(organizationId);
       await tx.organizations.updateSubscriptionStatus(organizationId, SUBSCRIPTION_STATUS.CANCELED);
-      const keysRevoked = await tx.apiKeys.revokeForOrganization(organizationId);
+      const keys = await tx.apiKeys.revokeForOrganization(organizationId);
 
-      return { deleted: true, subscription: sub, revokedKeyCount: keysRevoked };
+      return { deleted: true, canceledSubscription: transitioned, revokedKeys: keys };
     });
 
     if (!deleted) {
@@ -728,15 +735,31 @@ export class OrganizationService {
 
     logger.info('[org] soft-delete cascade applied', {
       organizationId,
-      revokedKeyCount,
-      subscriptionCanceled: Boolean(subscription),
+      revokedKeyCount: revokedKeys.length,
+      subscriptionCanceled: Boolean(canceledSubscription),
     });
 
-    // Best-effort: fire the external-provider cancellation. Failure to
-    // enqueue is logged but doesn't roll back — the local soft-delete
-    // is the user-visible commit, and a missed provider sync is
-    // recoverable via the existing BillingService flow if needed.
-    if (subscription?.external_subscription_id) {
+    // Best-effort cache invalidation per revoked key. One failure
+    // shouldn't block the others or roll back the soft-delete — the
+    // worst case if a single invalidate fails is that one key keeps
+    // authenticating from cache for ≤ 30s.
+    if (revokedKeys.length > 0) {
+      const cache = getCacheService();
+      await Promise.allSettled(
+        revokedKeys.map((k) =>
+          cache.invalidateApiKey(k.key_hash).catch((err) => {
+            logger.warn('[org] failed to invalidate api-key cache after revoke', {
+              organizationId,
+              apiKeyId: k.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          })
+        )
+      );
+    }
+
+    // Provider cancel only fires on real state transition.
+    if (canceledSubscription?.external_subscription_id) {
       try {
         const broker = getQueueManager().getBrokerInstance();
         await broker.publish(
@@ -745,7 +768,7 @@ export class OrganizationService {
           {
             action: 'cancel',
             organizationId,
-            externalSubscriptionId: subscription.external_subscription_id,
+            externalSubscriptionId: canceledSubscription.external_subscription_id,
           } satisfies PaymentJobData,
           {
             attempts: 5,
@@ -755,7 +778,7 @@ export class OrganizationService {
       } catch (err) {
         logger.error('[org] failed to enqueue external subscription cancel', {
           organizationId,
-          externalSubscriptionId: subscription.external_subscription_id,
+          externalSubscriptionId: canceledSubscription.external_subscription_id,
           error: err instanceof Error ? err.message : String(err),
         });
       }

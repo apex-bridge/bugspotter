@@ -285,9 +285,15 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
    *   different org or from the no-org bucket (those keys still have
    *   legitimate access elsewhere)
    *
-   * Returns the number of keys revoked, for logging.
+   * Returns the affected `{ id, key_hash }` rows so the caller can
+   * invalidate the api-key cache (which is keyed by key_hash with a
+   * 30s TTL — without invalidation, SDK requests would keep
+   * authenticating against the cached pre-revocation row for up to
+   * the TTL window).
    */
-  async revokeForOrganization(organizationId: string): Promise<number> {
+  async revokeForOrganization(
+    organizationId: string
+  ): Promise<Array<{ id: string; key_hash: string }>> {
     const query = `
       UPDATE ${this.schema}.${this.tableName}
       SET
@@ -302,9 +308,10 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
           FROM ${this.schema}.projects
           WHERE organization_id = $1
         )
+      RETURNING id, key_hash
     `;
-    const result = await this.pool.query(query, [organizationId]);
-    return result.rowCount ?? 0;
+    const result = await this.pool.query<{ id: string; key_hash: string }>(query, [organizationId]);
+    return result.rows;
   }
 
   /**

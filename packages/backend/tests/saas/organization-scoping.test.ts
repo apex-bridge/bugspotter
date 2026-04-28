@@ -19,6 +19,7 @@ describe('Organization scoping', () => {
   const createdOrgIds: string[] = [];
   const createdProjectIds: string[] = [];
   const createdReportIds: string[] = [];
+  const createdApiKeyIds: string[] = [];
 
   beforeAll(async () => {
     db = DatabaseClient.create({ connectionString: TEST_DATABASE_URL });
@@ -45,6 +46,10 @@ describe('Organization scoping', () => {
   afterAll(async () => {
     // Parallelize cleanup for better performance
     const cleanupResults = await Promise.allSettled([
+      // Delete all api keys in parallel — they're not cascaded from
+      // orgs (and global keys are explicitly preserved by the cascade),
+      // so the cascade test's fixtures need explicit cleanup.
+      ...createdApiKeyIds.map((id) => db.apiKeys.delete(id)),
       // Delete all bug reports in parallel
       ...createdReportIds.map((id) => db.bugReports.delete(id)),
       // Delete all projects in parallel
@@ -174,6 +179,7 @@ describe('Organization scoping', () => {
         allowed_projects: [cascadeProject.id],
         created_by: user.id,
       });
+      createdApiKeyIds.push(orgScopedKey.id);
 
       // API key B: allowed_projects = NULL ("all projects" / global) →
       // should NOT be revoked. Soft-deleting one org shouldn't kill a
@@ -189,6 +195,7 @@ describe('Organization scoping', () => {
         allowed_projects: null,
         created_by: user.id,
       });
+      createdApiKeyIds.push(globalKey.id);
 
       // Sanity preconditions.
       const subBefore = await db.subscriptions.findByOrganizationId(cascadeOrg.id);
