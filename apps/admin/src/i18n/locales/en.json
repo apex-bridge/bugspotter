@@ -1748,6 +1748,11 @@
         "description": "For your security we don't store the plaintext key. If you lose it, generate a new one from API Keys."
       }
     },
+    "extension": {
+      "title": "Try it instantly with the Chrome extension",
+      "description": "No code, no install steps. The extension captures bugs from any website you're browsing — fastest way to see your dashboard come alive while you set up the SDK on your own app.",
+      "installButton": "Add to Chrome"
+    },
     "install": {
       "title": "Install the SDK",
       "description": "Drop this into your app's entry file to start capturing bug reports.",
