@@ -197,6 +197,25 @@ describe('Organization scoping', () => {
       });
       createdApiKeyIds.push(globalKey.id);
 
+      // API key C: allowed_projects = [] (empty array, effectively
+      // wildcard via checkProjectPermission's allow-all rule) → should
+      // be revoked. A known trigger gap can leave non-active keys
+      // here when their last project is hard-deleted, and we sweep
+      // them up opportunistically during the cascade since they have
+      // no org affinity and are an active security risk.
+      const orphanWildcardKey = await db.apiKeys.create({
+        key_hash: `cascade_orphan_hash_${Date.now()}`,
+        key_prefix: 'bgs_test',
+        key_suffix: 'orph9012',
+        name: 'Orphan wildcard key',
+        type: 'production',
+        permission_scope: 'full',
+        permissions: [],
+        allowed_projects: [],
+        created_by: user.id,
+      });
+      createdApiKeyIds.push(orphanWildcardKey.id);
+
       // Sanity preconditions.
       const subBefore = await db.subscriptions.findByOrganizationId(cascadeOrg.id);
       expect(subBefore).not.toBeNull();
@@ -219,12 +238,16 @@ describe('Organization scoping', () => {
 
       // 3. Org-scoped api key revoked → SDK requests using it stop
       //    authenticating. Global key untouched → other tenants
-      //    keep working.
+      //    keep working. Orphan empty-array wildcard key revoked
+      //    too — covers the trigger's "non-active status" gap.
       const orgScopedAfter = await db.apiKeys.findById(orgScopedKey.id);
       expect(orgScopedAfter?.status).toBe('revoked');
 
       const globalAfter = await db.apiKeys.findById(globalKey.id);
       expect(globalAfter?.status).toBe('active');
+
+      const orphanAfter = await db.apiKeys.findById(orphanWildcardKey.id);
+      expect(orphanAfter?.status).toBe('revoked');
     });
   });
 

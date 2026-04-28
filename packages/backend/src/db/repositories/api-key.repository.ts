@@ -271,19 +271,28 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
   }
 
   /**
-   * Revoke every API key whose `allowed_projects` belongs entirely
-   * to the given organization. Used by the org soft-delete cascade
+   * Revoke every API key whose `allowed_projects` is a subset of
+   * the given org's projects. Used by the org soft-delete cascade
    * so a deleted org's keys stop authenticating SDK requests.
+   *
+   * Empty `allowed_projects` arrays match too. They're effectively
+   * wildcard keys — `checkProjectPermission` treats `[]` the same
+   * as `NULL` (allow-all) — and there's a known hole in the
+   * `cleanup_api_keys_on_project_delete` trigger where keys in
+   * non-`active` states (e.g. `expiring`) escape its auto-revoke
+   * filter when their last project is deleted, leaving them in
+   * exactly this state. Cleaning them up here is opportunistic but
+   * safe: an empty array has no org affinity, so cascading any
+   * soft-delete won't unfairly affect another org's resources.
    *
    * Deliberately leaves alone:
    * - Already-revoked keys (idempotent)
-   * - Keys with `allowed_projects = NULL` ("all projects" / global keys —
-   *   removing one org's projects shouldn't kill a global admin key)
-   * - Keys with `allowed_projects = []` (already orphaned, separately
-   *   handled by the project-delete trigger)
+   * - Keys with `allowed_projects = NULL` ("all projects" / global
+   *   keys — removing one org's projects shouldn't kill a global
+   *   admin key)
    * - Keys whose `allowed_projects` includes ANY project from a
-   *   different org or from the no-org bucket (those keys still have
-   *   legitimate access elsewhere)
+   *   different org or from the no-org bucket (those keys still
+   *   have legitimate access elsewhere)
    *
    * Returns the affected `{ id, key_hash }` rows so the caller can
    * invalidate the api-key cache (which is keyed by key_hash with a
@@ -302,7 +311,6 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
         updated_at = CURRENT_TIMESTAMP
       WHERE status != 'revoked'
         AND allowed_projects IS NOT NULL
-        AND cardinality(allowed_projects) > 0
         AND allowed_projects <@ (
           SELECT COALESCE(array_agg(id), ARRAY[]::UUID[])
           FROM ${this.schema}.projects
