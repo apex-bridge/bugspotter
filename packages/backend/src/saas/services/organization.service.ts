@@ -31,6 +31,11 @@ import {
 import { getQuotaForPlan } from '../plans.js';
 import { AppError } from '../../api/middleware/error.js';
 import { InvitationService } from './invitation.service.js';
+import { getLogger } from '../../logger.js';
+import { getQueueManager } from '../../queue/queue-manager.js';
+import { QUEUE_NAMES, type PaymentJobData } from '../../queue/types.js';
+
+const logger = getLogger();
 
 const TRIAL_DURATION_DAYS = 14;
 const ADMIN_PLAN_DURATION_DAYS = 365;
@@ -687,7 +692,32 @@ export class OrganizationService {
       return { mode: 'hard' as const };
     }
 
-    const deleted = await this.db.organizations.softDelete(organizationId, deletedBy);
+    // Cascade soft-delete: in addition to marking the org row deleted,
+    // cancel its subscription locally + flip the org's
+    // `subscription_status` (the invoice scheduler already filters on
+    // these, so no scheduler change is needed) and revoke API keys
+    // whose `allowed_projects` belong entirely to this org. This is
+    // what prevents the "zombie soft-deleted org" pattern where the
+    // org keeps accumulating data via active SDK keys and keeps
+    // generating invoices despite the user having deleted it.
+    //
+    // External-provider cancellation (Stripe, etc.) is dispatched
+    // AFTER the local transaction commits — the broker job is
+    // at-least-once with retries, so it tolerates eventual delivery
+    // and shouldn't block the user-visible delete.
+    const { deleted, subscription, revokedKeyCount } = await this.db.transaction(async (tx) => {
+      const orgDeleted = await tx.organizations.softDelete(organizationId, deletedBy);
+      if (!orgDeleted) {
+        return { deleted: false, subscription: null, revokedKeyCount: 0 };
+      }
+
+      const sub = await tx.subscriptions.cancelByOrganizationId(organizationId);
+      await tx.organizations.updateSubscriptionStatus(organizationId, SUBSCRIPTION_STATUS.CANCELED);
+      const keysRevoked = await tx.apiKeys.revokeForOrganization(organizationId);
+
+      return { deleted: true, subscription: sub, revokedKeyCount: keysRevoked };
+    });
+
     if (!deleted) {
       throw new AppError(
         'Could not delete: organization was modified concurrently. Please retry.',
@@ -695,6 +725,42 @@ export class OrganizationService {
         'Conflict'
       );
     }
+
+    logger.info('[org] soft-delete cascade applied', {
+      organizationId,
+      revokedKeyCount,
+      subscriptionCanceled: Boolean(subscription),
+    });
+
+    // Best-effort: fire the external-provider cancellation. Failure to
+    // enqueue is logged but doesn't roll back — the local soft-delete
+    // is the user-visible commit, and a missed provider sync is
+    // recoverable via the existing BillingService flow if needed.
+    if (subscription?.external_subscription_id) {
+      try {
+        const broker = getQueueManager().getBrokerInstance();
+        await broker.publish(
+          QUEUE_NAMES.PAYMENTS,
+          'cancel-subscription',
+          {
+            action: 'cancel',
+            organizationId,
+            externalSubscriptionId: subscription.external_subscription_id,
+          } satisfies PaymentJobData,
+          {
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 5_000 },
+          }
+        );
+      } catch (err) {
+        logger.error('[org] failed to enqueue external subscription cancel', {
+          organizationId,
+          externalSubscriptionId: subscription.external_subscription_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     return { mode: 'soft' as const };
   }
 

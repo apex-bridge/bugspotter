@@ -271,6 +271,43 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
   }
 
   /**
+   * Revoke every API key whose `allowed_projects` belongs entirely
+   * to the given organization. Used by the org soft-delete cascade
+   * so a deleted org's keys stop authenticating SDK requests.
+   *
+   * Deliberately leaves alone:
+   * - Already-revoked keys (idempotent)
+   * - Keys with `allowed_projects = NULL` ("all projects" / global keys —
+   *   removing one org's projects shouldn't kill a global admin key)
+   * - Keys with `allowed_projects = []` (already orphaned, separately
+   *   handled by the project-delete trigger)
+   * - Keys whose `allowed_projects` includes ANY project from a
+   *   different org or from the no-org bucket (those keys still have
+   *   legitimate access elsewhere)
+   *
+   * Returns the number of keys revoked, for logging.
+   */
+  async revokeForOrganization(organizationId: string): Promise<number> {
+    const query = `
+      UPDATE ${this.schema}.${this.tableName}
+      SET
+        status = 'revoked',
+        revoked_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE status != 'revoked'
+        AND allowed_projects IS NOT NULL
+        AND cardinality(allowed_projects) > 0
+        AND allowed_projects <@ (
+          SELECT COALESCE(array_agg(id), ARRAY[]::UUID[])
+          FROM ${this.schema}.projects
+          WHERE organization_id = $1
+        )
+    `;
+    const result = await this.pool.query(query, [organizationId]);
+    return result.rowCount ?? 0;
+  }
+
+  /**
    * Check if key has expired and update status
    */
   async checkAndUpdateExpired(): Promise<number> {
