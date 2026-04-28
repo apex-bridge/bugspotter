@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef } fr
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Copy, Check, KeyRound, Mail, AlertTriangle } from 'lucide-react';
+import { Copy, Check, KeyRound, Mail, AlertTriangle, Chrome } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
@@ -24,6 +24,16 @@ interface OnboardingHandoff {
   organization: { id: string; name: string; subdomain: string; trial_ends_at?: string };
   project: { id: string; name: string };
 }
+
+/**
+ * Canonical Chrome Web Store URL for the BugSpotter extension.
+ * Mirrored from the landing site (Products.astro, docs/installation
+ * pages) — keep in sync if the extension is ever republished under
+ * a new ID. The extension is the lowest-friction "try it now" path
+ * for fresh tenants since it captures bugs without code changes.
+ */
+const CHROME_WEB_STORE_URL =
+  'https://chromewebstore.google.com/detail/bugspotter/mpefobgognkodaknpalkaohkaniddmhj';
 
 /**
  * Normalize a base64-encoded querystring value so `atob` accepts it.
@@ -388,6 +398,44 @@ BugSpotter.init({
               <span className="ml-2">{t(copiedKey ? 'common.copied' : 'common.copy')}</span>
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/*
+        Extension first, SDK second. The extension is the
+        zero-code path — a tenant who just signed up can install
+        it, browse to any site, and watch bugs land in their new
+        dashboard without touching their codebase. The SDK below
+        is the production path; recommending the extension first
+        shortens "signed up" → "first bug captured" from "set up
+        a build pipeline" to "click Add to Chrome".
+      */}
+      <Card data-testid="onboarding-extension-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Chrome className="h-5 w-5" />
+            {t('onboarding.extension.title')}
+          </CardTitle>
+          <CardDescription>{t('onboarding.extension.description')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {/*
+            Styled anchor (not Button-in-anchor) — the local Button
+            component doesn't support `asChild` / Slot, and the
+            target is an external URL so anchor is the right
+            semantic anyway. Class set mirrors Button's primary +
+            md so the visual matches the rest of the page.
+          */}
+          <a
+            href={CHROME_WEB_STORE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="onboarding-extension-install"
+            className="inline-flex items-center justify-center rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-10 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            <Chrome className="h-4 w-4" />
+            <span className="ml-2">{t('onboarding.extension.installButton')}</span>
+          </a>
         </CardContent>
       </Card>
 
