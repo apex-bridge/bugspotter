@@ -115,6 +115,35 @@ describe('Organization scoping', () => {
       expect(projects.some((p) => p.id === orgProject.id)).toBe(true);
       expect(projects.some((p) => p.id === standaloneProject.id)).toBe(false);
     });
+
+    it('should hide projects whose owning org is soft-deleted', async () => {
+      // Use a fresh org so the shared `orgProject` fixture stays
+      // available for the other tests in this block.
+      const freshOrg = await service.createOrganization(
+        { name: 'Soft-deleted Org', subdomain: `soft-deleted-${Date.now()}` },
+        user.id
+      );
+      createdOrgIds.push(freshOrg.id);
+      const freshProject = await db.projects.create({
+        name: 'Project of soon-deleted org',
+        created_by: user.id,
+        organization_id: freshOrg.id,
+      });
+      createdProjectIds.push(freshProject.id);
+
+      // Sanity: project is visible while the org is alive.
+      const before = await db.projects.getUserAccessibleProjects(user.id);
+      expect(before.some((p) => p.id === freshProject.id)).toBe(true);
+
+      await db.organizations.softDelete(freshOrg.id, user.id);
+
+      // After soft-delete: that org's project is hidden, but the
+      // null-org (self-hosted-shape) project stays visible — the
+      // org filter must not regress that path.
+      const after = await db.projects.getUserAccessibleProjects(user.id);
+      expect(after.some((p) => p.id === freshProject.id)).toBe(false);
+      expect(after.some((p) => p.id === standaloneProject.id)).toBe(true);
+    });
   });
 
   describe('bug reports', () => {
