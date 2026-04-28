@@ -20,6 +20,10 @@ import type { FilterInputs } from '../components/audit/audit-log-filters';
  * `requireAuditAccess` (multi-org user, no org filter). Substring
  * match — brittle on wording change; backend error code would be
  * sturdier (tracked as follow-up).
+ *
+ * Reads the raw response fields directly rather than via
+ * `handleApiError` so detection stays decoupled from the
+ * presentation helper.
  */
 function isMultiOrgAdminError(error: unknown): boolean {
   if (!axios.isAxiosError(error)) {
@@ -28,7 +32,9 @@ function isMultiOrgAdminError(error: unknown): boolean {
   if (error.response?.status !== 400) {
     return false;
   }
-  return handleApiError(error).toLowerCase().includes('specify organization_id');
+  const data = error.response?.data;
+  const candidates = [data?.message, data?.error].filter((v): v is string => typeof v === 'string');
+  return candidates.some((m) => m.toLowerCase().includes('specify organization_id'));
 }
 
 export default function AuditLogsPage() {
