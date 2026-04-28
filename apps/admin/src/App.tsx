@@ -134,14 +134,11 @@ function App() {
                       </AdminRoute>
                     }
                   />
-                  <Route
-                    path="audit-logs"
-                    element={
-                      <AdminRoute>
-                        <AuditLogsPage />
-                      </AdminRoute>
-                    }
-                  />
+                  {/* Backend gates audit logs (platform admin, or org
+                      owner/admin). Page renders an error block on
+                      denial; some detail text passes through from
+                      the API and is not always localized. */}
+                  <Route path="audit-logs" element={<AuditLogsPage />} />
 
                   <Route
                     path="integrations"

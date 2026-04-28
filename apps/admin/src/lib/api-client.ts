@@ -121,9 +121,27 @@ api.interceptors.response.use(
   }
 );
 
+/**
+ * Pull the best human-readable text out of an error. Backend uses
+ * two shapes — `AppError` populates `data.message`, ad-hoc
+ * `reply.send` paths use `data.error` — and very rarely a raw
+ * string body. Falls back to Axios's own message and a generic
+ * last resort. Returns a string so all 30+ call sites stay simple
+ * (most pipe straight into `toast.error()`).
+ */
 export const handleApiError = (error: unknown): string => {
   if (axios.isAxiosError(error)) {
-    return error.response?.data?.message || error.message || 'An error occurred';
+    const data = error.response?.data;
+    if (typeof data === 'string' && data) {
+      return data;
+    }
+    if (typeof data?.message === 'string' && data.message) {
+      return data.message;
+    }
+    if (typeof data?.error === 'string' && data.error) {
+      return data.error;
+    }
+    return error.message || 'An error occurred';
   }
   return 'An unexpected error occurred';
 };

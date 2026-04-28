@@ -754,6 +754,8 @@
     "previous": "Previous",
     "next": "Next",
     "errorLoadingLogs": "Error loading audit logs",
+    "multiOrgTitle": "You're an admin of multiple organizations",
+    "multiOrgMessage": "Audit logs need to be viewed one organization at a time, and the per-org selector for this page is still on the way. Please contact support if you need access to a specific organization's logs in the meantime.",
     "notAvailable": "N/A",
     "totalLogs": "Total Logs",
     "successful": "Successful",

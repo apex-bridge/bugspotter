@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import axios from 'axios';
 import { auditLogService } from '../services/audit-logs';
 import { handleApiError } from '../lib/api-client';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
@@ -13,6 +14,28 @@ import { AuditLogFilters } from '../components/audit/audit-log-filters';
 import { AuditLogDetailModal } from '../components/audit/audit-log-detail-modal';
 import type { AuditLog, AuditLogFilters as AuditLogFiltersType } from '../types/audit';
 import type { FilterInputs } from '../components/audit/audit-log-filters';
+
+/**
+ * Detect the backend's "Specify organization_id" 400 from
+ * `requireAuditAccess` (multi-org user, no org filter). Substring
+ * match — brittle on wording change; backend error code would be
+ * sturdier (tracked as follow-up).
+ *
+ * Reads the raw response fields directly rather than via
+ * `handleApiError` so detection stays decoupled from the
+ * presentation helper.
+ */
+function isMultiOrgAdminError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+  if (error.response?.status !== 400) {
+    return false;
+  }
+  const data = error.response?.data;
+  const candidates = [data?.message, data?.error].filter((v): v is string => typeof v === 'string');
+  return candidates.some((m) => m.toLowerCase().includes('specify organization_id'));
+}
 
 export default function AuditLogsPage() {
   const { t } = useTranslation();
@@ -99,15 +122,26 @@ export default function AuditLogsPage() {
 
   // Show error state if logs fail to load
   if (logsError) {
+    const multiOrg = isMultiOrgAdminError(logsError);
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
           <h1 className="text-2xl font-bold">{t('auditLogs.title')}</h1>
         </div>
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
-          <p className="font-semibold">{t('auditLogs.errorLoadingLogs')}</p>
-          <p className="text-sm mt-1">{handleApiError(logsError)}</p>
-        </div>
+        {multiOrg ? (
+          // Distinct (amber, not red) styling: this isn't a user
+          // error or a server failure — it's a known UI gap that
+          // users hit when they're admin of multiple orgs.
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-800">
+            <p className="font-semibold">{t('auditLogs.multiOrgTitle')}</p>
+            <p className="text-sm mt-1">{t('auditLogs.multiOrgMessage')}</p>
+          </div>
+        ) : (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
+            <p className="font-semibold">{t('auditLogs.errorLoadingLogs')}</p>
+            <p className="text-sm mt-1">{handleApiError(logsError)}</p>
+          </div>
+        )}
       </div>
     );
   }
