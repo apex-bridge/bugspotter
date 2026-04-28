@@ -68,7 +68,7 @@ export interface IVerificationEmailSender {
 const logger = getLogger();
 
 const TRIAL_DURATION_DAYS = 14;
-const DEFAULT_PROJECT_NAME = 'My First Project';
+const DEFAULT_PROJECT_NAME = 'Default';
 // 24-hour TTL on verification tokens. Long enough that a user can come
 // back the next morning, short enough that an unread message in a
 // shared inbox doesn't stay valid for weeks.

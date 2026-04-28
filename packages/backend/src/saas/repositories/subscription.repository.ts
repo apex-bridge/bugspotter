@@ -63,4 +63,30 @@ export class SubscriptionRepository extends BaseRepository<
       external_customer_id: externalId,
     });
   }
+
+  /**
+   * Cancel an organization's subscription locally — sets status to
+   * `canceled`. Idempotent.
+   *
+   * Returns the just-canceled row, or `null` if there was nothing to
+   * cancel (no subscription, or already canceled). The null-on-no-op
+   * shape lets callers like the org soft-delete cascade enqueue a
+   * provider cancel job *only* when state actually transitioned —
+   * matches `BillingService.cancelSubscription`'s idempotency contract
+   * and avoids duplicate provider calls / noisy retry loops.
+   *
+   * Local-state-only by design: doesn't dispatch the external
+   * provider cancel, so it's safe to call inside a transaction. The
+   * caller is responsible for forwarding to the payments queue.
+   */
+  async cancelByOrganizationId(organizationId: string): Promise<Subscription | null> {
+    const query = `
+      UPDATE ${this.schema}.${this.tableName}
+      SET status = 'canceled', updated_at = NOW()
+      WHERE organization_id = $1 AND status != 'canceled'
+      RETURNING *
+    `;
+    const result = await this.getClient().query(query, [organizationId]);
+    return result.rows.length > 0 ? this.deserialize(result.rows[0]) : null;
+  }
 }

@@ -122,7 +122,31 @@ export class ProjectRepository extends BaseRepository<Project, ProjectInsert, Pr
    */
   async getUserAccessibleProjects(userId: string, organizationId?: string): Promise<Project[]> {
     const params: unknown[] = [userId];
-    const conditions: string[] = ['(p.created_by = $1 OR pm.user_id = $1)'];
+    // Hide projects whose owning organization has been soft-deleted —
+    // otherwise a user who deleted their org keeps seeing its projects
+    // in the dashboard. LEFT JOIN (not INNER) because in self-hosted
+    // mode `application.projects.organization_id` is NULL and the
+    // `saas.organizations` table is empty; an INNER JOIN would filter
+    // every self-hosted project out. The org check requires either
+    // no org link at all (self-hosted) or a present-and-alive org;
+    // orphan FKs (project pointing at a non-existent org row) are
+    // hidden too, which shouldn't happen in a properly-FK'd schema
+    // but is the safer default if it ever does. Admin / system queries
+    // (`findByOrganizationId`, `findAll`) intentionally don't apply
+    // this filter — platform admins need visibility into soft-deleted
+    // orgs for retention cleanup.
+    //
+    // The `project_members` LEFT JOIN pushes `pm.user_id = $1` into
+    // the ON clause so the join matches at most one row per project
+    // (the `(project_id, user_id)` pair is unique). Combined with
+    // `pm.user_id IS NOT NULL` in WHERE, that lets us drop SELECT
+    // DISTINCT and avoid the row-explosion that the previous form
+    // (LEFT JOIN with no ON-clause user filter) would cause for
+    // projects with many members.
+    const conditions: string[] = [
+      '(p.created_by = $1 OR pm.user_id IS NOT NULL)',
+      '(p.organization_id IS NULL OR (o.id IS NOT NULL AND o.deleted_at IS NULL))',
+    ];
 
     if (organizationId) {
       conditions.push(`p.organization_id = $${params.length + 1}`);
@@ -130,8 +154,10 @@ export class ProjectRepository extends BaseRepository<Project, ProjectInsert, Pr
     }
 
     const query = `
-      SELECT DISTINCT p.* FROM ${this.schema}.${this.tableName} p
-      LEFT JOIN ${this.schema}.project_members pm ON p.id = pm.project_id
+      SELECT p.* FROM ${this.schema}.${this.tableName} p
+      LEFT JOIN saas.organizations o ON o.id = p.organization_id
+      LEFT JOIN ${this.schema}.project_members pm
+        ON p.id = pm.project_id AND pm.user_id = $1
       WHERE ${conditions.join(' AND ')}
       ORDER BY p.created_at DESC
     `;
