@@ -19,6 +19,7 @@ describe('Organization scoping', () => {
   const createdOrgIds: string[] = [];
   const createdProjectIds: string[] = [];
   const createdReportIds: string[] = [];
+  const createdApiKeyIds: string[] = [];
 
   beforeAll(async () => {
     db = DatabaseClient.create({ connectionString: TEST_DATABASE_URL });
@@ -45,6 +46,10 @@ describe('Organization scoping', () => {
   afterAll(async () => {
     // Parallelize cleanup for better performance
     const cleanupResults = await Promise.allSettled([
+      // Delete all api keys in parallel — they're not cascaded from
+      // orgs (and global keys are explicitly preserved by the cascade),
+      // so the cascade test's fixtures need explicit cleanup.
+      ...createdApiKeyIds.map((id) => db.apiKeys.delete(id)),
       // Delete all bug reports in parallel
       ...createdReportIds.map((id) => db.bugReports.delete(id)),
       // Delete all projects in parallel
@@ -114,6 +119,135 @@ describe('Organization scoping', () => {
       const projects = await db.projects.findAll(org.id);
       expect(projects.some((p) => p.id === orgProject.id)).toBe(true);
       expect(projects.some((p) => p.id === standaloneProject.id)).toBe(false);
+    });
+
+    it('should hide projects whose owning org is soft-deleted', async () => {
+      // Use a fresh org so the shared `orgProject` fixture stays
+      // available for the other tests in this block.
+      const freshOrg = await service.createOrganization(
+        { name: 'Soft-deleted Org', subdomain: `soft-deleted-${Date.now()}` },
+        user.id
+      );
+      createdOrgIds.push(freshOrg.id);
+      const freshProject = await db.projects.create({
+        name: 'Project of soon-deleted org',
+        created_by: user.id,
+        organization_id: freshOrg.id,
+      });
+      createdProjectIds.push(freshProject.id);
+
+      // Sanity: project is visible while the org is alive.
+      const before = await db.projects.getUserAccessibleProjects(user.id);
+      expect(before.some((p) => p.id === freshProject.id)).toBe(true);
+
+      await db.organizations.softDelete(freshOrg.id, user.id);
+
+      // After soft-delete: that org's project is hidden, but the
+      // null-org (self-hosted-shape) project stays visible — the
+      // org filter must not regress that path.
+      const after = await db.projects.getUserAccessibleProjects(user.id);
+      expect(after.some((p) => p.id === freshProject.id)).toBe(false);
+      expect(after.some((p) => p.id === standaloneProject.id)).toBe(true);
+    });
+  });
+
+  describe('soft-delete cascade', () => {
+    it('cancels the org subscription and revokes project-scoped api keys', async () => {
+      // Self-contained fixtures so this doesn't pollute the shared org.
+      const cascadeOrg = await service.createOrganization(
+        { name: 'Cascade Test Org', subdomain: `cascade-${Date.now()}` },
+        user.id
+      );
+      createdOrgIds.push(cascadeOrg.id);
+
+      const cascadeProject = await db.projects.create({
+        name: 'Cascade Project',
+        created_by: user.id,
+        organization_id: cascadeOrg.id,
+      });
+      createdProjectIds.push(cascadeProject.id);
+
+      // API key A: allowed_projects = [cascadeProject only] → should be revoked
+      const orgScopedKey = await db.apiKeys.create({
+        key_hash: `cascade_hash_${Date.now()}`,
+        key_prefix: 'bgs_test',
+        key_suffix: 'cscd1234',
+        name: 'Org-scoped key',
+        type: 'production',
+        permission_scope: 'full',
+        permissions: [],
+        allowed_projects: [cascadeProject.id],
+        created_by: user.id,
+      });
+      createdApiKeyIds.push(orgScopedKey.id);
+
+      // API key B: allowed_projects = NULL ("all projects" / global) →
+      // should NOT be revoked. Soft-deleting one org shouldn't kill a
+      // global key that still has reach to other tenants.
+      const globalKey = await db.apiKeys.create({
+        key_hash: `cascade_global_hash_${Date.now()}`,
+        key_prefix: 'bgs_test',
+        key_suffix: 'glbl5678',
+        name: 'Global key',
+        type: 'production',
+        permission_scope: 'full',
+        permissions: [],
+        allowed_projects: null,
+        created_by: user.id,
+      });
+      createdApiKeyIds.push(globalKey.id);
+
+      // API key C: allowed_projects = [] (empty array, effectively
+      // wildcard via checkProjectPermission's allow-all rule) → should
+      // be revoked. A known trigger gap can leave non-active keys
+      // here when their last project is hard-deleted, and we sweep
+      // them up opportunistically during the cascade since they have
+      // no org affinity and are an active security risk.
+      const orphanWildcardKey = await db.apiKeys.create({
+        key_hash: `cascade_orphan_hash_${Date.now()}`,
+        key_prefix: 'bgs_test',
+        key_suffix: 'orph9012',
+        name: 'Orphan wildcard key',
+        type: 'production',
+        permission_scope: 'full',
+        permissions: [],
+        allowed_projects: [],
+        created_by: user.id,
+      });
+      createdApiKeyIds.push(orphanWildcardKey.id);
+
+      // Sanity preconditions.
+      const subBefore = await db.subscriptions.findByOrganizationId(cascadeOrg.id);
+      expect(subBefore).not.toBeNull();
+      expect(subBefore?.status).not.toBe('canceled');
+      expect(orgScopedKey.status).toBe('active');
+      expect(globalKey.status).toBe('active');
+
+      const result = await service.deleteOrganization(cascadeOrg.id, user.id, false);
+      expect(result.mode).toBe('soft');
+
+      // 1. Org row marked deleted_at
+      const orgAfter = await db.organizations.findByIdIncludeDeleted(cascadeOrg.id);
+      expect(orgAfter?.deleted_at).not.toBeNull();
+
+      // 2. Subscription canceled — the invoice scheduler filters on
+      //    this status, so cancellation here stops billing without any
+      //    scheduler change.
+      const subAfter = await db.subscriptions.findByOrganizationId(cascadeOrg.id);
+      expect(subAfter?.status).toBe('canceled');
+
+      // 3. Org-scoped api key revoked → SDK requests using it stop
+      //    authenticating. Global key untouched → other tenants
+      //    keep working. Orphan empty-array wildcard key revoked
+      //    too — covers the trigger's "non-active status" gap.
+      const orgScopedAfter = await db.apiKeys.findById(orgScopedKey.id);
+      expect(orgScopedAfter?.status).toBe('revoked');
+
+      const globalAfter = await db.apiKeys.findById(globalKey.id);
+      expect(globalAfter?.status).toBe('active');
+
+      const orphanAfter = await db.apiKeys.findById(orphanWildcardKey.id);
+      expect(orphanAfter?.status).toBe('revoked');
     });
   });
 

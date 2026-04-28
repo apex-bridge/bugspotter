@@ -218,7 +218,7 @@ describe('POST /api/v1/auth/signup (route smoke)', () => {
     expect(body.success).toBe(true);
     expect(body.data.user.email).toBe('founder@acme.com');
     expect(body.data.organization.subdomain).toBe('acme-corp');
-    expect(body.data.project.name).toBe('My First Project');
+    expect(body.data.project.name).toBe('Default');
     expect(body.data.api_key).toMatch(/^bgs_/);
     expect(body.data.access_token).toBeTruthy();
   });
