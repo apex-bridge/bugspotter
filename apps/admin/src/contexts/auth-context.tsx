@@ -126,6 +126,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  /**
+   * Wipe all client-side auth state (memory + sessionStorage +
+   * legacy localStorage keys + api-client token accessor). Does NOT
+   * call the backend logout endpoint and does NOT navigate — those
+   * are layered on top by `logout()` and the broadcast listener for
+   * their own reasons (logout: invalidate the refresh cookie
+   * server-side; broadcast listener: avoid recursive logout-API
+   * calls when another tab already invalidated the cookie).
+   *
+   * Resets `setAuthTokenAccessors` synchronously so any request fired
+   * between this call and the next render's useLayoutEffect doesn't
+   * still send the old Authorization header — `applyToken` captures
+   * the token by value in a closure, so React state updates alone
+   * aren't enough to invalidate it.
+   */
+  const clearLocalSession = useCallback(() => {
+    setAccessToken(null);
+    setUser(null);
+    setAuthTokenAccessors(
+      () => null,
+      (t) => setAccessToken(t)
+    );
+    sessionStorage.removeItem('user');
+    sessionStorage.removeItem('refresh_token');
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user');
+  }, []);
+
   // Register token accessors with API client - must run synchronously before paint
   // Using useLayoutEffect to prevent race condition where API calls happen before accessors are updated
   useLayoutEffect(() => {
@@ -212,10 +241,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
 
           console.error('❌ Token refresh failed:', error);
-          // Clear session and redirect to login
-          sessionStorage.removeItem('user');
-          setUser(null);
-          navigate('/login');
+          // Clear session and redirect to login. Use the shared
+          // helper so legacy localStorage keys + the api-client
+          // accessor get wiped too, not just sessionStorage.user.
+          clearLocalSession();
+          navigate('/login', { replace: true });
         }
       }
 
@@ -231,26 +261,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       abortController.abort();
     };
-  }, [navigate, location.pathname, applyToken, loadUserPreferences]);
-
-  /**
-   * Wipe all client-side auth state (memory + sessionStorage +
-   * legacy localStorage keys). Does NOT call the backend logout
-   * endpoint and does NOT navigate — those are layered on top by
-   * `logout()` and the broadcast listener for their own reasons
-   * (logout: invalidate the refresh cookie server-side; broadcast
-   * listener: avoid recursive logout-API calls when another tab
-   * already invalidated the cookie).
-   */
-  const clearLocalSession = useCallback(() => {
-    setAccessToken(null);
-    setUser(null);
-    sessionStorage.removeItem('user');
-    sessionStorage.removeItem('refresh_token');
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('user');
-  }, []);
+  }, [navigate, location.pathname, applyToken, loadUserPreferences, clearLocalSession]);
 
   /**
    * Broadcast channel for cross-tab session-replacement signals.
@@ -362,7 +373,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     clearLocalSession();
-    navigate('/login');
+    navigate('/login', { replace: true });
   }, [clearLocalSession, navigate]);
 
   return (
