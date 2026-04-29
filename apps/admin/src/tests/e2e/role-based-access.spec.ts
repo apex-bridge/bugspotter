@@ -82,7 +82,6 @@ test.describe('Role-based page access', () => {
   let adminToken: string;
   let adminOrgId: string;
   let orgUserId: string;
-  let orgUserToken: string;
   let orgId: string;
   let noOrgUserId: string;
 
@@ -123,20 +122,34 @@ test.describe('Role-based page access', () => {
     expect(createNoOrgUser.ok()).toBeTruthy();
     noOrgUserId = (await createNoOrgUser.json()).data.id;
 
-    // 5. Login as orgUser to get their token
+    // 5. Admin creates orgUser's org (with orgUser as owner) BEFORE
+    //    orgUser logs in. Login was previously the first step, but
+    //    SaaS-mode now rejects login for users with zero non-deleted
+    //    org memberships (auth.ts `assertUserHasActiveOrgAccess`).
+    //    Bootstrapping has to seed the membership first.
+    //    `/api/v1/admin/organizations` accepts `owner_user_id`, so
+    //    admin can establish orgUser as the owner without orgUser
+    //    needing a session.
+    const orgTimestamp = Date.now();
+    const createOrg = await request.post(`${E2E_API_URL}/api/v1/admin/organizations`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: {
+        name: `RBAC Test Org ${orgTimestamp}`,
+        subdomain: `rbac-org-${orgTimestamp}`,
+        owner_user_id: orgUserId,
+      },
+    });
+    expect(createOrg.ok()).toBeTruthy();
+    orgId = (await createOrg.json()).data.id;
+
+    // 6. Verify orgUser can now log in — they have an org membership.
+    //    The token isn't needed downstream (admin already created the
+    //    org); this is a regression-check for the SaaS-mode login
+    //    gate that came in alongside this PR.
     const orgUserLogin = await request.post(`${E2E_API_URL}/api/v1/auth/login`, {
       data: { email: ORG_USER.email, password: ORG_USER.password },
     });
     expect(orgUserLogin.ok()).toBeTruthy();
-    orgUserToken = (await orgUserLogin.json()).data.access_token;
-
-    // 6. orgUser creates an org (becomes owner)
-    const createOrg = await request.post(`${E2E_API_URL}/api/v1/organizations`, {
-      headers: { Authorization: `Bearer ${orgUserToken}` },
-      data: { name: `RBAC Test Org ${Date.now()}`, subdomain: `rbac-org-${Date.now()}` },
-    });
-    expect(createOrg.ok()).toBeTruthy();
-    orgId = (await createOrg.json()).data.id;
 
     // 7. Admin creates an org too (so admin has org section visible)
     const createAdminOrg = await request.post(`${E2E_API_URL}/api/v1/organizations`, {
@@ -278,8 +291,22 @@ test.describe('Role-based page access', () => {
   });
 
   // ── Regular User without Org ────────────────────────────────────────
+  //
+  // These tests verified the dashboard-emptiness UX for a logged-in
+  // user with zero org memberships. That state is now unreachable in
+  // SaaS mode — `/api/v1/auth/login` rejects with 403 OrgAccessRevoked
+  // before issuing a token (see auth.ts `assertUserHasActiveOrgAccess`).
+  // The user-visible behavior is now an inline "access revoked" alert
+  // on the login form, not an empty dashboard, so the assertions below
+  // can never fire.
+  //
+  // Coverage of the new behavior lives in the backend integration
+  // tests (auth.test.ts SaaS describe block). If a frontend E2E for
+  // the access-revoked alert is wanted, that's a separate spec —
+  // these tests are deleted in spirit, just .skipped here for the
+  // git history trail.
 
-  test.describe('Regular user without org', () => {
+  test.describe.skip('Regular user without org', () => {
     test.beforeEach(async ({ page }) => {
       await loginAs(page, NO_ORG_USER.email, NO_ORG_USER.password, /\/projects/);
     });
