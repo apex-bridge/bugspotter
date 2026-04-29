@@ -15,6 +15,8 @@ import { DuplicateBadge } from './duplicate-badge';
 import { AIEnrichmentCard } from './ai-enrichment-card';
 import { SimilarBugsWidget } from './similar-bugs-widget';
 import { SuggestFixButton } from './suggest-fix-button';
+import { IntelligenceDisabledNotice } from './intelligence-disabled-notice';
+import { useIntelligenceStatus } from '../../hooks/use-intelligence-status';
 import { toast } from 'sonner';
 
 interface BugReportDetailProps {
@@ -26,6 +28,7 @@ export function BugReportDetail({ reportId, onClose }: BugReportDetailProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'replay' | 'details' | 'logs'>('replay');
   const [isDownloading, setIsDownloading] = useState(false);
+  const { isEnabled: intelligenceEnabled } = useIntelligenceStatus();
 
   const { data: report, isLoading } = useQuery({
     queryKey: ['bugReport', reportId],
@@ -204,10 +207,21 @@ export function BugReportDetail({ reportId, onClose }: BugReportDetailProps) {
 
           {activeTab === 'details' && (
             <div className="space-y-6">
-              {/* AI Enrichment */}
-              <AIEnrichmentCard bugReportId={report.id} />
-              <SimilarBugsWidget bugReportId={report.id} projectId={report.project_id} />
-              <SuggestFixButton bugReportId={report.id} projectId={report.project_id} />
+              {/* AI affordances are gated on per-org intelligence_enabled.
+                  Three explicit states:
+                    - true   → render the cards
+                    - false  → render a single notice (no broken UIs)
+                    - null   → status still loading; render nothing
+                                to avoid flashing the cards' own
+                                loading states unnecessarily */}
+              {intelligenceEnabled === true && (
+                <>
+                  <AIEnrichmentCard bugReportId={report.id} />
+                  <SimilarBugsWidget bugReportId={report.id} projectId={report.project_id} />
+                  <SuggestFixButton bugReportId={report.id} projectId={report.project_id} />
+                </>
+              )}
+              {intelligenceEnabled === false && <IntelligenceDisabledNotice />}
 
               {/* Description */}
               {report.description && (

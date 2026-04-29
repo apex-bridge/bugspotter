@@ -9,6 +9,8 @@ interface AIEnrichmentCardProps {
   bugReportId: string;
 }
 
+// The parent (bug-report-detail) only mounts this when the org's
+// intelligence_enabled is true, so no self-gating is needed here.
 export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
   const { t } = useTranslation();
 
