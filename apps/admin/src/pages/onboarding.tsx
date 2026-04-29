@@ -36,14 +36,15 @@ const CHROME_WEB_STORE_URL =
   'https://chromewebstore.google.com/detail/bugspotter/mpefobgognkodaknpalkaohkaniddmhj';
 
 /**
- * Backend API URL — the value the extension's Options page accepts
- * as "Instance URL". Read at module load from runtime config (set by
- * docker-entrypoint.sh) with a Vite env-var fallback for local dev.
- * Mirrors the precedence in `lib/api-client.ts` and
- * `contexts/deployment-context.tsx`. Kept inline here to avoid
- * adding a new export from those files for a single use site.
+ * Instance URL the extension's Options page accepts. Use the
+ * tenant's own origin (e.g. `https://acme.kz.bugspotter.io`) — the
+ * admin's nginx proxies `/api/*` to the backend, and the API key
+ * still identifies the tenant, so requests succeed same-origin.
+ * That's better UX than a generic `api.*` host the user has never
+ * seen before, since they're already viewing the dashboard at this
+ * URL.
  */
-const INSTANCE_URL = window.__RUNTIME_CONFIG__?.apiUrl || import.meta.env.VITE_API_URL || '';
+const INSTANCE_URL = typeof window === 'undefined' ? '' : window.location.origin;
 
 /**
  * Normalize a base64-encoded querystring value so `atob` accepts it.
@@ -500,7 +501,7 @@ BugSpotter.init({
           */}
           <div>
             <p className="text-sm font-medium mb-2">{t('onboarding.extension.steps.title')}</p>
-            <ol className="text-sm space-y-1 list-decimal list-inside text-muted-foreground">
+            <ol className="text-sm space-y-2 list-decimal list-outside ml-5 text-muted-foreground">
               <li>{t('onboarding.extension.steps.install')}</li>
               <li>{t('onboarding.extension.steps.openOptions')}</li>
               <li>{t('onboarding.extension.steps.pasteCredentials')}</li>
