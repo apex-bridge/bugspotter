@@ -82,6 +82,8 @@
     "checkingSystemStatus": "Жүйе күйі тексерілуде...",
     "welcomeBack": "Қайта келуіңізбен",
     "loginToContinue": "Өз аккаунтыңызға кіріңіз",
+    "accessRevokedTitle": "Қол жеткізу қайтарылды",
+    "accessRevokedMessage": "Бұл аккаунттың енді ешқандай ұйымға қолжетімдігі жоқ. Бұл қате деп ойласаңыз, қолдау қызметіне хабарласыңыз.",
     "emailAddress": "Email мекенжайы",
     "password": "Құпия сөз",
     "loginButton": "Кіру",
