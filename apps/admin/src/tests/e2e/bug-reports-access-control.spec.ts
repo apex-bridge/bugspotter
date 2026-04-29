@@ -130,28 +130,35 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     // least one active membership and pass the SaaS-mode login gate.
     // Admin is the org owner (creator above), so they have the
     // permission to add members on this endpoint.
-    if (regularUserId) {
-      const addMemberResponse = await request.post(
-        `${API_URL}/api/v1/organizations/${organizationId}/members`,
-        {
-          headers: { Authorization: `Bearer ${adminToken}` },
-          data: { user_id: regularUserId, role: 'member' },
-        }
-      );
-      if (!addMemberResponse.ok()) {
-        throw new Error(
-          `Failed to add regular user to test org: ${addMemberResponse.status()} ${await addMemberResponse.text()}`
-        );
+    // Fail loudly if regularUserId is somehow missing — a silent
+    // skip would produce a less informative 403 at the login step
+    // below. The user-creation block above already handles "user
+    // already exists" gracefully, but if we got past that without
+    // an id we want to know.
+    const addMemberResponse = await request.post(
+      `${API_URL}/api/v1/organizations/${organizationId}/members`,
+      {
+        headers: { Authorization: `Bearer ${adminToken}` },
+        data: { user_id: regularUserId, role: 'member' },
       }
+    );
+    if (!addMemberResponse.ok()) {
+      throw new Error(
+        `Failed to add regular user to test org: ${addMemberResponse.status()} ${await addMemberResponse.text()}`
+      );
     }
 
-    // Login as regular user to get token (they now have an org membership)
+    // Login as regular user to get token (they now have an org membership).
+    // Assert ok() so a regression in the SaaS login gate (or a
+    // failure in the member-add above) surfaces with a clear
+    // message instead of a TypeError when reading .data.access_token.
     const regularLoginResponse = await request.post(`${API_URL}/api/v1/auth/login`, {
       data: {
         email: TEST_USER.email,
         password: TEST_USER.password,
       },
     });
+    expect(regularLoginResponse.ok()).toBeTruthy();
     const regularData = await regularLoginResponse.json();
     regularUserToken = regularData.data.access_token;
 

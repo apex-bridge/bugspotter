@@ -130,11 +130,12 @@ test.describe('Role-based page access', () => {
     //    `/api/v1/admin/organizations` accepts `owner_user_id`, so
     //    admin can establish orgUser as the owner without orgUser
     //    needing a session.
+    const orgTimestamp = Date.now();
     const createOrg = await request.post(`${E2E_API_URL}/api/v1/admin/organizations`, {
       headers: { Authorization: `Bearer ${adminToken}` },
       data: {
-        name: `RBAC Test Org ${Date.now()}`,
-        subdomain: `rbac-org-${Date.now()}`,
+        name: `RBAC Test Org ${orgTimestamp}`,
+        subdomain: `rbac-org-${orgTimestamp}`,
         owner_user_id: orgUserId,
       },
     });
