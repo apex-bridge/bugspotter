@@ -140,11 +140,16 @@ x-common-env: &common-env
   INTELLIGENCE_API_URL: ${INTELLIGENCE_API_URL:-http://intelligence:8000}
   INTELLIGENCE_API_KEY: ${INTELLIGENCE_API_KEY:-}
   # LLM inference on CPU is slow: cold-start + 300-token mitigation with
-  # similar-bugs context regularly takes 60-180s on 3 CPU. The worker's
-  # client timeout MUST be >= the intelligence service's OLLAMA_TIMEOUT
-  # (see below) — otherwise the worker gives up while intelligence is
-  # still generating and the result gets discarded.
-  INTELLIGENCE_TIMEOUT_MS: ${INTELLIGENCE_TIMEOUT_MS:-240000}
+  # similar-bugs context regularly takes 60-180s on 3 CPU.
+  #
+  # This (worker → intelligence) timeout MUST be STRICTLY GREATER than
+  # the intelligence service's OLLAMA_TIMEOUT (see below), with a buffer
+  # for HTTP/network overhead. Default = OLLAMA_TIMEOUT (240s) + 60s
+  # buffer = 300s. If this fires first, the connection drops while the
+  # intelligence service is still mid-generation and the result is
+  # discarded — exactly the failure mode that caused the recent prod
+  # incident.
+  INTELLIGENCE_TIMEOUT_MS: ${INTELLIGENCE_TIMEOUT_MS:-300000}
   INTELLIGENCE_MAX_RETRIES: ${INTELLIGENCE_MAX_RETRIES:-3}
   INTELLIGENCE_BACKOFF_DELAY_MS: ${INTELLIGENCE_BACKOFF_DELAY_MS:-1000}
   INTELLIGENCE_CB_FAILURE_THRESHOLD: ${INTELLIGENCE_CB_FAILURE_THRESHOLD:-5}
@@ -886,6 +891,11 @@ services:
           memory: 10G
           # 3 of the VM's 4 cores. 2 cores capped generation at <8 tok/s
           # which pushed mitigation requests past the worker timeout.
+          # Trade-off: api+worker+ollama limits sum to >host cores; under
+          # concurrent load the cfs scheduler arbitrates (no crash, just
+          # contention). Acceptable here because Ollama is the single
+          # latency-critical hot path. Consider scaling the host or
+          # dropping this to 2.5 if api/worker show CPU pressure.
           cpus: '3.0'
         reservations:
           memory: 6G
@@ -918,9 +928,12 @@ services:
       LLM_PROVIDER: ${INTELLIGENCE_LLM_PROVIDER:-ollama}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.1:8b}
-      # MUST be >= the worker's INTELLIGENCE_TIMEOUT_MS (in seconds vs ms).
-      # If this is shorter, intelligence aborts the Ollama call while the
-      # worker is still waiting → the would-be result is discarded.
+      # MUST be STRICTLY LESS than the worker's INTELLIGENCE_TIMEOUT_MS
+      # (in seconds vs ms). If this is longer, the worker times out
+      # while we're still waiting on Ollama → the worker drops the
+      # connection → our generation result has nowhere to go and is
+      # discarded. With OLLAMA_TIMEOUT < INTELLIGENCE_TIMEOUT_MS we
+      # fast-fail with a 500 that the worker can log and retry instead.
       OLLAMA_TIMEOUT: ${INTELLIGENCE_OLLAMA_TIMEOUT:-240}
       # Claude (optional, if using Claude instead of Ollama)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
