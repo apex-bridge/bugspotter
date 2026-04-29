@@ -454,43 +454,36 @@ BugSpotter.init({
             for both an "Instance URL" (this) and an API Key (above
             in the apiKey card). Without showing the URL on this
             page, the user can't actually finish the extension setup.
-            Only render when INSTANCE_URL is non-empty (selfhosted
-            builds may not have VITE_API_URL set; rather than show an
-            empty box, omit the row).
           */}
-          {INSTANCE_URL && (
-            <div>
-              <p className="text-sm font-medium mb-2">
-                {t('onboarding.extension.instanceUrlLabel')}
-              </p>
-              <div className="flex items-center gap-2">
-                <code
-                  className="flex-1 font-mono text-sm bg-muted px-3 py-2 rounded border break-all"
-                  data-testid="onboarding-extension-instance-url"
-                >
-                  {INSTANCE_URL}
-                </code>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() =>
-                    copyToClipboard(
-                      'instanceUrl',
-                      INSTANCE_URL,
-                      setCopiedInstanceUrl,
-                      'onboarding.extension.instanceUrlCopied'
-                    )
-                  }
-                  data-testid="onboarding-extension-instance-url-copy"
-                >
-                  {copiedInstanceUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  <span className="ml-2">
-                    {t(copiedInstanceUrl ? 'common.copied' : 'common.copy')}
-                  </span>
-                </Button>
-              </div>
+          <div>
+            <p className="text-sm font-medium mb-2">{t('onboarding.extension.instanceUrlLabel')}</p>
+            <div className="flex items-center gap-2">
+              <code
+                className="flex-1 font-mono text-sm bg-muted px-3 py-2 rounded border break-all"
+                data-testid="onboarding-extension-instance-url"
+              >
+                {INSTANCE_URL}
+              </code>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  copyToClipboard(
+                    'instanceUrl',
+                    INSTANCE_URL,
+                    setCopiedInstanceUrl,
+                    'onboarding.extension.instanceUrlCopied'
+                  )
+                }
+                data-testid="onboarding-extension-instance-url-copy"
+              >
+                {copiedInstanceUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                <span className="ml-2">
+                  {t(copiedInstanceUrl ? 'common.copied' : 'common.copy')}
+                </span>
+              </Button>
             </div>
-          )}
+          </div>
 
           {/*
             Setup walkthrough. The extension's Options page surfaces
