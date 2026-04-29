@@ -139,9 +139,12 @@ x-common-env: &common-env
   INTELLIGENCE_ENABLED: ${INTELLIGENCE_ENABLED:-false}
   INTELLIGENCE_API_URL: ${INTELLIGENCE_API_URL:-http://intelligence:8000}
   INTELLIGENCE_API_KEY: ${INTELLIGENCE_API_KEY:-}
-  # LLM inference on CPU takes 30-60s. Default must exceed that to avoid
-  # circuit breaker tripping on every Suggest Fix / Smart Search call.
-  INTELLIGENCE_TIMEOUT_MS: ${INTELLIGENCE_TIMEOUT_MS:-120000}
+  # LLM inference on CPU is slow: cold-start + 300-token mitigation with
+  # similar-bugs context regularly takes 60-180s on 3 CPU. The worker's
+  # client timeout MUST be >= the intelligence service's OLLAMA_TIMEOUT
+  # (see below) — otherwise the worker gives up while intelligence is
+  # still generating and the result gets discarded.
+  INTELLIGENCE_TIMEOUT_MS: ${INTELLIGENCE_TIMEOUT_MS:-240000}
   INTELLIGENCE_MAX_RETRIES: ${INTELLIGENCE_MAX_RETRIES:-3}
   INTELLIGENCE_BACKOFF_DELAY_MS: ${INTELLIGENCE_BACKOFF_DELAY_MS:-1000}
   INTELLIGENCE_CB_FAILURE_THRESHOLD: ${INTELLIGENCE_CB_FAILURE_THRESHOLD:-5}
@@ -881,7 +884,9 @@ services:
           # llama3.1:8b requires ~4.8 GB. Set to 10G to leave headroom for
           # Ollama overhead, model loading, and concurrent requests.
           memory: 10G
-          cpus: '2.0'
+          # 3 of the VM's 4 cores. 2 cores capped generation at <8 tok/s
+          # which pushed mitigation requests past the worker timeout.
+          cpus: '3.0'
         reservations:
           memory: 6G
           cpus: '1.0'
@@ -913,16 +918,24 @@ services:
       LLM_PROVIDER: ${INTELLIGENCE_LLM_PROVIDER:-ollama}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_TIMEOUT: ${INTELLIGENCE_OLLAMA_TIMEOUT:-120}
+      # MUST be >= the worker's INTELLIGENCE_TIMEOUT_MS (in seconds vs ms).
+      # If this is shorter, intelligence aborts the Ollama call while the
+      # worker is still waiting → the would-be result is discarded.
+      OLLAMA_TIMEOUT: ${INTELLIGENCE_OLLAMA_TIMEOUT:-240}
       # Claude (optional, if using Claude instead of Ollama)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-20250514}
-      # Embedding
-      EMBEDDING_PROVIDER: local
-      EMBEDDING_MODEL: all-MiniLM-L6-v2
-      # Similarity
-      SIMILARITY_THRESHOLD: ${INTELLIGENCE_SIMILARITY_THRESHOLD:-0.75}
-      DUPLICATE_THRESHOLD: ${INTELLIGENCE_DUPLICATE_THRESHOLD:-0.90}
+      # Embedding. The intelligence service migrates the bug_embeddings
+      # column to vector(1024) on startup (see migrations.py). The active
+      # embedding model MUST produce 1024-dim vectors — i.e. BAAI/bge-m3.
+      # If you change the model, the schema dimension must follow or
+      # writes will silently fail (psycopg dimension mismatch).
+      EMBEDDING_PROVIDER: ${INTELLIGENCE_EMBEDDING_PROVIDER:-local}
+      EMBEDDING_MODEL: ${INTELLIGENCE_EMBEDDING_MODEL:-BAAI/bge-m3}
+      # Similarity. Defaults tuned for bge-m3 (see embedding-benchmark
+      # research: 0.68 optimal for "similar", 0.85 for "duplicate").
+      SIMILARITY_THRESHOLD: ${INTELLIGENCE_SIMILARITY_THRESHOLD:-0.68}
+      DUPLICATE_THRESHOLD: ${INTELLIGENCE_DUPLICATE_THRESHOLD:-0.85}
       MAX_SIMILAR_BUGS: ${INTELLIGENCE_MAX_SIMILAR_BUGS:-5}
       # Redis (shared with main app)
       REDIS_HOST: ${REDIS_HOST:-redis}
@@ -945,14 +958,20 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      # Bumped from 30s — the lazy-loaded BGE-M3 embedding model takes
+      # 30-60s to load into memory on first request. start_period tells
+      # Docker to ignore failed health checks during the warmup window.
+      start_period: 120s
     deploy:
       resources:
         limits:
-          memory: 2G
+          # 2G was insufficient: BGE-M3 weights (~2.3 GB) + activations
+          # OOM-killed the container on first model load, leaving the
+          # embedding pipeline silently broken.
+          memory: 4G
           cpus: '1.0'
         reservations:
-          memory: 512M
+          memory: 1G
           cpus: '0.25'
 
 # ============================================================================
