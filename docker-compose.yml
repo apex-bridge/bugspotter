@@ -984,7 +984,11 @@ services:
           memory: 4G
           cpus: '1.0'
         reservations:
-          memory: 1G
+          # BGE-M3 stays resident at ~2.3 GB once loaded. The reservation
+          # should match that idle footprint so a Swarm/Kubernetes
+          # scheduler picks a node that can actually host the steady-state
+          # process (k8s reads this as `requests.memory`).
+          memory: 2500M
           cpus: '0.25'
 
 # ============================================================================
