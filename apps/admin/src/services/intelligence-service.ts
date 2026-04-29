@@ -6,6 +6,7 @@
 import { api, API_ENDPOINTS } from '../lib/api-client';
 import type {
   IntelligenceSettings,
+  IntelligenceStatus,
   UpdateIntelligenceSettingsInput,
   ProvisionKeyResult,
   IntelligenceEnrichment,
@@ -21,6 +22,14 @@ import type {
 } from '../types/intelligence';
 
 export const intelligenceService = {
+  // Lightweight feature-flag read — readable by any org member,
+  // unlike `getSettings` which is admin-only. Used to gate intel
+  // affordances on bug-report-detail.
+  getStatus: async (orgId: string): Promise<IntelligenceStatus> => {
+    const response = await api.get(API_ENDPOINTS.intelligence.status(orgId));
+    return response.data.data;
+  },
+
   getSettings: async (orgId: string): Promise<IntelligenceSettings> => {
     const response = await api.get(API_ENDPOINTS.intelligence.settings(orgId));
     return response.data.data;

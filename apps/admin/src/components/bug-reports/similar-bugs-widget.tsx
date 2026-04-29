@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { GitCompareArrows } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { intelligenceService } from '../../services/intelligence-service';
+import { useIntelligenceStatus } from '../../hooks/use-intelligence-status';
 import { SuggestionFeedback } from './suggestion-feedback';
 
 interface SimilarBugsWidgetProps {
@@ -12,12 +13,18 @@ interface SimilarBugsWidgetProps {
 
 export function SimilarBugsWidget({ bugReportId, projectId }: SimilarBugsWidgetProps) {
   const { t } = useTranslation();
+  const { isEnabled: intelligenceEnabled } = useIntelligenceStatus();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['similar-bugs', projectId, bugReportId],
     queryFn: () => intelligenceService.getSimilarBugs(projectId, bugReportId),
     retry: false,
+    enabled: intelligenceEnabled === true,
   });
+
+  if (intelligenceEnabled !== true) {
+    return null;
+  }
 
   if (isLoading) {
     return (

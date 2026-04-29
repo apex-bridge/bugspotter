@@ -15,6 +15,8 @@ import { DuplicateBadge } from './duplicate-badge';
 import { AIEnrichmentCard } from './ai-enrichment-card';
 import { SimilarBugsWidget } from './similar-bugs-widget';
 import { SuggestFixButton } from './suggest-fix-button';
+import { IntelligenceDisabledNotice } from './intelligence-disabled-notice';
+import { useIntelligenceStatus } from '../../hooks/use-intelligence-status';
 import { toast } from 'sonner';
 
 interface BugReportDetailProps {
@@ -26,6 +28,7 @@ export function BugReportDetail({ reportId, onClose }: BugReportDetailProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'replay' | 'details' | 'logs'>('replay');
   const [isDownloading, setIsDownloading] = useState(false);
+  const { isEnabled: intelligenceEnabled } = useIntelligenceStatus();
 
   const { data: report, isLoading } = useQuery({
     queryKey: ['bugReport', reportId],
@@ -204,10 +207,18 @@ export function BugReportDetail({ reportId, onClose }: BugReportDetailProps) {
 
           {activeTab === 'details' && (
             <div className="space-y-6">
-              {/* AI Enrichment */}
-              <AIEnrichmentCard bugReportId={report.id} />
-              <SimilarBugsWidget bugReportId={report.id} projectId={report.project_id} />
-              <SuggestFixButton bugReportId={report.id} projectId={report.project_id} />
+              {/* AI Enrichment / similar / suggest-fix — gated on per-org
+                  intelligence_enabled. When disabled, render a single
+                  notice instead of three broken affordances. */}
+              {intelligenceEnabled === false ? (
+                <IntelligenceDisabledNotice />
+              ) : (
+                <>
+                  <AIEnrichmentCard bugReportId={report.id} />
+                  <SimilarBugsWidget bugReportId={report.id} projectId={report.project_id} />
+                  <SuggestFixButton bugReportId={report.id} projectId={report.project_id} />
+                </>
+              )}
 
               {/* Description */}
               {report.description && (

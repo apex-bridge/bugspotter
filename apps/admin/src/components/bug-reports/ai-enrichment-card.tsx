@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Brain, Tag } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { intelligenceService } from '../../services/intelligence-service';
+import { useIntelligenceStatus } from '../../hooks/use-intelligence-status';
 import { formatDate } from '../../utils/format';
 
 interface AIEnrichmentCardProps {
@@ -11,6 +12,7 @@ interface AIEnrichmentCardProps {
 
 export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
   const { t } = useTranslation();
+  const { isEnabled: intelligenceEnabled } = useIntelligenceStatus();
 
   const {
     data: enrichment,
@@ -20,7 +22,15 @@ export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
     queryKey: ['enrichment', bugReportId],
     queryFn: () => intelligenceService.getEnrichment(bugReportId),
     retry: false,
+    enabled: intelligenceEnabled === true,
   });
+
+  // Hide entirely when intelligence is disabled for the org. The
+  // bug-report-detail view shows a single explanatory notice
+  // instead of letting each widget fail open with a red error box.
+  if (intelligenceEnabled !== true) {
+    return null;
+  }
 
   if (isLoading) {
     return (
