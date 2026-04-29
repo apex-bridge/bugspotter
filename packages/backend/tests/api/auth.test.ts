@@ -347,6 +347,37 @@ describe('Auth Routes', () => {
       expect(body.success).toBe(true);
       expect(body.data.access_token).toBeDefined();
     });
+
+    it('rejects refresh when user has zero active org memberships', async () => {
+      // Insert a user (no org) and sign a refresh JWT for them
+      // directly. This bypasses the login gate so we can isolate the
+      // refresh path — login already proved it's gated; this test
+      // covers the scenario where a refresh cookie was issued before
+      // the org was soft-deleted and the user is now trying to use
+      // it.
+      const userId = (
+        await db.query<{ id: string }>(
+          `INSERT INTO users (id, email, password_hash, role) VALUES (gen_random_uuid(), $1, 'unused', 'user') RETURNING id`,
+          ['stale-refresh@example.com']
+        )
+      ).rows[0].id;
+
+      const refresh_token = saasServer.jwt.sign({
+        userId,
+        isPlatformAdmin: false,
+      });
+
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/auth/refresh',
+        payload: { refresh_token },
+      });
+
+      expect(response.statusCode).toBe(403);
+      const body = response.json();
+      expect(body.success).toBe(false);
+      expect(body.error).toBe('OrgAccessRevoked');
+    });
   });
 
   describe('POST /api/v1/auth/register — name field', () => {
