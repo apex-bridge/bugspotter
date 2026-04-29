@@ -3,7 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lightbulb } from 'lucide-react';
 import { Button } from '../ui/button';
 import { intelligenceService } from '../../services/intelligence-service';
-import { useIntelligenceStatus } from '../../hooks/use-intelligence-status';
 import { SuggestionFeedback } from './suggestion-feedback';
 
 interface SuggestFixButtonProps {
@@ -11,10 +10,11 @@ interface SuggestFixButtonProps {
   projectId: string;
 }
 
+// Mounted by bug-report-detail only when intelligence_enabled is
+// true, so no self-gating here.
 export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isEnabled: intelligenceEnabled } = useIntelligenceStatus();
 
   // Trigger async generation (POST → 202).
   // Defined before useQuery so refetchInterval can reference isSuccess.
@@ -32,7 +32,6 @@ export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonPro
     queryKey: ['mitigation', projectId, bugReportId],
     queryFn: () => intelligenceService.getMitigation(projectId, bugReportId),
     retry: false,
-    enabled: intelligenceEnabled === true,
     refetchInterval: (query) => {
       // Only poll while generation has been triggered and result hasn't arrived
       if (triggerMutation.isSuccess && !query.state.data) {
@@ -43,10 +42,6 @@ export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonPro
   });
 
   const isGenerating = triggerMutation.isPending || (triggerMutation.isSuccess && !result);
-
-  if (intelligenceEnabled !== true) {
-    return null;
-  }
 
   // Already have a cached result — show it immediately
   if (result) {

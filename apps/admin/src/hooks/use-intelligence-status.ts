@@ -14,14 +14,17 @@ export function useIntelligenceStatus(): {
   const { currentOrganization } = useOrganization();
   const orgId = currentOrganization?.id;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isSuccess } = useQuery({
     queryKey: ['intelligence-status', orgId],
     queryFn: () => intelligenceService.getStatus(orgId!),
     enabled: !!orgId,
     staleTime: 5 * 60 * 1000,
   });
 
-  if (!orgId || isLoading || !data) {
+  // `isSuccess` stays true across background refetches once we've
+  // had data, so callers don't flicker back to `isEnabled: null`
+  // while the cache revalidates.
+  if (!isSuccess) {
     return { isEnabled: null, isLoading: !!orgId && isLoading };
   }
   return { isEnabled: data.intelligence_enabled, isLoading: false };

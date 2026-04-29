@@ -207,18 +207,21 @@ export function BugReportDetail({ reportId, onClose }: BugReportDetailProps) {
 
           {activeTab === 'details' && (
             <div className="space-y-6">
-              {/* AI Enrichment / similar / suggest-fix — gated on per-org
-                  intelligence_enabled. When disabled, render a single
-                  notice instead of three broken affordances. */}
-              {intelligenceEnabled === false ? (
-                <IntelligenceDisabledNotice />
-              ) : (
+              {/* AI affordances are gated on per-org intelligence_enabled.
+                  Three explicit states:
+                    - true   → render the cards
+                    - false  → render a single notice (no broken UIs)
+                    - null   → status still loading; render nothing
+                                to avoid flashing the cards' own
+                                loading states unnecessarily */}
+              {intelligenceEnabled === true && (
                 <>
                   <AIEnrichmentCard bugReportId={report.id} />
                   <SimilarBugsWidget bugReportId={report.id} projectId={report.project_id} />
                   <SuggestFixButton bugReportId={report.id} projectId={report.project_id} />
                 </>
               )}
+              {intelligenceEnabled === false && <IntelligenceDisabledNotice />}
 
               {/* Description */}
               {report.description && (
