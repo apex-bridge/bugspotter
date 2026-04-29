@@ -10,6 +10,10 @@ export interface IntelligenceKeyStatus {
   key_hint: string | null;
 }
 
+export interface IntelligenceStatus {
+  intelligence_enabled: boolean;
+}
+
 export interface IntelligenceSettings {
   intelligence_enabled: boolean;
   intelligence_provider: string | null;

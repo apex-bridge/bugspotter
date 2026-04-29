@@ -2,13 +2,16 @@
  * Intelligence Settings Routes
  *
  * Admin routes for per-org intelligence configuration:
- *   GET    /api/v1/organizations/:id/intelligence/settings      — read settings + key status
- *   PATCH  /api/v1/organizations/:id/intelligence/settings      — update settings
- *   POST   /api/v1/organizations/:id/intelligence/key           — provision API key (paste)
- *   POST   /api/v1/organizations/:id/intelligence/key/generate  — generate + auto-provision key
- *   DELETE /api/v1/organizations/:id/intelligence/key           — revoke API key
+ *   GET    /api/v1/organizations/:id/intelligence/settings      — read settings + key status (admin)
+ *   PATCH  /api/v1/organizations/:id/intelligence/settings      — update settings (admin)
+ *   POST   /api/v1/organizations/:id/intelligence/key           — provision API key (admin)
+ *   POST   /api/v1/organizations/:id/intelligence/key/generate  — generate + auto-provision key (admin)
+ *   DELETE /api/v1/organizations/:id/intelligence/key           — revoke API key (admin)
  *
- * All routes require admin-level org membership.
+ * Member-readable status route:
+ *   GET    /api/v1/organizations/:id/intelligence/status        — { intelligence_enabled }
+ *     Used by the bug-report-detail UI to gate enrichment / similar-bugs
+ *     / suggest-fix affordances. Any org member may read.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -107,6 +110,53 @@ export function intelligenceSettingsRoutes(fastify: FastifyInstance, db: Databas
       action: 'manage',
     }),
   ];
+
+  // Any-member preHandler — used for the read-only `/status` endpoint
+  // so bug-detail UI can gate intelligence widgets without requiring
+  // admin role.
+  const memberPreHandler = [
+    guard(db, {
+      auth: 'user',
+      resource: { type: 'organization' },
+    }),
+  ];
+
+  // GET /api/v1/organizations/:id/intelligence/status
+  // Lightweight feature-flag read. Returns just `intelligence_enabled`
+  // so bug-detail consumers (any org member) can hide enrichment /
+  // similar-bugs / suggest-fix UI without the admin-only settings call.
+  fastify.get<{ Params: { id: string } }>(
+    '/api/v1/organizations/:id/intelligence/status',
+    {
+      preHandler: memberPreHandler,
+      schema: {
+        params: orgIdParams,
+        response: {
+          200: {
+            type: 'object',
+            required: ['success', 'data', 'timestamp'],
+            properties: {
+              success: { type: 'boolean', enum: [true] },
+              data: {
+                type: 'object',
+                required: ['intelligence_enabled'],
+                properties: {
+                  intelligence_enabled: { type: 'boolean' },
+                },
+              },
+              timestamp: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const settings = resolveOrgIntelligenceSettings(request.organization!.settings);
+      return sendSuccess(reply, {
+        intelligence_enabled: settings.intelligence_enabled === true,
+      });
+    }
+  );
 
   // GET /api/v1/organizations/:id/intelligence/settings
   fastify.get<{ Params: { id: string } }>(

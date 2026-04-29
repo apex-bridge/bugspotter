@@ -275,6 +275,7 @@ export const API_ENDPOINTS = {
 
   // Intelligence endpoints
   intelligence: {
+    status: (orgId: string) => `${API_VERSION}/organizations/${orgId}/intelligence/status`,
     settings: (orgId: string) => `${API_VERSION}/organizations/${orgId}/intelligence/settings`,
     provisionKey: (orgId: string) => `${API_VERSION}/organizations/${orgId}/intelligence/key`,
     generateKey: (orgId: string) =>

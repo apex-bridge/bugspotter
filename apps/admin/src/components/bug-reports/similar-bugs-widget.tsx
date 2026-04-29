@@ -10,6 +10,8 @@ interface SimilarBugsWidgetProps {
   projectId: string;
 }
 
+// Mounted by bug-report-detail only when intelligence_enabled is
+// true, so no self-gating here.
 export function SimilarBugsWidget({ bugReportId, projectId }: SimilarBugsWidgetProps) {
   const { t } = useTranslation();
 

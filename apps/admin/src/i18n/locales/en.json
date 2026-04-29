@@ -1701,6 +1701,12 @@
       "enrichmentFailed": "Enrichment failed",
       "selfServiceDisabled": "Self-service is disabled for this organization",
       "dedupDisabled": "Duplicate detection is disabled for this organization"
+    },
+    "disabled": {
+      "title": "AI bug intelligence is off",
+      "descriptionAdmin": "AI enrichment, similar-bug detection, and fix suggestions are disabled for this organization. Enable them in Intelligence Settings.",
+      "descriptionMember": "AI enrichment, similar-bug detection, and fix suggestions are disabled for this organization. Ask an organization admin to enable them.",
+      "enableLink": "Open Intelligence Settings"
     }
   },
   "orgRetention": {

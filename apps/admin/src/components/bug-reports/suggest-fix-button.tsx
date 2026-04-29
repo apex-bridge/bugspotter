@@ -10,6 +10,8 @@ interface SuggestFixButtonProps {
   projectId: string;
 }
 
+// Mounted by bug-report-detail only when intelligence_enabled is
+// true, so no self-gating here.
 export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
