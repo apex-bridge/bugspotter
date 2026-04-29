@@ -8,7 +8,12 @@ const getRuntimeConfig = () => {
   return window.__RUNTIME_CONFIG__ || {};
 };
 
-const API_BASE_URL = getRuntimeConfig().apiUrl || import.meta.env.VITE_API_URL || '';
+/**
+ * Backend API base URL. Read once at module load.
+ * Single source of truth — `deployment-context.tsx` and the onboarding
+ * page import this instead of duplicating the precedence chain.
+ */
+export const API_BASE_URL = getRuntimeConfig().apiUrl || import.meta.env.VITE_API_URL || '';
 
 // Re-export API constants for convenience
 export { API_VERSION, API_ENDPOINTS } from './api-constants';

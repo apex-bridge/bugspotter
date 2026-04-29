@@ -1753,7 +1753,16 @@
     "extension": {
       "title": "Try it instantly with the Chrome extension",
       "description": "No code, no install steps. The extension captures bugs from any website you're browsing — fastest way to see your dashboard come alive while you set up the SDK on your own app.",
-      "installButton": "Add to Chrome"
+      "installButton": "Add to Chrome",
+      "instanceUrlLabel": "Instance URL (paste into the extension)",
+      "instanceUrlCopied": "Instance URL copied",
+      "steps": {
+        "title": "Setup",
+        "install": "Click \"Add to Chrome\" above to install the extension.",
+        "openOptions": "Right-click the BugSpotter icon in the toolbar and choose \"Options\" (or pin it via the puzzle-piece menu first).",
+        "pasteCredentials": "Paste the Instance URL above and your API key from the previous card, then click Save.",
+        "browse": "Visit any website — bug reports go straight to your dashboard."
+      }
     },
     "install": {
       "title": "Install the SDK",
