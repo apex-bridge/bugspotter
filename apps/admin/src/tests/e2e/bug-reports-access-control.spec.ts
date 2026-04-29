@@ -89,16 +89,6 @@ test.describe('Bug Reports - Access Control & Filters', () => {
       regularUserId = userData.data.id;
     }
 
-    // Login as regular user to get token
-    const regularLoginResponse = await request.post(`${API_URL}/api/v1/auth/login`, {
-      data: {
-        email: TEST_USER.email,
-        password: TEST_USER.password,
-      },
-    });
-    const regularData = await regularLoginResponse.json();
-    regularUserToken = regularData.data.access_token;
-
     // Create a dedicated org for this spec's projects. We can't reuse
     // the admin's default E2E org because the trial plan caps at 2
     // projects and earlier specs in the suite (api-keys, audit-logs,
@@ -114,6 +104,11 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     // otherwise this spec leaves the admin with an extra membership
     // and later specs that pick `myOrgs[0]` could select the wrong
     // one.
+    //
+    // Creation order matters: org + member-add MUST happen before
+    // the regular user logs in. SaaS-mode `/auth/login` rejects with
+    // 403 OrgAccessRevoked when the user has zero non-deleted org
+    // memberships — see auth.ts `assertUserHasActiveOrgAccess`.
     const orgTimestamp = Date.now();
     const bugReportOrgResponse = await request.post(`${API_URL}/api/v1/organizations`, {
       headers: { Authorization: `Bearer ${adminToken}` },
@@ -130,6 +125,35 @@ test.describe('Bug Reports - Access Control & Filters', () => {
     }
     bugReportOrgId = (await bugReportOrgResponse.json()).data.id as string;
     const organizationId = bugReportOrgId;
+
+    // Add the regular user as a member of the org so they have at
+    // least one active membership and pass the SaaS-mode login gate.
+    // Admin is the org owner (creator above), so they have the
+    // permission to add members on this endpoint.
+    if (regularUserId) {
+      const addMemberResponse = await request.post(
+        `${API_URL}/api/v1/organizations/${organizationId}/members`,
+        {
+          headers: { Authorization: `Bearer ${adminToken}` },
+          data: { user_id: regularUserId, role: 'member' },
+        }
+      );
+      if (!addMemberResponse.ok()) {
+        throw new Error(
+          `Failed to add regular user to test org: ${addMemberResponse.status()} ${await addMemberResponse.text()}`
+        );
+      }
+    }
+
+    // Login as regular user to get token (they now have an org membership)
+    const regularLoginResponse = await request.post(`${API_URL}/api/v1/auth/login`, {
+      data: {
+        email: TEST_USER.email,
+        password: TEST_USER.password,
+      },
+    });
+    const regularData = await regularLoginResponse.json();
+    regularUserToken = regularData.data.access_token;
 
     // Create two projects
     const project1Response = await request.post(`${API_URL}/api/v1/projects`, {
