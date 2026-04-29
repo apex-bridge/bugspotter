@@ -36,6 +36,17 @@ const CHROME_WEB_STORE_URL =
   'https://chromewebstore.google.com/detail/bugspotter/mpefobgognkodaknpalkaohkaniddmhj';
 
 /**
+ * Instance URL the extension's Options page accepts. Use the
+ * tenant's own origin (e.g. `https://acme.kz.bugspotter.io`) — the
+ * admin's nginx proxies `/api/*` to the backend, and the API key
+ * still identifies the tenant, so requests succeed same-origin.
+ * That's better UX than a generic `api.*` host the user has never
+ * seen before, since they're already viewing the dashboard at this
+ * URL.
+ */
+const INSTANCE_URL = typeof window === 'undefined' ? '' : window.location.origin;
+
+/**
  * Normalize a base64-encoded querystring value so `atob` accepts it.
  *
  * `URLSearchParams` decodes `+` to a space, and if the producer used
@@ -171,6 +182,7 @@ export default function OnboardingPage() {
 
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
+  const [copiedInstanceUrl, setCopiedInstanceUrl] = useState(false);
   const [resending, setResending] = useState(false);
   // Keyed by a short field id (`'key'`, `'snippet'`) so a second
   // click on the same button cancels the pending "revert to Copy
@@ -418,7 +430,7 @@ BugSpotter.init({
           </CardTitle>
           <CardDescription>{t('onboarding.extension.description')}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           {/*
             Styled anchor (not Button-in-anchor) — the local Button
             component doesn't support `asChild` / Slot, and the
@@ -436,6 +448,59 @@ BugSpotter.init({
             <Chrome className="h-4 w-4" />
             <span className="ml-2">{t('onboarding.extension.installButton')}</span>
           </a>
+
+          {/*
+            Instance URL display — the extension's Options page asks
+            for both an "Instance URL" (this) and an API Key (above
+            in the apiKey card). Without showing the URL on this
+            page, the user can't actually finish the extension setup.
+          */}
+          <div>
+            <p className="text-sm font-medium mb-2">{t('onboarding.extension.instanceUrlLabel')}</p>
+            <div className="flex items-center gap-2">
+              <code
+                className="flex-1 font-mono text-sm bg-muted px-3 py-2 rounded border break-all"
+                data-testid="onboarding-extension-instance-url"
+              >
+                {INSTANCE_URL}
+              </code>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  copyToClipboard(
+                    'instanceUrl',
+                    INSTANCE_URL,
+                    setCopiedInstanceUrl,
+                    'onboarding.extension.instanceUrlCopied'
+                  )
+                }
+                data-testid="onboarding-extension-instance-url-copy"
+              >
+                {copiedInstanceUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                <span className="ml-2">
+                  {t(copiedInstanceUrl ? 'common.copied' : 'common.copy')}
+                </span>
+              </Button>
+            </div>
+          </div>
+
+          {/*
+            Setup walkthrough. The extension's Options page surfaces
+            two fields (Instance URL + API Key) — the steps below
+            point at both the URL above and the API key from the
+            previous card so a fresh tenant can finish wiring without
+            jumping back to docs.
+          */}
+          <div>
+            <p className="text-sm font-medium mb-2">{t('onboarding.extension.steps.title')}</p>
+            <ol className="text-sm space-y-2 list-decimal list-outside ml-5 text-muted-foreground">
+              <li>{t('onboarding.extension.steps.install')}</li>
+              <li>{t('onboarding.extension.steps.openOptions')}</li>
+              <li>{t('onboarding.extension.steps.pasteCredentials')}</li>
+              <li>{t('onboarding.extension.steps.browse')}</li>
+            </ol>
+          </div>
         </CardContent>
       </Card>
 

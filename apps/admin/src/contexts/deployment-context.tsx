@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { API_ENDPOINTS } from '../lib/api-constants';
+import { API_BASE_URL } from '../lib/api-client';
 
 interface DeploymentFeatures {
   multiTenancy: boolean;
@@ -22,19 +23,13 @@ const DEFAULT_CONFIG: DeploymentConfig = {
 
 const DeploymentContext = createContext<DeploymentConfig>(DEFAULT_CONFIG);
 
-function getApiBaseUrl(): string {
-  const runtime = window.__RUNTIME_CONFIG__;
-  return runtime?.apiUrl || import.meta.env.VITE_API_URL || '';
-}
-
 export function DeploymentProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<DeploymentConfig>(DEFAULT_CONFIG);
 
   useEffect(() => {
     const controller = new AbortController();
-    const baseUrl = getApiBaseUrl();
 
-    fetch(`${baseUrl}${API_ENDPOINTS.deployment()}`, { signal: controller.signal })
+    fetch(`${API_BASE_URL}${API_ENDPOINTS.deployment()}`, { signal: controller.signal })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (json?.data?.mode && json?.data?.features) {
