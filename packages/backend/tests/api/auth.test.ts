@@ -263,6 +263,123 @@ describe('Auth Routes', () => {
     });
   });
 
+  describe('POST /api/v1/auth/login — SaaS org-access revocation', () => {
+    // SaaS mode rejects login when a user authenticated successfully
+    // but has zero non-deleted org memberships. The point is to make
+    // a leaked password against a "deleted" tenant useless and to
+    // give the user a clear "access revoked" message instead of an
+    // empty dashboard. Platform admins are exempt; selfhosted mode
+    // is exempt (saas schema is empty there by design).
+    let saasServer: FastifyInstance;
+
+    beforeAll(async () => {
+      const originalMode = process.env.DEPLOYMENT_MODE;
+      process.env.DEPLOYMENT_MODE = 'saas';
+      const { resetDeploymentConfig } = await import('../../src/saas/config.js');
+      resetDeploymentConfig();
+      vi.resetModules();
+
+      const { createServer: freshCreateServer } = await import('../../src/api/server.js');
+      saasServer = await freshCreateServer({
+        db,
+        storage: createMockStorage(),
+        pluginRegistry: createMockPluginRegistry(),
+      });
+      await saasServer.ready();
+
+      // Restore env var — the already-created server has its config baked in.
+      process.env.DEPLOYMENT_MODE = originalMode;
+      resetDeploymentConfig();
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      await saasServer.close();
+    });
+
+    beforeEach(async () => {
+      // Wipe in dependency order so FK constraints don't bite.
+      await db.query('DELETE FROM saas.organization_members');
+      await db.query('DELETE FROM saas.subscriptions');
+      await db.query('DELETE FROM saas.organizations');
+      await db.query('DELETE FROM users');
+    });
+
+    it('rejects login when user has zero active org memberships', async () => {
+      // Insert a user directly so we don't depend on the register
+      // route being enabled in saas mode. password_hash is bcrypt of
+      // 'password123' generated on the fly.
+      const bcrypt = (await import('bcrypt')).default;
+      const passwordHash = await bcrypt.hash('password123', 10);
+      await db.query(
+        `INSERT INTO users (id, email, password_hash, role) VALUES (gen_random_uuid(), $1, $2, 'user')`,
+        ['noorg@example.com', passwordHash]
+      );
+
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: 'noorg@example.com', password: 'password123' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      const body = response.json();
+      expect(body.success).toBe(false);
+      expect(body.error).toBe('OrgAccessRevoked');
+    });
+
+    it('allows login for platform admins regardless of org memberships', async () => {
+      const bcrypt = (await import('bcrypt')).default;
+      const passwordHash = await bcrypt.hash('password123', 10);
+      await db.query(
+        `INSERT INTO users (id, email, password_hash, role) VALUES (gen_random_uuid(), $1, $2, 'admin')`,
+        ['admin@example.com', passwordHash]
+      );
+
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: 'admin@example.com', password: 'password123' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.success).toBe(true);
+      expect(body.data.access_token).toBeDefined();
+    });
+
+    it('rejects refresh when user has zero active org memberships', async () => {
+      // Insert a user (no org) and sign a refresh JWT for them
+      // directly. This bypasses the login gate so we can isolate the
+      // refresh path — login already proved it's gated; this test
+      // covers the scenario where a refresh cookie was issued before
+      // the org was soft-deleted and the user is now trying to use
+      // it.
+      const userId = (
+        await db.query<{ id: string }>(
+          `INSERT INTO users (id, email, password_hash, role) VALUES (gen_random_uuid(), $1, 'unused', 'user') RETURNING id`,
+          ['stale-refresh@example.com']
+        )
+      ).rows[0].id;
+
+      const refresh_token = saasServer.jwt.sign({
+        userId,
+        isPlatformAdmin: false,
+      });
+
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/auth/refresh',
+        payload: { refresh_token },
+      });
+
+      expect(response.statusCode).toBe(403);
+      const body = response.json();
+      expect(body.success).toBe(false);
+      expect(body.error).toBe('OrgAccessRevoked');
+    });
+  });
+
   describe('POST /api/v1/auth/register — name field', () => {
     beforeEach(async () => {
       await db.query('DELETE FROM users');

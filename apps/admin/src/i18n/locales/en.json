@@ -82,6 +82,8 @@
     "checkingSystemStatus": "Checking system status...",
     "welcomeBack": "Welcome back",
     "loginToContinue": "Login to continue to your account",
+    "accessRevokedTitle": "Access revoked",
+    "accessRevokedMessage": "This account no longer has access to any organization. Contact support if you believe this is an error.",
     "emailAddress": "Email Address",
     "password": "Password",
     "loginButton": "Login",

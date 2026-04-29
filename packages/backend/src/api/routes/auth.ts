@@ -32,6 +32,37 @@ import {
 import { sendAccountLocked, sendUnauthorizedWithAttempts } from '../middleware/auth/responses.js';
 import type { User } from '../../db/types.js';
 import { isPlatformAdmin } from '../middleware/auth.js';
+import { getDeploymentConfig } from '../../saas/config.js';
+
+/**
+ * SaaS-mode access gate: reject the caller if the user has zero
+ * non-deleted org memberships. Used at both login and refresh time
+ * so a leaked refresh cookie against a "deleted" tenant doesn't
+ * keep minting access tokens. Selfhosted is exempt (saas schema
+ * is empty there by design); platform admins are exempt (they may
+ * legitimately have no membership rows).
+ *
+ * Throws `AppError(403, 'OrgAccessRevoked')` when access is denied.
+ * Callers that re-wrap thrown errors should let this 403 pass
+ * through with its original status — see the refresh handler's
+ * try/catch for the pattern.
+ */
+async function assertUserHasActiveOrgAccess(db: DatabaseClient, user: User): Promise<void> {
+  if (!getDeploymentConfig().features.multiTenancy) {
+    return;
+  }
+  if (isPlatformAdmin(user)) {
+    return;
+  }
+  const activeOrgs = await db.organizations.findByUserId(user.id);
+  if (activeOrgs.length === 0) {
+    throw new AppError(
+      'Access has been revoked. Contact support if you believe this is an error.',
+      403,
+      'OrgAccessRevoked'
+    );
+  }
+}
 
 interface LoginBody {
   email: string;
@@ -250,6 +281,9 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       // Login successful - clear any failed attempts
       await clearFailedAttempts(email);
 
+      // SaaS-mode access gate — see assertUserHasActiveOrgAccess.
+      await assertUserHasActiveOrgAccess(db, user);
+
       // Generate tokens
       const tokens = generateAuthTokens(fastify, user);
 
@@ -295,34 +329,43 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         throw new AppError('Refresh token not provided', 401, 'Unauthorized');
       }
 
+      // Token-verify + user-lookup live inside the try/catch so any
+      // failure collapses to a generic 401 (don't leak whether the
+      // token was malformed vs. signed with the wrong key vs.
+      // belonged to a now-missing user). The org-access check below
+      // runs OUTSIDE the catch so the 403 OrgAccessRevoked surfaces
+      // with its own status — without that, the catch would rewrite
+      // it to 401 and the frontend's tailored "access revoked"
+      // message wouldn't fire on refresh.
+      let user: User;
       try {
-        // Verify refresh token
         const decoded = fastify.jwt.verify(refresh_token);
-
-        // Validate payload structure
         validateJwtPayload(decoded);
-
-        // Verify user still exists
-        const user = await findOrThrow(() => db.users.findById(decoded.userId), 'User');
-
-        // Generate new tokens
-        const tokens = generateAuthTokens(fastify, user);
-
-        // Set new refresh token in httpOnly cookie
-        reply.setCookie(
-          'refresh_token',
-          tokens.refresh_token,
-          buildRefreshCookieOptions(tokens.refresh_expires_in)
-        );
-
-        return sendSuccess(reply, {
-          access_token: tokens.access_token,
-          expires_in: tokens.expires_in,
-          token_type: tokens.token_type,
-        });
+        user = await findOrThrow(() => db.users.findById(decoded.userId), 'User');
       } catch {
         throw new AppError('Invalid or expired refresh token', 401, 'Unauthorized');
       }
+
+      // SaaS-mode access gate — applies on refresh too, so a leaked
+      // refresh cookie against a "deleted" tenant stops minting access
+      // tokens within at most one access-token TTL of the soft-delete.
+      await assertUserHasActiveOrgAccess(db, user);
+
+      // Generate new tokens
+      const tokens = generateAuthTokens(fastify, user);
+
+      // Set new refresh token in httpOnly cookie
+      reply.setCookie(
+        'refresh_token',
+        tokens.refresh_token,
+        buildRefreshCookieOptions(tokens.refresh_expires_in)
+      );
+
+      return sendSuccess(reply, {
+        access_token: tokens.access_token,
+        expires_in: tokens.expires_in,
+        token_type: tokens.token_type,
+      });
     }
   );
 
