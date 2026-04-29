@@ -36,6 +36,16 @@ const CHROME_WEB_STORE_URL =
   'https://chromewebstore.google.com/detail/bugspotter/mpefobgognkodaknpalkaohkaniddmhj';
 
 /**
+ * Backend API URL — the value the extension's Options page accepts
+ * as "Instance URL". Read at module load from runtime config (set by
+ * docker-entrypoint.sh) with a Vite env-var fallback for local dev.
+ * Mirrors the precedence in `lib/api-client.ts` and
+ * `contexts/deployment-context.tsx`. Kept inline here to avoid
+ * adding a new export from those files for a single use site.
+ */
+const INSTANCE_URL = window.__RUNTIME_CONFIG__?.apiUrl || import.meta.env.VITE_API_URL || '';
+
+/**
  * Normalize a base64-encoded querystring value so `atob` accepts it.
  *
  * `URLSearchParams` decodes `+` to a space, and if the producer used
@@ -171,6 +181,7 @@ export default function OnboardingPage() {
 
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
+  const [copiedInstanceUrl, setCopiedInstanceUrl] = useState(false);
   const [resending, setResending] = useState(false);
   // Keyed by a short field id (`'key'`, `'snippet'`) so a second
   // click on the same button cancels the pending "revert to Copy
@@ -418,7 +429,7 @@ BugSpotter.init({
           </CardTitle>
           <CardDescription>{t('onboarding.extension.description')}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           {/*
             Styled anchor (not Button-in-anchor) — the local Button
             component doesn't support `asChild` / Slot, and the
@@ -436,6 +447,66 @@ BugSpotter.init({
             <Chrome className="h-4 w-4" />
             <span className="ml-2">{t('onboarding.extension.installButton')}</span>
           </a>
+
+          {/*
+            Instance URL display — the extension's Options page asks
+            for both an "Instance URL" (this) and an API Key (above
+            in the apiKey card). Without showing the URL on this
+            page, the user can't actually finish the extension setup.
+            Only render when INSTANCE_URL is non-empty (selfhosted
+            builds may not have VITE_API_URL set; rather than show an
+            empty box, omit the row).
+          */}
+          {INSTANCE_URL && (
+            <div>
+              <p className="text-sm font-medium mb-2">
+                {t('onboarding.extension.instanceUrlLabel')}
+              </p>
+              <div className="flex items-center gap-2">
+                <code
+                  className="flex-1 font-mono text-sm bg-muted px-3 py-2 rounded border break-all"
+                  data-testid="onboarding-extension-instance-url"
+                >
+                  {INSTANCE_URL}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    copyToClipboard(
+                      'instanceUrl',
+                      INSTANCE_URL,
+                      setCopiedInstanceUrl,
+                      'onboarding.extension.instanceUrlCopied'
+                    )
+                  }
+                  data-testid="onboarding-extension-instance-url-copy"
+                >
+                  {copiedInstanceUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  <span className="ml-2">
+                    {t(copiedInstanceUrl ? 'common.copied' : 'common.copy')}
+                  </span>
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/*
+            Setup walkthrough. The extension's Options page surfaces
+            two fields (Instance URL + API Key) — the steps below
+            point at both the URL above and the API key from the
+            previous card so a fresh tenant can finish wiring without
+            jumping back to docs.
+          */}
+          <div>
+            <p className="text-sm font-medium mb-2">{t('onboarding.extension.steps.title')}</p>
+            <ol className="text-sm space-y-1 list-decimal list-inside text-muted-foreground">
+              <li>{t('onboarding.extension.steps.install')}</li>
+              <li>{t('onboarding.extension.steps.openOptions')}</li>
+              <li>{t('onboarding.extension.steps.pasteCredentials')}</li>
+              <li>{t('onboarding.extension.steps.browse')}</li>
+            </ol>
+          </div>
         </CardContent>
       </Card>
 
