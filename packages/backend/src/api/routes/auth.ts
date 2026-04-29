@@ -32,6 +32,7 @@ import {
 import { sendAccountLocked, sendUnauthorizedWithAttempts } from '../middleware/auth/responses.js';
 import type { User } from '../../db/types.js';
 import { isPlatformAdmin } from '../middleware/auth.js';
+import { getDeploymentConfig } from '../../saas/config.js';
 
 interface LoginBody {
   email: string;
@@ -249,6 +250,26 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
 
       // Login successful - clear any failed attempts
       await clearFailedAttempts(email);
+
+      // SaaS-mode: reject login if the user has no active org
+      // memberships. They authenticated, but every org they belong
+      // to has been soft-deleted, so they have nothing usable
+      // post-login. Letting them in would land them on an empty
+      // dashboard and leave a leaked password useful against a
+      // "deleted" tenant. Platform admins are exempt — they may
+      // legitimately have no membership rows. Selfhosted mode is
+      // exempt — the saas schema is empty there by design, so this
+      // check would deny everyone.
+      if (getDeploymentConfig().features.multiTenancy && !isPlatformAdmin(user)) {
+        const activeOrgs = await db.organizations.findByUserId(user.id);
+        if (activeOrgs.length === 0) {
+          throw new AppError(
+            'Access has been revoked. Contact support if you believe this is an error.',
+            403,
+            'OrgAccessRevoked'
+          );
+        }
+      }
 
       // Generate tokens
       const tokens = generateAuthTokens(fastify, user);
