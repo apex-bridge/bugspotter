@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import integrationService from '../services/integration-service';
-import { handleApiError } from '../lib/api-client';
+import { handleApiError, getApiErrorStatus } from '../lib/api-client';
 import { isValidIntegration, type IntegrationResponse } from '../types/integration';
 import { isJiraConfig, validateJiraConfig } from '../utils/type-guards';
 
@@ -170,17 +170,9 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
         return { ok: true };
       } catch (error: unknown) {
         const errorMessage = handleApiError(error);
-        // Pull HTTP status off axios errors when present so callers
-        // can map 401/403/404 to friendly hints without re-parsing.
-        let statusCode: number | undefined;
-        if (
-          error &&
-          typeof error === 'object' &&
-          'response' in error &&
-          (error as { response?: { status?: number } }).response?.status !== undefined
-        ) {
-          statusCode = (error as { response: { status: number } }).response.status;
-        }
+        // Pull HTTP status off axios errors so callers can map
+        // 401/403/404 to friendly hints without re-parsing.
+        const statusCode = getApiErrorStatus(error);
         toast.error(`Connection test failed: ${errorMessage}`);
         return { ok: false, error: errorMessage, statusCode };
       }

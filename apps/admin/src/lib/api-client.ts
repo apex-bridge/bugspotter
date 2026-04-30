@@ -150,3 +150,14 @@ export const handleApiError = (error: unknown): string => {
   }
   return 'An unexpected error occurred';
 };
+
+/**
+ * Extract the HTTP status code from an unknown thrown value, if any.
+ * Returns `undefined` for non-axios errors (network errors, sync
+ * exceptions, request-cancellation, etc.). Callers use this to
+ * branch on 401 / 403 / 404 etc. without re-implementing the
+ * defensive type-narrowing every time.
+ */
+export const getApiErrorStatus = (error: unknown): number | undefined => {
+  return axios.isAxiosError(error) ? error.response?.status : undefined;
+};
