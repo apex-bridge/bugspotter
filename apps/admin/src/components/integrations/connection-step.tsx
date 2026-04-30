@@ -40,8 +40,20 @@ export function ConnectionStep({
   // a user looking away doesn't miss the toast.
   const [test, setTest] = useState<TestStatus>({ state: 'idle' });
 
-  // Validate config structure before accessing properties
+  // Validate config structure before accessing properties.
+  // useIntegrationConfig initializes `localConfig` to {} and only
+  // populates the Jira default shape inside a useEffect, so the
+  // first render after the parent unblocks `isLoading` lands here
+  // with empty {}. Without this fast path, the user would see a
+  // brief flash of the red "Invalid configuration structure" alert
+  // every time the page mounts. Treat empty-object as transient
+  // loading and render nothing — the parent already shows its own
+  // loading state, and the second render (post-effect) will match
+  // the type guard.
   if (!isJiraConfig(localConfig)) {
+    if (Object.keys(localConfig).length === 0) {
+      return null;
+    }
     return (
       <div className="border p-4 rounded text-sm text-red-600" role="alert">
         {t('integrationConfig.invalidConfigStructure')}
