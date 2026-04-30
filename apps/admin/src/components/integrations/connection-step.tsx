@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Trans } from 'react-i18next';
 import { CheckCircle2, AlertTriangle, ExternalLink, Loader2 } from 'lucide-react';
@@ -52,6 +52,20 @@ export function ConnectionStep({
   // After validation, we can safely access JiraConfig properties
   const config = localConfig as JiraConfig;
 
+  // Single helper for "user edited a field" flow:
+  //   1. apply the patch via setLocalConfig
+  //   2. invalidate any previous test result so a stale green check
+  //      can't lie about credentials the user just changed
+  // Functional setTest avoids re-creating this callback when test
+  // state changes — the dep array stays stable.
+  const handleConfigChange = useCallback(
+    (patch: (prev: Record<string, unknown>) => Record<string, unknown>) => {
+      setLocalConfig(patch);
+      setTest((prev) => (prev.state === 'idle' ? prev : { state: 'idle' }));
+    },
+    [setLocalConfig]
+  );
+
   const handleTest = async () => {
     setTest({ state: 'testing' });
     const result = await onTestConnection();
@@ -77,14 +91,7 @@ export function ConnectionStep({
         id="instance-url"
         type="url"
         value={config.instanceUrl ?? ''}
-        onChange={(e) => {
-          setLocalConfig({ ...localConfig, instanceUrl: e.target.value });
-          // Any edit invalidates the previous test result so the green
-          // badge can't lie about credentials the user just changed.
-          if (test.state !== 'idle') {
-            setTest({ state: 'idle' });
-          }
-        }}
+        onChange={(e) => handleConfigChange((prev) => ({ ...prev, instanceUrl: e.target.value }))}
         className="w-full border p-2 rounded mt-1"
         placeholder={t('integrationConfig.instanceUrlPlaceholder')}
       />
@@ -95,18 +102,15 @@ export function ConnectionStep({
           id="authentication-type"
           label={t('integrationConfig.authentication')}
           value={config.authentication?.type ?? 'basic'}
-          onChange={(e) => {
-            setLocalConfig({
-              ...localConfig,
+          onChange={(e) =>
+            handleConfigChange((prev) => ({
+              ...prev,
               authentication: {
-                ...(config.authentication || {}),
+                ...(prev as JiraConfig).authentication,
                 type: e.target.value as 'basic' | 'oauth2' | 'pat',
               },
-            });
-            if (test.state !== 'idle') {
-              setTest({ state: 'idle' });
-            }
-          }}
+            }))
+          }
         >
           <option value="basic">{t('integrationConfig.basicAuth')}</option>
           <option value="oauth2">{t('integrationConfig.oauth2')}</option>
@@ -124,18 +128,15 @@ export function ConnectionStep({
             id="email-input"
             type="email"
             value={config.authentication?.email ?? ''}
-            onChange={(e) => {
-              setLocalConfig({
-                ...localConfig,
+            onChange={(e) =>
+              handleConfigChange((prev) => ({
+                ...prev,
                 authentication: {
-                  ...(config.authentication || { type: 'basic' }),
+                  ...(prev as JiraConfig).authentication,
                   email: e.target.value,
                 },
-              });
-              if (test.state !== 'idle') {
-                setTest({ state: 'idle' });
-              }
-            }}
+              }))
+            }
             className="w-full border p-2 rounded mt-1"
             placeholder={t('integrationConfig.emailPlaceholder')}
           />
@@ -147,18 +148,15 @@ export function ConnectionStep({
             id="api-token-input"
             type="password"
             value={config.authentication?.apiToken ?? ''}
-            onChange={(e) => {
-              setLocalConfig({
-                ...localConfig,
+            onChange={(e) =>
+              handleConfigChange((prev) => ({
+                ...prev,
                 authentication: {
-                  ...(config.authentication || { type: 'basic' }),
+                  ...(prev as JiraConfig).authentication,
                   apiToken: e.target.value,
                 },
-              });
-              if (test.state !== 'idle') {
-                setTest({ state: 'idle' });
-              }
-            }}
+              }))
+            }
             className="w-full border p-2 rounded mt-1"
             placeholder={t('integrationConfig.apiTokenPlaceholder')}
           />
@@ -193,18 +191,15 @@ export function ConnectionStep({
             id="access-token-input"
             type="password"
             value={config.authentication?.accessToken ?? ''}
-            onChange={(e) => {
-              setLocalConfig({
-                ...localConfig,
+            onChange={(e) =>
+              handleConfigChange((prev) => ({
+                ...prev,
                 authentication: {
-                  ...(config.authentication || { type: 'oauth2' }),
+                  ...(prev as JiraConfig).authentication,
                   accessToken: e.target.value,
                 },
-              });
-              if (test.state !== 'idle') {
-                setTest({ state: 'idle' });
-              }
-            }}
+              }))
+            }
             className="w-full border p-2 rounded mt-1"
             placeholder={
               config.authentication?.type === 'pat'
@@ -225,15 +220,9 @@ export function ConnectionStep({
             id="project-key-input"
             type="text"
             value={config.projectKey ?? ''}
-            onChange={(e) => {
-              setLocalConfig({
-                ...localConfig,
-                projectKey: e.target.value,
-              });
-              if (test.state !== 'idle') {
-                setTest({ state: 'idle' });
-              }
-            }}
+            onChange={(e) =>
+              handleConfigChange((prev) => ({ ...prev, projectKey: e.target.value }))
+            }
             className="w-full border p-2 rounded mt-1"
             placeholder={t('integrationConfig.projectKeyPlaceholder')}
           />
