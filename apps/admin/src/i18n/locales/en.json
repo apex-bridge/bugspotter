@@ -418,6 +418,7 @@
     "testConnection": "Test Connection",
     "testingConnection": "Testing…",
     "testSuccess": "Connection successful — credentials are valid.",
+    "testFailedToast": "Connection test failed: {{error}}",
     "testHint": "Tip: run \"Test Connection\" before continuing to confirm your credentials work.",
     "apiTokenHelp": "Don't have one yet? <a>Create an Atlassian API token<icon /></a> and paste it above.",
     "invalidConfigStructure": "Invalid configuration structure. Please ensure all required fields are present.",

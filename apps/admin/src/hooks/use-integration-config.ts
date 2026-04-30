@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import integrationService from '../services/integration-service';
 import { handleApiError, getApiErrorStatus } from '../lib/api-client';
@@ -53,6 +54,7 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
   onSaveSuccess,
 }: UseIntegrationConfigOptions): UseIntegrationConfigReturn<T> {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const [localConfig, setLocalConfig] = useState<T>({} as T);
   const [description, setDescription] = useState<string>('');
 
@@ -166,18 +168,18 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
 
       try {
         await integrationService.testConnection(baseType, localConfig as Record<string, unknown>);
-        toast.success('Connection test passed! Configuration is valid.');
+        toast.success(t('integrationConfig.testSuccess'));
         return { ok: true };
       } catch (error: unknown) {
         const errorMessage = handleApiError(error);
         // Pull HTTP status off axios errors so callers can map
         // 401/403/404 to friendly hints without re-parsing.
         const statusCode = getApiErrorStatus(error);
-        toast.error(`Connection test failed: ${errorMessage}`);
+        toast.error(t('integrationConfig.testFailedToast', { error: errorMessage }));
         return { ok: false, error: errorMessage, statusCode };
       }
     },
-    [localConfig, validateConfig]
+    [localConfig, validateConfig, t]
   );
 
   return {
