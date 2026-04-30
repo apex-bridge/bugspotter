@@ -1681,7 +1681,10 @@
       "suggestion": "AI Suggestion",
       "basedOnSimilar": "Based on similar resolved bugs",
       "loading": "Generating suggestion...",
-      "error": "Failed to generate suggestion"
+      "error": "Failed to generate suggestion",
+      "timeoutTitle": "Suggestion is taking longer than expected",
+      "timeoutDescription": "The AI service may be busy or this bug needs more time to analyze. You can try again in a moment.",
+      "retry": "Try again"
     },
     "search": {
       "placeholder": "Search bugs with AI...",
