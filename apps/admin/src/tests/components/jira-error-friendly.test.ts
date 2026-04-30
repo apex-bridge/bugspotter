@@ -67,6 +67,14 @@ describe('mapJiraError', () => {
     expect(r.raw).toBe(raw);
   });
 
+  it('prefers statusCode over conflicting message text', () => {
+    // 403 with a body that says "unauthorized" must NOT downgrade to 401 —
+    // the HTTP status is authoritative when present.
+    const r = mapJiraError('User is unauthorized to access this resource', 403);
+    expect(r.titleKey).toBe('integrationConfig.jiraErrors.forbidden.title');
+    expect(r.docHref).toBeUndefined();
+  });
+
   it('handles empty / null raw message gracefully', () => {
     expect(() => mapJiraError('', 500)).not.toThrow();
     // @ts-expect-error testing defensive handling

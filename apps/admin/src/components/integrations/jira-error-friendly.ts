@@ -38,9 +38,54 @@ export function mapJiraError(rawMessage: string, statusCode?: number): FriendlyJ
   const m = safe.toLowerCase();
   const raw = safe;
 
-  // Network-level — DNS/TLS — usually means the site URL is wrong.
-  // Atlassian sites are <name>.atlassian.net; users sometimes paste the
-  // bare org name or copy the wiki/confluence URL by mistake.
+  // ──────────────────────────────────────────────────────────────────
+  // 1. Status code — authoritative when provided. Check first so a
+  //    403 with body containing "unauthorized" doesn't get classified
+  //    as 401 by the message-fallback pass below.
+  // ──────────────────────────────────────────────────────────────────
+  if (statusCode === 401) {
+    return {
+      titleKey: 'integrationConfig.jiraErrors.unauthorized.title',
+      hintKey: 'integrationConfig.jiraErrors.unauthorized.hint',
+      docHref: ATLASSIAN_API_TOKEN_DOCS,
+      raw,
+    };
+  }
+  if (statusCode === 403) {
+    return {
+      titleKey: 'integrationConfig.jiraErrors.forbidden.title',
+      hintKey: 'integrationConfig.jiraErrors.forbidden.hint',
+      raw,
+    };
+  }
+  if (statusCode === 404) {
+    return {
+      titleKey: 'integrationConfig.jiraErrors.notFound.title',
+      hintKey: 'integrationConfig.jiraErrors.notFound.hint',
+      raw,
+    };
+  }
+  if (statusCode === 429) {
+    return {
+      titleKey: 'integrationConfig.jiraErrors.rateLimited.title',
+      hintKey: 'integrationConfig.jiraErrors.rateLimited.hint',
+      raw,
+    };
+  }
+  if (statusCode !== undefined && statusCode >= 500) {
+    return {
+      titleKey: 'integrationConfig.jiraErrors.upstream.title',
+      hintKey: 'integrationConfig.jiraErrors.upstream.hint',
+      raw,
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // 2. Network/transport — these surface as messages, no HTTP status
+  //    is involved (DNS failure, TLS, connection refused, etc).
+  //    Atlassian sites are <name>.atlassian.net; users sometimes paste
+  //    the bare org name or copy the wiki/confluence URL by mistake.
+  // ──────────────────────────────────────────────────────────────────
   if (
     m.includes('enotfound') ||
     m.includes('getaddrinfo') ||
@@ -56,9 +101,12 @@ export function mapJiraError(rawMessage: string, statusCode?: number): FriendlyJ
     };
   }
 
-  // 401 — almost always wrong/expired token or email/token pairing
-  // mismatch. Send them straight to Atlassian's token-mgmt docs.
-  if (statusCode === 401 || m.includes('unauthorized') || /\b401\b/.test(m)) {
+  // ──────────────────────────────────────────────────────────────────
+  // 3. Message-text fallback — used when statusCode is missing or
+  //    didn't match any of the cases above. Catches errors that come
+  //    through as strings only (e.g. wrapped exceptions).
+  // ──────────────────────────────────────────────────────────────────
+  if (m.includes('unauthorized') || /\b401\b/.test(m)) {
     return {
       titleKey: 'integrationConfig.jiraErrors.unauthorized.title',
       hintKey: 'integrationConfig.jiraErrors.unauthorized.hint',
@@ -66,39 +114,28 @@ export function mapJiraError(rawMessage: string, statusCode?: number): FriendlyJ
       raw,
     };
   }
-
-  // 403 — auth was OK but the user doesn't have the required Jira
-  // permissions (typically "Browse projects" + "Create issues").
-  if (statusCode === 403 || m.includes('forbidden') || /\b403\b/.test(m)) {
+  if (m.includes('forbidden') || /\b403\b/.test(m)) {
     return {
       titleKey: 'integrationConfig.jiraErrors.forbidden.title',
       hintKey: 'integrationConfig.jiraErrors.forbidden.hint',
       raw,
     };
   }
-
-  // 404 — site URL points at a valid Atlassian host but the path/site
-  // doesn't exist for this account. Often happens when users paste
-  // someone else's site URL.
-  if (statusCode === 404 || /\b404\b/.test(m) || m.includes('site not found')) {
+  if (/\b404\b/.test(m) || m.includes('site not found') || m.includes('not found')) {
     return {
       titleKey: 'integrationConfig.jiraErrors.notFound.title',
       hintKey: 'integrationConfig.jiraErrors.notFound.hint',
       raw,
     };
   }
-
-  // 429 — rate limit. Self-explanatory; just tell them to wait.
-  if (statusCode === 429 || /\b429\b/.test(m) || m.includes('too many requests')) {
+  if (/\b429\b/.test(m) || m.includes('too many requests')) {
     return {
       titleKey: 'integrationConfig.jiraErrors.rateLimited.title',
       hintKey: 'integrationConfig.jiraErrors.rateLimited.hint',
       raw,
     };
   }
-
-  // 5xx — Atlassian-side problem, retry later.
-  if ((statusCode !== undefined && statusCode >= 500) || /\b5\d\d\b/.test(m)) {
+  if (/\b5\d\d\b/.test(m)) {
     return {
       titleKey: 'integrationConfig.jiraErrors.upstream.title',
       hintKey: 'integrationConfig.jiraErrors.upstream.hint',
@@ -106,8 +143,8 @@ export function mapJiraError(rawMessage: string, statusCode?: number): FriendlyJ
     };
   }
 
-  // Fallback — show the raw message verbatim so a developer can copy
-  // it. Title is the same generic "test failed".
+  // 4. Fallback — show the raw message verbatim so a developer can
+  //    copy it. Title is the same generic "test failed".
   return {
     titleKey: 'integrationConfig.jiraErrors.generic.title',
     hintKey: 'integrationConfig.jiraErrors.generic.hint',

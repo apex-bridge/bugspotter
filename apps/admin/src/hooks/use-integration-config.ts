@@ -26,11 +26,15 @@ interface UseIntegrationConfigReturn<T> {
   /**
    * Returns a structured result so callers can render inline state
    * (success badge / friendly error box) instead of relying solely on
-   * the toast. Toast is still emitted for backwards compat with
-   * non-Jira integrations and for users who navigate away from the
-   * step before the response arrives.
+   * the toast. Toast is still emitted by default for backwards compat
+   * with non-Jira integrations and for users who navigate away from
+   * the step before the response arrives. Pass `{ silent: true }` to
+   * suppress toasts when the caller renders its own inline feedback.
    */
-  testConnection: (baseType: string) => Promise<TestConnectionResult>;
+  testConnection: (
+    baseType: string,
+    options?: { silent?: boolean }
+  ) => Promise<TestConnectionResult>;
   isLoading: boolean;
   isError: boolean;
   error: Error | null;
@@ -159,23 +163,30 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
 
   // Test connection
   const testConnection = useCallback(
-    async (baseType: string): Promise<TestConnectionResult> => {
+    async (baseType: string, options?: { silent?: boolean }): Promise<TestConnectionResult> => {
+      const silent = options?.silent === true;
       const validationError = validateConfig();
       if (validationError) {
-        toast.error(validationError);
+        if (!silent) {
+          toast.error(validationError);
+        }
         return { ok: false, error: validationError };
       }
 
       try {
         await integrationService.testConnection(baseType, localConfig as Record<string, unknown>);
-        toast.success(t('integrationConfig.testSuccess'));
+        if (!silent) {
+          toast.success(t('integrationConfig.testSuccess'));
+        }
         return { ok: true };
       } catch (error: unknown) {
         const errorMessage = handleApiError(error);
         // Pull HTTP status off axios errors so callers can map
         // 401/403/404 to friendly hints without re-parsing.
         const statusCode = getApiErrorStatus(error);
-        toast.error(t('integrationConfig.testFailedToast', { error: errorMessage }));
+        if (!silent) {
+          toast.error(t('integrationConfig.testFailedToast', { error: errorMessage }));
+        }
         return { ok: false, error: errorMessage, statusCode };
       }
     },
