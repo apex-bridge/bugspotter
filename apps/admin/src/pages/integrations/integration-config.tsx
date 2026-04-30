@@ -137,9 +137,7 @@ const IntegrationConfigPage: React.FC = () => {
         <ConnectionStep
           localConfig={localConfig}
           setLocalConfig={setLocalConfig}
-          onTestConnection={async () => {
-            await testConnection(baseType);
-          }}
+          onTestConnection={() => testConnection(baseType, { silent: true })}
           onNext={() => setStep(2)}
           showProjectKey={true}
         />
