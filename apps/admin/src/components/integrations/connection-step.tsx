@@ -86,14 +86,23 @@ export function ConnectionStep({
   const handleTest = async () => {
     setTest({ state: 'testing' });
     const result = await onTestConnection();
-    if (result.ok) {
-      setTest({ state: 'success' });
-    } else {
-      setTest({
+    // Functional updater + state-check guards against a stale result
+    // overwriting idle: if the user edited a field mid-flight,
+    // handleConfigChange already reset state to idle and we should
+    // discard this response rather than show a status that no longer
+    // reflects the current form values.
+    setTest((prev) => {
+      if (prev.state !== 'testing') {
+        return prev;
+      }
+      if (result.ok) {
+        return { state: 'success' };
+      }
+      return {
         state: 'error',
         result: mapJiraError(result.error, result.statusCode),
-      });
-    }
+      };
+    });
   };
 
   const isTesting = test.state === 'testing';
