@@ -1,16 +1,26 @@
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Trans } from 'react-i18next';
+import { CheckCircle2, AlertTriangle, ExternalLink, Loader2 } from 'lucide-react';
 import { Select } from '../ui/select';
 import { isJiraConfig } from '../../utils/type-guards';
 import type { JiraConfig } from '../../types';
+import type { TestConnectionResult } from '../../hooks/use-integration-config';
+import { mapJiraError, ATLASSIAN_API_TOKEN_DOCS } from './jira-error-friendly';
 
 interface ConnectionStepProps {
   localConfig: Record<string, unknown>;
   setLocalConfig: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;
-  onTestConnection: () => Promise<void>;
+  onTestConnection: () => Promise<TestConnectionResult>;
   onNext: () => void;
   showProjectKey?: boolean;
 }
+
+type TestStatus =
+  | { state: 'idle' }
+  | { state: 'testing' }
+  | { state: 'success' }
+  | { state: 'error'; result: ReturnType<typeof mapJiraError> };
 
 /**
  * Reusable connection configuration step
@@ -25,17 +35,78 @@ export function ConnectionStep({
   showProjectKey = true,
 }: ConnectionStepProps) {
   const { t } = useTranslation();
-  // Validate config structure before accessing properties
+
+  // Persistent state for the last test result. Survives re-renders so
+  // a user looking away doesn't miss the toast.
+  const [test, setTest] = useState<TestStatus>({ state: 'idle' });
+
+  // Single helper for "user edited a field" flow:
+  //   1. apply the patch via setLocalConfig
+  //   2. invalidate any previous test result so a stale green check
+  //      can't lie about credentials the user just changed
+  // Functional setTest avoids re-creating this callback when test
+  // state changes — the dep array stays stable.
+  //
+  // MUST be declared above the conditional return below — moving it
+  // after would skip the hook on the empty-config render path and
+  // break the Rules of Hooks (call order would change between
+  // renders). This was the regression flagged in PR #79 review.
+  const handleConfigChange = useCallback(
+    (patch: (prev: Record<string, unknown>) => Record<string, unknown>) => {
+      setLocalConfig(patch);
+      setTest((prev) => (prev.state === 'idle' ? prev : { state: 'idle' }));
+    },
+    [setLocalConfig]
+  );
+
+  // Validate config structure before accessing properties.
+  // useIntegrationConfig initializes `localConfig` to {} and only
+  // populates the Jira default shape inside a useEffect, so the
+  // first render after the parent unblocks `isLoading` lands here
+  // with empty {}. Without this fast path, the user would see a
+  // brief flash of the red "Invalid configuration structure" alert
+  // every time the page mounts. Treat empty-object as transient
+  // loading and render nothing — the parent already shows its own
+  // loading state, and the second render (post-effect) will match
+  // the type guard.
   if (!isJiraConfig(localConfig)) {
+    if (Object.keys(localConfig).length === 0) {
+      return null;
+    }
     return (
-      <div className="border p-4 rounded text-sm text-red-600">
-        Invalid configuration structure. Please ensure all required fields are present.
+      <div className="border p-4 rounded text-sm text-red-600" role="alert">
+        {t('integrationConfig.invalidConfigStructure')}
       </div>
     );
   }
 
   // After validation, we can safely access JiraConfig properties
   const config = localConfig as JiraConfig;
+
+  const handleTest = async () => {
+    setTest({ state: 'testing' });
+    const result = await onTestConnection();
+    // Functional updater + state-check guards against a stale result
+    // overwriting idle: if the user edited a field mid-flight,
+    // handleConfigChange already reset state to idle and we should
+    // discard this response rather than show a status that no longer
+    // reflects the current form values.
+    setTest((prev) => {
+      if (prev.state !== 'testing') {
+        return prev;
+      }
+      if (result.ok) {
+        return { state: 'success' };
+      }
+      return {
+        state: 'error',
+        result: mapJiraError(result.error, result.statusCode),
+      };
+    });
+  };
+
+  const isTesting = test.state === 'testing';
+
   return (
     <div className="border p-4 rounded">
       {/* Instance URL */}
@@ -46,7 +117,7 @@ export function ConnectionStep({
         id="instance-url"
         type="url"
         value={config.instanceUrl ?? ''}
-        onChange={(e) => setLocalConfig({ ...localConfig, instanceUrl: e.target.value })}
+        onChange={(e) => handleConfigChange((prev) => ({ ...prev, instanceUrl: e.target.value }))}
         className="w-full border p-2 rounded mt-1"
         placeholder={t('integrationConfig.instanceUrlPlaceholder')}
       />
@@ -58,13 +129,13 @@ export function ConnectionStep({
           label={t('integrationConfig.authentication')}
           value={config.authentication?.type ?? 'basic'}
           onChange={(e) =>
-            setLocalConfig({
-              ...localConfig,
+            handleConfigChange((prev) => ({
+              ...prev,
               authentication: {
-                ...(config.authentication || {}),
+                ...(prev as JiraConfig).authentication,
                 type: e.target.value as 'basic' | 'oauth2' | 'pat',
               },
-            })
+            }))
           }
         >
           <option value="basic">{t('integrationConfig.basicAuth')}</option>
@@ -84,13 +155,13 @@ export function ConnectionStep({
             type="email"
             value={config.authentication?.email ?? ''}
             onChange={(e) =>
-              setLocalConfig({
-                ...localConfig,
+              handleConfigChange((prev) => ({
+                ...prev,
                 authentication: {
-                  ...(config.authentication || { type: 'basic' }),
+                  ...(prev as JiraConfig).authentication,
                   email: e.target.value,
                 },
-              })
+              }))
             }
             className="w-full border p-2 rounded mt-1"
             placeholder={t('integrationConfig.emailPlaceholder')}
@@ -104,17 +175,35 @@ export function ConnectionStep({
             type="password"
             value={config.authentication?.apiToken ?? ''}
             onChange={(e) =>
-              setLocalConfig({
-                ...localConfig,
+              handleConfigChange((prev) => ({
+                ...prev,
                 authentication: {
-                  ...(config.authentication || { type: 'basic' }),
+                  ...(prev as JiraConfig).authentication,
                   apiToken: e.target.value,
                 },
-              })
+              }))
             }
             className="w-full border p-2 rounded mt-1"
             placeholder={t('integrationConfig.apiTokenPlaceholder')}
           />
+          {/* Inline link to Atlassian's "create API token" docs — the
+              single most common stumble point for first-time setup. */}
+          <p className="text-xs text-gray-500 mt-1">
+            <Trans
+              i18nKey="integrationConfig.apiTokenHelp"
+              components={{
+                a: (
+                  <a
+                    href={ATLASSIAN_API_TOKEN_DOCS}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline inline-flex items-center gap-1"
+                  />
+                ),
+                icon: <ExternalLink className="w-3 h-3 inline" aria-hidden="true" />,
+              }}
+            />
+          </p>
         </>
       )}
 
@@ -129,13 +218,13 @@ export function ConnectionStep({
             type="password"
             value={config.authentication?.accessToken ?? ''}
             onChange={(e) =>
-              setLocalConfig({
-                ...localConfig,
+              handleConfigChange((prev) => ({
+                ...prev,
                 authentication: {
-                  ...(config.authentication || { type: 'oauth2' }),
+                  ...(prev as JiraConfig).authentication,
                   accessToken: e.target.value,
                 },
-              })
+              }))
             }
             className="w-full border p-2 rounded mt-1"
             placeholder={
@@ -158,10 +247,7 @@ export function ConnectionStep({
             type="text"
             value={config.projectKey ?? ''}
             onChange={(e) =>
-              setLocalConfig({
-                ...localConfig,
-                projectKey: e.target.value,
-              })
+              handleConfigChange((prev) => ({ ...prev, projectKey: e.target.value }))
             }
             className="w-full border p-2 rounded mt-1"
             placeholder={t('integrationConfig.projectKeyPlaceholder')}
@@ -170,14 +256,79 @@ export function ConnectionStep({
       )}
 
       {/* Action Buttons */}
-      <div className="mt-3 flex gap-2">
-        <button className="px-3 py-1 bg-blue-600 text-white rounded" onClick={onTestConnection}>
-          {t('integrationConfig.testConnection')}
+      <div className="mt-3 flex gap-2 items-center">
+        <button
+          className="px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+          onClick={handleTest}
+          disabled={isTesting}
+          type="button"
+        >
+          {isTesting && <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />}
+          {isTesting
+            ? t('integrationConfig.testingConnection')
+            : t('integrationConfig.testConnection')}
         </button>
-        <button className="px-3 py-1 bg-gray-100 rounded" onClick={onNext}>
+        <button
+          className="px-3 py-1 bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={onNext}
+          disabled={isTesting}
+          type="button"
+        >
           {t('integrationConfig.nextProject')}
         </button>
       </div>
+
+      {/* Inline test-result feedback. Persists until the user edits
+          the form (which clears it back to idle in the onChange
+          handlers above). */}
+      {test.state === 'success' && (
+        <div
+          role="status"
+          className="mt-3 flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
+        >
+          <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span>{t('integrationConfig.testSuccess')}</span>
+        </div>
+      )}
+      {test.state === 'error' && (
+        <div
+          role="alert"
+          className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{t(test.result.titleKey)}</span>
+          </div>
+          <p className="mt-1 ml-6 text-red-800">{t(test.result.hintKey)}</p>
+          {test.result.docHref && (
+            <a
+              href={test.result.docHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 ml-6 inline-flex items-center gap-1 text-xs text-red-900 hover:underline"
+            >
+              {t('integrationConfig.jiraErrors.docsLink')}
+              <ExternalLink className="w-3 h-3" aria-hidden="true" />
+            </a>
+          )}
+          {/* Show raw server message under a <details> so non-dev
+              users see the friendly hint, but devs can still copy
+              the verbatim error for issue reports. */}
+          <details className="mt-2 ml-6">
+            <summary className="cursor-pointer text-xs text-red-700 hover:text-red-900">
+              {t('integrationConfig.jiraErrors.showRaw')}
+            </summary>
+            <pre className="mt-1 whitespace-pre-wrap break-all text-xs text-red-800">
+              {test.result.raw}
+            </pre>
+          </details>
+        </div>
+      )}
+
+      {/* Soft hint if the user hasn't tested yet — non-blocking. */}
+      {test.state === 'idle' && (
+        <p className="mt-3 text-xs text-gray-500">{t('integrationConfig.testHint')}</p>
+      )}
     </div>
   );
 }
