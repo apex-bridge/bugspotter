@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Copy, ExternalLink } from 'lucide-react';
 import { Badge } from '../ui/badge';
@@ -28,6 +29,15 @@ export function DuplicateBadge({
   const truncatedId = duplicateOf.slice(0, 8);
   const canNavigate = !!onNavigateToOriginal;
 
+  // Single navigation handler used by both the truncated-ID button and
+  // the "View original" button. Optional chaining is intentional —
+  // although `canNavigate` guards rendering, TypeScript doesn't narrow
+  // an aliased boolean's truth back onto the original prop reference
+  // across closures, so the call site remains `?.`.
+  const handleNavigate = useCallback(() => {
+    onNavigateToOriginal?.(duplicateOf);
+  }, [onNavigateToOriginal, duplicateOf]);
+
   return (
     <div className="px-6 py-3 bg-amber-50 border-b border-amber-100">
       <div className="flex items-center justify-between gap-3">
@@ -43,7 +53,7 @@ export function DuplicateBadge({
             // to verify or copy via right-click → inspect.
             <button
               type="button"
-              onClick={() => onNavigateToOriginal?.(duplicateOf)}
+              onClick={handleNavigate}
               title={duplicateOf}
               className="text-xs bg-amber-100 px-1.5 py-0.5 rounded font-mono text-amber-700 hover:bg-amber-200 hover:underline focus:outline-none focus:ring-2 focus:ring-amber-400"
               // Describe the navigation target (which bug), not the
@@ -67,7 +77,7 @@ export function DuplicateBadge({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => onNavigateToOriginal?.(duplicateOf)}
+              onClick={handleNavigate}
               className="h-7 text-amber-700 hover:bg-amber-100 hover:text-amber-900"
             >
               <ExternalLink className="w-3.5 h-3.5 mr-1" aria-hidden="true" />
