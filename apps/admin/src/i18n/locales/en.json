@@ -416,6 +416,43 @@
     "projectPickerBasicAuthOnly": "Automatic project listing is only available for Basic Auth (email + API token). Enter the project key manually, or switch authentication type in the previous step.",
     "useTypedProjectKey": "Use \"{{key}}\" as project key",
     "testConnection": "Test Connection",
+    "testingConnection": "Testing…",
+    "testSuccess": "Connection successful — credentials are valid.",
+    "testHint": "Tip: run \"Test Connection\" before continuing to confirm your credentials work.",
+    "apiTokenHelp": "Don't have one yet? <a>Create an Atlassian API token<icon /></a> and paste it above.",
+    "invalidConfigStructure": "Invalid configuration structure. Please ensure all required fields are present.",
+    "jiraErrors": {
+      "docsLink": "How to fix this",
+      "showRaw": "Show raw error from Atlassian",
+      "unauthorized": {
+        "title": "Authentication failed",
+        "hint": "Atlassian rejected your credentials. Double-check the email matches the one tied to your API token, and that the token hasn't been revoked."
+      },
+      "forbidden": {
+        "title": "Not enough permissions",
+        "hint": "Your account authenticated but doesn't have the required Jira permissions. You need at least \"Browse projects\" and \"Create issues\" in the target project."
+      },
+      "notFound": {
+        "title": "Site or path not found",
+        "hint": "The URL didn't resolve to a Jira site you have access to. Make sure you used the full site URL, e.g. https://yourcompany.atlassian.net."
+      },
+      "unreachable": {
+        "title": "Couldn't reach this Atlassian site",
+        "hint": "DNS or TLS lookup failed. Verify the URL is your full Atlassian site (https://<company>.atlassian.net) — not the bare company name or a Confluence URL."
+      },
+      "rateLimited": {
+        "title": "Rate limited by Atlassian",
+        "hint": "Too many requests in a short time. Wait a minute and try again."
+      },
+      "upstream": {
+        "title": "Atlassian is having issues",
+        "hint": "Atlassian returned a server error. This is on their side — try again in a moment."
+      },
+      "generic": {
+        "title": "Connection test failed",
+        "hint": "We couldn't validate this configuration. The raw error from Atlassian is below."
+      }
+    },
     "nextProject": "Next: Project",
     "issueType": "Issue Type",
     "issueTypePlaceholder": "Bug",
