@@ -228,7 +228,12 @@ export default function BugReportsPage() {
 
       {/* Detail Modal */}
       {selectedReportId && (
+        // `key` forces a remount when navigating between bugs (e.g.
+        // duplicate → original). Without it React would reuse the
+        // same instance, leaking internal state — active tab,
+        // download flags, scroll position — across different bugs.
         <BugReportDetail
+          key={selectedReportId}
           reportId={selectedReportId}
           onClose={handleCloseDetail}
           onNavigateToBug={handleNavigateToBug}
