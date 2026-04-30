@@ -21,7 +21,12 @@ export default function BugReportsPage() {
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<Filters>({});
   const [page, setPage] = useState(1);
-  const [selectedReport, setSelectedReport] = useState<BugReport | null>(null);
+  // We hold just the id (not the whole BugReport) so the detail modal
+  // can navigate to a different bug — e.g. clicking "View original" on
+  // a duplicate badge — by swapping the id. The modal is keyed on
+  // this id below to force a clean remount on navigation; see comment
+  // at the BugReportDetail render site.
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const limit = 20;
 
   // Fetch projects for filter dropdown
@@ -57,12 +62,17 @@ export default function BugReportsPage() {
     setPage(1); // Reset to first page when filters change
   }, []);
 
-  const handleViewDetails = useCallback((report: BugReport) => {
-    setSelectedReport(report);
+  const handleNavigateToBug = useCallback((bugId: string) => {
+    setSelectedReportId(bugId);
   }, []);
 
+  const handleViewDetails = useCallback(
+    (report: BugReport) => handleNavigateToBug(report.id),
+    [handleNavigateToBug]
+  );
+
   const handleCloseDetail = useCallback(() => {
-    setSelectedReport(null);
+    setSelectedReportId(null);
   }, []);
 
   const handleDelete = useCallback(
@@ -219,8 +229,17 @@ export default function BugReportsPage() {
       )}
 
       {/* Detail Modal */}
-      {selectedReport && (
-        <BugReportDetail reportId={selectedReport.id} onClose={handleCloseDetail} />
+      {selectedReportId && (
+        // `key` forces a remount when navigating between bugs (e.g.
+        // duplicate → original). Without it React would reuse the
+        // same instance, leaking internal state — active tab,
+        // download flags, scroll position — across different bugs.
+        <BugReportDetail
+          key={selectedReportId}
+          reportId={selectedReportId}
+          onClose={handleCloseDetail}
+          onNavigateToBug={handleNavigateToBug}
+        />
       )}
     </div>
   );

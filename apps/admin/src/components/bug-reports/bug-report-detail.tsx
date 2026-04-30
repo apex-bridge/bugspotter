@@ -22,9 +22,15 @@ import { toast } from 'sonner';
 interface BugReportDetailProps {
   reportId: string;
   onClose: () => void;
+  /**
+   * Navigate to a different bug within the same modal (no close+reopen).
+   * Optional so the modal still works in contexts that don't support
+   * navigation (e.g. linked from email).
+   */
+  onNavigateToBug?: (bugId: string) => void;
 }
 
-export function BugReportDetail({ reportId, onClose }: BugReportDetailProps) {
+export function BugReportDetail({ reportId, onClose, onNavigateToBug }: BugReportDetailProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'replay' | 'details' | 'logs'>('replay');
   const [isDownloading, setIsDownloading] = useState(false);
@@ -139,6 +145,7 @@ export function BugReportDetail({ reportId, onClose }: BugReportDetailProps) {
             duplicateOf={report.duplicate_of}
             bugReportId={report.id}
             projectId={report.project_id}
+            onNavigateToOriginal={onNavigateToBug}
           />
         )}
 
