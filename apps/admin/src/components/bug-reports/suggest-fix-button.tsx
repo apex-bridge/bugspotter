@@ -86,19 +86,23 @@ export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonPro
   const handleRetry = () => {
     setIsTimedOut(false);
     setPollingStartedAt(null);
+    // Reset the query so a stale `isError` from the previous poll
+    // attempt doesn't flicker the UI between spinner and error during
+    // the next polling cycle.
+    queryClient.resetQueries({ queryKey: ['mitigation', projectId, bugReportId] });
     triggerMutation.reset();
     triggerMutation.mutate();
   };
 
-  // Stop pretending to be "generating" once an error surfaces — otherwise
-  // the button stays disabled with a spinner *and* the error box renders
-  // below, leaving no way for the user to retry without waiting out the
-  // full 3-minute timeout.
+  // The mutation-pending branch is unconditional: the spinner should
+  // show during the POST itself even if the *previous* polling cycle
+  // ended in error (e.g. user is retrying). The polling-active branch
+  // additionally requires no errors — otherwise the button stays
+  // disabled with a spinner *and* the error box renders below,
+  // trapping the user until the 3-minute timeout.
   const isGenerating =
-    !isTimedOut &&
-    !isError &&
-    !triggerMutation.isError &&
-    (triggerMutation.isPending || (triggerMutation.isSuccess && !result));
+    triggerMutation.isPending ||
+    (!isTimedOut && !isError && !triggerMutation.isError && triggerMutation.isSuccess && !result);
 
   // Already have a cached result — show it immediately
   if (result) {
