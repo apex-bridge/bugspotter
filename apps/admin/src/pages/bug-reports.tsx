@@ -60,16 +60,17 @@ export default function BugReportsPage() {
     setPage(1); // Reset to first page when filters change
   }, []);
 
-  const handleViewDetails = useCallback((report: BugReport) => {
-    setSelectedReportId(report.id);
+  const handleNavigateToBug = useCallback((bugId: string) => {
+    setSelectedReportId(bugId);
   }, []);
+
+  const handleViewDetails = useCallback(
+    (report: BugReport) => handleNavigateToBug(report.id),
+    [handleNavigateToBug]
+  );
 
   const handleCloseDetail = useCallback(() => {
     setSelectedReportId(null);
-  }, []);
-
-  const handleNavigateToBug = useCallback((bugId: string) => {
-    setSelectedReportId(bugId);
   }, []);
 
   const handleDelete = useCallback(

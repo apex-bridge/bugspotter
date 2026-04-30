@@ -43,7 +43,7 @@ export function DuplicateBadge({
             // to verify or copy via right-click → inspect.
             <button
               type="button"
-              onClick={() => onNavigateToOriginal(duplicateOf)}
+              onClick={() => onNavigateToOriginal?.(duplicateOf)}
               title={duplicateOf}
               className="text-xs bg-amber-100 px-1.5 py-0.5 rounded font-mono text-amber-700 hover:bg-amber-200 hover:underline focus:outline-none focus:ring-2 focus:ring-amber-400"
               // Describe the navigation target (which bug), not the
@@ -67,7 +67,7 @@ export function DuplicateBadge({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => onNavigateToOriginal(duplicateOf)}
+              onClick={() => onNavigateToOriginal?.(duplicateOf)}
               className="h-7 text-amber-700 hover:bg-amber-100 hover:text-amber-900"
             >
               <ExternalLink className="w-3.5 h-3.5 mr-1" aria-hidden="true" />
