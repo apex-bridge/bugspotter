@@ -46,7 +46,11 @@ export function DuplicateBadge({
               onClick={() => onNavigateToOriginal(duplicateOf)}
               title={duplicateOf}
               className="text-xs bg-amber-100 px-1.5 py-0.5 rounded font-mono text-amber-700 hover:bg-amber-200 hover:underline focus:outline-none focus:ring-2 focus:ring-amber-400"
-              aria-label={t('intelligence.duplicate.viewOriginal')}
+              // Describe the navigation target (which bug), not the
+              // generic action — the sibling "View original" button
+              // already covers the action verb. Avoids duplicate
+              // screen-reader announcements.
+              aria-label={`${t('intelligence.duplicate.of')} ${truncatedId}`}
             >
               {truncatedId}
             </button>
