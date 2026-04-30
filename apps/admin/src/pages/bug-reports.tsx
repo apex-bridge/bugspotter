@@ -23,7 +23,9 @@ export default function BugReportsPage() {
   const [page, setPage] = useState(1);
   // We hold just the id (not the whole BugReport) so the detail modal
   // can navigate to a different bug — e.g. clicking "View original" on
-  // a duplicate badge — by swapping the id without remounting.
+  // a duplicate badge — by swapping the id. The modal is keyed on
+  // this id below to force a clean remount on navigation; see comment
+  // at the BugReportDetail render site.
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const limit = 20;
 
