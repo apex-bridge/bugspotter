@@ -30,8 +30,13 @@ export const ATLASSIAN_API_TOKEN_DOCS =
   'https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/';
 
 export function mapJiraError(rawMessage: string, statusCode?: number): FriendlyJiraError {
-  const m = (rawMessage || '').toLowerCase();
-  const raw = rawMessage || '';
+  // String() cast guards against a non-string slipping past the
+  // type system (e.g. a JS-side caller passing a raw Error object).
+  // The signature still says `string` for the well-typed path; this
+  // is defense-in-depth, not a workaround.
+  const safe = String(rawMessage || '');
+  const m = safe.toLowerCase();
+  const raw = safe;
 
   // Network-level — DNS/TLS — usually means the site URL is wrong.
   // Atlassian sites are <name>.atlassian.net; users sometimes paste the

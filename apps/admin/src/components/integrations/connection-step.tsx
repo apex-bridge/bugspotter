@@ -40,6 +40,25 @@ export function ConnectionStep({
   // a user looking away doesn't miss the toast.
   const [test, setTest] = useState<TestStatus>({ state: 'idle' });
 
+  // Single helper for "user edited a field" flow:
+  //   1. apply the patch via setLocalConfig
+  //   2. invalidate any previous test result so a stale green check
+  //      can't lie about credentials the user just changed
+  // Functional setTest avoids re-creating this callback when test
+  // state changes — the dep array stays stable.
+  //
+  // MUST be declared above the conditional return below — moving it
+  // after would skip the hook on the empty-config render path and
+  // break the Rules of Hooks (call order would change between
+  // renders). This was the regression flagged in PR #79 review.
+  const handleConfigChange = useCallback(
+    (patch: (prev: Record<string, unknown>) => Record<string, unknown>) => {
+      setLocalConfig(patch);
+      setTest((prev) => (prev.state === 'idle' ? prev : { state: 'idle' }));
+    },
+    [setLocalConfig]
+  );
+
   // Validate config structure before accessing properties.
   // useIntegrationConfig initializes `localConfig` to {} and only
   // populates the Jira default shape inside a useEffect, so the
@@ -63,20 +82,6 @@ export function ConnectionStep({
 
   // After validation, we can safely access JiraConfig properties
   const config = localConfig as JiraConfig;
-
-  // Single helper for "user edited a field" flow:
-  //   1. apply the patch via setLocalConfig
-  //   2. invalidate any previous test result so a stale green check
-  //      can't lie about credentials the user just changed
-  // Functional setTest avoids re-creating this callback when test
-  // state changes — the dep array stays stable.
-  const handleConfigChange = useCallback(
-    (patch: (prev: Record<string, unknown>) => Record<string, unknown>) => {
-      setLocalConfig(patch);
-      setTest((prev) => (prev.state === 'idle' ? prev : { state: 'idle' }));
-    },
-    [setLocalConfig]
-  );
 
   const handleTest = async () => {
     setTest({ state: 'testing' });
