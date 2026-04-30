@@ -83,12 +83,15 @@ export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonPro
     return () => window.clearTimeout(timer);
   }, [pollingStartedAt, result]);
 
-  const handleRetry = () => {
+  // Single entry point for both the initial click and the post-timeout
+  // retry. The query cache persists across modal close/reopen of the
+  // bug-detail view, so a stale `isError` from a previous session
+  // could otherwise flicker the UI even on what looks to the user
+  // like a "fresh" Suggest Fix click. Resetting query + mutation
+  // before mutate guarantees consistent behavior from any entry.
+  const handleTrigger = () => {
     setIsTimedOut(false);
     setPollingStartedAt(null);
-    // Reset the query so a stale `isError` from the previous poll
-    // attempt doesn't flicker the UI between spinner and error during
-    // the next polling cycle.
     queryClient.resetQueries({ queryKey: ['mitigation', projectId, bugReportId] });
     triggerMutation.reset();
     triggerMutation.mutate();
@@ -150,7 +153,7 @@ export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonPro
         <Button
           variant="secondary"
           size="sm"
-          onClick={handleRetry}
+          onClick={handleTrigger}
           className="bg-white border-amber-300 text-amber-700 hover:bg-amber-100"
         >
           <Lightbulb className="w-4 h-4 mr-2" aria-hidden="true" />
@@ -166,7 +169,7 @@ export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonPro
       <Button
         variant="secondary"
         size="sm"
-        onClick={() => triggerMutation.mutate()}
+        onClick={handleTrigger}
         isLoading={isGenerating}
         disabled={isGenerating}
         className="bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
