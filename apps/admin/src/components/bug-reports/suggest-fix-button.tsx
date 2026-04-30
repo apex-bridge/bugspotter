@@ -90,8 +90,15 @@ export function SuggestFixButton({ bugReportId, projectId }: SuggestFixButtonPro
     triggerMutation.mutate();
   };
 
+  // Stop pretending to be "generating" once an error surfaces — otherwise
+  // the button stays disabled with a spinner *and* the error box renders
+  // below, leaving no way for the user to retry without waiting out the
+  // full 3-minute timeout.
   const isGenerating =
-    !isTimedOut && (triggerMutation.isPending || (triggerMutation.isSuccess && !result));
+    !isTimedOut &&
+    !isError &&
+    !triggerMutation.isError &&
+    (triggerMutation.isPending || (triggerMutation.isSuccess && !result));
 
   // Already have a cached result — show it immediately
   if (result) {
