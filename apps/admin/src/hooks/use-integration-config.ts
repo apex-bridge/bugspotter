@@ -11,6 +11,8 @@ interface UseIntegrationConfigOptions {
   onSaveSuccess?: () => void;
 }
 
+export type TestConnectionResult = { ok: true } | { ok: false; error: string; statusCode?: number };
+
 interface UseIntegrationConfigReturn<T> {
   integration: IntegrationResponse | undefined;
   config: T | undefined;
@@ -20,7 +22,14 @@ interface UseIntegrationConfigReturn<T> {
   setDescription: React.Dispatch<React.SetStateAction<string>>;
   updateField: <K extends keyof T>(field: K, value: T[K]) => void;
   save: () => Promise<void>;
-  testConnection: (baseType: string) => Promise<void>;
+  /**
+   * Returns a structured result so callers can render inline state
+   * (success badge / friendly error box) instead of relying solely on
+   * the toast. Toast is still emitted for backwards compat with
+   * non-Jira integrations and for users who navigate away from the
+   * step before the response arrives.
+   */
+  testConnection: (baseType: string) => Promise<TestConnectionResult>;
   isLoading: boolean;
   isError: boolean;
   error: Error | null;
@@ -148,19 +157,32 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
 
   // Test connection
   const testConnection = useCallback(
-    async (baseType: string) => {
+    async (baseType: string): Promise<TestConnectionResult> => {
       const validationError = validateConfig();
       if (validationError) {
         toast.error(validationError);
-        return;
+        return { ok: false, error: validationError };
       }
 
       try {
         await integrationService.testConnection(baseType, localConfig as Record<string, unknown>);
         toast.success('Connection test passed! Configuration is valid.');
+        return { ok: true };
       } catch (error: unknown) {
         const errorMessage = handleApiError(error);
+        // Pull HTTP status off axios errors when present so callers
+        // can map 401/403/404 to friendly hints without re-parsing.
+        let statusCode: number | undefined;
+        if (
+          error &&
+          typeof error === 'object' &&
+          'response' in error &&
+          (error as { response?: { status?: number } }).response?.status !== undefined
+        ) {
+          statusCode = (error as { response: { status: number } }).response.status;
+        }
         toast.error(`Connection test failed: ${errorMessage}`);
+        return { ok: false, error: errorMessage, statusCode };
       }
     },
     [localConfig, validateConfig]
