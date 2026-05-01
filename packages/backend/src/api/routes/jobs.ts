@@ -32,6 +32,17 @@ interface ReportJobsParams {
  * for `process-integration` jobs include decrypted `credentials` and may grow
  * to include other secret-bearing keys; redact defensively so future job
  * shapes don't accidentally leak.
+ *
+ * Recursive: matching keys are scrubbed at any depth. A whole sub-object
+ * that matches a key (e.g. `credentials: { email, apiToken }`) is replaced
+ * outright rather than recursed into — replacing wholesale is safer than
+ * walking, because not every leaf in a credential blob is itself in the
+ * keyset (an `email` adjacent to an `apiToken` is still sensitive metadata).
+ * Non-matching objects ARE recursed so a future `data.config.apiToken` or
+ * `data.options.password` gets caught.
+ *
+ * Depth-bounded so a buggy worker can't pin the event loop with pathological
+ * nesting. 10 is well past any realistic job payload depth.
  */
 const REDACTED_JOB_DATA_KEYS = new Set([
   'credentials',
@@ -43,20 +54,34 @@ const REDACTED_JOB_DATA_KEYS = new Set([
   'secret',
 ]);
 
+const MAX_REDACTION_DEPTH = 10;
+
+function redactValue(value: unknown, depth: number): unknown {
+  if (depth >= MAX_REDACTION_DEPTH) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => redactValue(v, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = REDACTED_JOB_DATA_KEYS.has(k) ? '[REDACTED]' : redactValue(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
 function redactJobStatus(jobStatus: unknown): unknown {
   if (!jobStatus || typeof jobStatus !== 'object') {
     return jobStatus;
   }
   const status = jobStatus as Record<string, unknown>;
-  const data = status.data;
-  if (!data || typeof data !== 'object') {
+  if (!status.data || typeof status.data !== 'object') {
     return status;
   }
-  const redactedData: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-    redactedData[key] = REDACTED_JOB_DATA_KEYS.has(key) ? '[REDACTED]' : value;
-  }
-  return { ...status, data: redactedData };
+  return { ...status, data: redactValue(status.data, 0) };
 }
 
 export function jobRoutes(

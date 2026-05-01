@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Mock } from 'vitest';
+import bcrypt from 'bcrypt';
 import { createServer } from '../../src/api/server.js';
 import { createDatabaseClient } from '../../src/db/client.js';
 import type { FastifyInstance } from 'fastify';
@@ -631,6 +632,76 @@ describe('Uploads API', () => {
       });
 
       expect(response.statusCode).toBe(403);
+    });
+  });
+
+  // Positive path: the admin UI hits screenshot-url / replay-url with a JWT
+  // bearer token, not an API key. `requireApiKeyPermission('reports:read')`
+  // explicitly bypasses for JWT users (their permissions are gated elsewhere
+  // via project membership). These tests pin that bypass so a future tweak
+  // to the middleware can't accidentally block dashboard users.
+  describe('JWT user with project access can read assets', () => {
+    let jwtToken: string;
+
+    beforeEach(async () => {
+      const passwordHash = await bcrypt.hash('password123', 10);
+      const user = await db.users.create({
+        email: `jwt-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: passwordHash,
+        role: 'user',
+      });
+      // Project membership at viewer level — the minimum that should still
+      // see screenshots/replays per ACCESS_CONTROL.md.
+      await db.query(
+        'INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)',
+        [testProject.id, user.id, 'viewer']
+      );
+      jwtToken = app.jwt.sign({ userId: user.id, role: 'user' }, { expiresIn: '1h' });
+
+      await db.query('UPDATE bug_reports SET screenshot_key = $1, replay_key = $2 WHERE id = $3', [
+        'screenshots/proj/bug/original.png',
+        'replays/proj/bug/replay.gz',
+        testBugReport.id,
+      ]);
+    });
+
+    it('GET screenshot-url with project-viewer JWT returns 200', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/reports/${testBugReport.id}/screenshot-url`,
+        headers: { authorization: `Bearer ${jwtToken}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.body).data.url).toBeDefined();
+    });
+
+    it('GET replay-url with project-viewer JWT returns 200', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/reports/${testBugReport.id}/replay-url`,
+        headers: { authorization: `Bearer ${jwtToken}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.body).data.url).toBeDefined();
+    });
+
+    it('GET intelligence mitigation with project-viewer JWT passes the auth gate', async () => {
+      // Mitigation is on the same `requireApiKeyPermission('reports:read')`
+      // chain. JWT users must still pass through. We don't care whether the
+      // mitigation row exists (it doesn't — would be 404), only that the
+      // response is NOT 401/403, which is what the new gate would have
+      // returned if it failed to bypass for JWT users.
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/intelligence/projects/${testProject.id}/bugs/${testBugReport.id}/mitigation`,
+        headers: { authorization: `Bearer ${jwtToken}` },
+      });
+
+      expect([200, 404]).toContain(response.statusCode);
+      expect(response.statusCode).not.toBe(401);
+      expect(response.statusCode).not.toBe(403);
     });
   });
 });

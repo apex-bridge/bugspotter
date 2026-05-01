@@ -221,6 +221,47 @@ describe('Jobs API Routes', () => {
       expect(body.data.data.config).toEqual({ instanceUrl: 'https://x.atlassian.net' });
     });
 
+    it('should redact credential-shaped fields nested deep in job data', async () => {
+      // Defense-in-depth against future job shapes that nest credentials
+      // (e.g. config.apiToken, options.auth.password). The shallow walk
+      // would have leaked these.
+      const mockJobStatus = {
+        id: 'integration-job-2',
+        name: 'process-integration',
+        state: 'completed',
+        data: {
+          bugReportId: 'bug-2',
+          projectId: 'proj-2',
+          config: {
+            instanceUrl: 'https://x.atlassian.net',
+            apiToken: 'nested-secret-1', // nested matching key
+            nested: {
+              password: 'nested-secret-2', // 2 levels deep
+              keep: 'visible',
+            },
+          },
+          options: [{ auth: { token: 'array-element-secret' }, label: 'first' }],
+        },
+      };
+      (mockQueueManager.getJob as any).mockResolvedValueOnce(mockJobStatus);
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/queues/integrations/jobs/integration-job-2',
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.data.config.apiToken).toBe('[REDACTED]');
+      expect(body.data.data.config.nested.password).toBe('[REDACTED]');
+      expect(body.data.data.options[0].auth.token).toBe('[REDACTED]');
+      // Surrounding non-sensitive fields preserved at every depth
+      expect(body.data.data.config.instanceUrl).toBe('https://x.atlassian.net');
+      expect(body.data.data.config.nested.keep).toBe('visible');
+      expect(body.data.data.options[0].label).toBe('first');
+    });
+
     it('should handle invalid queue name', async () => {
       // Mock QueueNotFoundError being thrown
       (mockQueueManager.getJob as any).mockRejectedValueOnce(
