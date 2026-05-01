@@ -34,6 +34,13 @@ jobs:
       - name: Run Claude review
         uses: anthropics/claude-code-action@v1
         with:
+          # Pass both auth modes — the action picks whichever secret is set.
+          # ANTHROPIC_API_KEY is the simpler path (raw API billing); the OAuth
+          # token route is what `/install-github-app` populates and uses App
+          # billing. Either works; passing both means the workflow keeps
+          # running if you later switch from one to the other without
+          # re-editing the YAML.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             Review PR #${{ github.event.pull_request.number }}.
