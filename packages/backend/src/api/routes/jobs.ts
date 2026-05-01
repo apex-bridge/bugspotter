@@ -10,6 +10,7 @@ import type { QueueName } from '../../queue/types.js';
 import { QUEUE_NAMES } from '../../queue/types.js';
 import { sendSuccess } from '../utils/response.js';
 import { checkProjectAccess, findOrThrow } from '../utils/resource.js';
+import { requireUser, requirePlatformAdmin } from '../middleware/auth.js';
 import { AppError } from '../middleware/error.js';
 import { getEncryptionService } from '../../utils/encryption.js';
 import { QueueNotFoundError } from '../../queue/errors.js';
@@ -26,6 +27,38 @@ interface ReportJobsParams {
   id: string;
 }
 
+/**
+ * Strip credential-shaped fields from a job status response. Worker payloads
+ * for `process-integration` jobs include decrypted `credentials` and may grow
+ * to include other secret-bearing keys; redact defensively so future job
+ * shapes don't accidentally leak.
+ */
+const REDACTED_JOB_DATA_KEYS = new Set([
+  'credentials',
+  'encrypted_credentials',
+  'apiToken',
+  'apiKey',
+  'token',
+  'password',
+  'secret',
+]);
+
+function redactJobStatus(jobStatus: unknown): unknown {
+  if (!jobStatus || typeof jobStatus !== 'object') {
+    return jobStatus;
+  }
+  const status = jobStatus as Record<string, unknown>;
+  const data = status.data;
+  if (!data || typeof data !== 'object') {
+    return status;
+  }
+  const redactedData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+    redactedData[key] = REDACTED_JOB_DATA_KEYS.has(key) ? '[REDACTED]' : value;
+  }
+  return { ...status, data: redactedData };
+}
+
 export function jobRoutes(
   fastify: FastifyInstance,
   db: DatabaseClient,
@@ -35,9 +68,20 @@ export function jobRoutes(
   /**
    * GET /api/v1/queues/:queueName/jobs/:id
    * Get status of a specific job in a queue
+   *
+   * Platform-admin only: a process-integration job's `data` carries decrypted
+   * Jira/GitHub credentials (see /admin/integrations/:platform/trigger below
+   * where the worker payload is constructed). Without this gate, any
+   * authenticated caller — including the public-facing SDK ingest key —
+   * could fetch any job by id and read another tenant's integration creds.
+   * Even with the gate, we redact credential-shaped fields below as
+   * defense-in-depth.
    */
   fastify.get<{ Params: JobParams }>(
     '/api/v1/queues/:queueName/jobs/:id',
+    {
+      preHandler: [requireUser, requirePlatformAdmin()],
+    },
     async (request, reply) => {
       if (!queueManager) {
         throw new AppError('Queue system not available', 503, 'ServiceUnavailable');
@@ -52,7 +96,7 @@ export function jobRoutes(
           throw new AppError(`Job ${id} not found in ${queueName} queue`, 404, 'NotFound');
         }
 
-        return sendSuccess(reply, jobStatus);
+        return sendSuccess(reply, redactJobStatus(jobStatus));
       } catch (error) {
         if (error instanceof AppError) {
           throw error;

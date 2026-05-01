@@ -9,7 +9,7 @@ import { createServer } from '../../src/api/server.js';
 import type { FastifyInstance } from 'fastify';
 import type { QueueManager } from '../../src/queue/queue-manager.js';
 import type { Queue } from 'bullmq';
-import { createMockPluginRegistry, createMockStorage } from '../test-helpers.js';
+import { createMockPluginRegistry, createMockStorage, createAdminUser } from '../test-helpers.js';
 import { QueueNotFoundError } from '../../src/queue/errors.js';
 import { ApiKeyService } from '../../src/services/api-key/api-key-service.js';
 
@@ -20,6 +20,7 @@ describe('Jobs API Routes', () => {
   let testProjectId: string;
   let testApiKey: string;
   let testBugReportId: string;
+  let adminToken: string;
 
   beforeAll(async () => {
     // Initialize database
@@ -84,6 +85,10 @@ describe('Jobs API Routes', () => {
     });
     testProjectId = project.id;
 
+    // Create platform admin for routes that require it (e.g. /queues/:queueName/jobs/:id).
+    const admin = await createAdminUser(server, db, 'jobs-admin');
+    adminToken = admin.token;
+
     // Create managed API key for the project
     const apiKeyService = new ApiKeyService(db);
     const apiKeyResult = await apiKeyService.createKey({
@@ -116,7 +121,7 @@ describe('Jobs API Routes', () => {
         method: 'GET',
         url: '/api/v1/queues/screenshots/jobs/test-job',
         headers: {
-          'x-api-key': testApiKey,
+          authorization: `Bearer ${adminToken}`,
         },
       });
 
@@ -130,6 +135,25 @@ describe('Jobs API Routes', () => {
       const response = await server.inject({
         method: 'GET',
         url: '/api/v1/queues/screenshots/jobs/test-job',
+      });
+
+      expect(response.statusCode).toBe(401);
+    });
+
+    it('should reject API-key auth (platform admin only)', async () => {
+      // Regression: route previously had no preHandler — any authenticated
+      // caller, including the public-facing SDK ingest key, could fetch any
+      // job by id. Process-integration jobs carry decrypted credentials in
+      // their payload, so this was a cross-tenant secret exfiltration.
+      // Note: no `mockResolvedValueOnce` here — auth fails before getJob is
+      // called, and queueing a mock would leak into the next test.
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/queues/screenshots/jobs/test-job',
+        headers: {
+          'x-api-key': testApiKey,
+        },
       });
 
       expect(response.statusCode).toBe(401);
@@ -150,7 +174,7 @@ describe('Jobs API Routes', () => {
         method: 'GET',
         url: '/api/v1/queues/screenshots/jobs/test-job-123',
         headers: {
-          'x-api-key': testApiKey,
+          authorization: `Bearer ${adminToken}`,
         },
       });
 
@@ -158,6 +182,43 @@ describe('Jobs API Routes', () => {
       const body = JSON.parse(response.body);
       expect(body.success).toBe(true);
       expect(body.data).toEqual(mockJobStatus);
+    });
+
+    it('should redact credential-shaped fields from job data', async () => {
+      // Regression: process-integration job payloads carry decrypted
+      // credentials. Defense-in-depth — even with platform-admin auth,
+      // these should never appear in the response body.
+      const mockJobStatus = {
+        id: 'integration-job-1',
+        name: 'process-integration',
+        state: 'completed',
+        data: {
+          bugReportId: 'bug-1',
+          projectId: 'proj-1',
+          platform: 'jira',
+          credentials: { email: 'svc@x.com', apiToken: 'secret-token-XXX' },
+          apiToken: 'top-secret',
+          config: { instanceUrl: 'https://x.atlassian.net' },
+        },
+      };
+      (mockQueueManager.getJob as any).mockResolvedValueOnce(mockJobStatus);
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/queues/integrations/jobs/integration-job-1',
+        headers: {
+          authorization: `Bearer ${adminToken}`,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.data.credentials).toBe('[REDACTED]');
+      expect(body.data.data.apiToken).toBe('[REDACTED]');
+      // Non-sensitive fields preserved
+      expect(body.data.data.bugReportId).toBe('bug-1');
+      expect(body.data.data.projectId).toBe('proj-1');
+      expect(body.data.data.config).toEqual({ instanceUrl: 'https://x.atlassian.net' });
     });
 
     it('should handle invalid queue name', async () => {
@@ -170,7 +231,7 @@ describe('Jobs API Routes', () => {
         method: 'GET',
         url: '/api/v1/queues/invalid-queue/jobs/test-job',
         headers: {
-          'x-api-key': testApiKey,
+          authorization: `Bearer ${adminToken}`,
         },
       });
 

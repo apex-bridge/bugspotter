@@ -9,7 +9,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import type { QueueManager } from '../../queue/queue-manager.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireApiKeyPermission } from '../middleware/auth.js';
 import { sendSuccess } from '../utils/response.js';
 import { successResponseSchema } from '../schemas/common-schema.js';
 import { IntelligenceMitigationService } from '../../services/intelligence/mitigation-service.js';
@@ -48,7 +48,11 @@ export function intelligenceMitigationRoutes(
   fastify.get<{ Params: { projectId: string; bugId: string } }>(
     '/api/v1/intelligence/projects/:projectId/bugs/:bugId/mitigation',
     {
-      preHandler: [requireAuth],
+      // Mitigation suggestions can echo bug content (titles, repro steps,
+      // surrounding context) into the response. Same disclosure surface as
+      // GET /reports/:id, so the same `reports:read` gate applies — keeping
+      // ingest-only SDK keys out.
+      preHandler: [requireAuth, requireApiKeyPermission('reports:read')],
       schema: {
         params: mitigationParams,
         response: { 200: successResponseSchema },
@@ -91,7 +95,9 @@ export function intelligenceMitigationRoutes(
   fastify.post<{ Params: { projectId: string; bugId: string } }>(
     '/api/v1/intelligence/projects/:projectId/bugs/:bugId/mitigation',
     {
-      preHandler: [requireAuth],
+      // Triggering mitigation reads the bug + similar bugs to build the
+      // prompt; same disclosure as the GET above.
+      preHandler: [requireAuth, requireApiKeyPermission('reports:read')],
       schema: {
         params: mitigationParams,
         response: { 202: successResponseSchema },

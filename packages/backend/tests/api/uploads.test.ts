@@ -588,4 +588,49 @@ describe('Uploads API', () => {
       expect(body.message).toContain('Access denied');
     });
   });
+
+  // Regression: ingest-only SDK keys (the kind self-service signup issues —
+  // permissions: ['reports:write','sessions:write'], no read perm) must NOT be
+  // able to fetch presigned URLs for screenshots or replays. The keys ship in
+  // public-facing front-end SDK code; granting them read access would let any
+  // page visitor pull every bug-report asset for the project.
+  describe('ingest-only API key cannot read assets (regression)', () => {
+    let ingestOnlyKey: string;
+
+    beforeEach(async () => {
+      const apiKeyService = new ApiKeyService(db);
+      const result = await apiKeyService.createKey({
+        name: 'Ingest-only SDK key',
+        permissions: ['reports:write', 'sessions:write'],
+        allowed_projects: [testProject.id],
+      });
+      ingestOnlyKey = result.plaintext;
+
+      await db.query('UPDATE bug_reports SET screenshot_key = $1, replay_key = $2 WHERE id = $3', [
+        'screenshots/proj/bug/original.png',
+        'replays/proj/bug/replay.gz',
+        testBugReport.id,
+      ]);
+    });
+
+    it('GET screenshot-url with ingest-only key returns 403', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/reports/${testBugReport.id}/screenshot-url`,
+        headers: { 'x-api-key': ingestOnlyKey },
+      });
+
+      expect(response.statusCode).toBe(403);
+    });
+
+    it('GET replay-url with ingest-only key returns 403', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/reports/${testBugReport.id}/replay-url`,
+        headers: { 'x-api-key': ingestOnlyKey },
+      });
+
+      expect(response.statusCode).toBe(403);
+    });
+  });
 });

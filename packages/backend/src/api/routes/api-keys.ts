@@ -109,6 +109,79 @@ async function authorizeApiKeyReadAccess(
   throw new AppError('Access denied', 403, 'Forbidden');
 }
 
+/**
+ * Assert the caller has owner/admin (explicit or org-inherited) on every
+ * project in `projectIds`. CREATE has its own inline copy; this helper exists
+ * so PATCH can re-run the same gate when the caller is widening
+ * `allowed_projects` or otherwise touching grant-shaped fields.
+ *
+ * Without it, a user who legitimately created a single-project key could PATCH
+ * the key to add cross-tenant projects — the only check on PATCH today is
+ * "are you the creator?", which is too weak for a privilege-bearing field.
+ */
+async function assertCanGrantProjects(
+  db: DatabaseClient,
+  userId: string,
+  projectIds: string[]
+): Promise<void> {
+  if (projectIds.length === 0) {
+    throw new AppError('Non-admin users must specify at least one project', 403, 'Forbidden');
+  }
+
+  const roleMap = await db.projects.getUserRolesForProjects(projectIds, userId);
+
+  const needsOrgCheck = projectIds.filter((pid) => {
+    const role = roleMap.get(pid);
+    return role !== 'owner' && role !== 'admin';
+  });
+
+  if (needsOrgCheck.length === 0) {
+    return;
+  }
+
+  const projects = (await db.projects.findByIds(needsOrgCheck)) as Array<{
+    id: string;
+    organization_id?: string;
+  }>;
+  const projectMap = new Map(projects.map((p) => [p.id, p]));
+
+  for (const pid of needsOrgCheck) {
+    if (!projectMap.has(pid)) {
+      throw new AppError(`Project not found: ${pid}`, 404, 'NotFound');
+    }
+  }
+
+  const orgIds = [...new Set(projects.map((p) => p.organization_id).filter(Boolean) as string[])];
+
+  const orgMembershipMap = new Map<string, OrgMemberRole>();
+  if (orgIds.length > 0) {
+    const memberships = await db.organizationMembers.findByUserId(userId);
+    for (const m of memberships) {
+      if (orgIds.includes(m.organization_id)) {
+        orgMembershipMap.set(m.organization_id, m.role as OrgMemberRole);
+      }
+    }
+  }
+
+  for (const project of projects) {
+    const explicitRole = roleMap.get(project.id);
+    const orgRole = project.organization_id
+      ? orgMembershipMap.get(project.organization_id)
+      : undefined;
+    const effectiveRole = getEffectiveProjectRole(
+      explicitRole ? (explicitRole as 'owner' | 'admin' | 'member' | 'viewer') : undefined,
+      orgRole
+    );
+    if (!effectiveRole || !hasPermissionLevel(effectiveRole, 'admin')) {
+      throw new AppError(
+        `Access denied: You must be owner or admin of project ${project.id}`,
+        403,
+        'Forbidden'
+      );
+    }
+  }
+}
+
 export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
   const apiKeyService = new ApiKeyService(db);
 
@@ -354,7 +427,50 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         expires_at?: string | null;
       };
 
-      await authorizeApiKeyAccess(apiKeyService, id, request.authUser.id, isPlatformAdmin(request));
+      const existingKey = await authorizeApiKeyAccess(
+        apiKeyService,
+        id,
+        request.authUser.id,
+        isPlatformAdmin(request)
+      );
+
+      // Re-validate grant-shaped fields. The pre-existing `authorizeApiKeyAccess`
+      // check is "are you the key's creator?" — that's strong enough for `name`
+      // or rate-limit tweaks but too weak for fields that widen what the key can
+      // do. CREATE re-checks project access at issuance time; without the same
+      // re-check on PATCH, a user could legitimately create a single-project key
+      // and then PATCH it to add cross-tenant projects, escalate to
+      // `permission_scope: 'full'`, or set `permissions: ['*']`.
+      if (!isPlatformAdmin(request)) {
+        if (requestBody.permission_scope !== undefined && requestBody.permission_scope === 'full') {
+          throw new AppError(
+            'Only platform admins can grant full-scope API keys',
+            403,
+            'Forbidden'
+          );
+        }
+
+        if (requestBody.permissions?.includes('*')) {
+          throw new AppError(
+            'Only platform admins can grant wildcard permissions',
+            403,
+            'Forbidden'
+          );
+        }
+
+        const grantFieldsTouched =
+          requestBody.allowed_projects !== undefined ||
+          requestBody.permissions !== undefined ||
+          requestBody.permission_scope !== undefined;
+
+        if (grantFieldsTouched) {
+          // Validate against the post-update set of allowed projects. Falls
+          // back to the existing key's set if the caller didn't pass one.
+          const effectiveAllowedProjects =
+            requestBody.allowed_projects ?? existingKey.allowed_projects ?? [];
+          await assertCanGrantProjects(db, request.authUser.id, effectiveAllowedProjects);
+        }
+      }
 
       // Map request body to updates object
       const updates = mapUpdateFields(requestBody);
