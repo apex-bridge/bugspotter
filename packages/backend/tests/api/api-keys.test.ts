@@ -44,6 +44,7 @@ describe('API Key Routes', () => {
   let server: FastifyInstance;
   let db: DatabaseClient;
   let userToken: string;
+  let userId: string;
   let adminToken: string;
   let adminId: string;
   let projectId: string;
@@ -71,6 +72,7 @@ describe('API Key Routes', () => {
     // Create test users
     const user = await createTestUser(server, 'user', 'user');
     userToken = user.token;
+    userId = user.userId;
 
     const admin = await createTestUser(server, 'admin', 'admin', db);
     adminToken = admin.token;
@@ -821,6 +823,198 @@ describe('API Key Routes', () => {
       });
 
       expect(response.statusCode).toBe(404);
+    });
+
+    // Regression: PATCH used to forward `allowed_projects` / `permissions` /
+    // `permission_scope` straight through after only an "are you the creator?"
+    // check. CREATE has always re-validated project admin; PATCH did not, so a
+    // user with admin on one project could PATCH their own key to cross
+    // tenants. The gate now mirrors CREATE.
+    describe('grant-field re-validation (regression)', () => {
+      it('rejects non-admin widening allowed_projects to a tenant they do not admin', async () => {
+        // userToken creates a key for projectId (their own project)
+        const createResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/api-keys',
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: {
+            name: 'Single-project key',
+            type: 'development',
+            permission_scope: 'custom',
+            permissions: ['reports:read'],
+            allowed_projects: [projectId],
+          },
+        });
+        expect(createResp.statusCode).toBe(201);
+        const keyId = createResp.json().data.key_details.id;
+
+        // Different user owns a different project — userToken has no role on it
+        const otherUser = await createTestUser(server, 'user', 'cross-tenant-victim');
+        const otherProjectResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/projects',
+          headers: { authorization: `Bearer ${otherUser.token}` },
+          payload: { name: 'Other Tenant Project' },
+        });
+        const otherProjectId = otherProjectResp.json().data.id;
+
+        // userToken tries to PATCH their own key to add the foreign project
+        const patchResp = await server.inject({
+          method: 'PATCH',
+          url: `/api/v1/api-keys/${keyId}`,
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: { allowed_projects: [projectId, otherProjectId] },
+        });
+
+        expect(patchResp.statusCode).toBe(403);
+        expect(patchResp.json().message).toContain('owner or admin');
+      });
+
+      it('rejects non-admin widening to a project they are only a member of', async () => {
+        // userToken creates a key for projectId
+        const createResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/api-keys',
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: {
+            name: 'Member-of-other-project key',
+            type: 'development',
+            permission_scope: 'custom',
+            permissions: ['reports:read'],
+            allowed_projects: [projectId],
+          },
+        });
+        const keyId = createResp.json().data.key_details.id;
+
+        // Other user creates a project, then adds userToken-user as member (not admin)
+        const otherUser = await createTestUser(server, 'user', 'project-owner');
+        const otherProjectResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/projects',
+          headers: { authorization: `Bearer ${otherUser.token}` },
+          payload: { name: 'Member-Only Project' },
+        });
+        const otherProjectId = otherProjectResp.json().data.id;
+
+        await db.query(
+          'INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)',
+          [otherProjectId, userId, 'member']
+        );
+
+        const patchResp = await server.inject({
+          method: 'PATCH',
+          url: `/api/v1/api-keys/${keyId}`,
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: { allowed_projects: [projectId, otherProjectId] },
+        });
+
+        expect(patchResp.statusCode).toBe(403);
+        expect(patchResp.json().message).toContain('owner or admin');
+      });
+
+      it('allows non-admin widening to a project they DO admin (positive case)', async () => {
+        // userToken creates a key for projectId
+        const createResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/api-keys',
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: {
+            name: 'About-to-be-widened key',
+            type: 'development',
+            permission_scope: 'custom',
+            permissions: ['reports:read'],
+            allowed_projects: [projectId],
+          },
+        });
+        const keyId = createResp.json().data.key_details.id;
+
+        // userToken creates a SECOND project they own
+        const project2Resp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/projects',
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: { name: 'Second Owned Project' },
+        });
+        const project2Id = project2Resp.json().data.id;
+
+        // Widening to include their own second project should pass
+        const patchResp = await server.inject({
+          method: 'PATCH',
+          url: `/api/v1/api-keys/${keyId}`,
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: { allowed_projects: [projectId, project2Id] },
+        });
+
+        expect(patchResp.statusCode).toBe(200);
+        expect(patchResp.json().data.allowed_projects).toContain(projectId);
+        expect(patchResp.json().data.allowed_projects).toContain(project2Id);
+      });
+
+      it('allows non-admin to PATCH non-grant fields (name, rate limits) without re-validation', async () => {
+        // Proves the gate isn't over-restrictive. Updating just `name` on your
+        // own key shouldn't require re-running project-admin checks.
+        const createResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/api-keys',
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: {
+            name: 'Original',
+            type: 'development',
+            permission_scope: 'custom',
+            permissions: ['reports:read'],
+            allowed_projects: [projectId],
+          },
+        });
+        const keyId = createResp.json().data.key_details.id;
+
+        const patchResp = await server.inject({
+          method: 'PATCH',
+          url: `/api/v1/api-keys/${keyId}`,
+          headers: { authorization: `Bearer ${userToken}` },
+          payload: { name: 'Renamed', rate_limit_per_minute: 50 },
+        });
+
+        expect(patchResp.statusCode).toBe(200);
+        expect(patchResp.json().data.name).toBe('Renamed');
+        expect(patchResp.json().data.rate_limit_per_minute).toBe(50);
+      });
+
+      it('platform admin can PATCH allowed_projects to any project (admin bypass)', async () => {
+        // Admin creates a full-scope key for an arbitrary project
+        const createResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/api-keys',
+          headers: { authorization: `Bearer ${adminToken}` },
+          payload: {
+            name: 'Admin-managed key',
+            type: 'development',
+            permission_scope: 'full',
+            allowed_projects: [projectId],
+          },
+        });
+        const keyId = createResp.json().data.key_details.id;
+
+        // A different user owns a project that admin has no membership in.
+        const stranger = await createTestUser(server, 'user', 'stranger');
+        const strangerProjectResp = await server.inject({
+          method: 'POST',
+          url: '/api/v1/projects',
+          headers: { authorization: `Bearer ${stranger.token}` },
+          payload: { name: 'Stranger Project' },
+        });
+        const strangerProjectId = strangerProjectResp.json().data.id;
+
+        // Platform admin should bypass the project-admin check entirely
+        const patchResp = await server.inject({
+          method: 'PATCH',
+          url: `/api/v1/api-keys/${keyId}`,
+          headers: { authorization: `Bearer ${adminToken}` },
+          payload: { allowed_projects: [projectId, strangerProjectId] },
+        });
+
+        expect(patchResp.statusCode).toBe(200);
+        expect(patchResp.json().data.allowed_projects).toContain(strangerProjectId);
+      });
     });
   });
 
