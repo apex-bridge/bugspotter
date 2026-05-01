@@ -57,7 +57,16 @@ const REDACTED_JOB_DATA_KEYS = new Set([
 const MAX_REDACTION_DEPTH = 10;
 
 function redactValue(value: unknown, depth: number): unknown {
+  // Fail closed at the depth boundary: if we can't keep walking, we can't be
+  // sure the subtree doesn't contain a credential-shaped key, so replace the
+  // whole subtree with a placeholder rather than leaking it. Realistic job
+  // payloads don't nest this deep — hitting this branch means a buggy or
+  // malicious worker shape, and surprising the consumer with a placeholder
+  // is much better than surprising them with an unredacted credential.
   if (depth >= MAX_REDACTION_DEPTH) {
+    if (value && typeof value === 'object') {
+      return '[DEPTH_EXCEEDED]';
+    }
     return value;
   }
   if (Array.isArray(value)) {

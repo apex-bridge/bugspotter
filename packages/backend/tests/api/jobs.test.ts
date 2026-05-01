@@ -221,6 +221,40 @@ describe('Jobs API Routes', () => {
       expect(body.data.data.config).toEqual({ instanceUrl: 'https://x.atlassian.net' });
     });
 
+    it('should fail closed when nesting exceeds redaction depth', async () => {
+      // Build a payload nested past MAX_REDACTION_DEPTH (10). The redactor
+      // can't keep walking past the limit, and rather than leak the whole
+      // subtree it replaces deep objects with a placeholder. Realistic job
+      // payloads never nest this deep — hitting the limit means a buggy or
+      // malicious worker shape.
+      let deeplyNested: Record<string, unknown> = { apiToken: 'leak-me' };
+      for (let i = 0; i < 12; i++) {
+        deeplyNested = { wrapper: deeplyNested };
+      }
+      const mockJobStatus = {
+        id: 'pathological-job',
+        name: 'process-integration',
+        state: 'completed',
+        data: deeplyNested,
+      };
+      (mockQueueManager.getJob as any).mockResolvedValueOnce(mockJobStatus);
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/queues/integrations/jobs/pathological-job',
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      // Walk the response. Every level must be either a wrapper object, the
+      // [DEPTH_EXCEEDED] placeholder, or [REDACTED] for matching keys —
+      // never the literal 'leak-me'.
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain('leak-me');
+      expect(serialized).toContain('[DEPTH_EXCEEDED]');
+    });
+
     it('should redact credential-shaped fields nested deep in job data', async () => {
       // Defense-in-depth against future job shapes that nest credentials
       // (e.g. config.apiToken, options.auth.password). The shallow walk

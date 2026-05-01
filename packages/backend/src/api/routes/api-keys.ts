@@ -222,75 +222,12 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         expires_at?: string;
       };
 
-      // Authorization: Platform admins can create keys for any projects
-      // Other users need owner/admin role (explicit or inherited from org) for all specified projects
+      // Authorization: Platform admins can create keys for any projects.
+      // Other users need owner/admin role (explicit or inherited from org)
+      // for all specified projects. Same gate as PATCH — single helper so
+      // the two paths can't drift.
       if (!isPlatformAdmin(request)) {
-        if (allowed_projects.length === 0) {
-          throw new AppError('Non-admin users must specify at least one project', 403, 'Forbidden');
-        }
-
-        // Step 1: Batch-fetch explicit project roles
-        const roleMap = await db.projects.getUserRolesForProjects(
-          allowed_projects,
-          request.authUser.id
-        );
-
-        // Step 2: Identify projects needing org inheritance check
-        const needsOrgCheck = allowed_projects.filter((pid) => {
-          const role = roleMap.get(pid);
-          return role !== 'owner' && role !== 'admin';
-        });
-
-        // Step 3: Batch-fetch org memberships for projects lacking explicit admin access
-        const orgMembershipMap = new Map<string, OrgMemberRole>();
-        if (needsOrgCheck.length > 0) {
-          // Single query to fetch all projects needing org check
-          const projects = (await db.projects.findByIds(needsOrgCheck)) as Array<{
-            id: string;
-            organization_id?: string;
-          }>;
-          const projectMap = new Map(projects.map((p) => [p.id, p]));
-
-          // Reject any unknown project IDs
-          for (const pid of needsOrgCheck) {
-            if (!projectMap.has(pid)) {
-              throw new AppError(`Project not found: ${pid}`, 404, 'NotFound');
-            }
-          }
-
-          const orgIds = [
-            ...new Set(projects.map((p) => p.organization_id).filter(Boolean) as string[]),
-          ];
-
-          // Fetch user's memberships for all relevant orgs in one query
-          if (orgIds.length > 0) {
-            const memberships = await db.organizationMembers.findByUserId(request.authUser.id);
-            for (const m of memberships) {
-              if (orgIds.includes(m.organization_id)) {
-                orgMembershipMap.set(m.organization_id, m.role as OrgMemberRole);
-              }
-            }
-          }
-
-          // Step 4: Validate each project using effective role
-          for (const project of projects) {
-            const explicitRole = roleMap.get(project.id);
-            const orgRole = project.organization_id
-              ? orgMembershipMap.get(project.organization_id)
-              : undefined;
-            const effectiveRole = getEffectiveProjectRole(
-              explicitRole ? (explicitRole as 'owner' | 'admin' | 'member' | 'viewer') : undefined,
-              orgRole
-            );
-            if (!effectiveRole || !hasPermissionLevel(effectiveRole, 'admin')) {
-              throw new AppError(
-                `Access denied: You must be owner or admin of project ${project.id}`,
-                403,
-                'Forbidden'
-              );
-            }
-          }
-        }
+        await assertCanGrantProjects(db, request.authUser.id, allowed_projects);
       }
 
       // Create API key (validation handled in service)
