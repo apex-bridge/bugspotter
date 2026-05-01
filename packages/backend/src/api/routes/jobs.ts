@@ -83,14 +83,17 @@ function redactValue(value: unknown, depth: number): unknown {
 }
 
 function redactJobStatus(jobStatus: unknown): unknown {
-  if (!jobStatus || typeof jobStatus !== 'object') {
-    return jobStatus;
-  }
-  const status = jobStatus as Record<string, unknown>;
-  if (!status.data || typeof status.data !== 'object') {
-    return status;
-  }
-  return { ...status, data: redactValue(status.data, 0) };
+  // Walk the whole job-status object, not just `data`. BullMQ also exposes
+  // `returnValue` (worker return) and may carry sensitive structures in
+  // future fields. `redactValue` only triggers on credential-shaped keys,
+  // so non-matching top-level fields (id, name, state, timestamp, etc.)
+  // pass through untouched.
+  //
+  // Known limitation: `failedReason` and `stacktrace` are string-typed; if
+  // a worker stringifies a credential into an error message, structural
+  // redaction can't catch it. Scrubbing arbitrary strings for credentials
+  // is a different problem (pattern-based, fragile) and out of scope here.
+  return redactValue(jobStatus, 0);
 }
 
 export function jobRoutes(

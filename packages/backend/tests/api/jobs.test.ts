@@ -221,6 +221,42 @@ describe('Jobs API Routes', () => {
       expect(body.data.data.config).toEqual({ instanceUrl: 'https://x.atlassian.net' });
     });
 
+    it('should redact credential-shaped fields in returnValue (not just data)', async () => {
+      // BullMQ surfaces a worker's return value in `returnValue`. If a
+      // worker bug lands credentials there (or a future job shape stores
+      // results differently), structural redaction must catch it — same
+      // disclosure surface as `data`.
+      const mockJobStatus = {
+        id: 'integration-job-3',
+        name: 'process-integration',
+        state: 'completed',
+        data: { bugReportId: 'bug-3' },
+        returnValue: {
+          ticketId: 'JIRA-123',
+          credentials: { apiToken: 'leaked-via-returnValue' },
+          rotatedToken: 'plaintext-leak',
+          nested: { apiToken: 'also-leaked' },
+        },
+      };
+      (mockQueueManager.getJob as any).mockResolvedValueOnce(mockJobStatus);
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/queues/integrations/jobs/integration-job-3',
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.data.returnValue.credentials).toBe('[REDACTED]');
+      expect(body.data.returnValue.nested.apiToken).toBe('[REDACTED]');
+      // Non-matching keys preserved
+      expect(body.data.returnValue.ticketId).toBe('JIRA-123');
+      // The literal credential strings must not survive anywhere in the body
+      expect(JSON.stringify(body)).not.toContain('leaked-via-returnValue');
+      expect(JSON.stringify(body)).not.toContain('also-leaked');
+    });
+
     it('should fail closed when nesting exceeds redaction depth', async () => {
       // Build a payload nested past MAX_REDACTION_DEPTH (10). The redactor
       // can't keep walking past the limit, and rather than leak the whole
