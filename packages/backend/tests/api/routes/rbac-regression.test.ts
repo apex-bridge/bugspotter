@@ -39,6 +39,7 @@ import {
   requireAuth,
   requirePermission,
   requireProjectRole,
+  requireApiKeyPermission,
 } from '../../../src/api/middleware/auth/authorization.js';
 
 // ============================================================================
@@ -584,6 +585,109 @@ describe('requirePermission regression', () => {
       const result = await runMiddleware(middleware, { systemRole: 'viewer' });
       expect(result.allowed).toBe(viewerAllowed[action]);
     }
+  });
+});
+
+// ============================================================================
+// requireApiKeyPermission — API-key permission gate (regression: ingest-only
+// SDK keys must not bypass read permission via authProject shortcut)
+// ============================================================================
+
+describe('requireApiKeyPermission regression', () => {
+  // The signup-issued ingest-only key has permission_scope='custom' and
+  // permissions=['reports:write','sessions:write'] (see saas/services/
+  // signup.service.ts). It also has allowed_projects.length === 1, which
+  // means handlers.ts also sets request.authProject. The middleware MUST
+  // gate on request.apiKey.permissions, not fall through to authProject.
+
+  function createApiKeyRequest(opts: {
+    permissions?: string[];
+    permission_scope?: 'full' | 'read' | 'write' | 'custom';
+    hasAuthProject?: boolean;
+  }): FastifyRequest {
+    return {
+      authUser: undefined,
+      apiKey: {
+        id: 'key-1',
+        allowed_projects: ['project-1'],
+        permissions: opts.permissions ?? [],
+        permission_scope: opts.permission_scope ?? 'custom',
+      },
+      authProject: opts.hasAuthProject ? { id: 'project-1' } : undefined,
+    } as unknown as FastifyRequest;
+  }
+
+  it('JWT user bypasses (permissions checked elsewhere)', async () => {
+    const middleware = requireApiKeyPermission('reports:read');
+    const request = {
+      authUser: { id: 'u1', email: 'u@test.com', role: 'user' },
+    } as unknown as FastifyRequest;
+    const reply = createReply();
+    await middleware(request, reply);
+    expect((reply as any).code.mock.calls.length).toBe(0);
+  });
+
+  it('ingest-only key (reports:write only) is denied reports:read', async () => {
+    const middleware = requireApiKeyPermission('reports:read');
+    const request = createApiKeyRequest({
+      permissions: ['reports:write', 'sessions:write'],
+      hasAuthProject: true, // single allowed_projects → authProject is set
+    });
+    const reply = createReply();
+    await middleware(request, reply);
+    expect((reply as any)._statusCode).toBe(403);
+  });
+
+  it('ingest-only key (reports:write only) is denied sessions:read', async () => {
+    const middleware = requireApiKeyPermission('sessions:read');
+    const request = createApiKeyRequest({
+      permissions: ['reports:write', 'sessions:write'],
+      hasAuthProject: true,
+    });
+    const reply = createReply();
+    await middleware(request, reply);
+    expect((reply as any)._statusCode).toBe(403);
+  });
+
+  it('ingest-only key passes its OWN permission (reports:write)', async () => {
+    const middleware = requireApiKeyPermission('reports:write');
+    const request = createApiKeyRequest({
+      permissions: ['reports:write', 'sessions:write'],
+      hasAuthProject: true,
+    });
+    const reply = createReply();
+    await middleware(request, reply);
+    expect((reply as any).code.mock.calls.length).toBe(0);
+  });
+
+  it('full-scope key (permissions: ["*"]) passes any permission', async () => {
+    const middleware = requireApiKeyPermission('reports:read');
+    const request = createApiKeyRequest({
+      permissions: ['*'],
+      permission_scope: 'full',
+    });
+    const reply = createReply();
+    await middleware(request, reply);
+    expect((reply as any).code.mock.calls.length).toBe(0);
+  });
+
+  it('read-scope key passes reports:read', async () => {
+    const middleware = requireApiKeyPermission('reports:read');
+    const request = createApiKeyRequest({
+      permissions: ['reports:read', 'sessions:read'],
+      permission_scope: 'read',
+    });
+    const reply = createReply();
+    await middleware(request, reply);
+    expect((reply as any).code.mock.calls.length).toBe(0);
+  });
+
+  it('unauthenticated request returns 401', async () => {
+    const middleware = requireApiKeyPermission('reports:read');
+    const request = {} as FastifyRequest;
+    const reply = createReply();
+    await middleware(request, reply);
+    expect((reply as any)._statusCode).toBe(401);
   });
 });
 
