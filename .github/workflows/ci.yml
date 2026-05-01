@@ -760,7 +760,14 @@ jobs:
   ci-success:
     name: CI
     runs-on: ubuntu-latest
-    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, playwright-admin, build, test-coverage, validate-compose]
+    # `test-backend-integration` is in `needs` so the required CI summary
+    # waits for it to finish — without this, CI can go green while the
+    # integration job is still running and any new regression would slip
+    # through. Intentionally NOT added to the result-check block below:
+    # the job has `continue-on-error: true` and is non-blocking until
+    # the cleanup PRs (α–ε) land. Add a result check here when those
+    # ship.
+    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, test-backend-integration, playwright-admin, build, test-coverage, validate-compose]
     if: always()
     steps:
       - name: Check all jobs succeeded
