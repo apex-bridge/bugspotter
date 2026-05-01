@@ -8,7 +8,7 @@ import type { DatabaseClient } from '../../db/client.js';
 import type { IStorageService } from '../../storage/types.js';
 import type { QueueManager } from '../../queue/queue-manager.js';
 import { AppError } from '../middleware/error.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireApiKeyPermission } from '../middleware/auth.js';
 import { sendSuccess } from '../utils/response.js';
 import { checkProjectAccess } from '../utils/resource.js';
 import { getLogger } from '../../logger.js';
@@ -190,7 +190,14 @@ export function uploadsRoutes(
   fastify.get<{ Params: { id: string } }>(
     '/api/v1/reports/:id/screenshot-url',
     {
-      preHandler: requireAuth,
+      // Why `reports:read` (not a distinct `assets:read`): the screenshot is
+      // a render of the report. Whoever can GET /reports/:id should be able
+      // to load its screenshot, and whoever cannot, should not — same audience,
+      // same gate. Adding it here closes a gap where ingest-only SDK keys
+      // (permissions: ['reports:write','sessions:write']) bypassed the
+      // permission check via requireAuth and pulled presigned URLs for any
+      // bug-report asset in their allowed project.
+      preHandler: [requireAuth, requireApiKeyPermission('reports:read')],
       schema: bugReportIdParamsSchema,
     },
     async (request, reply) => {
@@ -238,7 +245,9 @@ export function uploadsRoutes(
   fastify.get<{ Params: { id: string } }>(
     '/api/v1/reports/:id/replay-url',
     {
-      preHandler: requireAuth,
+      // See screenshot-url above for the rationale; replays carry the same
+      // PII surface (and more — full DOM, console, network).
+      preHandler: [requireAuth, requireApiKeyPermission('reports:read')],
       schema: bugReportIdParamsSchema,
     },
     async (request, reply) => {

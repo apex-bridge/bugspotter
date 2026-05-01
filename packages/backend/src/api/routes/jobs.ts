@@ -10,6 +10,7 @@ import type { QueueName } from '../../queue/types.js';
 import { QUEUE_NAMES } from '../../queue/types.js';
 import { sendSuccess } from '../utils/response.js';
 import { checkProjectAccess, findOrThrow } from '../utils/resource.js';
+import { requireUser, requirePlatformAdmin } from '../middleware/auth.js';
 import { AppError } from '../middleware/error.js';
 import { getEncryptionService } from '../../utils/encryption.js';
 import { QueueNotFoundError } from '../../queue/errors.js';
@@ -26,6 +27,75 @@ interface ReportJobsParams {
   id: string;
 }
 
+/**
+ * Strip credential-shaped fields from a job status response. Worker payloads
+ * for `process-integration` jobs include decrypted `credentials` and may grow
+ * to include other secret-bearing keys; redact defensively so future job
+ * shapes don't accidentally leak.
+ *
+ * Recursive: matching keys are scrubbed at any depth. A whole sub-object
+ * that matches a key (e.g. `credentials: { email, apiToken }`) is replaced
+ * outright rather than recursed into — replacing wholesale is safer than
+ * walking, because not every leaf in a credential blob is itself in the
+ * keyset (an `email` adjacent to an `apiToken` is still sensitive metadata).
+ * Non-matching objects ARE recursed so a future `data.config.apiToken` or
+ * `data.options.password` gets caught.
+ *
+ * Depth-bounded so a buggy worker can't pin the event loop with pathological
+ * nesting. 10 is well past any realistic job payload depth.
+ */
+const REDACTED_JOB_DATA_KEYS = new Set([
+  'credentials',
+  'encrypted_credentials',
+  'apiToken',
+  'apiKey',
+  'token',
+  'password',
+  'secret',
+]);
+
+const MAX_REDACTION_DEPTH = 10;
+
+function redactValue(value: unknown, depth: number): unknown {
+  // Fail closed at the depth boundary: if we can't keep walking, we can't be
+  // sure the subtree doesn't contain a credential-shaped key, so replace the
+  // whole subtree with a placeholder rather than leaking it. Realistic job
+  // payloads don't nest this deep — hitting this branch means a buggy or
+  // malicious worker shape, and surprising the consumer with a placeholder
+  // is much better than surprising them with an unredacted credential.
+  if (depth >= MAX_REDACTION_DEPTH) {
+    if (value && typeof value === 'object') {
+      return '[DEPTH_EXCEEDED]';
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => redactValue(v, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = REDACTED_JOB_DATA_KEYS.has(k) ? '[REDACTED]' : redactValue(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+function redactJobStatus(jobStatus: unknown): unknown {
+  // Walk the whole job-status object, not just `data`. BullMQ also exposes
+  // `returnValue` (worker return) and may carry sensitive structures in
+  // future fields. `redactValue` only triggers on credential-shaped keys,
+  // so non-matching top-level fields (id, name, state, timestamp, etc.)
+  // pass through untouched.
+  //
+  // Known limitation: `failedReason` and `stacktrace` are string-typed; if
+  // a worker stringifies a credential into an error message, structural
+  // redaction can't catch it. Scrubbing arbitrary strings for credentials
+  // is a different problem (pattern-based, fragile) and out of scope here.
+  return redactValue(jobStatus, 0);
+}
+
 export function jobRoutes(
   fastify: FastifyInstance,
   db: DatabaseClient,
@@ -35,9 +105,20 @@ export function jobRoutes(
   /**
    * GET /api/v1/queues/:queueName/jobs/:id
    * Get status of a specific job in a queue
+   *
+   * Platform-admin only: a process-integration job's `data` carries decrypted
+   * Jira/GitHub credentials (see /admin/integrations/:platform/trigger below
+   * where the worker payload is constructed). Without this gate, any
+   * authenticated caller — including the public-facing SDK ingest key —
+   * could fetch any job by id and read another tenant's integration creds.
+   * Even with the gate, we redact credential-shaped fields below as
+   * defense-in-depth.
    */
   fastify.get<{ Params: JobParams }>(
     '/api/v1/queues/:queueName/jobs/:id',
+    {
+      preHandler: [requireUser, requirePlatformAdmin()],
+    },
     async (request, reply) => {
       if (!queueManager) {
         throw new AppError('Queue system not available', 503, 'ServiceUnavailable');
@@ -52,7 +133,7 @@ export function jobRoutes(
           throw new AppError(`Job ${id} not found in ${queueName} queue`, 404, 'NotFound');
         }
 
-        return sendSuccess(reply, jobStatus);
+        return sendSuccess(reply, redactJobStatus(jobStatus));
       } catch (error) {
         if (error instanceof AppError) {
           throw error;
