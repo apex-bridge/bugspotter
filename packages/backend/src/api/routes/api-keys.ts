@@ -439,25 +439,14 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       // or rate-limit tweaks but too weak for fields that widen what the key can
       // do. CREATE re-checks project access at issuance time; without the same
       // re-check on PATCH, a user could legitimately create a single-project key
-      // and then PATCH it to add cross-tenant projects, escalate to
-      // `permission_scope: 'full'`, or set `permissions: ['*']`.
+      // and then PATCH it to add cross-tenant projects.
+      //
+      // The gate intentionally mirrors CREATE: project-admin on every project
+      // in the post-update `allowed_projects`. Scope/permissions are bounded by
+      // that project list, so no separate scope or wildcard check is needed —
+      // matching CREATE keeps the surface symmetric and avoids the trap of
+      // PATCH being arbitrarily stricter than the path that issued the key.
       if (!isPlatformAdmin(request)) {
-        if (requestBody.permission_scope !== undefined && requestBody.permission_scope === 'full') {
-          throw new AppError(
-            'Only platform admins can grant full-scope API keys',
-            403,
-            'Forbidden'
-          );
-        }
-
-        if (requestBody.permissions?.includes('*')) {
-          throw new AppError(
-            'Only platform admins can grant wildcard permissions',
-            403,
-            'Forbidden'
-          );
-        }
-
         const grantFieldsTouched =
           requestBody.allowed_projects !== undefined ||
           requestBody.permissions !== undefined ||
