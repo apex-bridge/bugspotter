@@ -226,6 +226,60 @@ jobs:
       - name: Run other tests
         run: pnpm --filter @bugspotter/backend test -- tests/storage tests/config tests/security tests/integration tests/utils tests/*.test.ts
 
+  test-backend-integration:
+    name: Backend Integration Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Non-blocking on purpose. Integration tests stopped running in CI when
+    # `vitest.config.ts` started excluding `tests/integration/**` — the
+    # `pnpm test -- tests/integration` calls in other jobs match nothing and
+    # exit 0. Wiring `pnpm test:integration` (which uses the integration
+    # config) restores visibility, but the suite carries pre-existing
+    # baseline failures (verified pre-PR-1 by checking out origin/main).
+    # Cleanup is tracked in follow-up PRs (α–ε from the rot analysis):
+    #   - α: setup.integration-env.ts ALLOW_REGISTRATION → fixes 3
+    #   - β: rule-evaluator beforeEach cache invalidation → fixes 10
+    #   - γ: delete two stale tests (admin-register, role-required magic)
+    #   - δ: full-scope-api-key URL/enum/fixture drift → fixes 12
+    #   - ε: integration-rules-permissions role + wording → fixes 5
+    # Once those land, flip continue-on-error to false and add this job
+    # to ci-success's needs list to make it required.
+    continue-on-error: true
+
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: ${{ matrix.node-version }}
+          pnpm-version: '9.14.4'
+
+      - name: Build types package
+        run: pnpm --filter @bugspotter/types run build
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Run integration tests
+        # Testcontainers spins up Postgres/Redis automatically — Docker is
+        # available on the GitHub-hosted runner.
+        run: pnpm --filter @bugspotter/backend run test:integration
+
   playwright-admin:
     name: Admin E2E Tests
     runs-on: ubuntu-latest
