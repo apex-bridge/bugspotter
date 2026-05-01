@@ -1,0 +1,53 @@
+name: Claude PR Review
+
+# Auto-reviews every PR using the Claude GitHub App. Mirrors what
+# `gemini-code-assist[bot]` does today — runs on open + each new push,
+# posts inline review comments. Independent of the main `ci.yml`
+# workflow; failures here don't gate merges.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+# Cancel in-flight reviews when new commits are pushed — no point reviewing
+# a stale revision and burning credits doing it.
+concurrency:
+  group: claude-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    name: Claude Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Shallow clone — review only needs the diff, not full history.
+          fetch-depth: 1
+
+      - name: Run Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Review PR #${{ github.event.pull_request.number }}.
+
+            Focus on what would actually break:
+            - Security gaps (auth bypass, injection, missing tenant scoping,
+              credential leaks, SSRF, unsafe deserialization)
+            - Race conditions, deadlocks, transactional gaps
+            - Missing tests for new behavior — flag the specific scenarios
+            - Concrete bugs — point at file:line and name the failure mode
+
+            Skip: generic best-practice nits, style preferences, theoretical
+            issues that wouldn't reach a real user. If you find nothing
+            substantive, say so and stop — don't manufacture findings.
+
+            Use inline review comments on the relevant diff lines. Do NOT
+            post a top-level PR summary comment.
