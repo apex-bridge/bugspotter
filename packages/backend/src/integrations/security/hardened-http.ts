@@ -188,10 +188,14 @@ export async function hardenedFetch(
         // best-effort cleanup
       }
       // Resolve relative redirect against the current URL.
-      currentUrl = new URL(location, currentUrl).toString();
+      const nextUrl = new URL(location, currentUrl);
+      currentUrl = nextUrl.toString();
+      // Log only origin + pathname — query/fragment can carry signed
+      // tokens or session identifiers that should not land in log
+      // storage on every redirect hop.
       logger.debug('Hardened fetch following redirect', {
-        from: parsedUrl.toString(),
-        to: currentUrl,
+        from: `${parsedUrl.origin}${parsedUrl.pathname}`,
+        to: `${nextUrl.origin}${nextUrl.pathname}`,
         hop: hop + 1,
       });
       continue;

@@ -673,8 +673,15 @@ export async function registerIntegrationRoutes(
       const validateHopUrl = (urlToCheck: URL): void => {
         // Re-run the full SSRF URL-string validator (protocol, IP
         // range, cloud metadata, alternative-encoding) on the redirect
-        // target. Throws on any violation.
-        validateSSRFProtection(urlToCheck.toString());
+        // target. Wrap as 400 AppError so the route's outer catch
+        // (which maps everything to 500) doesn't downgrade a policy
+        // rejection into a generic network error.
+        try {
+          validateSSRFProtection(urlToCheck.toString());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new AppError(`Redirect target rejected: ${message}`, 400, 'BadRequest');
+        }
         // Re-run the integration's domain allowlist on the redirect
         // target — same allowedDomains we computed for the initial URL.
         const hop = urlToCheck.hostname;
@@ -685,18 +692,21 @@ export async function registerIntegrationRoutes(
           return hop === domain;
         });
         if (!ok) {
-          throw new Error(`Redirect target hostname not allowed: ${hop}`);
+          throw new AppError(`Redirect target hostname not allowed: ${hop}`, 403, 'Forbidden');
         }
       };
 
       // Fetch avatar from validated external source — hardened against
       // H1 (redirect-following past validation) via per-hop URL
-      // re-validation and a redirect cap. We do NOT pin DNS here:
-      // Node's undici-backed `fetch` does not accept a custom `agent`
-      // for HTTPS in a way that overrides DNS resolution, so a
-      // per-hop agent would be theatre. The Jira and generic-http
-      // clients (which use raw https.request / axios with httpsAgent)
-      // remain DNS-pinned where the agent IS effective.
+      // re-validation and a redirect cap. DNS pinning is NOT applied
+      // on this path: the avatar proxy uses Node's undici-backed
+      // `fetch`, which ignores the legacy `agent` option for HTTPS.
+      // Closing H2 (pure DNS rebinding, no redirect) for this route
+      // requires switching to an undici Dispatcher with a `connect`
+      // hook — tracked separately so the dep + test-harness changes
+      // don't bloat this PR. The Jira and generic-http clients still
+      // pin DNS via `https.request({ lookup })` / axios `httpsAgent`
+      // where the underlying transport DOES honour custom resolution.
       let response: Response;
       try {
         response = await hardenedFetch(validatedUrl.toString(), {
@@ -706,6 +716,12 @@ export async function registerIntegrationRoutes(
           validateUrl: validateHopUrl,
         });
       } catch (error) {
+        // Policy rejections (validateHopUrl throws AppError) propagate
+        // as the original 4xx — only treat non-AppError throws as
+        // network errors and map to 500.
+        if (error instanceof AppError) {
+          throw error;
+        }
         logger.error('Network error fetching avatar from external service', {
           integrationId,
           url: validatedUrl.toString(), // Full URL for debugging (already validated)
