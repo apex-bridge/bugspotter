@@ -388,7 +388,11 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         const decoded = fastify.jwt.verify(token) as {
           type?: string;
           userId: string;
-          role: string;
+          // role is optional — older magic tokens issued before role was
+          // dropped from the payload (per validateJwtPayload at auth.ts:137)
+          // may still carry it, but new tokens don't. The cast must reflect
+          // the actual contract the validator enforces, not an old shape.
+          role?: string;
           organizationId?: string;
         };
 

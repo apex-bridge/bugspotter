@@ -515,12 +515,32 @@ describe('Magic Login Authentication', () => {
       expect(body.message).toContain('user identifier');
     });
 
-    // Removed: "should reject token with missing role" — `role` was made
-    // optional in the JWT payload (see auth.ts:117,137 — comment notes
-    // "removed from new tokens, may exist in old ones"). Tokens without
-    // role now validate successfully; this test asserted the old behavior.
-    // Adjacent tests for missing/null `userId` still apply because that
-    // field remains required.
+    it('should accept magic token without role claim (backward compat)', async () => {
+      // `role` was made optional in the JWT payload (auth.ts:137 comment:
+      // "removed from new tokens, may exist in old ones"). Newer tokens
+      // omit it entirely. Without an explicit positive test, a future
+      // "fix" that re-adds the role-required check would silently break
+      // every magic-login token issued after that change.
+      const tokenWithoutRole = server.jwt.sign(
+        {
+          userId: testUserId,
+          organizationId: testOrgId,
+          type: 'magic',
+        },
+        { expiresIn: '1h' }
+      );
+
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/magic-login',
+        payload: { token: tokenWithoutRole },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.success).toBe(true);
+      expect(body.data.access_token).toBeDefined();
+    });
 
     it('should reject token with null userId', async () => {
       const malformedToken = server.jwt.sign(

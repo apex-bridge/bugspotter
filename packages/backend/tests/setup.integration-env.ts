@@ -33,13 +33,14 @@ if (!process.env.LOG_LEVEL) {
 // posture) and tests fail with 403. Production behavior is controlled by
 // `DEPLOYMENT_MODE=saas`, which we don't set here so other code paths stay
 // in their selfhosted defaults.
-if (!process.env.ALLOW_REGISTRATION) {
-  process.env.ALLOW_REGISTRATION = 'true';
-}
-
-if (!process.env.REQUIRE_INVITATION_TO_REGISTER) {
-  process.env.REQUIRE_INVITATION_TO_REGISTER = 'false';
-}
+//
+// Force-set rather than conditional-set: a developer who has these vars
+// set to other values in their local shell (e.g. mirroring a selfhosted
+// deployment for manual testing) would otherwise see opaque 403 failures
+// when running the integration suite. The integration tests own these
+// values during their run.
+process.env.ALLOW_REGISTRATION = 'true';
+process.env.REQUIRE_INVITATION_TO_REGISTER = 'false';
 
 // Verify DATABASE_URL is set (should come from globalSetup)
 if (!process.env.DATABASE_URL) {
