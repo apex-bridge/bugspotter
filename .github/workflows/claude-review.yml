@@ -15,11 +15,24 @@ on:
   pull_request_review_comment:
     types: [created]
 
-# Cancel in-flight reviews when new commits are pushed — no point
-# reviewing a stale revision and burning credits doing it.
+# Cancel in-flight reviews when new COMMITS are pushed (so we don't
+# review a stale revision) — but NOT when comment events fire.
+#
+# Comment-triggered runs (`issue_comment`, `pull_request_review_comment`)
+# share the same concurrency group as `pull_request` runs. Without the
+# event-aware `cancel-in-progress`, every comment on a PR — even bot
+# threads or replies the workflow's `if:` guard would skip — would
+# cancel an in-flight pull_request review on the same ref. That's how
+# four laconic replies on review threads accidentally killed PR-90's
+# real review run.
+#
+# With this expression, only `pull_request` events (= new pushes) cancel
+# in-flight runs. Comment events queue behind / run alongside, and any
+# without `@claude` get filtered out by the job-level `if:` guard
+# anyway.
 concurrency:
   group: claude-review-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   claude-review:
