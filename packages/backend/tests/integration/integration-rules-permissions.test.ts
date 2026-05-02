@@ -70,13 +70,18 @@ describe('Integration Rules Permissions - E2E', () => {
     testProject = await createTestProject(db, { created_by: adminUser.id });
     cleanup.trackProject(testProject.id);
 
-    // Add regular user as project admin. The integration-rules CRUD routes
-    // (create / update / delete / copy) now require `requireProjectRole('admin')`
-    // — see src/api/routes/integration-rules.ts:203,269,313,360 — so a `member`
-    // role no longer suffices to exercise the "should allow regular user to ..."
-    // tests below. The PLATFORM role stays `user` (set in createTestUser),
-    // so these tests still verify that a non-platform-admin can perform the
-    // op when their project role is sufficient.
+    // Add regular user as project admin. The create / update routes use
+    // `requireProjectRole('admin')` (integration-rules.ts:203, 269), so
+    // `member` would 403. The COPY route enforces admin on the TARGET
+    // project only (inline `checkProjectAccess` in the handler at
+    // integration-rules.ts:370-380); its preHandler (line 361) uses
+    // `requireProjectAccess` with no minProjectRole, so the SOURCE
+    // project just needs membership. We grant admin on the source anyway
+    // for symmetry. Platform role stays `user`, so these tests still
+    // verify that a non-platform-admin can do these ops when their
+    // project role is sufficient. DELETE is excluded — see the rename
+    // in the DELETE describe-block (platform `user` lacks
+    // `integration_rules:delete` in the permissions seed).
     await db.projectMembers.addMember(testProject.id, regularUser.id, 'admin');
 
     // Add viewer user as member
@@ -264,6 +269,41 @@ describe('Integration Rules Permissions - E2E', () => {
       );
     });
 
+    // Coverage: a project `member` (not `admin`) is denied at the
+    // `requireProjectRole('admin')` gate, NOT at requirePermission.
+    // Without this test, a regression that relaxes the project-role
+    // requirement back to 'member' (or removes the guard entirely)
+    // would only be caught for the platform-permission gate via the
+    // viewer/outsider tests above. Distinguished by the error message.
+    it('should deny project member (with create permission) from creating rules', async () => {
+      const memberData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(memberData.user.id);
+      await db.projectMembers.addMember(testProject.id, memberData.user.id, 'member');
+      const memberLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: memberData.user.email, password: memberData.password },
+      });
+      const memberJwt = JSON.parse(memberLogin.body).data.access_token;
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules`,
+        headers: { authorization: `Bearer ${memberJwt}` },
+        payload: {
+          name: 'Member Rule (should be denied)',
+          enabled: true,
+          filters: [{ field: 'os', operator: 'equals', value: 'linux' }],
+          auto_create: false,
+        },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // Platform `user` HAS `integration_rules:create`, so requirePermission
+      // passes — the denial comes from `requireProjectRole('admin')`.
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
+    });
+
     it('should deny outsider from creating rules', async () => {
       const response = await server.inject({
         method: 'POST',
@@ -356,7 +396,12 @@ describe('Integration Rules Permissions - E2E', () => {
   });
 
   describe('DELETE - Delete Rule (DELETE /api/v1/integrations/:platform/:projectId/rules/:ruleId)', () => {
-    it('should allow regular user to delete rules for their project', async () => {
+    // The permissions seed (db/migrations/001_initial_schema.sql) gives
+    // platform role `user` create/read/update on integration_rules but
+    // explicitly NOT delete — delete is admin-only at the system level.
+    // So this case can only verify the platform-admin path; project-admin
+    // alone is insufficient. Renamed accordingly.
+    it('should allow platform admin to delete rules for their project', async () => {
       // Create a rule to delete
       const createResponse = await server.inject({
         method: 'POST',
@@ -377,11 +422,11 @@ describe('Integration Rules Permissions - E2E', () => {
       });
       const deleteRuleId = JSON.parse(createResponse.body).data.id;
 
-      // Delete as regular user
+      // Delete as platform admin (only role with `integration_rules:delete`).
       const response = await server.inject({
         method: 'DELETE',
         url: `/api/v1/integrations/jira/${testProject.id}/rules/${deleteRuleId}`,
-        headers: { authorization: `Bearer ${regularUserJwt}` },
+        headers: { authorization: `Bearer ${adminJwt}` },
       });
 
       expect(response.statusCode).toBe(200);
@@ -431,9 +476,23 @@ describe('Integration Rules Permissions - E2E', () => {
 
   describe('COPY - Copy Rule (POST /api/v1/integrations/:platform/:projectId/rules/:ruleId/copy)', () => {
     it('should allow regular user to copy rules to target project with access', async () => {
-      // Create a second project where regular user is a project admin —
-      // copy requires admin on BOTH source and target project (see route
-      // preHandler in src/api/routes/integration-rules.ts:360).
+      // Reset the source rule name so this test isn't order-dependent on
+      // the UPDATE describe-block above mutating the shared `ruleId`.
+      // Without this, the assertion on `copiedRule.name` later would
+      // depend on whichever update last ran.
+      await db.query('UPDATE integration_rules SET name = $1 WHERE id = $2', [
+        'High Severity Auto-Create',
+        ruleId,
+      ]);
+
+      // Create a second project where regular user is a project admin.
+      // The copy route enforces `minProjectRole: 'admin'` on the TARGET
+      // project only — inline `checkProjectAccess` in the handler body
+      // (integration-rules.ts:370-380). The SOURCE project preHandler
+      // is `requireProjectAccess` with no minProjectRole, so any
+      // membership level (viewer/member/admin) on the source passes.
+      // We give regularUser admin on both anyway because the role bump
+      // for source happens in beforeAll for the create/update cases.
       const secondProject = await createTestProject(db, { created_by: adminUser.id });
       cleanup.trackProject(secondProject.id);
       await db.projectMembers.addMember(secondProject.id, regularUser.id, 'admin');
@@ -478,7 +537,7 @@ describe('Integration Rules Permissions - E2E', () => {
       const copiedRule = responseBody.data.rule;
       expect(copiedRule.id).toBeDefined();
       expect(copiedRule.project_id).toBe(secondProject.id);
-      expect(copiedRule.name).toBe('Updated by Regular User (Copy)');
+      expect(copiedRule.name).toBe('High Severity Auto-Create (Copy)');
 
       // Clean up
       await db.query('DELETE FROM integration_rules WHERE id = $1', [responseBody.data.rule.id]);
