@@ -78,9 +78,24 @@ export const CacheKeys = {
   /**
    * Pattern to invalidate all rules for a project
    * @param projectId - Project ID
+   *
+   * Note: this matches `<prefix>:<projectId>:*` only — it does NOT match
+   * the auto-create variant `<prefix>:auto:<projectId>:<integrationId>`
+   * because `auto` precedes `<projectId>` in that key. Use
+   * `autoCreateRulesPattern(projectId)` for that side, or call both when
+   * invalidating after a rule mutation.
    */
   integrationRulesPattern(projectId: string): string {
     return buildCachePattern(buildCacheKey(CachePrefix.INTEGRATION_RULES, projectId));
+  },
+
+  /**
+   * Pattern to invalidate all auto-create rules for a project. Sibling of
+   * `integrationRulesPattern` — see that note for why we need both.
+   * @param projectId - Project ID
+   */
+  autoCreateRulesPattern(projectId: string): string {
+    return buildCachePattern(buildCacheKey(CachePrefix.INTEGRATION_RULES, 'auto', projectId));
   },
 
   /**

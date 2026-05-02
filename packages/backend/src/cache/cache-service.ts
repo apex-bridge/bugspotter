@@ -298,12 +298,28 @@ export class CacheService {
   }
 
   /**
-   * Invalidate all integration rules for a project
+   * Invalidate all integration rules for a project, including auto-create
+   * rule cache entries. Two separate pattern deletes are required because
+   * auto-create keys are shaped `<prefix>:auto:<projectId>:<integrationId>`
+   * — the `auto` segment precedes `<projectId>`, so a wildcard rooted at
+   * `<projectId>` doesn't reach them.
+   *
+   * Production route handlers call this after every rule create/update/
+   * delete; without the auto-create pattern, the auto-create cache would
+   * stay stale for up to `CacheTTL.SHORT` (60s) after a rule change.
    */
   async invalidateIntegrationRules(projectId: string): Promise<void> {
-    const pattern = CacheKeys.integrationRulesPattern(projectId);
-    const deleted = await this.deletePattern(pattern);
-    logger.debug('Invalidated integration rules cache', { projectId, deleted });
+    const generalPattern = CacheKeys.integrationRulesPattern(projectId);
+    const autoCreatePattern = CacheKeys.autoCreateRulesPattern(projectId);
+    const [deletedGeneral, deletedAutoCreate] = await Promise.all([
+      this.deletePattern(generalPattern),
+      this.deletePattern(autoCreatePattern),
+    ]);
+    logger.debug('Invalidated integration rules cache', {
+      projectId,
+      deletedGeneral,
+      deletedAutoCreate,
+    });
   }
 
   /**

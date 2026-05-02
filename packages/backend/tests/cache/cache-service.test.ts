@@ -471,6 +471,48 @@ describe('CacheService', () => {
       });
     });
 
+    describe('invalidateIntegrationRules', () => {
+      // Regression: prior implementation called only the general
+      // `integrationRulesPattern` (`<prefix>:<projectId>:*`) which does
+      // NOT match the auto-create cache key shape
+      // (`<prefix>:auto:<projectId>:<integrationId>` — `auto` precedes
+      // `<projectId>`). Production route handlers thought they were
+      // invalidating after rule mutations but the auto-create cache
+      // stayed stale until TTL expired.
+      it('should delete BOTH the general rules pattern and the auto-create rules pattern', async () => {
+        vi.mocked(mockMemoryCache.deletePattern).mockResolvedValue(2);
+        vi.mocked(mockRedisCache.deletePattern).mockResolvedValue(1);
+
+        await cacheService.invalidateIntegrationRules('proj-1');
+
+        const generalPattern = CacheKeys.integrationRulesPattern('proj-1');
+        const autoCreatePattern = CacheKeys.autoCreateRulesPattern('proj-1');
+
+        expect(mockMemoryCache.deletePattern).toHaveBeenCalledWith(generalPattern);
+        expect(mockMemoryCache.deletePattern).toHaveBeenCalledWith(autoCreatePattern);
+        expect(mockRedisCache.deletePattern).toHaveBeenCalledWith(generalPattern);
+        expect(mockRedisCache.deletePattern).toHaveBeenCalledWith(autoCreatePattern);
+      });
+
+      it('should clear the auto-create cache key written by getAutoCreateRules', async () => {
+        // End-to-end shape check: an entry written by getAutoCreateRules
+        // must be removed by invalidateIntegrationRules. This is the
+        // invariant that route handlers depend on.
+        const autoCreateKey = CacheKeys.autoCreateRules('proj-1', 'integ-1');
+        const autoCreatePattern = CacheKeys.autoCreateRulesPattern('proj-1');
+
+        // The pattern's wildcard suffix must match the actual key.
+        // (Strip the trailing `*` and confirm the key starts with the prefix.)
+        const prefix = autoCreatePattern.replace(/\*$/, '');
+        expect(autoCreateKey.startsWith(prefix)).toBe(true);
+
+        // And the OLD general pattern (the buggy one) must NOT match.
+        const generalPattern = CacheKeys.integrationRulesPattern('proj-1');
+        const generalPrefix = generalPattern.replace(/\*$/, '');
+        expect(autoCreateKey.startsWith(generalPrefix)).toBe(false);
+      });
+    });
+
     describe('getSystemConfig', () => {
       it('should return cached system config', async () => {
         const config = { maxUploadSize: 1024000 };
