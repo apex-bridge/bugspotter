@@ -14,7 +14,7 @@
     "@bugspotter/message-broker": "workspace:*",
     "bullmq": "^5.61.0",
     "dotenv": "^16.4.7",
-    "fastify": "^5.6.1",
+    "fastify": "^5.8.5",
     "ioredis": "^5.8.1",
     "stripe": "^17.5.0"
   },

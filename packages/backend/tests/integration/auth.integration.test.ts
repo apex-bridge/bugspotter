@@ -277,6 +277,33 @@ describe('Authentication Flow Integration Tests', () => {
       expect(body.error).toBe('Unauthorized');
     });
 
+    it('should reject token signed with alg:none (CVE-2026-35042 mitigation)', async () => {
+      // The @fastify/jwt registration restricts `verify.algorithms` to
+      // ['HS256']. Without it, fast-jwt would accept any algorithm
+      // including `none`, letting an attacker bypass signature
+      // verification with a forged unsigned token. Forge one explicitly
+      // and confirm the server rejects it. If anyone removes the
+      // `algorithms` allowlist in server.ts, this test fails.
+      const noneToken = [
+        Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
+        Buffer.from(JSON.stringify({ userId, sub: userId })).toString('base64url'),
+        '', // empty signature — what `alg:none` is supposed to mean
+      ].join('.');
+
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/projects',
+        headers: {
+          authorization: `Bearer ${noneToken}`,
+        },
+        payload: {
+          name: 'Should Not Be Created',
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+    });
+
     it('should reject request with malformed authorization header', async () => {
       const response = await server.inject({
         method: 'POST',
