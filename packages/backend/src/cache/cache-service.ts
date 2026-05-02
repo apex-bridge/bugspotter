@@ -298,12 +298,52 @@ export class CacheService {
   }
 
   /**
-   * Invalidate all integration rules for a project
+   * Invalidate all integration rules for a project. Three deletes are
+   * required because the rules cache has three key shapes:
+   *
+   *   1. `<prefix>:<projectId>`                       — bare project key
+   *      written by `CacheKeys.integrationRules(projectId)` when the
+   *      caller wants the full rule list for a project, no integration
+   *      filter. This is an EXACT key, not a pattern — wildcards can't
+   *      match it (no trailing colon segment for `:*` to land on).
+   *
+   *   2. `<prefix>:<projectId>:<integrationId>`        — per-integration
+   *      key written by `CacheKeys.integrationRules(projectId, integ)`.
+   *      Caught by the general pattern `<prefix>:<projectId>:*`.
+   *
+   *   3. `<prefix>:auto:<projectId>:<integrationId>`   — auto-create
+   *      variant. `auto` precedes `<projectId>`, so a wildcard rooted
+   *      at `<projectId>` can't reach it — needs its own pattern.
+   *
+   * Production route handlers call this after every rule create/update/
+   * delete; missing any of the three shapes leaves stale rules in the
+   * cache for up to `CacheTTL.SHORT` (60s) after a rule change.
    */
   async invalidateIntegrationRules(projectId: string): Promise<void> {
-    const pattern = CacheKeys.integrationRulesPattern(projectId);
-    const deleted = await this.deletePattern(pattern);
-    logger.debug('Invalidated integration rules cache', { projectId, deleted });
+    // Guard against empty/whitespace projectId. `buildCacheKey` filters
+    // out empty-string parts, so an empty `projectId` would collapse the
+    // patterns to `rules:*` and `rules:auto:*` — wiping every project's
+    // rules cache, not just one. Treat as a no-op rather than a global
+    // nuke; a real caller should never reach this branch.
+    if (!projectId || !projectId.trim()) {
+      logger.warn('invalidateIntegrationRules called with empty projectId — ignoring', {
+        projectId,
+      });
+      return;
+    }
+    const baseKey = CacheKeys.integrationRules(projectId);
+    const generalPattern = CacheKeys.integrationRulesPattern(projectId);
+    const autoCreatePattern = CacheKeys.autoCreateRulesPattern(projectId);
+    const [, deletedGeneral, deletedAutoCreate] = await Promise.all([
+      this.delete(baseKey),
+      this.deletePattern(generalPattern),
+      this.deletePattern(autoCreatePattern),
+    ]);
+    logger.debug('Invalidated integration rules cache', {
+      projectId,
+      deletedGeneral,
+      deletedAutoCreate,
+    });
   }
 
   /**
