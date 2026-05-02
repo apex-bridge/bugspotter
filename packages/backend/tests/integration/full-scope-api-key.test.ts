@@ -24,6 +24,7 @@ import { DatabaseClient } from '../../src/db/client.js';
 import type { Project, User, BugReport } from '../../src/db/types.js';
 import { ApiKeyService } from '../../src/services/api-key/index.js';
 import { getCacheService } from '../../src/cache/cache-service.js';
+import { CacheKeys } from '../../src/cache/cache-keys.js';
 import { createStorage } from '../../src/storage/index.js';
 import type { BaseStorageService } from '../../src/storage/base-storage-service.js';
 
@@ -205,7 +206,18 @@ describe('Full-Scope API Key Integration Tests', () => {
   });
 
   afterAll(async () => {
-    // Clean up
+    // Clean up storage objects written in beforeAll. Best-effort: dev
+    // local-storage runs accumulate placeholder PNGs across runs without
+    // this; CI containers are ephemeral so it's a no-op there. Wrapped
+    // so a missing object doesn't fail the rest of teardown.
+    if (bugReport1?.screenshot_key) {
+      await storage.deleteObject(bugReport1.screenshot_key).catch(() => {});
+    }
+    if (bugReport2?.screenshot_key) {
+      await storage.deleteObject(bugReport2.screenshot_key).catch(() => {});
+    }
+
+    // Clean up DB rows
     if (bugReport1) {
       await db.bugReports.delete(bugReport1.id);
     }
@@ -319,9 +331,13 @@ describe('Full-Scope API Key Integration Tests', () => {
       const body = JSON.parse(response.body);
       expect(body.urls).toBeDefined();
       expect(body.urls[bugReport2.id]).toBeDefined();
-      // Both requested types should be present (urls or null, but the keys
-      // exist) — the route pre-populates with null for every requested type.
       expect(Object.keys(body.urls[bugReport2.id]).sort()).toEqual(['replay', 'screenshot']);
+      // Both screenshot_key and replay_key are populated in beforeAll, so
+      // a healthy route MUST return real presigned URLs. Asserting only
+      // key-presence would let a regression where URL generation silently
+      // returns null slip past green CI.
+      expect(body.urls[bugReport2.id].screenshot).toBeTruthy();
+      expect(body.urls[bugReport2.id].replay).toBeTruthy();
     });
 
     it('should deny limited-scope key for disallowed projects', async () => {
@@ -760,25 +776,30 @@ describe('Full-Scope API Key Integration Tests', () => {
       });
       expect(gracePeriodResponse.statusCode).toBe(200);
 
-      // Simulate grace period expiry by directly updating the database
-      // (in real scenarios, grace period is 24 hours from revoked_at)
-      await db.query(
-        `UPDATE api_keys SET revoked_at = $1 WHERE id = $2`,
-        [new Date(Date.now() - 86400000 - 1000), oldKeyRecord.id] // >24h ago
-      );
+      // Simulate grace period expiry by backdating revoked_at past the
+      // service's `ROTATION_GRACE_PERIOD` (7 days — see api-key-service.ts).
+      // Use 8 days + 1s so we're unambiguously outside the grace window.
+      const EIGHT_DAYS_MS = 8 * 24 * 60 * 60 * 1000;
+      await db.query(`UPDATE api_keys SET revoked_at = $1 WHERE id = $2`, [
+        new Date(Date.now() - EIGHT_DAYS_MS - 1000),
+        oldKeyRecord.id,
+      ]);
 
       // Invalidate cache so the next auth call re-reads from the DB and
-      // sees the rolled-back revoked_at. The cache moved from a Postgres
-      // table to Redis. Call the cache service directly (rather than
-      // the production `invalidateKeyCache` helper) because the helper
-      // try/catches Redis errors and silently no-ops — that would leave
-      // the stale cache in place and produce a misleading 200-vs-401
-      // failure pointing at the auth path instead of test setup.
-      const persistedKey = await db.apiKeys.findById(oldKeyRecord.id);
-      if (!persistedKey) {
-        throw new Error('Setup failure: rotated key not found in DB');
+      // sees the rolled-back revoked_at. Call the cache service directly
+      // because `invalidateKeyCache` swallows Redis errors. But the
+      // direct `delete()` path also catches errors at the redis-cache
+      // layer, so smoke-check that the entry is actually gone before
+      // proceeding — otherwise a Redis no-op leaves the stale cached
+      // key in place and the assertion below sees a misleading 200.
+      const cache = getCacheService();
+      await cache.invalidateApiKey(oldKeyRecord.key_hash);
+      const stillCached = await cache.get(CacheKeys.apiKey(oldKeyRecord.key_hash));
+      if (stillCached !== null && stillCached !== undefined) {
+        throw new Error(
+          'Setup failure: API key cache not invalidated; the 401 assertion below would be misleading'
+        );
       }
-      await getCacheService().invalidateApiKey(persistedKey.key_hash);
 
       // Now old key should be rejected (grace period expired)
       const expiredResponse = await server.inject({
