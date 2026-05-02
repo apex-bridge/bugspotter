@@ -36,7 +36,8 @@
     "overrides": {
       "tar": "^7.4.0",
       "fast-jwt": "^6.2.4",
-      "jws": "^3.2.3"
+      "jws": "^3.2.3",
+      "pino": "^9.13.1"
     }
   },
   "packageManager": "pnpm@9.14.4",
