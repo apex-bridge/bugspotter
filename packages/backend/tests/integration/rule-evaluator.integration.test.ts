@@ -8,6 +8,8 @@ import { createDatabaseClient } from '../../src/db/client.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 import { RuleEvaluator } from '../../src/services/integrations/rule-evaluator.js';
 import { ThrottleChecker } from '../../src/services/integrations/throttle-checker.js';
+import { getCacheService } from '../../src/cache/index.js';
+import { CacheKeys } from '../../src/cache/cache-keys.js';
 import type { BugReport } from '../../src/db/types.js';
 import { createProjectIntegrationSQL } from '../test-helpers.js';
 
@@ -90,6 +92,18 @@ describe('RuleEvaluator Integration Tests', () => {
     // Clean up integration rules and tickets before each test
     await db.query('DELETE FROM integration_rules WHERE project_id = $1', [testProjectId]);
     await db.query('DELETE FROM tickets WHERE bug_report_id = $1', [testBugReportId]);
+    // RuleEvaluator caches auto-create rules per (projectId, integrationId)
+    // via getCacheService().getAutoCreateRules. The test bypasses route
+    // handlers (writes via the repository directly), so the cache stays
+    // populated across tests and every test after the first reads stale
+    // rules. Targeted delete on the specific cache key — surgical, doesn't
+    // touch entries owned by other tests.
+    //
+    // Note: `cache.invalidateIntegrationRules(projectId)` would be cleaner
+    // but is currently buggy (its pattern doesn't match auto-create keys
+    // due to a key-shape mismatch). Tracked + fixed in a separate PR;
+    // after that lands this can swap to `invalidateIntegrationRules`.
+    await getCacheService().delete(CacheKeys.autoCreateRules(testProjectId, testIntegrationId));
   });
 
   describe('should evaluate rules against real database', () => {

@@ -384,12 +384,17 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       const { token } = request.body;
 
       try {
-        // Verify and decode magic token
+        // Verify and decode magic token. Shape mirrors what
+        // `validateJwtPayload` enforces — `userId` required, `role`
+        // optional (older tokens may still carry it), `isPlatformAdmin`
+        // optional. `type` and `organizationId` are magic-token-specific
+        // and validated explicitly below.
         const decoded = fastify.jwt.verify(token) as {
           type?: string;
           userId: string;
-          role: string;
+          role?: string;
           organizationId?: string;
+          isPlatformAdmin?: boolean;
         };
 
         // Validate payload structure
