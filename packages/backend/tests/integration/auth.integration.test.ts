@@ -60,26 +60,12 @@ describe('Authentication Flow Integration Tests', () => {
       cleanup.trackUser(body.data.user.id);
     });
 
-    it('should register admin user with admin role', async () => {
-      const email = `admin-${generateUniqueId()}@example.com`;
-      const password = 'AdminPassword123!';
-
-      const response = await server.inject({
-        method: 'POST',
-        url: '/api/v1/auth/register',
-        payload: {
-          email,
-          password,
-          role: 'admin',
-        },
-      });
-
-      expect(response.statusCode).toBe(201);
-      const body = JSON.parse(response.body);
-      expect(body.data.user.role).toBe('admin');
-
-      cleanup.trackUser(body.data.user.id);
-    });
+    // Removed: "should register admin user with admin role" — the route now
+    // hardcodes role: 'user' on registration (per src/api/routes/auth.ts:193
+    // comment) and registerSchema rejects extra properties including `role`,
+    // so this test asserted behavior that's been deliberately removed for
+    // privilege-escalation prevention. Admin users are created via admin
+    // endpoints, not via /register.
 
     it('should reject duplicate email registration', async () => {
       const email = `duplicate-${generateUniqueId()}@example.com`;
@@ -607,6 +593,9 @@ describe('Authentication Flow Integration Tests', () => {
       const token2 = JSON.parse(login2.body).data.access_token;
 
       expect(token1).toBeDefined();
+      expect(token2).toBeDefined();
+      // Test name says "different tokens for different users" — assert it.
+      expect(token1).not.toBe(token2);
     });
   });
 });

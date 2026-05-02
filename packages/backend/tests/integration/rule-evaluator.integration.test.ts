@@ -8,6 +8,7 @@ import { createDatabaseClient } from '../../src/db/client.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 import { RuleEvaluator } from '../../src/services/integrations/rule-evaluator.js';
 import { ThrottleChecker } from '../../src/services/integrations/throttle-checker.js';
+import { getCacheService } from '../../src/cache/index.js';
 import type { BugReport } from '../../src/db/types.js';
 import { createProjectIntegrationSQL } from '../test-helpers.js';
 
@@ -90,6 +91,17 @@ describe('RuleEvaluator Integration Tests', () => {
     // Clean up integration rules and tickets before each test
     await db.query('DELETE FROM integration_rules WHERE project_id = $1', [testProjectId]);
     await db.query('DELETE FROM tickets WHERE bug_report_id = $1', [testBugReportId]);
+    // RuleEvaluator caches auto-create rules per (projectId, integrationId)
+    // via getCacheService().getAutoCreateRules. The test bypasses route
+    // handlers (writes via the repository directly), so the cache stays
+    // populated across tests and every test after the first reads stale
+    // rules. Use `clear()` rather than `invalidateIntegrationRules` because
+    // the latter's key pattern (`<prefix>:<projectId>:*`) doesn't match
+    // auto-create cache keys (`<prefix>:auto:<projectId>:<integrationId>`)
+    // — a real bug in cache-service.ts that affects production route
+    // handlers too. Fixing that bug is tracked separately; clearing the
+    // whole cache here sidesteps the issue without depending on key naming.
+    await getCacheService().clear();
   });
 
   describe('should evaluate rules against real database', () => {
