@@ -14,6 +14,7 @@ import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import { getEncryptionService } from '../../utils/encryption.js';
 import { getLogger } from '../../logger.js';
 import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js';
+import { hardenedFetch } from '../../integrations/security/hardened-http.js';
 
 const logger = getLogger();
 
@@ -663,15 +664,64 @@ export async function registerIntegrationRoutes(
         hostname: validatedUrl.hostname,
       });
 
-      // Fetch avatar from validated external source
+      // Helper that re-runs both the SSRF URL-string check AND the
+      // domain-allowlist check on every redirect hop. Without this,
+      // an attacker who controls a `*.atlassian.net` host (e.g. via
+      // an Atlassian Cloud trial) could 302 from a legit-looking
+      // initial URL to `http://169.254.169.254/...` and the original
+      // `fetch()` would dutifully follow into cloud metadata.
+      const validateHopUrl = (urlToCheck: URL): void => {
+        // Re-run the full SSRF URL-string validator (protocol, IP
+        // range, cloud metadata, alternative-encoding) on the redirect
+        // target. Wrap as 400 AppError so the route's outer catch
+        // (which maps everything to 500) doesn't downgrade a policy
+        // rejection into a generic network error.
+        try {
+          validateSSRFProtection(urlToCheck.toString());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new AppError(`Redirect target rejected: ${message}`, 400, 'BadRequest');
+        }
+        // Re-run the integration's domain allowlist on the redirect
+        // target — same allowedDomains we computed for the initial URL.
+        const hop = urlToCheck.hostname;
+        const ok = allowedDomains.some((domain) => {
+          if (domain.startsWith('*.')) {
+            return hop.endsWith('.' + domain.slice(2));
+          }
+          return hop === domain;
+        });
+        if (!ok) {
+          throw new AppError(`Redirect target hostname not allowed: ${hop}`, 403, 'Forbidden');
+        }
+      };
+
+      // Fetch avatar from validated external source — hardened against
+      // H1 (redirect-following past validation) via per-hop URL
+      // re-validation and a redirect cap. DNS pinning is NOT applied
+      // on this path: the avatar proxy uses Node's undici-backed
+      // `fetch`, which ignores the legacy `agent` option for HTTPS.
+      // Closing H2 (pure DNS rebinding, no redirect) for this route
+      // requires switching to an undici Dispatcher with a `connect`
+      // hook — tracked separately so the dep + test-harness changes
+      // don't bloat this PR. The Jira and generic-http clients still
+      // pin DNS via `https.request({ lookup })` / axios `httpsAgent`
+      // where the underlying transport DOES honour custom resolution.
       let response: Response;
       try {
-        response = await fetch(validatedUrl.toString(), {
+        response = await hardenedFetch(validatedUrl.toString(), {
           headers: {
             'User-Agent': 'BugSpotter-Avatar-Proxy/1.0',
           },
+          validateUrl: validateHopUrl,
         });
       } catch (error) {
+        // Policy rejections (validateHopUrl throws AppError) propagate
+        // as the original 4xx — only treat non-AppError throws as
+        // network errors and map to 500.
+        if (error instanceof AppError) {
+          throw error;
+        }
         logger.error('Network error fetching avatar from external service', {
           integrationId,
           url: validatedUrl.toString(), // Full URL for debugging (already validated)

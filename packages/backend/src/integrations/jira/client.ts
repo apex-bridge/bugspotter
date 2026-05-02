@@ -8,6 +8,7 @@ import { request as httpsRequest } from 'https';
 import { URL } from 'url';
 import { getLogger } from '../../logger.js';
 import { validateSSRFProtection } from '../security/ssrf-validator.js';
+import { pinHostnameToIp } from '../security/hardened-http.js';
 import type {
   JiraConfig,
   JiraIssueFields,
@@ -113,6 +114,15 @@ export class JiraClient {
    * Make authenticated HTTP request to Jira API
    */
   private async request<T = unknown>(options: RequestOptions): Promise<T> {
+    // SSRF Protection (DNS rebinding): resolve the hostname HERE, validate
+    // the resolved IP, and pin the connection to that IP via `lookup`.
+    // The constructor's URL-string check already rejected obvious bad hosts,
+    // but Node re-resolves DNS at connect time — without this pin, a
+    // resolver returning a public IP for the validation lookup and a
+    // private IP (127.x, 169.254.x, 10.x) on the actual connect would
+    // route auth-bearing requests to internal services.
+    const { lookup } = await pinHostnameToIp(this.baseUrl.hostname);
+
     return new Promise((resolve, reject) => {
       const auth = Buffer.from(`${this.email}:${this.apiToken}`).toString('base64');
 
@@ -127,6 +137,7 @@ export class JiraClient {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
+        lookup,
       };
 
       const req = httpsRequest(requestOptions, (res) => {
@@ -335,6 +346,11 @@ export class JiraClient {
       size: isStream ? 'streaming' : buffer!.length,
     });
 
+    // Pin DNS before constructing the request — see `request()` above for
+    // the rationale. Attachment upload sends auth-bearing requests with
+    // file payloads; DNS rebinding here would route them at internal IPs.
+    const { lookup } = await pinHostnameToIp(this.baseUrl.hostname);
+
     return new Promise((resolve, reject) => {
       const boundary = `----WebKitFormBoundary${Date.now()}`;
       const auth = Buffer.from(`${this.email}:${this.apiToken}`).toString('base64');
@@ -363,6 +379,7 @@ export class JiraClient {
         path: JIRA_ENDPOINTS.ADD_ATTACHMENT(issueKey),
         method: 'POST',
         headers,
+        lookup,
       };
 
       const req = httpsRequest(requestOptions, (res) => {
