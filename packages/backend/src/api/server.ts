@@ -333,6 +333,15 @@ export async function createServer(options: ServerOptions): Promise<FastifyInsta
   if (config.jwt.secret) {
     await fastify.register(jwt, {
       secret: config.jwt.secret,
+      // Explicit allowlist closes fast-jwt CVE-2026-35042 (RFC 7515 `crit`
+      // header algorithm-confusion). Without an `algorithms` restriction,
+      // fast-jwt accepts any algorithm on inbound tokens, including `none`,
+      // which an attacker can leverage to bypass signature verification.
+      // We use HMAC throughout (`config.jwt.secret` is a string), so HS256
+      // is the only algorithm any signing site uses; pin to it here.
+      verify: {
+        algorithms: ['HS256'],
+      },
     });
   } else {
     logger.warn('JWT_SECRET not configured. JWT authentication will not work.');

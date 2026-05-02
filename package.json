@@ -34,7 +34,9 @@
   "license": "FSL-1.1-Apache-2.0",
   "pnpm": {
     "overrides": {
-      "tar": "^7.4.0"
+      "tar": "^7.4.0",
+      "fast-jwt": "^6.2.4",
+      "jws": "^3.2.3"
     }
   },
   "packageManager": "pnpm@9.14.4",
