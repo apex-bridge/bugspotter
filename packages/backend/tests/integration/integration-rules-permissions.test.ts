@@ -70,8 +70,14 @@ describe('Integration Rules Permissions - E2E', () => {
     testProject = await createTestProject(db, { created_by: adminUser.id });
     cleanup.trackProject(testProject.id);
 
-    // Add regular user as member
-    await db.projectMembers.addMember(testProject.id, regularUser.id, 'member');
+    // Add regular user as project admin. The integration-rules CRUD routes
+    // (create / update / delete / copy) now require `requireProjectRole('admin')`
+    // — see src/api/routes/integration-rules.ts:203,269,313,360 — so a `member`
+    // role no longer suffices to exercise the "should allow regular user to ..."
+    // tests below. The PLATFORM role stays `user` (set in createTestUser),
+    // so these tests still verify that a non-platform-admin can perform the
+    // op when their project role is sufficient.
+    await db.projectMembers.addMember(testProject.id, regularUser.id, 'admin');
 
     // Add viewer user as member
     await db.projectMembers.addMember(testProject.id, viewerUser.id, 'viewer');
@@ -408,17 +414,29 @@ describe('Integration Rules Permissions - E2E', () => {
         headers: { authorization: `Bearer ${outsiderJwt}` },
       });
 
+      // Outsider has platform role `user`, which doesn't carry
+      // `integration_rules:delete` in the permissions table. They're denied
+      // by `requirePermission` BEFORE `requireProjectAccess` runs — same
+      // 403 path as the viewer test above. The previous "Access denied"
+      // assertion expected a `requireProjectAccess` rejection, but middleware
+      // ordering means that path is unreachable for any platform role
+      // lacking the system permission. Either denial is correct; pin to
+      // the current actual message.
       expect(response.statusCode).toBe(403);
-      expect(JSON.parse(response.body).message).toContain('Access denied');
+      expect(JSON.parse(response.body).message).toContain(
+        'Insufficient permissions to delete integration_rules'
+      );
     });
   });
 
   describe('COPY - Copy Rule (POST /api/v1/integrations/:platform/:projectId/rules/:ruleId/copy)', () => {
     it('should allow regular user to copy rules to target project with access', async () => {
-      // Create a second project where regular user is a member
+      // Create a second project where regular user is a project admin —
+      // copy requires admin on BOTH source and target project (see route
+      // preHandler in src/api/routes/integration-rules.ts:360).
       const secondProject = await createTestProject(db, { created_by: adminUser.id });
       cleanup.trackProject(secondProject.id);
-      await db.projectMembers.addMember(secondProject.id, regularUser.id, 'member');
+      await db.projectMembers.addMember(secondProject.id, regularUser.id, 'admin');
 
       // Create integration for second project
       const encryptedCredentials = encryptionService.encrypt(
