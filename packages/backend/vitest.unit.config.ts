@@ -26,6 +26,7 @@ export default defineConfig({
       // Integration tests that don't require database
       'tests/integrations/plugin-utils-retry.test.ts',
       'tests/integrations/ssrf-protection.test.ts',
+      'tests/integrations/hardened-http.test.ts',
       'tests/integrations/rpc-http-fetch.test.ts',
       'tests/integrations/rpc-bridge-security.test.ts',
       'tests/integrations/base-integration-helpers.test.ts',
