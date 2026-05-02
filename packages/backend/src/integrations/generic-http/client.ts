@@ -8,6 +8,7 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { getLogger } from '../../logger.js';
 import { validateSSRFProtection } from '../security/ssrf-validator.js';
+import { createPinnedAgent } from '../security/hardened-http.js';
 import type { GenericHttpConfig, EndpointConfig, HttpMethod, AuthConfig } from './types.js';
 
 const logger = getLogger();
@@ -19,13 +20,14 @@ const logger = getLogger();
 export class GenericHttpClient {
   private client: AxiosInstance;
   private config: GenericHttpConfig;
+  private parsedBaseUrl: URL;
 
   constructor(config: GenericHttpConfig) {
     this.config = config;
 
     // SECURITY: Validate baseUrl against SSRF attacks before creating client
     // This prevents requests to internal networks, cloud metadata endpoints, etc.
-    validateSSRFProtection(config.baseUrl);
+    this.parsedBaseUrl = validateSSRFProtection(config.baseUrl);
 
     // Create axios instance with base configuration
     this.client = axios.create({
@@ -65,6 +67,21 @@ export class GenericHttpClient {
       requestConfig.data = data;
     } else if (data && endpoint.method === 'GET') {
       requestConfig.params = data;
+    }
+
+    // SSRF Protection (DNS rebinding): build a fresh `https.Agent` per
+    // request whose `lookup` is pinned to a single resolved + validated
+    // IP. The constructor already rejected obviously-bad URL strings,
+    // but Node re-resolves DNS on every connection — without this pin,
+    // an attacker controlling the hostname's resolver could return a
+    // public IP for the validation lookup and a private IP (127.x,
+    // 169.254.x, 10.x) on the actual connect, routing auth-bearing
+    // requests at internal services. Pinning per-request (not per-
+    // client) handles legitimate IP rotation and re-validates on every
+    // call.
+    if (this.parsedBaseUrl.protocol === 'https:') {
+      const { agent } = await createPinnedAgent(this.parsedBaseUrl.hostname);
+      requestConfig.httpsAgent = agent;
     }
 
     logger.debug('Making HTTP request', {

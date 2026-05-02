@@ -381,3 +381,47 @@ export function validateSSRFProtection(url: string): URL {
 
   return parsedUrl;
 }
+
+/**
+ * Assert that a DNS-resolved IP address is not in the SSRF blocklist.
+ *
+ * Use this AFTER `validateSSRFProtection(url)` has accepted the URL string
+ * but BEFORE actually connecting — otherwise a DNS rebinding attack
+ * (resolver returns a public IP first, then a private IP on the actual
+ * connect) bypasses the URL-based check entirely.
+ *
+ * Pattern in `hardened-http.ts`: resolve hostname once, call this, pass
+ * the resolved IP via `lookup` to `https.request` so the connection can't
+ * race a second DNS lookup back to a private address.
+ *
+ * @param ip - A DNS-resolved IP literal (IPv4 dotted-quad or IPv6).
+ * @throws Error if the IP falls in any blocked range (private / loopback /
+ *               link-local / cloud-metadata / etc).
+ */
+export function assertResolvedIpAllowed(ip: string): void {
+  // Cloud metadata IPs are exact-match in the URL validator; mirror that
+  // for resolved IPs so a hostname that resolves to 169.254.169.254 fails
+  // here even though the URL string had a benign-looking domain.
+  if (CLOUD_METADATA_IPS.includes(ip.toLowerCase())) {
+    logger.warn('SSRF attempt blocked: hostname resolved to cloud metadata IP', { ip });
+    throw new Error('Requests to cloud metadata endpoints are not allowed');
+  }
+
+  const ipv4Check = isBlockedIPv4(ip);
+  if (ipv4Check.blocked) {
+    logger.warn('SSRF attempt blocked: hostname resolved to private IPv4', {
+      ip,
+      reason: ipv4Check.reason,
+    });
+    throw new Error('Requests to internal/private networks are not allowed');
+  }
+
+  const ipv6Check = isBlockedIPv6(ip);
+  if (ipv6Check.blocked) {
+    logger.warn('SSRF attempt blocked: hostname resolved to private IPv6', {
+      ip,
+      reason: ipv6Check.reason,
+    });
+    throw new Error('Requests to internal/private networks are not allowed');
+  }
+}

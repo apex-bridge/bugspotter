@@ -14,6 +14,7 @@ import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import { getEncryptionService } from '../../utils/encryption.js';
 import { getLogger } from '../../logger.js';
 import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js';
+import { hardenedFetch, createPinnedAgent } from '../../integrations/security/hardened-http.js';
 
 const logger = getLogger();
 
@@ -663,13 +664,54 @@ export async function registerIntegrationRoutes(
         hostname: validatedUrl.hostname,
       });
 
-      // Fetch avatar from validated external source
+      // Helper that re-runs both the SSRF URL-string check AND the
+      // domain-allowlist check on every redirect hop. Without this,
+      // an attacker who controls a `*.atlassian.net` host (e.g. via
+      // an Atlassian Cloud trial) could 302 from a legit-looking
+      // initial URL to `http://169.254.169.254/...` and the original
+      // `fetch()` would dutifully follow into cloud metadata.
+      const validateHopUrl = (urlToCheck: URL): void => {
+        // Re-run the full SSRF URL-string validator (protocol, IP
+        // range, cloud metadata, alternative-encoding) on the redirect
+        // target. Throws on any violation.
+        validateSSRFProtection(urlToCheck.toString());
+        // Re-run the integration's domain allowlist on the redirect
+        // target — same allowedDomains we computed for the initial URL.
+        const hop = urlToCheck.hostname;
+        const ok = allowedDomains.some((domain) => {
+          if (domain.startsWith('*.')) {
+            return hop.endsWith('.' + domain.slice(2));
+          }
+          return hop === domain;
+        });
+        if (!ok) {
+          throw new Error(`Redirect target hostname not allowed: ${hop}`);
+        }
+      };
+
+      // Per-hop pinned-DNS agent. Closes the rebinding window inside
+      // a single hop: even after the URL-string check passes, Node
+      // would otherwise re-resolve DNS at connect time and could
+      // route to a freshly-rotated private IP.
+      const agentForUrl = async (urlToFetch: URL): Promise<import('https').Agent | undefined> => {
+        if (urlToFetch.protocol !== 'https:') {
+          return undefined;
+        }
+        const { agent } = await createPinnedAgent(urlToFetch.hostname);
+        return agent;
+      };
+
+      // Fetch avatar from validated external source — hardened against
+      // both H1 (redirect-following past validation) and H2 (DNS
+      // rebinding). Caps redirects at 5 (default).
       let response: Response;
       try {
-        response = await fetch(validatedUrl.toString(), {
+        response = await hardenedFetch(validatedUrl.toString(), {
           headers: {
             'User-Agent': 'BugSpotter-Avatar-Proxy/1.0',
           },
+          validateUrl: validateHopUrl,
+          agentForUrl,
         });
       } catch (error) {
         logger.error('Network error fetching avatar from external service', {
