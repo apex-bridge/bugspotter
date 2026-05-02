@@ -67,23 +67,14 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            Review PR #${{ github.event.pull_request.number || github.event.issue.number }}.
+            Review PR #${{ github.event.pull_request.number || github.event.issue.number }}. Focus on real-impact issues:
+            - Auth/security: bypass, injection, missing tenant scoping, credential leak, SSRF
+            - Concurrency: races, deadlocks, transactional gaps
+            - Missing tests for new behavior
+            - Concrete bugs at file:line — name the failure mode
 
-            Focus on what would actually break:
-            - Security gaps (auth bypass, injection, missing tenant scoping,
-              credential leaks, SSRF, unsafe deserialization)
-            - Race conditions, deadlocks, transactional gaps
-            - Missing tests for new behavior — flag the specific scenarios
-            - Concrete bugs — point at file:line and name the failure mode
-
-            Skip: generic best-practice nits, style preferences, theoretical
-            issues that wouldn't reach a real user. If you find nothing
-            substantive, exit silently — don't manufacture findings, don't
-            post a "looks good" summary. The check status itself signals
-            the review ran.
-
-            Use inline review comments on the relevant diff lines. Do NOT
-            post a top-level PR summary comment.
+            Skip nits, style, theoretical issues. If nothing substantive, exit silently.
+            Inline comments only — no top-level summary.
           # `mcp__github_inline_comment__create_inline_comment` is the
           # MCP-bridged tool the action uses to buffer inline review
           # comments. Without it explicitly allow-listed, Claude's tool
@@ -94,4 +85,4 @@ jobs:
           # no-top-level-summary preference.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*)"
-            --max-turns 15
+            --max-turns 25
