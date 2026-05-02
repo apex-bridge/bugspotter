@@ -471,6 +471,86 @@ describe('CacheService', () => {
       });
     });
 
+    describe('invalidateIntegrationRules', () => {
+      // Regression: prior implementation called only the general
+      // `integrationRulesPattern` (`<prefix>:<projectId>:*`) which does
+      // NOT match the auto-create cache key shape
+      // (`<prefix>:auto:<projectId>:<integrationId>` — `auto` precedes
+      // `<projectId>`). Production route handlers thought they were
+      // invalidating after rule mutations but the auto-create cache
+      // stayed stale until TTL expired.
+      it('should delete the bare project key, the general pattern, AND the auto-create pattern', async () => {
+        vi.mocked(mockMemoryCache.deletePattern).mockResolvedValue(2);
+        vi.mocked(mockRedisCache.deletePattern).mockResolvedValue(1);
+        vi.mocked(mockMemoryCache.delete).mockResolvedValue(true);
+        vi.mocked(mockRedisCache.delete).mockResolvedValue(true);
+
+        await cacheService.invalidateIntegrationRules('proj-1');
+
+        const baseKey = CacheKeys.integrationRules('proj-1');
+        const generalPattern = CacheKeys.integrationRulesPattern('proj-1');
+        const autoCreatePattern = CacheKeys.autoCreateRulesPattern('proj-1');
+
+        // Bare project key (`<prefix>:<projectId>`) — exact key, not a pattern.
+        // Wildcard `<prefix>:<projectId>:*` doesn't match because there's no
+        // trailing colon segment to match the `*`.
+        expect(mockMemoryCache.delete).toHaveBeenCalledWith(baseKey);
+        expect(mockRedisCache.delete).toHaveBeenCalledWith(baseKey);
+
+        // Per-integration keys (`<prefix>:<projectId>:<integrationId>`).
+        expect(mockMemoryCache.deletePattern).toHaveBeenCalledWith(generalPattern);
+        expect(mockRedisCache.deletePattern).toHaveBeenCalledWith(generalPattern);
+
+        // Auto-create variant (`<prefix>:auto:<projectId>:<integrationId>`).
+        expect(mockMemoryCache.deletePattern).toHaveBeenCalledWith(autoCreatePattern);
+        expect(mockRedisCache.deletePattern).toHaveBeenCalledWith(autoCreatePattern);
+      });
+
+      it.each([
+        ['empty string', ''],
+        ['whitespace only', '   '],
+      ])(
+        'should NOT make any cache calls when projectId is %s (guard against global wipe)',
+        async (_label, badProjectId) => {
+          // `buildCacheKey` filters out empty-string parts. Without the
+          // guard, an empty projectId would collapse the patterns to
+          // `rules:*` and `rules:auto:*`, wiping every project's rules
+          // cache — far worse than a no-op. Assert that NEITHER `delete`
+          // NOR `deletePattern` is called for invalid input.
+          await cacheService.invalidateIntegrationRules(badProjectId);
+
+          expect(mockMemoryCache.delete).not.toHaveBeenCalled();
+          expect(mockRedisCache.delete).not.toHaveBeenCalled();
+          expect(mockMemoryCache.deletePattern).not.toHaveBeenCalled();
+          expect(mockRedisCache.deletePattern).not.toHaveBeenCalled();
+        }
+      );
+
+      it('should clear ALL three integration-rules cache key shapes', async () => {
+        // End-to-end shape check: every entry written by the rules cache
+        // methods must be reachable by some part of invalidateIntegrationRules.
+        const baseKey = CacheKeys.integrationRules('proj-1');
+        const perIntegrationKey = CacheKeys.integrationRules('proj-1', 'integ-1');
+        const autoCreateKey = CacheKeys.autoCreateRules('proj-1', 'integ-1');
+
+        const generalPattern = CacheKeys.integrationRulesPattern('proj-1');
+        const autoCreatePattern = CacheKeys.autoCreateRulesPattern('proj-1');
+        const generalPrefix = generalPattern.replace(/\*$/, '');
+        const autoCreatePrefix = autoCreatePattern.replace(/\*$/, '');
+
+        // baseKey is matched by exact delete (bare key, no wildcard match).
+        expect(baseKey).toBe('rules:proj-1');
+
+        // perIntegrationKey is matched by the general pattern.
+        expect(perIntegrationKey.startsWith(generalPrefix)).toBe(true);
+
+        // autoCreateKey is matched by the auto-create pattern.
+        expect(autoCreateKey.startsWith(autoCreatePrefix)).toBe(true);
+        // And NOT by the general pattern (the original PR-88 bug).
+        expect(autoCreateKey.startsWith(generalPrefix)).toBe(false);
+      });
+    });
+
     describe('getSystemConfig', () => {
       it('should return cached system config', async () => {
         const config = { maxUploadSize: 1024000 };
