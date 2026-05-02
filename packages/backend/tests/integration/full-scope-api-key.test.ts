@@ -23,9 +23,9 @@ import type { FastifyInstance } from 'fastify';
 import { DatabaseClient } from '../../src/db/client.js';
 import type { Project, User, BugReport } from '../../src/db/types.js';
 import { ApiKeyService } from '../../src/services/api-key/index.js';
+import { invalidateKeyCache } from '../../src/services/api-key/key-lifecycle-helpers.js';
 import { createStorage } from '../../src/storage/index.js';
 import type { BaseStorageService } from '../../src/storage/base-storage-service.js';
-import crypto from 'crypto';
 
 const TEST_DATABASE_URL = process.env.DATABASE_URL || 'postgresql://test:test@localhost:5432/test';
 
@@ -79,17 +79,25 @@ describe('Full-Scope API Key Integration Tests', () => {
       created_by: adminUser.id,
     });
 
-    // Create bug reports
+    // Create bug reports — pre-populate screenshot_key / replay_key so the
+    // routes under test (screenshots, storage-urls, share-tokens) reach the
+    // authorization branch instead of short-circuiting on a 404 for missing
+    // resources. The values don't need to point at real storage objects;
+    // these tests assert auth behaviour, not stream content.
     bugReport1 = await db.bugReports.create({
       project_id: testProject1.id,
       title: 'Test Bug 1',
       description: 'Test bug 1',
+      screenshot_key: `test/screenshots/bug-${testProject1.id}-1.png`,
+      replay_key: `test/replays/bug-${testProject1.id}-1.json`,
     });
 
     bugReport2 = await db.bugReports.create({
       project_id: testProject2.id,
       title: 'Test Bug 2',
       description: 'Test bug 2',
+      screenshot_key: `test/screenshots/bug-${testProject2.id}-2.png`,
+      replay_key: `test/replays/bug-${testProject2.id}-2.json`,
     });
 
     // Create API keys
@@ -262,32 +270,37 @@ describe('Full-Scope API Key Integration Tests', () => {
 
   describe('Storage URL Generation', () => {
     it('should allow full-scope key to generate URLs for any project', async () => {
+      // Route is `POST /api/v1/storage/urls/batch`. Body shape is
+      // `{ bugReportIds: string[], types: string[] }`. Response is
+      // `{ urls: Record<bugReportId, { screenshot?, replay?, ... }>,
+      // generatedAt }` — no `data` wrapper (route uses raw reply.send).
       const response = await server.inject({
         method: 'POST',
-        url: '/api/v1/storage-urls/batch',
+        url: '/api/v1/storage/urls/batch',
         headers: { 'x-api-key': fullScopeKey, 'Content-Type': 'application/json' },
         payload: JSON.stringify({
-          urls: [
-            { bugReportId: bugReport2.id, resourceType: 'screenshot' },
-            { bugReportId: bugReport2.id, resourceType: 'replay' },
-          ],
+          bugReportIds: [bugReport2.id],
+          types: ['screenshot', 'replay'],
         }),
       });
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
-      expect(body.data.urls).toHaveLength(2);
+      expect(body.urls).toBeDefined();
+      expect(body.urls[bugReport2.id]).toBeDefined();
+      // Both requested types should be present (urls or null, but the keys
+      // exist) — the route pre-populates with null for every requested type.
+      expect(Object.keys(body.urls[bugReport2.id]).sort()).toEqual(['replay', 'screenshot']);
     });
 
     it('should deny limited-scope key for disallowed projects', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/v1/storage-urls/batch',
+        url: '/api/v1/storage/urls/batch',
         headers: { 'x-api-key': limitedScopeKey, 'Content-Type': 'application/json' },
         payload: JSON.stringify({
-          urls: [
-            { bugReportId: bugReport2.id, resourceType: 'screenshot' }, // project2 NOT allowed
-          ],
+          bugReportIds: [bugReport2.id], // project2 NOT in allowed_projects
+          types: ['screenshot'],
         }),
       });
 
@@ -318,7 +331,7 @@ describe('Full-Scope API Key Integration Tests', () => {
         url: `/api/v1/reports/${bugReport2.id}`,
         headers: { 'x-api-key': fullScopeKey, 'Content-Type': 'application/json' },
         payload: JSON.stringify({
-          status: 'in_progress',
+          status: 'in-progress',
         }),
       });
 
@@ -342,29 +355,32 @@ describe('Full-Scope API Key Integration Tests', () => {
 
   describe('Share Token Routes', () => {
     it('should allow full-scope key to create share token for any project', async () => {
+      // Route is `POST /api/v1/replays/:id/share` — bug-report id in the
+      // URL path, not the body. Body shape is `{ expires_in_hours }`,
+      // not `{ bug_report_id, expires_at }`.
       const response = await server.inject({
         method: 'POST',
-        url: '/api/v1/share-tokens',
+        url: `/api/v1/replays/${bugReport2.id}/share`,
         headers: { 'x-api-key': fullScopeKey, 'Content-Type': 'application/json' },
         payload: JSON.stringify({
-          bug_report_id: bugReport2.id,
-          expires_at: new Date(Date.now() + 86400000).toISOString(),
+          expires_in_hours: 24,
         }),
       });
 
       expect(response.statusCode).toBe(201);
       const body = JSON.parse(response.body);
-      expect(body.data.bug_report_id).toBe(bugReport2.id);
+      // Response shape: { token, share_url, expires_at, password_protected }
+      expect(typeof body.data.token).toBe('string');
+      expect(typeof body.data.share_url).toBe('string');
     });
 
     it('should deny limited-scope key for disallowed projects', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/v1/share-tokens',
+        url: `/api/v1/replays/${bugReport2.id}/share`, // project2 NOT allowed
         headers: { 'x-api-key': limitedScopeKey, 'Content-Type': 'application/json' },
         payload: JSON.stringify({
-          bug_report_id: bugReport2.id, // project2 NOT allowed
-          expires_at: new Date(Date.now() + 86400000).toISOString(),
+          expires_in_hours: 24,
         }),
       });
 
@@ -712,10 +728,10 @@ describe('Full-Scope API Key Integration Tests', () => {
         [new Date(Date.now() - 86400000 - 1000), oldKeyRecord.id] // >24h ago
       );
 
-      // Invalidate cache so it re-fetches from DB
-      await db.query(`DELETE FROM api_key_cache WHERE key_hash = $1`, [
-        crypto.createHash('sha256').update(oldKey).digest('hex'),
-      ]);
+      // Invalidate cache so the next auth call re-reads from the DB and
+      // sees the rolled-back revoked_at. The cache moved from a Postgres
+      // table to Redis; use the production helper instead of a raw DELETE.
+      await invalidateKeyCache(db, oldKeyRecord.id);
 
       // Now old key should be rejected (grace period expired)
       const expiredResponse = await server.inject({
