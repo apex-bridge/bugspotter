@@ -14,7 +14,7 @@ import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import { getEncryptionService } from '../../utils/encryption.js';
 import { getLogger } from '../../logger.js';
 import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js';
-import { hardenedFetch, createPinnedAgent } from '../../integrations/security/hardened-http.js';
+import { hardenedFetch } from '../../integrations/security/hardened-http.js';
 
 const logger = getLogger();
 
@@ -689,21 +689,14 @@ export async function registerIntegrationRoutes(
         }
       };
 
-      // Per-hop pinned-DNS agent. Closes the rebinding window inside
-      // a single hop: even after the URL-string check passes, Node
-      // would otherwise re-resolve DNS at connect time and could
-      // route to a freshly-rotated private IP.
-      const agentForUrl = async (urlToFetch: URL): Promise<import('https').Agent | undefined> => {
-        if (urlToFetch.protocol !== 'https:') {
-          return undefined;
-        }
-        const { agent } = await createPinnedAgent(urlToFetch.hostname);
-        return agent;
-      };
-
       // Fetch avatar from validated external source — hardened against
-      // both H1 (redirect-following past validation) and H2 (DNS
-      // rebinding). Caps redirects at 5 (default).
+      // H1 (redirect-following past validation) via per-hop URL
+      // re-validation and a redirect cap. We do NOT pin DNS here:
+      // Node's undici-backed `fetch` does not accept a custom `agent`
+      // for HTTPS in a way that overrides DNS resolution, so a
+      // per-hop agent would be theatre. The Jira and generic-http
+      // clients (which use raw https.request / axios with httpsAgent)
+      // remain DNS-pinned where the agent IS effective.
       let response: Response;
       try {
         response = await hardenedFetch(validatedUrl.toString(), {
@@ -711,7 +704,6 @@ export async function registerIntegrationRoutes(
             'User-Agent': 'BugSpotter-Avatar-Proxy/1.0',
           },
           validateUrl: validateHopUrl,
-          agentForUrl,
         });
       } catch (error) {
         logger.error('Network error fetching avatar from external service', {

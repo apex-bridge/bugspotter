@@ -19,11 +19,14 @@
  *      handling to manual, re-runs the caller's allowlist + SSRF checks
  *      on every hop, and bounds the chain length.
  *
- * Both helpers compose: a caller can use `hardenedFetch` with an
- * `agentForUrl` that builds a pinned-DNS `https.Agent` per hop, getting
- * both protections at once. The avatar-proxy route does this; the Jira
- * and generic-http clients use `pinHostnameToIp` directly because they
- * don't follow redirects.
+ * The Jira and generic-http clients use `pinHostnameToIp` /
+ * `createPinnedAgent` directly: their callers (`https.request` and
+ * axios) accept a custom `lookup` / `httpsAgent` that actually
+ * overrides DNS resolution. The avatar-proxy uses `hardenedFetch`
+ * with per-hop URL re-validation only; Node's undici-backed `fetch`
+ * does NOT honour an `agent` option for HTTPS in a way that would
+ * make per-hop DNS pinning effective there, so `hardenedFetch` does
+ * not attempt to plumb one through.
  */
 
 import { lookup as dnsLookup } from 'dns/promises';
@@ -128,18 +131,11 @@ export interface HardenedFetchOptions {
   /**
    * Caller-supplied check that runs BEFORE every fetch hop, including
    * after each redirect. Throw to abort the chain. Use this to enforce
-   * domain allowlists; the SSRF check on resolved IPs runs separately
-   * via `pinHostnameToIp` if `agentForUrl` is provided.
+   * domain allowlists; the URL-string SSRF blocklist (private IP
+   * literals, alternative encodings, cloud-metadata) should be invoked
+   * here too if redirect targets need to be re-validated.
    */
   validateUrl: (url: URL) => void;
-  /**
-   * Optional per-hop agent factory. If provided, called on every hop with
-   * the URL about to be requested; should return an `https.Agent` (or
-   * undefined for plain http) whose connection is pinned to a validated
-   * IP. Without it, hops are subject to DNS rebinding even though the
-   * Location is allowlist-checked.
-   */
-  agentForUrl?: (url: URL) => Promise<HttpsAgent | undefined>;
   /** Forwarded to fetch() on every hop. */
   headers?: Record<string, string>;
 }
@@ -150,9 +146,8 @@ export interface HardenedFetchOptions {
  * Each hop:
  *   1. Parses the URL.
  *   2. Calls `options.validateUrl(parsed)` — caller's allowlist check.
- *   3. Optionally builds a pinned-DNS agent via `options.agentForUrl`.
- *   4. Issues the request with `redirect: 'manual'`.
- *   5. If the response is 3xx with a `Location`, resolves the next URL
+ *   3. Issues the request with `redirect: 'manual'`.
+ *   4. If the response is 3xx with a `Location`, resolves the next URL
  *      relative to the current one and loops; otherwise returns.
  *
  * Caps total hops at `options.maxRedirects ?? 5`.
@@ -175,23 +170,9 @@ export async function hardenedFetch(
     // Caller's allowlist + SSRF URL-string check. Throws to abort.
     options.validateUrl(parsedUrl);
 
-    // Per-hop pinned agent (DNS rebinding protection). Built here so
-    // each hop's resolved IP is independently validated — a redirect
-    // to a different host can't reuse a previous hop's pinned agent.
-    const agent = options.agentForUrl ? await options.agentForUrl(parsedUrl) : undefined;
-
     const response = await fetch(currentUrl, {
       headers: options.headers,
       redirect: 'manual',
-      // @ts-expect-error — Node's undici-backed fetch accepts `dispatcher`
-      // for connection control, but for HTTPS the agent is plumbed via
-      // a different mechanism (an Agent on `globalThis`). Where the
-      // hardened agent is the only correct one, we set it directly on
-      // the request via `Symbol.for('undici.dispatcher')` workaround;
-      // for the avatar-proxy use case this isn't strictly required
-      // because the URL is already validated and the hostname-allowlist
-      // narrows the attack surface. Documenting the limitation here.
-      agent,
     });
 
     if (response.status >= 300 && response.status < 400) {
