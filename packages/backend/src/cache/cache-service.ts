@@ -298,20 +298,33 @@ export class CacheService {
   }
 
   /**
-   * Invalidate all integration rules for a project, including auto-create
-   * rule cache entries. Two separate pattern deletes are required because
-   * auto-create keys are shaped `<prefix>:auto:<projectId>:<integrationId>`
-   * — the `auto` segment precedes `<projectId>`, so a wildcard rooted at
-   * `<projectId>` doesn't reach them.
+   * Invalidate all integration rules for a project. Three deletes are
+   * required because the rules cache has three key shapes:
+   *
+   *   1. `<prefix>:<projectId>`                       — bare project key
+   *      written by `CacheKeys.integrationRules(projectId)` when the
+   *      caller wants the full rule list for a project, no integration
+   *      filter. This is an EXACT key, not a pattern — wildcards can't
+   *      match it (no trailing colon segment for `:*` to land on).
+   *
+   *   2. `<prefix>:<projectId>:<integrationId>`        — per-integration
+   *      key written by `CacheKeys.integrationRules(projectId, integ)`.
+   *      Caught by the general pattern `<prefix>:<projectId>:*`.
+   *
+   *   3. `<prefix>:auto:<projectId>:<integrationId>`   — auto-create
+   *      variant. `auto` precedes `<projectId>`, so a wildcard rooted
+   *      at `<projectId>` can't reach it — needs its own pattern.
    *
    * Production route handlers call this after every rule create/update/
-   * delete; without the auto-create pattern, the auto-create cache would
-   * stay stale for up to `CacheTTL.SHORT` (60s) after a rule change.
+   * delete; missing any of the three shapes leaves stale rules in the
+   * cache for up to `CacheTTL.SHORT` (60s) after a rule change.
    */
   async invalidateIntegrationRules(projectId: string): Promise<void> {
+    const baseKey = CacheKeys.integrationRules(projectId);
     const generalPattern = CacheKeys.integrationRulesPattern(projectId);
     const autoCreatePattern = CacheKeys.autoCreateRulesPattern(projectId);
-    const [deletedGeneral, deletedAutoCreate] = await Promise.all([
+    const [, deletedGeneral, deletedAutoCreate] = await Promise.all([
+      this.delete(baseKey),
       this.deletePattern(generalPattern),
       this.deletePattern(autoCreatePattern),
     ]);
