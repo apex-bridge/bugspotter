@@ -79,10 +79,17 @@ jobs:
           # MCP-bridged tool the action uses to buffer inline review
           # comments. Without it explicitly allow-listed, Claude's tool
           # calls get denied and the action exits with "No buffered inline
-          # comments" — silently producing nothing visible. The Bash gh
-          # entries are read-only diff/view fallbacks; we deliberately
-          # don't allow `gh pr comment` to enforce the
-          # no-top-level-summary preference.
+          # comments" — silently producing nothing visible.
+          #
+          # `gh pr diff` and `gh pr view` are read-only fallbacks for
+          # exploratory navigation. We deliberately do NOT allow
+          # `gh pr comment` (would enable top-level summaries we've
+          # explicitly disabled in the prompt) or `gh api:*` (supports
+          # `-X POST/PATCH/DELETE` so the wildcard would let Claude
+          # mutate any GitHub resource the workflow's GITHUB_TOKEN can
+          # touch — including posting top-level PR comments via
+          # `gh api repos/.../issues/.../comments`, defeating the same
+          # constraint).
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*)"
             --max-turns 25

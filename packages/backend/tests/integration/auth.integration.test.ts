@@ -60,12 +60,12 @@ describe('Authentication Flow Integration Tests', () => {
       cleanup.trackUser(body.data.user.id);
     });
 
-    // Removed: "should register admin user with admin role" — the route now
-    // hardcodes role: 'user' on registration (per src/api/routes/auth.ts:193
-    // comment) and registerSchema rejects extra properties including `role`,
-    // so this test asserted behavior that's been deliberately removed for
-    // privilege-escalation prevention. Admin users are created via admin
-    // endpoints, not via /register.
+    // Removed: "should register admin user with admin role" — the
+    // /auth/register handler now hardcodes role: 'user' to prevent
+    // privilege escalation via the public registration endpoint, and
+    // `registerSchema` rejects extra properties including `role`. This
+    // test asserted behavior that's been deliberately removed. Admin
+    // users are created via admin endpoints, not via /register.
 
     it('should reject duplicate email registration', async () => {
       const email = `duplicate-${generateUniqueId()}@example.com`;

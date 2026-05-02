@@ -516,11 +516,11 @@ describe('Magic Login Authentication', () => {
     });
 
     it('should accept magic token without role claim (backward compat)', async () => {
-      // `role` was made optional in the JWT payload (auth.ts:137 comment:
-      // "removed from new tokens, may exist in old ones"). Newer tokens
-      // omit it entirely. Without an explicit positive test, a future
-      // "fix" that re-adds the role-required check would silently break
-      // every magic-login token issued after that change.
+      // `role` was made optional in `validateJwtPayload` — older tokens
+      // may still carry it, newer tokens omit it entirely. Without an
+      // explicit positive test, a future "fix" that re-adds the
+      // role-required check would silently break every magic-login
+      // token issued after `role` was dropped.
       const tokenWithoutRole = server.jwt.sign(
         {
           userId: testUserId,
