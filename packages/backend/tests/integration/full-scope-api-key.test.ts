@@ -23,6 +23,7 @@ import type { FastifyInstance } from 'fastify';
 import { DatabaseClient } from '../../src/db/client.js';
 import type { Project, User, BugReport } from '../../src/db/types.js';
 import { ApiKeyService } from '../../src/services/api-key/index.js';
+import { ROTATION_GRACE_PERIOD } from '../../src/services/api-key/api-key-service.js';
 import { getCacheService } from '../../src/cache/cache-service.js';
 import { CacheKeys } from '../../src/cache/cache-keys.js';
 import { createStorage } from '../../src/storage/index.js';
@@ -777,11 +778,13 @@ describe('Full-Scope API Key Integration Tests', () => {
       expect(gracePeriodResponse.statusCode).toBe(200);
 
       // Simulate grace period expiry by backdating revoked_at past the
-      // service's `ROTATION_GRACE_PERIOD` (7 days — see api-key-service.ts).
-      // Use 8 days + 1s so we're unambiguously outside the grace window.
-      const EIGHT_DAYS_MS = 8 * 24 * 60 * 60 * 1000;
+      // service's grace window. Derive from the imported constant rather
+      // than hardcoding a duration — a future bump (e.g. enterprise tier
+      // moving to 30d) would otherwise leave the key inside grace and the
+      // 401 assertion below would silently flip to 200.
+      const PAST_GRACE_MS = ROTATION_GRACE_PERIOD + 24 * 60 * 60 * 1000; // grace + 1d
       await db.query(`UPDATE api_keys SET revoked_at = $1 WHERE id = $2`, [
-        new Date(Date.now() - EIGHT_DAYS_MS - 1000),
+        new Date(Date.now() - PAST_GRACE_MS),
         oldKeyRecord.id,
       ]);
 
