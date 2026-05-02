@@ -506,6 +506,26 @@ describe('CacheService', () => {
         expect(mockRedisCache.deletePattern).toHaveBeenCalledWith(autoCreatePattern);
       });
 
+      it.each([
+        ['empty string', ''],
+        ['whitespace only', '   '],
+      ])(
+        'should NOT make any cache calls when projectId is %s (guard against global wipe)',
+        async (_label, badProjectId) => {
+          // `buildCacheKey` filters out empty-string parts. Without the
+          // guard, an empty projectId would collapse the patterns to
+          // `rules:*` and `rules:auto:*`, wiping every project's rules
+          // cache — far worse than a no-op. Assert that NEITHER `delete`
+          // NOR `deletePattern` is called for invalid input.
+          await cacheService.invalidateIntegrationRules(badProjectId);
+
+          expect(mockMemoryCache.delete).not.toHaveBeenCalled();
+          expect(mockRedisCache.delete).not.toHaveBeenCalled();
+          expect(mockMemoryCache.deletePattern).not.toHaveBeenCalled();
+          expect(mockRedisCache.deletePattern).not.toHaveBeenCalled();
+        }
+      );
+
       it('should clear ALL three integration-rules cache key shapes', async () => {
         // End-to-end shape check: every entry written by the rules cache
         // methods must be reachable by some part of invalidateIntegrationRules.

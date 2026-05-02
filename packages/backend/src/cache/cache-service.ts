@@ -320,6 +320,17 @@ export class CacheService {
    * cache for up to `CacheTTL.SHORT` (60s) after a rule change.
    */
   async invalidateIntegrationRules(projectId: string): Promise<void> {
+    // Guard against empty/whitespace projectId. `buildCacheKey` filters
+    // out empty-string parts, so an empty `projectId` would collapse the
+    // patterns to `rules:*` and `rules:auto:*` — wiping every project's
+    // rules cache, not just one. Treat as a no-op rather than a global
+    // nuke; a real caller should never reach this branch.
+    if (!projectId || !projectId.trim()) {
+      logger.warn('invalidateIntegrationRules called with empty projectId — ignoring', {
+        projectId,
+      });
+      return;
+    }
     const baseKey = CacheKeys.integrationRules(projectId);
     const generalPattern = CacheKeys.integrationRulesPattern(projectId);
     const autoCreatePattern = CacheKeys.autoCreateRulesPattern(projectId);
