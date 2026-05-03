@@ -143,11 +143,31 @@ export function getEffectiveProjectRole(
   orgRole: OrgMemberRole | undefined
 ): ProjectRole | undefined {
   const inherited = orgRole ? getInheritedProjectRole(orgRole) : undefined;
-  if (!explicitRole) {
-    return inherited;
+  return pickHigherProjectRole(explicitRole, inherited) ?? undefined;
+}
+
+/**
+ * Pick the higher of two already-resolved project roles.
+ *
+ * Both `getEffectiveProjectRole` (above) and the `requireProjectAccess`
+ * middleware need the same composition: given an explicit project role
+ * and an inherited project role (either side may be null/undefined),
+ * return the one with the higher permission level. The previous form was
+ * inlined in both locations; centralising here keeps the rule in one
+ * place so a future change to `ROLE_HIERARCHY` or to the picking policy
+ * doesn't drift across callers.
+ *
+ * Pure function, no DB access. Accepts `null` for "role not set" so
+ * callers don't need to defensively coerce undefined.
+ */
+export function pickHigherProjectRole(
+  a: ProjectRole | null | undefined,
+  b: ProjectRole | null | undefined
+): ProjectRole | null {
+  const left = a ?? null;
+  const right = b ?? null;
+  if (left && right) {
+    return hasPermissionLevel(left, right) ? left : right;
   }
-  if (!inherited) {
-    return explicitRole;
-  }
-  return hasPermissionLevel(explicitRole, inherited) ? explicitRole : inherited;
+  return left ?? right ?? null;
 }
