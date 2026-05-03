@@ -28,13 +28,28 @@ read reports across projects — don't.
 
 ## 2. Header precedence (and the audit-identity caveat)
 
-The auth middleware ([auth/middleware.ts:54-76](../src/api/middleware/auth/middleware.ts#L54-L76)) tries
-the `x-api-key` header **first** and short-circuits as soon as the key
-validates. JWT is only consulted when no API-key header is present. So
-when both headers arrive together:
+The auth middleware ([auth/middleware.ts:42-86](../src/api/middleware/auth/middleware.ts#L42-L86))
+tries auth methods in a fixed order, short-circuiting on the first one
+that's _applicable_ (not first-success — see the gotcha below):
+
+1. **`shareToken`** (query param on GET, body on POST) — if present and
+   valid, returns immediately.
+2. **`x-api-key`** header — if the header exists, runs API-key auth.
+3. **`Authorization: Bearer …`** JWT — only consulted when no
+   `x-api-key` header was present.
+
+**Critical gotcha**: if `x-api-key` is present but invalid/revoked/expired,
+the request is **rejected** — JWT is **not** tried as a fallback. The
+middleware returns at the end of the api-key block regardless of
+success or failure ([line 71](../src/api/middleware/auth/middleware.ts#L71)).
+Operators sometimes assume a valid JWT will rescue a bad API key; it
+won't. Either drop the api-key header or refresh the key.
+
+When `x-api-key` AND `Authorization: Bearer` are both present and the
+API key validates:
 
 - `request.apiKey` is populated
-- `request.authUser` stays **undefined**
+- `request.authUser` stays **undefined** (JWT was never consulted)
 
 This is _not_ a privilege-escalation surface (a leaked full-scope key
 already grants full access; presenting JWT alongside adds nothing). But
