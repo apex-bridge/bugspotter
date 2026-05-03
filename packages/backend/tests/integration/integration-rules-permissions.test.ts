@@ -1037,6 +1037,118 @@ describe('Integration Rules Permissions - E2E', () => {
       // Same gate as the explicit-viewer test, just reached via inheritance.
       expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
+
+    // Closes GH-101: cross-organisation rule copy. Even a user who
+    // satisfies BOTH project-level gates (member+ on source, admin on
+    // target) cannot copy rules across org boundaries — the route
+    // enforces `sourceProject.organization_id === targetProject.organization_id`
+    // strict equality. Rule configurations contain tenant-specific
+    // business logic (custom field mappings, PII filters, internal
+    // description templates) that should stay within the org they
+    // originated in.
+    it('should deny cross-organization copy', async () => {
+      // User has explicit member on a source project in org A,
+      // explicit admin on a target project in org B. Both project-
+      // level gates pass; the cross-org guard is the only thing
+      // standing between Alice's source rule and Bob's project.
+      const crossOrgUserData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(crossOrgUserData.user.id);
+
+      const orgA = await db.organizations.create({
+        name: `Cross-Org Source ${Date.now()}`,
+        subdomain: `xo-src-${Date.now()}`,
+      });
+      cleanup.trackOrganization(orgA.id);
+
+      const orgB = await db.organizations.create({
+        name: `Cross-Org Target ${Date.now()}`,
+        subdomain: `xo-tgt-${Date.now()}`,
+      });
+      cleanup.trackOrganization(orgB.id);
+
+      // Source project in org A; user is explicit `member`.
+      const sourceProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(sourceProject.id);
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        orgA.id,
+        sourceProject.id,
+      ]);
+      await db.projectMembers.addMember(sourceProject.id, crossOrgUserData.user.id, 'member');
+      await db.projectIntegrations.create({
+        project_id: sourceProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'XOS',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+      const sourceRuleResponse = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules`,
+        headers: { authorization: `Bearer ${adminJwt}` },
+        payload: {
+          name: 'Cross-org-deny source rule',
+          enabled: true,
+          filters: [{ field: 'priority', operator: 'equals', value: 'low' }],
+          auto_create: false,
+        },
+      });
+      const sourceRuleId = JSON.parse(sourceRuleResponse.body).data.id;
+
+      // Target project in org B; user is explicit `admin`.
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        orgB.id,
+        targetProject.id,
+      ]);
+      await db.projectMembers.addMember(targetProject.id, crossOrgUserData.user.id, 'admin');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'XOT',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const userLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: {
+          email: crossOrgUserData.user.email,
+          password: crossOrgUserData.password,
+        },
+      });
+      expect(userLogin.statusCode).toBe(200);
+      const userJwt = JSON.parse(userLogin.body).data.access_token;
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules/${sourceRuleId}/copy`,
+        headers: { authorization: `Bearer ${userJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(JSON.parse(response.body).message).toContain('Cannot copy rules across organizations');
+    });
   });
 
   describe('Admin Bypass', () => {
