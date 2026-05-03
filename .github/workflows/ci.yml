@@ -230,21 +230,15 @@ jobs:
     name: Backend Integration Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Non-blocking on purpose. Integration tests stopped running in CI when
-    # `vitest.config.ts` started excluding `tests/integration/**` — the
-    # `pnpm test -- tests/integration` calls in other jobs match nothing and
-    # exit 0. Wiring `pnpm test:integration` (which uses the integration
-    # config) restores visibility, but the suite carries pre-existing
-    # baseline failures (verified pre-PR-1 by checking out origin/main).
-    # Cleanup is tracked in follow-up PRs (α–ε from the rot analysis):
-    #   - α: setup.integration-env.ts ALLOW_REGISTRATION → fixes 3
-    #   - β: rule-evaluator beforeEach cache invalidation → fixes 10
-    #   - γ: delete two stale tests (admin-register, role-required magic)
-    #   - δ: full-scope-api-key URL/enum/fixture drift → fixes 12
-    #   - ε: integration-rules-permissions role + wording → fixes 5
-    # Once those land, flip continue-on-error to false and add this job
-    # to ci-success's needs list to make it required.
-    continue-on-error: true
+    # Required. Was previously non-blocking with `continue-on-error: true`
+    # because `vitest.config.ts` had been excluding `tests/integration/**`
+    # for long enough that the suite carried significant drift from the
+    # current routes/schemas. The cleanup PRs that closed each drift
+    # cluster have all landed (integration baseline cleanup, full-scope
+    # API key + integration-rules-permissions tests, presigned-url
+    # residency-validator bypass), so the job is now stable green on
+    # main and can gate merges. Add a matching result-check below in
+    # ci-success when adjusting this — both must move together.
 
     env:
       NODE_OPTIONS: --no-node-snapshot
@@ -760,13 +754,10 @@ jobs:
   ci-success:
     name: CI
     runs-on: ubuntu-latest
-    # `test-backend-integration` is in `needs` so the required CI summary
-    # waits for it to finish — without this, CI can go green while the
-    # integration job is still running and any new regression would slip
-    # through. Intentionally NOT added to the result-check block below:
-    # the job has `continue-on-error: true` and is non-blocking until
-    # the cleanup PRs (α–ε) land. Add a result check here when those
-    # ship.
+    # `test-backend-integration` is in `needs` AND in the result-check
+    # block below. Both must move together: removing it from one without
+    # the other either lets a failure slip through (only in `needs`) or
+    # waits on a job that doesn't gate (only in checks).
     needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, test-backend-integration, playwright-admin, build, test-coverage, validate-compose]
     if: always()
     steps:
@@ -791,6 +782,10 @@ jobs:
           fi
           if [[ "${{ needs.test-backend-other.result }}" != "success" ]]; then
             echo "❌ Backend Other Tests job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-backend-integration.result }}" != "success" ]]; then
+            echo "❌ Backend Integration Tests job failed"
             exit 1
           fi
           if [[ "${{ needs.playwright-admin.result }}" != "success" ]]; then
