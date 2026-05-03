@@ -33,6 +33,7 @@ import { sendAccountLocked, sendUnauthorizedWithAttempts } from '../middleware/a
 import type { User } from '../../db/types.js';
 import { isPlatformAdmin } from '../middleware/auth.js';
 import { getDeploymentConfig } from '../../saas/config.js';
+import { assertUserBelongsToTenant } from '../../saas/middleware/tenant-match.js';
 
 /**
  * SaaS-mode access gate: reject the caller if the user has zero
@@ -284,6 +285,13 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       // SaaS-mode access gate — see assertUserHasActiveOrgAccess.
       await assertUserHasActiveOrgAccess(db, user);
 
+      // Tenant-match gate (closes the cross-tenant login surface):
+      // when the request arrives on a tenant subdomain, the user
+      // must belong to that org. Throws the same 401 shape as
+      // wrong-password to avoid user enumeration. No-op on the hub
+      // domain (request.organizationId undefined) per product policy.
+      await assertUserBelongsToTenant(db, user, request.organizationId);
+
       // Generate tokens
       const tokens = generateAuthTokens(fastify, user);
 
@@ -351,6 +359,19 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       // tokens within at most one access-token TTL of the soft-delete.
       await assertUserHasActiveOrgAccess(db, user);
 
+      // Tenant-match gate on refresh: a stolen refresh cookie replayed
+      // against a different tenant subdomain stops minting access
+      // tokens within at most one refresh roundtrip. Match the
+      // catch-block's shape ("Invalid or expired refresh token") so
+      // an attacker can't probe whether the cookie belongs to a
+      // specific tenant by diffing error codes.
+      await assertUserBelongsToTenant(
+        db,
+        user,
+        request.organizationId,
+        'Invalid or expired refresh token'
+      );
+
       // Generate new tokens
       const tokens = generateAuthTokens(fastify, user);
 
@@ -412,6 +433,20 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
             401,
             'Unauthorized'
           );
+        }
+
+        // Tenant-match gate: a magic token issued for orgA must not
+        // be redeemable at orgB's subdomain. The token's
+        // `organizationId` claim is the source of truth for which
+        // tenant the magic link was minted for; if the request
+        // arrived at a different tenant subdomain, refuse. Hub-domain
+        // magic-logins (no `request.organizationId`) keep working
+        // per product policy.
+        if (
+          request.organizationId !== undefined &&
+          request.organizationId !== decoded.organizationId
+        ) {
+          throw new AppError('Invalid magic token: tenant mismatch', 401, 'Unauthorized');
         }
 
         // Check if magic login is enabled for this organization (DB-backed setting)
