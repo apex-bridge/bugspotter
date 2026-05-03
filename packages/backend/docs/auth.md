@@ -82,7 +82,7 @@ A user's project role is the **max** of two sources:
 - **Inherited**: the user's org membership, mapped through
   [`ORG_TO_PROJECT_ROLE`](../src/types/project-roles.ts):
 
-  ```
+  ```text
   org owner   → project admin
   org admin   → project admin
   org member  → project viewer
@@ -146,6 +146,6 @@ adjacent to these should consult the linked issues before assuming
 permanence.
 
 - **[#97](https://github.com/apex-bridge/bugspotter/issues/97) — Audit-identity masking**: JWT + full-scope API key obscures user attribution in logs because `request.authUser` is never set when an API key is present. Three fix options proposed (populate `authUser` anyway, log both identities, or reject dual-header). Decision needed.
-- **[#101](https://github.com/apex-bridge/bugspotter/issues/101) — Cross-organisation rule copy**: a user who is `member` on org A's project + `admin` on org B's project can copy rules across orgs. The intra-org viewer-source case was closed in [#100](https://github.com/apex-bridge/bugspotter/pull/100); cross-org is a separate policy decision (allow for sufficiently-privileged users vs. never).
+- **[#101](https://github.com/apex-bridge/bugspotter/issues/101) — Cross-organisation rule copy**: a user who is `member` on org A's project + `admin` on org B's project can copy rules across orgs. The intra-org viewer-source case was closed in [#102](https://github.com/apex-bridge/bugspotter/pull/102); cross-org is a separate policy decision (allow for sufficiently-privileged users vs. never).
 - **API-key admin enforcement**: the bypass rules in §5 are intentional today, but the lock-in tests document them so a future product decision to add machine-level admin gates would surface as test diffs. No active ticket.
 - **`checkProjectAccess` return type**: currently `Promise<void>` (throws on failure). Changing to `Promise<ProjectRole | null>` would let `requireProjectAccess` reuse the role resolved during access verification, eliminating the second `checkOrganizationAccess` round-trip for org-inherited users. 26 callsites; significant blast radius. Good candidate for a follow-up RBAC perf PR.
