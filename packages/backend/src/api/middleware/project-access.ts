@@ -6,7 +6,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import { findOrThrow, checkProjectAccess, lookupInheritedProjectRole } from '../utils/resource.js';
-import { hasPermissionLevel, isProjectRole } from '../../types/project-roles.js';
+import { isProjectRole, pickHigherProjectRole } from '../../types/project-roles.js';
 import { extractRouteParam, requireAuthContext } from './helpers.js';
 
 /**
@@ -77,8 +77,12 @@ export function requireProjectAccess(db: DatabaseClient, options: { paramName?: 
     const project = await findOrThrow(() => db.projects.findById(projectId), 'Project');
 
     // Verify project access using centralized logic (handles JWT, project-scoped, and full-scope API keys)
+    // Pass organization_id so the inherited-role lookup inside
+    // checkProjectAccess can skip the redundant `db.projects.findById`
+    // (we already loaded `project` two lines above).
     await checkProjectAccess(project.id, request.authUser, request.authProject, db, 'Project', {
       apiKey: request.apiKey,
+      organizationId: project.organization_id,
     });
 
     // Fetch the user's effective project role for downstream authorization
@@ -102,15 +106,11 @@ export function requireProjectAccess(db: DatabaseClient, options: { paramName?: 
         lookupInheritedProjectRole(project.id, request.authUser.id, db, project.organization_id),
       ]);
 
-      // Pick the higher of explicit and inherited. Mirrors the same
-      // composition logic used inside checkProjectAccess.
+      // Pick the higher of explicit and inherited via the shared helper
+      // (`types/project-roles.ts:pickHigherProjectRole`) so the rule
+      // stays in one place — same call inside checkProjectAccess.
       const explicit = isProjectRole(explicitRole) ? explicitRole : null;
-      const effectiveRole =
-        explicit && inheritedRole
-          ? hasPermissionLevel(explicit, inheritedRole)
-            ? explicit
-            : inheritedRole
-          : (explicit ?? inheritedRole);
+      const effectiveRole = pickHigherProjectRole(explicit, inheritedRole);
 
       if (effectiveRole) {
         request.projectRole = effectiveRole;

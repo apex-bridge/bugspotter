@@ -933,6 +933,110 @@ describe('Integration Rules Permissions - E2E', () => {
       // in afterAll. testProject is never touched.
       void sourceJiraIntegration;
     });
+
+    // Counterpart to the inherited-admin allow test: pins the
+    // `ORG_TO_PROJECT_ROLE` mapping in `types/project-roles.ts:122-126`
+    // (member → viewer). If anyone changes that map to `member: 'member'`,
+    // org members would silently gain copy access — this test catches that.
+    // The viewer-deny test above exercises the same `requireProjectRole`
+    // gate but via an EXPLICIT project_members row, not via inheritance,
+    // so it doesn't cover the mapping branch.
+    it('should deny org-member (inherits viewer) on source project from copying rules', async () => {
+      const orgMemberData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(orgMemberData.user.id);
+
+      // Org with this user as `member` — inherits project `viewer`,
+      // which is below the `member` floor enforced by
+      // `requireProjectRole('member')` on the copy source.
+      const sourceOrg = await db.organizations.create({
+        name: `Inherited Member Deny Test Org ${Date.now()}`,
+        subdomain: `inh-mem-deny-${Date.now()}`,
+      });
+      cleanup.trackOrganization(sourceOrg.id);
+      await db.organizationMembers.create({
+        organization_id: sourceOrg.id,
+        user_id: orgMemberData.user.id,
+        role: 'member',
+      });
+
+      // Source project: scoped to the org, no explicit project_members row
+      // for this user (access comes purely from org-member inheritance).
+      const sourceProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(sourceProject.id);
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        sourceOrg.id,
+        sourceProject.id,
+      ]);
+      await db.projectIntegrations.create({
+        project_id: sourceProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'IMDS',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+      const sourceRuleResponse = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules`,
+        headers: { authorization: `Bearer ${adminJwt}` },
+        payload: {
+          name: 'Inherited-member deny source rule',
+          enabled: true,
+          filters: [{ field: 'priority', operator: 'equals', value: 'low' }],
+          auto_create: false,
+        },
+      });
+      const sourceRuleId = JSON.parse(sourceRuleResponse.body).data.id;
+
+      // Target: user has explicit admin so the source gate is the only
+      // thing that can deny — isolates the test to the inheritance mapping.
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.projectMembers.addMember(targetProject.id, orgMemberData.user.id, 'admin');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'IMDT',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const orgUserLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: orgMemberData.user.email, password: orgMemberData.password },
+      });
+      expect(orgUserLogin.statusCode).toBe(200);
+      const orgUserJwt = JSON.parse(orgUserLogin.body).data.access_token;
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules/${sourceRuleId}/copy`,
+        headers: { authorization: `Bearer ${orgUserJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // Same gate as the explicit-viewer test, just reached via inheritance.
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
+    });
   });
 
   describe('Admin Bypass', () => {

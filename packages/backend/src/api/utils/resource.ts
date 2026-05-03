@@ -12,6 +12,7 @@ import {
   hasPermissionLevel,
   isProjectRole,
   getInheritedProjectRole,
+  pickHigherProjectRole,
 } from '../../types/project-roles.js';
 import { checkProjectPermission } from '../../services/api-key/key-permissions.js';
 
@@ -156,6 +157,15 @@ export async function checkProjectAccess(
     apiKey?: ApiKey;
     /** Minimum project role required (e.g., 'admin' for config, 'member' for data). API keys bypass this. */
     minProjectRole?: ProjectRole;
+    /**
+     * Project's `organization_id`, if the caller already loaded the
+     * project. Avoids a redundant `db.projects.findById` inside
+     * `lookupInheritedProjectRole` on hot paths like
+     * `requireProjectAccess`. `undefined` (the default) keeps the
+     * original behaviour for direct callers that don't have the
+     * project in hand.
+     */
+    organizationId?: string | null;
   }
 ): Promise<void> {
   // API key authentication without JWT user — verify project permission via API key rules
@@ -198,17 +208,13 @@ export async function checkProjectAccess(
 
     // If minProjectRole specified, check effective role = max(explicit, inherited)
     if (options?.minProjectRole) {
-      const explicitRole = await db.projects.getUserRole(projectId, authUser.id);
-      const inheritedRole = await lookupInheritedProjectRole(projectId, authUser.id, db);
+      const [explicitRole, inheritedRole] = await Promise.all([
+        db.projects.getUserRole(projectId, authUser.id),
+        lookupInheritedProjectRole(projectId, authUser.id, db, options?.organizationId),
+      ]);
 
-      // Pick the higher of explicit and inherited
-      let effectiveRole: ProjectRole | null = null;
-      const explicit = explicitRole && isProjectRole(explicitRole) ? explicitRole : null;
-      if (explicit && inheritedRole) {
-        effectiveRole = hasPermissionLevel(explicit, inheritedRole) ? explicit : inheritedRole;
-      } else {
-        effectiveRole = explicit ?? inheritedRole;
-      }
+      const explicit = isProjectRole(explicitRole) ? explicitRole : null;
+      const effectiveRole = pickHigherProjectRole(explicit, inheritedRole);
 
       if (!effectiveRole) {
         throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
@@ -226,8 +232,15 @@ export async function checkProjectAccess(
     // Fallback: check boolean membership (backward compatible)
     const hasAccess = await db.projects.hasAccess(projectId, authUser.id);
     if (!hasAccess) {
-      // Check org inheritance as fallback
-      const inheritedRole = await lookupInheritedProjectRole(projectId, authUser.id, db);
+      // Check org inheritance as fallback. Pass organizationId through
+      // so the helper skips the redundant `db.projects.findById` when
+      // the caller already loaded the project.
+      const inheritedRole = await lookupInheritedProjectRole(
+        projectId,
+        authUser.id,
+        db,
+        options?.organizationId
+      );
       if (!inheritedRole) {
         throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
       }
