@@ -5,8 +5,8 @@
 
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
-import { findOrThrow, checkProjectAccess } from '../utils/resource.js';
-import { isProjectRole } from '../../types/project-roles.js';
+import { findOrThrow, checkProjectAccess, lookupInheritedProjectRole } from '../utils/resource.js';
+import { hasPermissionLevel, isProjectRole } from '../../types/project-roles.js';
 import { extractRouteParam, requireAuthContext } from './helpers.js';
 
 /**
@@ -81,13 +81,32 @@ export function requireProjectAccess(db: DatabaseClient, options: { paramName?: 
       apiKey: request.apiKey,
     });
 
-    // Fetch and attach user's role for downstream authorization checks (avoids N+1 queries)
+    // Fetch the user's effective project role for downstream authorization
+    // checks. Effective = max(explicit project_members row, org-inherited
+    // role). `getUserRole` only sees explicit project membership rows
+    // (and the `created_by` owner shortcut); a user whose project access
+    // is granted via org membership inheritance has `getUserRole` returning
+    // null. Without combining both, downstream `requireProjectRole`
+    // false-negatives every org-inherited member with a misleading
+    // "You do not have a role in this project" 403 — even though
+    // `requireProjectAccess` (above) just admitted them via the inherited
+    // path in `checkProjectAccess`.
     if (request.authUser) {
-      const role = await db.projects.getUserRole(project.id, request.authUser.id);
+      const explicitRole = await db.projects.getUserRole(project.id, request.authUser.id);
+      const inheritedRole = await lookupInheritedProjectRole(project.id, request.authUser.id, db);
 
-      // Validate role before attaching to request (defensive check against invalid DB data)
-      if (role && isProjectRole(role)) {
-        request.projectRole = role;
+      // Pick the higher of explicit and inherited. Mirrors the same
+      // composition logic used inside checkProjectAccess.
+      const explicit = explicitRole && isProjectRole(explicitRole) ? explicitRole : null;
+      let effectiveRole = explicit;
+      if (explicit && inheritedRole) {
+        effectiveRole = hasPermissionLevel(explicit, inheritedRole) ? explicit : inheritedRole;
+      } else if (inheritedRole) {
+        effectiveRole = inheritedRole;
+      }
+
+      if (effectiveRole) {
+        request.projectRole = effectiveRole;
       }
       // If role is null or invalid, leave request.projectRole as undefined
       // Downstream authorization checks will handle missing roles appropriately

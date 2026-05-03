@@ -805,6 +805,107 @@ describe('Integration Rules Permissions - E2E', () => {
       // 'Insufficient project role for Integration Rules').
       expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
+
+    // Regression guard: a user whose source-project access is granted
+    // ONLY via org membership inheritance (no explicit project_members
+    // row) was previously locked out by `requireProjectRole('member')`
+    // because the middleware only populated `request.projectRole` from
+    // `db.projects.getUserRole()` — a query that ignores org-level
+    // inheritance. The underlying middleware fix (project-access.ts
+    // now combines explicit + inherited via `lookupInheritedProjectRole`)
+    // benefits every callsite of `requireProjectRole`, but this is the
+    // route where the regression was introduced and is the natural test
+    // home for it.
+    //
+    // Org-to-project role inheritance (project-roles.ts:122-126) maps:
+    //   owner  → admin
+    //   admin  → admin
+    //   member → viewer
+    // To exercise the regression, the org role must inherit a project
+    // role >= 'member' — that means org admin or owner. Org `member`
+    // inherits `viewer` (< member) and would correctly be denied by
+    // `requireProjectRole('member')` even after the fix.
+    it('should allow org-inherited admin on source project to copy rules', async () => {
+      // Set up: user has org-level admin (inherits project `admin`),
+      // NO explicit project_members row on the source project. They
+      // have explicit admin on a fresh target.
+      const orgUserData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(orgUserData.user.id);
+
+      // Create org and add user as `admin` so they inherit project `admin`.
+      const sourceOrg = await db.organizations.create({
+        name: `Inherited Admin Test Org ${Date.now()}`,
+        subdomain: `inh-adm-${Date.now()}`,
+      });
+      cleanup.trackOrganization(sourceOrg.id);
+      await db.organizationMembers.create({
+        organization_id: sourceOrg.id,
+        user_id: orgUserData.user.id,
+        role: 'admin',
+      });
+
+      // Move testProject under this org so the user inherits access.
+      // (testProject was created with no organization_id in beforeAll;
+      // updating it in-place is fine for this isolated test.)
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        sourceOrg.id,
+        testProject.id,
+      ]);
+
+      // Target project: same org, fresh, with the user as explicit admin
+      // and an integration configured.
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        sourceOrg.id,
+        targetProject.id,
+      ]);
+      await db.projectMembers.addMember(targetProject.id, orgUserData.user.id, 'admin');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'INH',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const orgUserLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: orgUserData.user.email, password: orgUserData.password },
+      });
+      expect(orgUserLogin.statusCode).toBe(200);
+      const orgUserJwt = JSON.parse(orgUserLogin.body).data.access_token;
+
+      // Reset rule name so the assertion below isn't order-dependent.
+      await db.integrationRules.update(ruleId, { name: 'High Severity Auto-Create' });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
+        headers: { authorization: `Bearer ${orgUserJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const copied = JSON.parse(response.body).data.rule;
+
+      // Clean up
+      await db.query('DELETE FROM integration_rules WHERE id = $1', [copied.id]);
+      // Reset testProject's organization_id so other tests aren't affected.
+      await db.query('UPDATE application.projects SET organization_id = NULL WHERE id = $1', [
+        testProject.id,
+      ]);
+    });
   });
 
   describe('Admin Bypass', () => {

@@ -20,7 +20,7 @@ import { checkProjectPermission } from '../../services/api-key/key-permissions.j
  * Fetches project → org → membership from DB, then maps via shared getInheritedProjectRole.
  * Returns null if no inheritance applies (no org, not a member).
  */
-async function lookupInheritedProjectRole(
+export async function lookupInheritedProjectRole(
   projectId: string,
   userId: string,
   db: DatabaseClient
