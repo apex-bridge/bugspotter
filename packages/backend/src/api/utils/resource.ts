@@ -95,13 +95,33 @@ export async function checkPermission(
  * Optionally checks permissions for specific resource/action
  * Optionally enforces a minimum project role (e.g., 'admin' for config changes)
  *
- * **Authentication Precedence**: When multiple authentication methods are present:
- * 1. JWT user authentication takes highest priority (user's project permissions are checked)
- * 2. Project-scoped API keys (authProject) are checked next
- * 3. Multi-project/full-scope API keys (options.apiKey without authProject) are checked last
+ * **Authentication branch order** (within this function): the first matching
+ * branch returns and the rest are skipped.
  *
- * This ensures that even if a full-scope API key is provided alongside a JWT token,
- * the user's permissions are still enforced, preventing privilege escalation.
+ *   1. `options.apiKey && !authUser` — API-key-only request (full-scope or
+ *      multi-project). Validated against `checkProjectPermission`.
+ *   2. `authProject` — project-scoped (single-project) API key. Project must
+ *      match.
+ *   3. `authUser` — JWT path. Platform admin bypass first; otherwise checks
+ *      explicit/inherited project role + optional `resource:action`
+ *      permission.
+ *
+ * **Important caveat**: `request.authUser` is set ONLY by the JWT auth
+ * handler (`handleJwtAuth`). The auth middleware (`auth/middleware.ts:54-76`)
+ * tries the `x-api-key` header first and short-circuits as soon as the
+ * key validates — JWT is only consulted when no API-key header is present.
+ * So a request that arrives with BOTH headers reaches this function with
+ * `authUser = undefined` and `apiKey` populated, meaning branch (1) above
+ * runs and any JWT-based restrictions are NOT enforced. The "JWT takes
+ * highest priority" wording that previously sat in this docstring was
+ * aspirational — the middleware ordering makes it unreachable in practice.
+ *
+ * That's not currently a privilege-escalation surface: a leaked full-scope
+ * API key alone already grants the same access an attacker would get by
+ * also presenting a JWT, so adding the JWT yields nothing extra. But if
+ * any future caller relies on "user restrictions still apply when both
+ * are present", they need to authenticate JWT-only or change the auth
+ * middleware to populate `authUser` even when an API key is also present.
  */
 export async function checkProjectAccess(
   projectId: string,

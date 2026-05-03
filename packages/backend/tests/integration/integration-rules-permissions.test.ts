@@ -591,6 +591,13 @@ describe('Integration Rules Permissions - E2E', () => {
       });
 
       expect(response.statusCode).toBe(200);
+      // Verify the row is actually gone, not just that the route returned
+      // 200 — would catch a future regression where the route swallows
+      // the error and reports success without persisting the delete.
+      const deleted = await db.query('SELECT id FROM integration_rules WHERE id = $1', [
+        targetRuleId,
+      ]);
+      expect(deleted.rows).toHaveLength(0);
     });
   });
 
