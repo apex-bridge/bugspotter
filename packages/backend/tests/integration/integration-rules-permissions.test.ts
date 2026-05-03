@@ -181,7 +181,10 @@ describe('Integration Rules Permissions - E2E', () => {
    * succeeded so a future auth-setup drift surfaces as a clear
    * "expected 200, got X" instead of a JSON parse error on undefined.
    */
-  async function loginAsProjectRole(projectId: string, role: 'viewer' | 'member' | 'admin') {
+  async function loginAsProjectRole(
+    projectId: string,
+    role: 'viewer' | 'member' | 'admin' | 'owner'
+  ) {
     const userData = await createTestUser(db, { role: 'user' });
     cleanup.trackUser(userData.user.id);
     await db.projectMembers.addMember(projectId, userData.user.id, role);
@@ -535,18 +538,70 @@ describe('Integration Rules Permissions - E2E', () => {
         'Insufficient permissions to delete integration_rules'
       );
     });
+
+    // Verifies the platform-admin bypass on `requireProjectRole('admin')`.
+    // claude flagged on PR-94 that under the current permissions seed the
+    // `requireProjectRole('admin')` guard at integration-rules.ts:313 is
+    // never the binding constraint on DELETE — only platform admins reach
+    // it (everyone else is stopped earlier by `requirePermission`), and
+    // platform admins bypass it via `isPlatformAdmin()` in `checkProjectAccess`
+    // and `requireProjectRole`. If a future migration grants `:delete` to a
+    // non-platform-admin role, the project-role gate suddenly becomes
+    // load-bearing without warning. This positive test pins the bypass:
+    // a platform admin who is NOT a project admin (or member) can still
+    // delete, proving the bypass is wired correctly.
+    it('should allow platform admin (not a project member) to delete rules', async () => {
+      // Create a rule to delete — a fresh one so we don't churn the
+      // shared `ruleId` used by other tests in the suite.
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules`,
+        headers: { authorization: `Bearer ${adminJwt}` },
+        payload: {
+          name: 'Rule for platform-admin-bypass test',
+          enabled: true,
+          filters: [{ field: 'priority', operator: 'equals', value: 'low' }],
+          auto_create: false,
+        },
+      });
+      const targetRuleId = JSON.parse(createResponse.body).data.id;
+
+      // Fresh platform admin, intentionally not added to the project.
+      // Both `checkProjectAccess` and `requireProjectRole('admin')` short-
+      // circuit on `isPlatformAdmin` BEFORE checking project membership,
+      // so this user reaches the handler body without belonging to the
+      // project at all.
+      const platformAdminData = await createTestUser(db, { role: 'admin' });
+      cleanup.trackUser(platformAdminData.user.id);
+      const platformAdminLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: {
+          email: platformAdminData.user.email,
+          password: platformAdminData.password,
+        },
+      });
+      expect(platformAdminLogin.statusCode).toBe(200);
+      const platformAdminJwt = JSON.parse(platformAdminLogin.body).data.access_token;
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${targetRuleId}`,
+        headers: { authorization: `Bearer ${platformAdminJwt}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+    });
   });
 
   describe('COPY - Copy Rule (POST /api/v1/integrations/:platform/:projectId/rules/:ruleId/copy)', () => {
     it('should allow regular user to copy rules to target project with access', async () => {
       // Reset the source rule name so this test isn't order-dependent on
       // the UPDATE describe-block above mutating the shared `ruleId`.
-      // Without this, the assertion on `copiedRule.name` later would
-      // depend on whichever update last ran.
-      await db.query('UPDATE integration_rules SET name = $1 WHERE id = $2', [
-        'High Severity Auto-Create',
-        ruleId,
-      ]);
+      // Use the repo layer rather than raw SQL so a future migration
+      // renaming the `name` column surfaces as a typecheck/test error
+      // instead of a cryptic Postgres relation/column error at runtime.
+      await db.integrationRules.update(ruleId, { name: 'High Severity Auto-Create' });
 
       // Create a second project where regular user is a project admin.
       // The copy route enforces `minProjectRole: 'admin'` on the TARGET
@@ -681,74 +736,19 @@ describe('Integration Rules Permissions - E2E', () => {
       expect(JSON.parse(response.body).message).toContain('Insufficient project role');
     });
 
-    // Documents the SOURCE-PROJECT permissiveness as it currently stands.
-    // The copy preHandler is `requireProjectAccess` with no minProjectRole,
-    // so any membership level on the source — viewer included — passes.
-    // claude flagged this as an authorization asymmetry in PR-94 review:
-    // a user who is only a viewer on source, but admin on target, can
-    // export the source's rule configurations. Whether to tighten the
-    // source guard is a design call for the route author. This test
-    // pins the current behaviour so any change to that contract surfaces
-    // in test diffs rather than silently shipping.
-    it('SECURITY-NOTE: viewer on source + admin on target currently CAN copy (lock-in test for review)', async () => {
-      // Source: a user who is only `viewer` on source, `admin` on target.
-      const sourceViewerData = await createTestUser(db, { role: 'user' });
-      cleanup.trackUser(sourceViewerData.user.id);
-      await db.projectMembers.addMember(testProject.id, sourceViewerData.user.id, 'viewer');
-
-      const targetProject = await createTestProject(db, { created_by: adminUser.id });
-      cleanup.trackProject(targetProject.id);
-      await db.projectMembers.addMember(targetProject.id, sourceViewerData.user.id, 'admin');
-      await db.projectIntegrations.create({
-        project_id: targetProject.id,
-        integration_id: jiraIntegrationGlobalId,
-        config: {
-          instanceUrl: 'https://example.atlassian.net',
-          projectKey: 'VTGT',
-          issueType: 'Bug',
-          autoCreate: false,
-          syncStatus: false,
-          syncComments: false,
-        },
-        encrypted_credentials: encryptionService.encrypt(
-          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
-        ),
-        enabled: true,
-      });
-
-      const sourceViewerLogin = await server.inject({
-        method: 'POST',
-        url: '/api/v1/auth/login',
-        payload: {
-          email: sourceViewerData.user.email,
-          password: sourceViewerData.password,
-        },
-      });
-      expect(sourceViewerLogin.statusCode).toBe(200);
-      const sourceViewerJwt = JSON.parse(sourceViewerLogin.body).data.access_token;
-
-      // Reset rule name so this test isn't order-dependent.
-      await db.query('UPDATE integration_rules SET name = $1 WHERE id = $2', [
-        'High Severity Auto-Create',
-        ruleId,
-      ]);
-
-      const response = await server.inject({
-        method: 'POST',
-        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
-        headers: { authorization: `Bearer ${sourceViewerJwt}` },
-        payload: { targetProjectId: targetProject.id },
-      });
-
-      // CURRENT BEHAVIOUR: 201. If the source preHandler is later tightened
-      // to `requireProjectRole('member')` or stricter, this assertion will
-      // need to flip to 403 — that's the signal to update both this test
-      // and the corresponding PR description.
-      expect(response.statusCode).toBe(201);
-
-      const responseBody = JSON.parse(response.body);
-      await db.query('DELETE FROM integration_rules WHERE id = $1', [responseBody.data.rule.id]);
-    });
+    // FOLLOW-UP / DEFERRED: cross-tenant data exfiltration via copy.
+    //
+    // The copy preHandler is `requireProjectAccess` with no minProjectRole
+    // (integration-rules.ts:361), so a user with only `viewer` membership
+    // on the source project can extract that project's rule configurations
+    // (filters / field_mappings / description_template / attachment_config)
+    // by copying them into a project they admin. claude flagged this on
+    // PR-94. The fix belongs to the queued RBAC tightening sweep, not this
+    // test PR — adding `requireProjectRole('member')` (or stricter) to the
+    // copy source preHandler closes the gap. Intentionally NOT pinning a
+    // passing 201 lock-in test here, because doing so would tell CI to
+    // permanently accept the bypass and a future tightening would be
+    // blocked rather than welcomed. Track in: RBAC tightening PR.
   });
 
   describe('Admin Bypass', () => {
