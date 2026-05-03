@@ -99,12 +99,21 @@ export async function checkPermission(
  * branch returns and the rest are skipped.
  *
  *   1. `options.apiKey && !authUser` — API-key-only request (full-scope or
- *      multi-project). Validated against `checkProjectPermission`.
+ *      multi-project). Validated against `checkProjectPermission` only.
+ *      **`options.minProjectRole` is NOT enforced on this branch** — API
+ *      keys authenticate as a machine, not a project member, so callers
+ *      that pass `minProjectRole: 'admin'` (or similar) are NOT given that
+ *      gate against API-key auth. If the route needs admin-level
+ *      enforcement against API keys, either reject API-key auth at the
+ *      preHandler or add a separate explicit check. Same applies to
+ *      `options.resource` / `options.action` (system-permission check) —
+ *      those run only on the JWT branch.
  *   2. `authProject` — project-scoped (single-project) API key. Project must
- *      match.
+ *      match. `minProjectRole` also bypassed (same reason).
  *   3. `authUser` — JWT path. Platform admin bypass first; otherwise checks
  *      explicit/inherited project role + optional `resource:action`
- *      permission.
+ *      permission. This is the ONLY branch that honours
+ *      `options.minProjectRole`.
  *
  * **Important caveat**: `request.authUser` is set ONLY by the JWT auth
  * handler (`handleJwtAuth`). The auth middleware (`auth/middleware.ts:54-76`)

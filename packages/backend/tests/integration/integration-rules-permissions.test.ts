@@ -744,18 +744,20 @@ describe('Integration Rules Permissions - E2E', () => {
     });
 
     // FOLLOW-UP / DEFERRED: cross-tenant data exfiltration via copy.
+    // Tracked in: https://github.com/apex-bridge/bugspotter/issues/96
     //
     // The copy preHandler is `requireProjectAccess` with no minProjectRole
     // (integration-rules.ts:361), so a user with only `viewer` membership
     // on the source project can extract that project's rule configurations
     // (filters / field_mappings / description_template / attachment_config)
-    // by copying them into a project they admin. claude flagged this on
-    // PR-94. The fix belongs to the queued RBAC tightening sweep, not this
-    // test PR — adding `requireProjectRole('member')` (or stricter) to the
-    // copy source preHandler closes the gap. Intentionally NOT pinning a
-    // passing 201 lock-in test here, because doing so would tell CI to
-    // permanently accept the bypass and a future tightening would be
-    // blocked rather than welcomed. Track in: RBAC tightening PR.
+    // by copying them into a project they admin. Fix is a one-line route
+    // change (add `requireProjectRole('member')` to the copy source
+    // preHandler) — see issue #96 for full repro and the acceptance test
+    // shape. Belongs to the queued RBAC tightening PR rather than this
+    // test cleanup. Intentionally NOT pinning a passing 201 lock-in test
+    // here, because doing so would tell CI to permanently accept the
+    // bypass and a future tightening would be blocked rather than
+    // welcomed.
   });
 
   describe('Admin Bypass', () => {
