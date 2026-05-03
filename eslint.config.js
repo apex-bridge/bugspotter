@@ -44,6 +44,19 @@ export default tseslint.config(
       ],
       'no-console': 'off',
       curly: ['error', 'all'],
+      // Prevent regression on the audit-identity gap (closed by GH-97):
+      // do not use the literal 'api-key' as a fallback `userId` in audit
+      // logs or audit_log row writes. Record `userId` and `apiKeyId` as
+      // separate fields so dual-header (JWT + api-key) requests attribute
+      // correctly. See packages/backend/docs/auth.md §audit-identity.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "Property[key.name='userId'] Literal[value='api-key']",
+          message:
+            "Don't use the 'api-key' literal as a userId. Record `userId: authUser?.id ?? null` and `apiKeyId: apiKey?.id ?? null` as separate fields. See packages/backend/docs/auth.md §audit-identity.",
+        },
+      ],
     },
   },
   {

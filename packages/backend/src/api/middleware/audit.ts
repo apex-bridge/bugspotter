@@ -183,9 +183,15 @@ export function createAuditMiddleware(db: DatabaseClient) {
       return;
     }
 
-    // Get user info from auth context
+    // Get user info from auth context. Both `authUser` and `apiKey`
+    // are recorded so that audit trails attribute api-key-only and
+    // dual-header (JWT + api-key) requests correctly. The
+    // `audit_logs.user_id` column stays null for api-key-only requests
+    // (see GH-97 for the deferred schema-level api_key_id column);
+    // until then, the api-key id rides along in the `details` JSONB.
     const authUser = request.authUser;
-    const userId = authUser?.id || null;
+    const userId = authUser?.id ?? null;
+    const apiKeyId = request.apiKey?.id ?? null;
 
     // Capture organization context (set by guard/org-access middleware on org/project routes)
     const organizationId = request.organizationId ?? null;
@@ -218,6 +224,12 @@ export function createAuditMiddleware(db: DatabaseClient) {
         body: sanitizeData(request.body),
         query: sanitizeData(request.query),
         params: sanitizeData(request.params),
+        // `api_key_id` lives in details (JSONB) because the audit_logs
+        // table has no first-class api_key_id column today. Indexed
+        // schema-level migration tracked separately so api-key-attributed
+        // queries (e.g., "all actions from this leaked key") don't have
+        // to scan JSONB.
+        api_key_id: apiKeyId,
       },
       success,
       error_message: errorMessage,
@@ -238,6 +250,13 @@ export async function createAuditLog(
   db: DatabaseClient,
   data: {
     userId?: string;
+    /**
+     * API-key id when the action was driven by a machine credential
+     * (or by a user with an api-key in the same request — see GH-97
+     * audit-identity gap). Both fields are recorded so dual-header
+     * requests attribute correctly.
+     */
+    apiKeyId?: string;
     action: string;
     resource: string;
     resourceId?: string;
@@ -252,7 +271,10 @@ export async function createAuditLog(
       action: data.action,
       resource: data.resource,
       resource_id: data.resourceId || null,
-      details: data.details || null,
+      details:
+        data.apiKeyId !== undefined
+          ? { ...(data.details ?? {}), api_key_id: data.apiKeyId }
+          : (data.details ?? null),
       success: data.success ?? true,
       error_message: data.errorMessage || null,
     });

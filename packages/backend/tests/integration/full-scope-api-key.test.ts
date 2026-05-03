@@ -711,19 +711,19 @@ describe('Full-Scope API Key Integration Tests', () => {
       // above and the test name to match.
       //
       // Audit-identity caveat (also load-bearing if the middleware ever
-      // changes). Tracked in:
-      // https://github.com/apex-bridge/bugspotter/issues/97
-      //
-      // Because `request.authUser` is never set on this path, downstream
-      // logger calls record `userId: 'api-key'` instead of the JWT
-      // user's ID. A user can deliberately combine their JWT with an
-      // organisation's full-scope key to mask their identity in audit
-      // logs — actions appear under the machine identity rather than
-      // the user. If a future PR flips the middleware to prefer JWT (or
-      // to populate `authUser` even when an API key is also present),
-      // verify that the `userId` field in handler-level audit logs
-      // picks up the JWT user's ID, otherwise the user-attribution gap
-      // stays open even though the precedence question is resolved.
+      // changes). The audit-identity gap (#97) was closed by recording
+      // `userId` and `apiKeyId` as separate audit fields rather than
+      // changing the precedence — see packages/backend/docs/auth.md
+      // §audit-identity. Because `request.authUser` is still never set
+      // on this dual-header path, downstream audit logs record
+      // `userId: null, apiKeyId: <key id>`. Combining JWT + api-key
+      // therefore no longer masks user attribution by collapsing it to
+      // the machine identity; the api-key id is recorded explicitly
+      // and the user-side null is honest about what the middleware
+      // saw. If a future PR flips the middleware to prefer JWT (or
+      // populates `authUser` even when an api-key is present), audit
+      // logs would start recording both ids, which is the correct
+      // outcome under either precedence model.
       expect(response.statusCode).toBe(200);
     });
 
