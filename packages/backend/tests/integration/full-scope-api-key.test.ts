@@ -14,7 +14,12 @@
  * SECURITY VALIDATION:
  * - Full-scope keys allow access to any project
  * - Limited-scope keys restricted to allowed_projects
- * - JWT user auth takes precedence over API keys
+ * - When BOTH `x-api-key` and `Authorization: Bearer` headers are present,
+ *   the auth middleware short-circuits on the API key and never consults
+ *   the JWT — see the 'Authentication Precedence' describe-block below
+ *   and the comment on `auth/middleware.ts:54-76`. (Older versions of
+ *   this header claimed JWT takes precedence; that was aspirational and
+ *   never matched the code.)
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -706,16 +711,19 @@ describe('Full-Scope API Key Integration Tests', () => {
       // above and the test name to match.
       //
       // Audit-identity caveat (also load-bearing if the middleware ever
-      // changes): because `request.authUser` is never set on this path,
-      // downstream logger calls record `userId: 'api-key'` instead of the
-      // JWT user's ID. A user can deliberately combine their JWT with an
+      // changes). Tracked in:
+      // https://github.com/apex-bridge/bugspotter/issues/97
+      //
+      // Because `request.authUser` is never set on this path, downstream
+      // logger calls record `userId: 'api-key'` instead of the JWT
+      // user's ID. A user can deliberately combine their JWT with an
       // organisation's full-scope key to mask their identity in audit
-      // logs — actions appear under the machine identity rather than the
-      // user. If a future PR flips the middleware to prefer JWT (or to
-      // populate `authUser` even when an API key is also present),
-      // verify that the `userId` field in handler-level audit logs picks
-      // up the JWT user's ID, otherwise the user-attribution gap stays
-      // open even though the precedence question is resolved.
+      // logs — actions appear under the machine identity rather than
+      // the user. If a future PR flips the middleware to prefer JWT (or
+      // to populate `authUser` even when an API key is also present),
+      // verify that the `userId` field in handler-level audit logs
+      // picks up the JWT user's ID, otherwise the user-attribution gap
+      // stays open even though the precedence question is resolved.
       expect(response.statusCode).toBe(200);
     });
 
