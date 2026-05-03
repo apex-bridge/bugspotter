@@ -173,6 +173,28 @@ describe('Integration Rules Permissions - E2E', () => {
     await db.close();
   });
 
+  /**
+   * Helper: create a fresh user with the given project role and return
+   * their JWT. Used by the member-deny tests below to exercise the
+   * `requireProjectRole('admin')` gate independently of the platform
+   * permission check. Tracks the user for cleanup. Asserts the login
+   * succeeded so a future auth-setup drift surfaces as a clear
+   * "expected 200, got X" instead of a JSON parse error on undefined.
+   */
+  async function loginAsProjectRole(projectId: string, role: 'viewer' | 'member' | 'admin') {
+    const userData = await createTestUser(db, { role: 'user' });
+    cleanup.trackUser(userData.user.id);
+    await db.projectMembers.addMember(projectId, userData.user.id, role);
+    const loginResponse = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: userData.user.email, password: userData.password },
+    });
+    expect(loginResponse.statusCode).toBe(200);
+    const jwt = JSON.parse(loginResponse.body).data.access_token;
+    return { user: userData.user, jwt };
+  }
+
   describe('READ - List Rules (GET /api/v1/integrations/:platform/:projectId/rules)', () => {
     it('should allow regular user to list rules for their project', async () => {
       const response = await server.inject({
@@ -276,15 +298,7 @@ describe('Integration Rules Permissions - E2E', () => {
     // would only be caught for the platform-permission gate via the
     // viewer/outsider tests above. Distinguished by the error message.
     it('should deny project member (with create permission) from creating rules', async () => {
-      const memberData = await createTestUser(db, { role: 'user' });
-      cleanup.trackUser(memberData.user.id);
-      await db.projectMembers.addMember(testProject.id, memberData.user.id, 'member');
-      const memberLogin = await server.inject({
-        method: 'POST',
-        url: '/api/v1/auth/login',
-        payload: { email: memberData.user.email, password: memberData.password },
-      });
-      const memberJwt = JSON.parse(memberLogin.body).data.access_token;
+      const { jwt: memberJwt } = await loginAsProjectRole(testProject.id, 'member');
 
       const response = await server.inject({
         method: 'POST',
@@ -380,6 +394,26 @@ describe('Integration Rules Permissions - E2E', () => {
       );
     });
 
+    // Locks in the project-role gate on PATCH (integration-rules.ts:269).
+    // Without this, the gate could be relaxed back to `member` and only
+    // viewer/outsider tests would still pass — both stop at the
+    // platform-permission check before reaching `requireProjectRole`.
+    it('should deny project member (with update permission) from updating rules', async () => {
+      const { jwt: memberJwt } = await loginAsProjectRole(testProject.id, 'member');
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}`,
+        headers: { authorization: `Bearer ${memberJwt}` },
+        payload: { name: 'Member Update (should be denied)' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // Platform `user` HAS `integration_rules:update`, so requirePermission
+      // passes — denial comes from `requireProjectRole('admin')`.
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
+    });
+
     it('should deny outsider from updating rules', async () => {
       const response = await server.inject({
         method: 'PATCH',
@@ -447,6 +481,35 @@ describe('Integration Rules Permissions - E2E', () => {
       });
 
       expect(response.statusCode).toBe(403);
+      expect(JSON.parse(response.body).message).toContain(
+        'Insufficient permissions to delete integration_rules'
+      );
+    });
+
+    // Verifies the platform-permission gate is the binding constraint:
+    // a project admin (platform `user` role) is denied because the
+    // permissions seed grants `user` only create/read/update on
+    // integration_rules — not :delete (migrations/001:565-572). This
+    // pins the platform/project boundary so a future relaxation of
+    // the platform gate can't slip through covered only by the viewer
+    // case (which fails for an unrelated reason — viewer also lacks
+    // :read on integration_rules at the platform level... actually,
+    // viewer DOES have :read but not anything else; the failure path
+    // is the same `requirePermission` gate).
+    it('should deny project admin (platform user) from deleting rules', async () => {
+      const { jwt: projectAdminJwt } = await loginAsProjectRole(testProject.id, 'admin');
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}`,
+        headers: { authorization: `Bearer ${projectAdminJwt}` },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // Platform `user` lacks `integration_rules:delete`, so requirePermission
+      // denies BEFORE requireProjectAccess/requireProjectRole runs — same
+      // path as the viewer/outsider deny tests above. Project-admin role
+      // doesn't compensate for the missing platform permission.
       expect(JSON.parse(response.body).message).toContain(
         'Insufficient permissions to delete integration_rules'
       );
@@ -571,6 +634,120 @@ describe('Integration Rules Permissions - E2E', () => {
 
       expect(response.statusCode).toBe(403);
       expect(JSON.parse(response.body).message).toContain('Access denied');
+    });
+
+    // Locks in the inline target-project admin gate
+    // (`checkProjectAccess(targetProjectId, …, { minProjectRole: 'admin' })`
+    // at integration-rules.ts:370-380). The viewer/outsider deny tests above
+    // both fail BEFORE the handler body runs, so this is the only path that
+    // exercises the inline target check. If `minProjectRole: 'admin'` were
+    // dropped or relaxed, every other deny test still passes.
+    it('should deny user with non-admin role on target project', async () => {
+      // Source: regularUser is admin (set in beforeAll). Target: a fresh
+      // project where the same user is only a `member`. Source-side gates
+      // all pass (platform :create, source membership); failure is at the
+      // inline target check.
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.projectMembers.addMember(targetProject.id, regularUser.id, 'member');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'TGT',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
+        headers: { authorization: `Bearer ${regularUserJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // Inline `checkProjectAccess` throws via `Insufficient project role for X`
+      // when the resource name isn't 'Project'; here the route uses the
+      // resource name 'Integration Rules'.
+      expect(JSON.parse(response.body).message).toContain('Insufficient project role');
+    });
+
+    // Documents the SOURCE-PROJECT permissiveness as it currently stands.
+    // The copy preHandler is `requireProjectAccess` with no minProjectRole,
+    // so any membership level on the source — viewer included — passes.
+    // claude flagged this as an authorization asymmetry in PR-94 review:
+    // a user who is only a viewer on source, but admin on target, can
+    // export the source's rule configurations. Whether to tighten the
+    // source guard is a design call for the route author. This test
+    // pins the current behaviour so any change to that contract surfaces
+    // in test diffs rather than silently shipping.
+    it('SECURITY-NOTE: viewer on source + admin on target currently CAN copy (lock-in test for review)', async () => {
+      // Source: a user who is only `viewer` on source, `admin` on target.
+      const sourceViewerData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(sourceViewerData.user.id);
+      await db.projectMembers.addMember(testProject.id, sourceViewerData.user.id, 'viewer');
+
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.projectMembers.addMember(targetProject.id, sourceViewerData.user.id, 'admin');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'VTGT',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const sourceViewerLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: {
+          email: sourceViewerData.user.email,
+          password: sourceViewerData.password,
+        },
+      });
+      expect(sourceViewerLogin.statusCode).toBe(200);
+      const sourceViewerJwt = JSON.parse(sourceViewerLogin.body).data.access_token;
+
+      // Reset rule name so this test isn't order-dependent.
+      await db.query('UPDATE integration_rules SET name = $1 WHERE id = $2', [
+        'High Severity Auto-Create',
+        ruleId,
+      ]);
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
+        headers: { authorization: `Bearer ${sourceViewerJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      // CURRENT BEHAVIOUR: 201. If the source preHandler is later tightened
+      // to `requireProjectRole('member')` or stricter, this assertion will
+      // need to flip to 403 — that's the signal to update both this test
+      // and the corresponding PR description.
+      expect(response.statusCode).toBe(201);
+
+      const responseBody = JSON.parse(response.body);
+      await db.query('DELETE FROM integration_rules WHERE id = $1', [responseBody.data.rule.id]);
     });
   });
 
