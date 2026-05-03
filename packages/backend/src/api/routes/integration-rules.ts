@@ -359,14 +359,25 @@ export async function registerIntegrationRuleRoutes(
         requireAuth,
         requirePermission(db, 'integration_rules', 'create'),
         requireProjectAccess(db, { paramName: 'projectId' }),
+        // Source project requires `member` role minimum (closes
+        // GH-96: cross-tenant exfiltration). Without this, a user
+        // with only `viewer` membership on the source could read
+        // the source rule's filters / field_mappings /
+        // description_template / attachment_config and persist them
+        // in a target project they admin — extracting business-
+        // sensitive logic across project boundaries. The target
+        // project still requires `admin` (inline check below).
+        // API-key auth still bypasses this gate by design (see the
+        // checkProjectAccess JSDoc on `minProjectRole`).
+        requireProjectRole('member'),
       ],
     },
     async (request, reply) => {
       const { platform, projectId, ruleId } = request.params;
       const { targetProjectId, targetIntegrationId } = request.body;
 
-      // Source project access validated by middleware (viewer+ via requireProjectAccess)
-      // Target project requires admin — inline check needed since it's a different project
+      // Source project: `member`+ enforced via preHandler above.
+      // Target project requires `admin` — inline check needed since it's a different project
       await checkProjectAccess(
         targetProjectId,
         request.authUser,

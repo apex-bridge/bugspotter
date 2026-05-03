@@ -15,6 +15,8 @@ Every request can carry up to four auth artifacts:
 
 **`authProject` is NOT a legacy flag.** It's set inside `handleNewApiKeyAuth` (`src/api/middleware/auth/handlers.ts`), only after `request.apiKey` is set, and only for single-project keys — which includes the self-service-signup-issued ingest-only key. Bypassing on `authProject` would let that key read reports, so don't.
 
+For the full RBAC reference — header precedence rules, the 3-layer authorization model, effective project role (explicit ∪ inherited), API-key bypass rules, and open policy questions — see [docs/auth.md](docs/auth.md).
+
 ## API key permission enforcement
 
 - Read routes enforce the key's `permissions` via `requireApiKeyPermission('resource:action')` as a preHandler.

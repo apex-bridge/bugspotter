@@ -15,6 +15,7 @@ import { createTestUser, createTestProject, TestCleanupTracker } from '../utils/
 import type { DatabaseClient } from '../../src/db/client.js';
 import type { User, Project } from '../../src/db/types.js';
 import { getEncryptionService } from '../../src/utils/encryption.js';
+import { ApiKeyService } from '../../src/services/api-key/index.js';
 
 describe('Integration Rules Permissions - E2E', () => {
   let server: FastifyInstance;
@@ -743,21 +744,299 @@ describe('Integration Rules Permissions - E2E', () => {
       expect(JSON.parse(response.body).message).toContain('Insufficient project role');
     });
 
-    // FOLLOW-UP / DEFERRED: cross-tenant data exfiltration via copy.
-    // Tracked in: https://github.com/apex-bridge/bugspotter/issues/96
+    // Closes GH-96: cross-tenant exfiltration via copy. The route fix
+    // (`requireProjectRole('member')` on the copy source preHandler at
+    // integration-rules.ts:361) makes viewer-source-copy a 403 instead
+    // of a 201. Without this guard a user with only `viewer` membership
+    // on the source project could extract that project's rule
+    // configurations (filters / field_mappings / description_template /
+    // attachment_config) by copying them into a project they admin.
+    it('should deny viewer on source project from copying rules', async () => {
+      // Source: user has `viewer` membership only on testProject.
+      // Target: user has `admin` on a fresh project (passes the inline
+      // target-admin gate). Without the route fix the request would 201;
+      // with the fix the source `requireProjectRole('member')` returns
+      // 403 BEFORE the handler body runs.
+      const sourceViewerData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(sourceViewerData.user.id);
+      await db.projectMembers.addMember(testProject.id, sourceViewerData.user.id, 'viewer');
+
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.projectMembers.addMember(targetProject.id, sourceViewerData.user.id, 'admin');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'VTGT',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const sourceViewerLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: {
+          email: sourceViewerData.user.email,
+          password: sourceViewerData.password,
+        },
+      });
+      expect(sourceViewerLogin.statusCode).toBe(200);
+      const sourceViewerJwt = JSON.parse(sourceViewerLogin.body).data.access_token;
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
+        headers: { authorization: `Bearer ${sourceViewerJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // Denial comes from `requireProjectRole('member')` on the source —
+      // distinct from the target inline check (which would say
+      // 'Insufficient project role for Integration Rules').
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
+    });
+
+    // Regression guard: a user whose source-project access is granted
+    // ONLY via org membership inheritance (no explicit project_members
+    // row) was previously locked out by `requireProjectRole('member')`
+    // because the middleware only populated `request.projectRole` from
+    // `db.projects.getUserRole()` — a query that ignores org-level
+    // inheritance. The underlying middleware fix (project-access.ts
+    // now combines explicit + inherited via `lookupInheritedProjectRole`)
+    // benefits every callsite of `requireProjectRole`, but this is the
+    // route where the regression was introduced and is the natural test
+    // home for it.
     //
-    // The copy preHandler is `requireProjectAccess` with no minProjectRole
-    // (integration-rules.ts:361), so a user with only `viewer` membership
-    // on the source project can extract that project's rule configurations
-    // (filters / field_mappings / description_template / attachment_config)
-    // by copying them into a project they admin. Fix is a one-line route
-    // change (add `requireProjectRole('member')` to the copy source
-    // preHandler) — see issue #96 for full repro and the acceptance test
-    // shape. Belongs to the queued RBAC tightening PR rather than this
-    // test cleanup. Intentionally NOT pinning a passing 201 lock-in test
-    // here, because doing so would tell CI to permanently accept the
-    // bypass and a future tightening would be blocked rather than
-    // welcomed.
+    // Org-to-project role inheritance (project-roles.ts:122-126) maps:
+    //   owner  → admin
+    //   admin  → admin
+    //   member → viewer
+    // To exercise the regression, the org role must inherit a project
+    // role >= 'member' — that means org admin or owner. Org `member`
+    // inherits `viewer` (< member) and would correctly be denied by
+    // `requireProjectRole('member')` even after the fix.
+    it('should allow org-inherited admin on source project to copy rules', async () => {
+      // Use DEDICATED projects rather than mutating the shared `testProject`.
+      // If an assertion below fails, `cleanup.cleanup()` deletes the
+      // organization via `trackOrganization`, and a previously-mutated
+      // `testProject.organization_id` would FK-cascade through every
+      // remaining test in the file. Dedicated projects keep this test
+      // isolated from the rest of the suite even on assertion failure.
+      const orgUserData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(orgUserData.user.id);
+
+      // Org with this user as admin (inherits project `admin`).
+      const sourceOrg = await db.organizations.create({
+        name: `Inherited Admin Test Org ${Date.now()}`,
+        subdomain: `inh-adm-${Date.now()}`,
+      });
+      cleanup.trackOrganization(sourceOrg.id);
+      await db.organizationMembers.create({
+        organization_id: sourceOrg.id,
+        user_id: orgUserData.user.id,
+        role: 'admin',
+      });
+
+      // Source project: scoped to the org. User has NO explicit
+      // project_members row — access is purely via inheritance, which is
+      // the regression scenario.
+      const sourceProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(sourceProject.id);
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        sourceOrg.id,
+        sourceProject.id,
+      ]);
+      const sourceJiraIntegration = await db.projectIntegrations.create({
+        project_id: sourceProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'INHSRC',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      // Source rule, owned by adminJwt (not the user under test).
+      const sourceRuleResponse = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules`,
+        headers: { authorization: `Bearer ${adminJwt}` },
+        payload: {
+          name: 'Inherited-admin source rule',
+          enabled: true,
+          filters: [{ field: 'priority', operator: 'equals', value: 'low' }],
+          auto_create: false,
+        },
+      });
+      const sourceRuleId = JSON.parse(sourceRuleResponse.body).data.id;
+
+      // Target project: same org, user has explicit admin.
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        sourceOrg.id,
+        targetProject.id,
+      ]);
+      await db.projectMembers.addMember(targetProject.id, orgUserData.user.id, 'admin');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'INHTGT',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const orgUserLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: orgUserData.user.email, password: orgUserData.password },
+      });
+      expect(orgUserLogin.statusCode).toBe(200);
+      const orgUserJwt = JSON.parse(orgUserLogin.body).data.access_token;
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules/${sourceRuleId}/copy`,
+        headers: { authorization: `Bearer ${orgUserJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(201);
+      // No tail cleanup needed: the dedicated source/target projects (and
+      // their integrations / rules) cascade-delete via cleanup.cleanup()
+      // in afterAll. testProject is never touched.
+      void sourceJiraIntegration;
+    });
+
+    // Counterpart to the inherited-admin allow test: pins the
+    // `ORG_TO_PROJECT_ROLE` mapping in `types/project-roles.ts:122-126`
+    // (member → viewer). If anyone changes that map to `member: 'member'`,
+    // org members would silently gain copy access — this test catches that.
+    // The viewer-deny test above exercises the same `requireProjectRole`
+    // gate but via an EXPLICIT project_members row, not via inheritance,
+    // so it doesn't cover the mapping branch.
+    it('should deny org-member (inherits viewer) on source project from copying rules', async () => {
+      const orgMemberData = await createTestUser(db, { role: 'user' });
+      cleanup.trackUser(orgMemberData.user.id);
+
+      // Org with this user as `member` — inherits project `viewer`,
+      // which is below the `member` floor enforced by
+      // `requireProjectRole('member')` on the copy source.
+      const sourceOrg = await db.organizations.create({
+        name: `Inherited Member Deny Test Org ${Date.now()}`,
+        subdomain: `inh-mem-deny-${Date.now()}`,
+      });
+      cleanup.trackOrganization(sourceOrg.id);
+      await db.organizationMembers.create({
+        organization_id: sourceOrg.id,
+        user_id: orgMemberData.user.id,
+        role: 'member',
+      });
+
+      // Source project: scoped to the org, no explicit project_members row
+      // for this user (access comes purely from org-member inheritance).
+      const sourceProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(sourceProject.id);
+      await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
+        sourceOrg.id,
+        sourceProject.id,
+      ]);
+      await db.projectIntegrations.create({
+        project_id: sourceProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'IMDS',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+      const sourceRuleResponse = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules`,
+        headers: { authorization: `Bearer ${adminJwt}` },
+        payload: {
+          name: 'Inherited-member deny source rule',
+          enabled: true,
+          filters: [{ field: 'priority', operator: 'equals', value: 'low' }],
+          auto_create: false,
+        },
+      });
+      const sourceRuleId = JSON.parse(sourceRuleResponse.body).data.id;
+
+      // Target: user has explicit admin so the source gate is the only
+      // thing that can deny — isolates the test to the inheritance mapping.
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.projectMembers.addMember(targetProject.id, orgMemberData.user.id, 'admin');
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'IMDT',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      const orgUserLogin = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: orgMemberData.user.email, password: orgMemberData.password },
+      });
+      expect(orgUserLogin.statusCode).toBe(200);
+      const orgUserJwt = JSON.parse(orgUserLogin.body).data.access_token;
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules/${sourceRuleId}/copy`,
+        headers: { authorization: `Bearer ${orgUserJwt}` },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(403);
+      // Same gate as the explicit-viewer test, just reached via inheritance.
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
+    });
   });
 
   describe('Admin Bypass', () => {
@@ -813,6 +1092,106 @@ describe('Integration Rules Permissions - E2E', () => {
       // Clean up admin-created rule
       const adminRuleId = JSON.parse(createResponse.body).data.id;
       await db.query('DELETE FROM integration_rules WHERE id = $1', [adminRuleId]);
+    });
+  });
+
+  // Pins the existing intentional behaviour for full-scope API keys:
+  // they reach handler bodies regardless of project membership or role,
+  // because `requirePermission`, `requireProjectRole`, and the
+  // `apiKey && !authUser` branch of `checkProjectAccess` ALL skip
+  // their gates for API-key auth. This is the security model — full-
+  // scope keys (`allowed_projects: []`) are intentionally project-
+  // unbounded — but it was previously undocumented and untested.
+  // If product later adds explicit API-key admin enforcement, these
+  // assertions flip from 201 to 403 and the bypass-comments in
+  // `src/api/utils/resource.ts` should be updated to match.
+  describe('Full-scope API key bypass (lock-in)', () => {
+    let fullScopeKey: string;
+
+    beforeAll(async () => {
+      const apiKeyService = new ApiKeyService(db);
+      const result = await apiKeyService.createKey({
+        name: 'Full-scope test key (rule bypass lock-in)',
+        type: 'development',
+        permission_scope: 'full',
+        // requirePermission is skipped for API-key auth, so the
+        // permissions array is irrelevant on these routes — included
+        // for completeness with the production CRUD shape.
+        permissions: ['integration_rules:create', 'integration_rules:update'],
+        created_by: adminUser.id,
+        allowed_projects: [], // full-scope
+      });
+      fullScopeKey = result.plaintext;
+    });
+
+    it('should allow full-scope API key to create rules in any project (no membership / no admin role required)', async () => {
+      // testProject was created by adminUser; the API key has zero
+      // project membership of its own. The route still accepts the
+      // request because `requireProjectRole`/`requirePermission` both
+      // return early for API-key auth, and `checkProjectAccess` takes
+      // the `apiKey && !authUser` branch which only validates against
+      // `allowed_projects` (empty = all).
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules`,
+        headers: { 'x-api-key': fullScopeKey },
+        payload: {
+          name: 'Created via full-scope key',
+          enabled: true,
+          filters: [{ field: 'priority', operator: 'equals', value: 'low' }],
+          auto_create: false,
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const created = JSON.parse(response.body).data;
+      expect(created.name).toBe('Created via full-scope key');
+
+      // Clean up
+      await db.query('DELETE FROM integration_rules WHERE id = $1', [created.id]);
+    });
+
+    it('should allow full-scope API key to copy rules to any target (no admin role on target required)', async () => {
+      // Inline `checkProjectAccess(targetProjectId, …, { minProjectRole: 'admin' })`
+      // in the COPY handler is skipped for API-key auth (branch (1) of
+      // checkProjectAccess returns before reaching the role check).
+      // Combined with the source-side bypass on `requireProjectRole`,
+      // a full-scope key copies anything to anywhere.
+      const targetProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(targetProject.id);
+      await db.projectIntegrations.create({
+        project_id: targetProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'APIK',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
+
+      // Reset rule name so the assertion below isn't order-dependent.
+      await db.integrationRules.update(ruleId, { name: 'High Severity Auto-Create' });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
+        headers: { 'x-api-key': fullScopeKey },
+        payload: { targetProjectId: targetProject.id },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const copied = JSON.parse(response.body).data.rule;
+      expect(copied.project_id).toBe(targetProject.id);
+
+      // Clean up
+      await db.query('DELETE FROM integration_rules WHERE id = $1', [copied.id]);
     });
   });
 });
