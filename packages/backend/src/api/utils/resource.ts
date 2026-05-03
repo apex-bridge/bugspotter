@@ -17,23 +17,32 @@ import { checkProjectPermission } from '../../services/api-key/key-permissions.j
 
 /**
  * Look up inherited project role from org membership.
- * Fetches project → org → membership from DB, then maps via shared getInheritedProjectRole.
- * Returns null if no inheritance applies (no org, not a member).
+ * Maps the user's org membership role via shared getInheritedProjectRole.
+ * Returns null if no inheritance applies (project has no org, or user is
+ * not an org member).
+ *
+ * Callers that already have the project's `organization_id` in hand
+ * SHOULD pass it as the optional fourth argument — this skips a
+ * `db.projects.findById` round-trip. Hot paths like `requireProjectAccess`
+ * fetch the project for their own use a few lines earlier; without the
+ * override this helper would re-fetch on every JWT-authenticated request.
  */
 export async function lookupInheritedProjectRole(
   projectId: string,
   userId: string,
-  db: DatabaseClient
+  db: DatabaseClient,
+  organizationId?: string | null
 ): Promise<ProjectRole | null> {
-  const project = await db.projects.findById(projectId);
-  if (!project?.organization_id) {
+  let orgId: string | null | undefined = organizationId;
+  if (orgId === undefined) {
+    const project = await db.projects.findById(projectId);
+    orgId = project?.organization_id ?? null;
+  }
+  if (!orgId) {
     return null;
   }
 
-  const { membership } = await db.organizationMembers.checkOrganizationAccess(
-    project.organization_id,
-    userId
-  );
+  const { membership } = await db.organizationMembers.checkOrganizationAccess(orgId, userId);
   if (!membership) {
     return null;
   }

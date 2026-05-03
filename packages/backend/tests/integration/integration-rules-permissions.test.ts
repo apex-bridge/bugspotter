@@ -826,13 +826,16 @@ describe('Integration Rules Permissions - E2E', () => {
     // inherits `viewer` (< member) and would correctly be denied by
     // `requireProjectRole('member')` even after the fix.
     it('should allow org-inherited admin on source project to copy rules', async () => {
-      // Set up: user has org-level admin (inherits project `admin`),
-      // NO explicit project_members row on the source project. They
-      // have explicit admin on a fresh target.
+      // Use DEDICATED projects rather than mutating the shared `testProject`.
+      // If an assertion below fails, `cleanup.cleanup()` deletes the
+      // organization via `trackOrganization`, and a previously-mutated
+      // `testProject.organization_id` would FK-cascade through every
+      // remaining test in the file. Dedicated projects keep this test
+      // isolated from the rest of the suite even on assertion failure.
       const orgUserData = await createTestUser(db, { role: 'user' });
       cleanup.trackUser(orgUserData.user.id);
 
-      // Create org and add user as `admin` so they inherit project `admin`.
+      // Org with this user as admin (inherits project `admin`).
       const sourceOrg = await db.organizations.create({
         name: `Inherited Admin Test Org ${Date.now()}`,
         subdomain: `inh-adm-${Date.now()}`,
@@ -844,16 +847,47 @@ describe('Integration Rules Permissions - E2E', () => {
         role: 'admin',
       });
 
-      // Move testProject under this org so the user inherits access.
-      // (testProject was created with no organization_id in beforeAll;
-      // updating it in-place is fine for this isolated test.)
+      // Source project: scoped to the org. User has NO explicit
+      // project_members row — access is purely via inheritance, which is
+      // the regression scenario.
+      const sourceProject = await createTestProject(db, { created_by: adminUser.id });
+      cleanup.trackProject(sourceProject.id);
       await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
         sourceOrg.id,
-        testProject.id,
+        sourceProject.id,
       ]);
+      const sourceJiraIntegration = await db.projectIntegrations.create({
+        project_id: sourceProject.id,
+        integration_id: jiraIntegrationGlobalId,
+        config: {
+          instanceUrl: 'https://example.atlassian.net',
+          projectKey: 'INHSRC',
+          issueType: 'Bug',
+          autoCreate: false,
+          syncStatus: false,
+          syncComments: false,
+        },
+        encrypted_credentials: encryptionService.encrypt(
+          JSON.stringify({ email: 'test@example.com', apiToken: 'test-token' })
+        ),
+        enabled: true,
+      });
 
-      // Target project: same org, fresh, with the user as explicit admin
-      // and an integration configured.
+      // Source rule, owned by adminJwt (not the user under test).
+      const sourceRuleResponse = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules`,
+        headers: { authorization: `Bearer ${adminJwt}` },
+        payload: {
+          name: 'Inherited-admin source rule',
+          enabled: true,
+          filters: [{ field: 'priority', operator: 'equals', value: 'low' }],
+          auto_create: false,
+        },
+      });
+      const sourceRuleId = JSON.parse(sourceRuleResponse.body).data.id;
+
+      // Target project: same org, user has explicit admin.
       const targetProject = await createTestProject(db, { created_by: adminUser.id });
       cleanup.trackProject(targetProject.id);
       await db.query('UPDATE application.projects SET organization_id = $1 WHERE id = $2', [
@@ -866,7 +900,7 @@ describe('Integration Rules Permissions - E2E', () => {
         integration_id: jiraIntegrationGlobalId,
         config: {
           instanceUrl: 'https://example.atlassian.net',
-          projectKey: 'INH',
+          projectKey: 'INHTGT',
           issueType: 'Bug',
           autoCreate: false,
           syncStatus: false,
@@ -886,25 +920,18 @@ describe('Integration Rules Permissions - E2E', () => {
       expect(orgUserLogin.statusCode).toBe(200);
       const orgUserJwt = JSON.parse(orgUserLogin.body).data.access_token;
 
-      // Reset rule name so the assertion below isn't order-dependent.
-      await db.integrationRules.update(ruleId, { name: 'High Severity Auto-Create' });
-
       const response = await server.inject({
         method: 'POST',
-        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
+        url: `/api/v1/integrations/jira/${sourceProject.id}/rules/${sourceRuleId}/copy`,
         headers: { authorization: `Bearer ${orgUserJwt}` },
         payload: { targetProjectId: targetProject.id },
       });
 
       expect(response.statusCode).toBe(201);
-      const copied = JSON.parse(response.body).data.rule;
-
-      // Clean up
-      await db.query('DELETE FROM integration_rules WHERE id = $1', [copied.id]);
-      // Reset testProject's organization_id so other tests aren't affected.
-      await db.query('UPDATE application.projects SET organization_id = NULL WHERE id = $1', [
-        testProject.id,
-      ]);
+      // No tail cleanup needed: the dedicated source/target projects (and
+      // their integrations / rules) cascade-delete via cleanup.cleanup()
+      // in afterAll. testProject is never touched.
+      void sourceJiraIntegration;
     });
   });
 

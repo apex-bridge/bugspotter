@@ -91,25 +91,33 @@ export function requireProjectAccess(db: DatabaseClient, options: { paramName?: 
     // "You do not have a role in this project" 403 — even though
     // `requireProjectAccess` (above) just admitted them via the inherited
     // path in `checkProjectAccess`.
+    //
+    // Both lookups run in parallel — they're independent (different
+    // tables, no shared rows). `lookupInheritedProjectRole` takes the
+    // already-fetched `project.organization_id` so it doesn't re-query
+    // the projects table for a row we just loaded above.
     if (request.authUser) {
-      const explicitRole = await db.projects.getUserRole(project.id, request.authUser.id);
-      const inheritedRole = await lookupInheritedProjectRole(project.id, request.authUser.id, db);
+      const [explicitRole, inheritedRole] = await Promise.all([
+        db.projects.getUserRole(project.id, request.authUser.id),
+        lookupInheritedProjectRole(project.id, request.authUser.id, db, project.organization_id),
+      ]);
 
       // Pick the higher of explicit and inherited. Mirrors the same
       // composition logic used inside checkProjectAccess.
-      const explicit = explicitRole && isProjectRole(explicitRole) ? explicitRole : null;
-      let effectiveRole = explicit;
-      if (explicit && inheritedRole) {
-        effectiveRole = hasPermissionLevel(explicit, inheritedRole) ? explicit : inheritedRole;
-      } else if (inheritedRole) {
-        effectiveRole = inheritedRole;
-      }
+      const explicit = isProjectRole(explicitRole) ? explicitRole : null;
+      const effectiveRole =
+        explicit && inheritedRole
+          ? hasPermissionLevel(explicit, inheritedRole)
+            ? explicit
+            : inheritedRole
+          : (explicit ?? inheritedRole);
 
       if (effectiveRole) {
         request.projectRole = effectiveRole;
       }
-      // If role is null or invalid, leave request.projectRole as undefined
-      // Downstream authorization checks will handle missing roles appropriately
+      // If both lookups returned null, leave request.projectRole undefined.
+      // Downstream authorization checks (e.g., requireProjectRole) handle
+      // missing roles appropriately.
     }
 
     // Attach project ID and project to request for downstream handlers
