@@ -53,6 +53,13 @@ export async function setup() {
   process.env.RATE_LIMIT_MAX_REQUESTS = '10000'; // Very high limit for tests
   process.env.RATE_LIMIT_WINDOW_MS = '60000'; // 1 minute window
   process.env.ALLOW_REGISTRATION = 'true'; // Enable registration for tests
+  // Skip the strict-residency storage validator at server boot. Strict
+  // regions (kz, rf) are hardcoded in src/data-residency/types.ts and
+  // require per-region S3 endpoints — integration tests use a local
+  // testcontainer (postgres/redis/minio) and don't model regional
+  // routing, so the validator would always fail. The escape hatch is
+  // documented at src/data-residency/config.ts:354-366.
+  process.env.DISABLE_STRICT_RESIDENCY_VALIDATION = 'true';
 
   console.log('✅ PostgreSQL container started');
   console.log('📍 Database:', connectionUri.replace(/:[^:@]+@/, ':***@'));
