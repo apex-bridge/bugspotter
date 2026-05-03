@@ -143,13 +143,7 @@ export function getEffectiveProjectRole(
   orgRole: OrgMemberRole | undefined
 ): ProjectRole | undefined {
   const inherited = orgRole ? getInheritedProjectRole(orgRole) : undefined;
-  if (!explicitRole) {
-    return inherited;
-  }
-  if (!inherited) {
-    return explicitRole;
-  }
-  return hasPermissionLevel(explicitRole, inherited) ? explicitRole : inherited;
+  return pickHigherProjectRole(explicitRole, inherited) ?? undefined;
 }
 
 /**

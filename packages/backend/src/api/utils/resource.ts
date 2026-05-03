@@ -22,11 +22,26 @@ import { checkProjectPermission } from '../../services/api-key/key-permissions.j
  * Returns null if no inheritance applies (project has no org, or user is
  * not an org member).
  *
- * Callers that already have the project's `organization_id` in hand
- * SHOULD pass it as the optional fourth argument — this skips a
- * `db.projects.findById` round-trip. Hot paths like `requireProjectAccess`
- * fetch the project for their own use a few lines earlier; without the
- * override this helper would re-fetch on every JWT-authenticated request.
+ * **`organizationId` parameter — TRUSTED OVERRIDE**:
+ * If supplied, this function uses it directly and SKIPS the
+ * `db.projects.findById(projectId)` round-trip that would otherwise
+ * derive `organization_id` from the project row. This is the hot-path
+ * optimisation that `requireProjectAccess` relies on (the middleware
+ * just loaded the project a few lines up; re-fetching it inside this
+ * helper would N+1 every JWT-authenticated request).
+ *
+ * **Trust contract for callers**: when you pass `organizationId`, you
+ * are asserting that it was just read from the project row identified
+ * by `projectId` (or is `null` because that project has none). The
+ * helper does NOT re-validate this — passing a mismatched/stale value
+ * would let `userId` inherit from the wrong organisation. Callers MUST:
+ *   - Have just fetched the project synchronously in the same request
+ *     (no async gap that could let the org_id change), AND
+ *   - Pass exactly `project.organization_id` (do not derive from
+ *     unrelated state like `request.authUser.organization_id`).
+ *
+ * `undefined` (or omitted) is the safe default: the helper does its
+ * own `findById` and is unconditionally correct.
  */
 export async function lookupInheritedProjectRole(
   projectId: string,
