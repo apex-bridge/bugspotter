@@ -81,8 +81,8 @@ export async function assertUserBelongsToTenant(
   if (!organizationId) {
     return;
   }
-  const userOrgs = await db.organizations.findByUserId(user.id);
-  if (!userOrgs.some((o) => o.id === organizationId)) {
+  const membership = await db.organizationMembers.findMembership(organizationId, user.id);
+  if (!membership) {
     throw new AppError(errorMessage, 401, 'Unauthorized');
   }
 }
@@ -138,8 +138,8 @@ export function createTenantMatchMiddleware(db: DatabaseClient) {
       return;
     }
 
-    const userOrgs = await db.organizations.findByUserId(authUser.id);
-    if (userOrgs.some((o) => o.id === organizationId)) {
+    const membership = await db.organizationMembers.findMembership(organizationId, authUser.id);
+    if (membership) {
       return;
     }
 
