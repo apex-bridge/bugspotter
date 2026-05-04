@@ -195,13 +195,14 @@ export function createAuditMiddleware(db: DatabaseClient) {
     //     short-circuits on api-key (auth/middleware.ts:71) and never
     //     populates `request.authUser`, so the JWT user's id is
     //     unreachable from this hook. The audit trail therefore
-    //     captures the machine identity but loses the human actor —
-    //     the same gap GH-97 named, only partially closed by the
-    //     handler-level loggers (which compute `userId` from the route
-    //     context, not from `request.authUser`). Closing it here
-    //     requires a deeper auth-middleware change that runs JWT
-    //     parsing alongside api-key validation for identity purposes;
-    //     out of scope for #97's Option B fix and warrants its own
+    //     captures the machine identity but loses the human actor.
+    //     Handler-level loggers (e.g. routes/integrations.ts,
+    //     routes/integration-rules.ts) read the same
+    //     `request.authUser?.id ?? null`, so they share this gap —
+    //     they do NOT partially close it. Closing it here requires
+    //     a deeper auth-middleware change that runs JWT parsing
+    //     alongside api-key validation for identity purposes; out
+    //     of scope for #97's Option B fix and warrants its own
     //     design pass.
     //
     // Schema-level `audit_logs.api_key_id` column is also still
