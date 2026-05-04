@@ -226,6 +226,54 @@ jobs:
       - name: Run other tests
         run: pnpm --filter @bugspotter/backend test -- tests/storage tests/config tests/security tests/integration tests/utils tests/*.test.ts
 
+  test-backend-integration:
+    name: Backend Integration Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Required. Was previously non-blocking with `continue-on-error: true`
+    # because `vitest.config.ts` had been excluding `tests/integration/**`
+    # for long enough that the suite carried significant drift from the
+    # current routes/schemas. The cleanup PRs that closed each drift
+    # cluster have all landed (integration baseline cleanup, full-scope
+    # API key + integration-rules-permissions tests, presigned-url
+    # residency-validator bypass), so the job is now stable green on
+    # main and can gate merges. Add a matching result-check below in
+    # ci-success when adjusting this — both must move together.
+
+    env:
+      NODE_OPTIONS: --no-node-snapshot
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with native build tools
+        uses: ./.github/actions/setup-node-native
+        with:
+          node-version: ${{ matrix.node-version }}
+          pnpm-version: '9.14.4'
+
+      - name: Build types package
+        run: pnpm --filter @bugspotter/types run build
+
+      - name: Build utils package
+        run: pnpm --filter @bugspotter/utils run build
+
+      - name: Build message-broker package
+        run: pnpm --filter @bugspotter/message-broker run build
+
+      - name: Build billing package
+        run: pnpm --filter @bugspotter/billing run build
+
+      - name: Run integration tests
+        # Testcontainers spins up Postgres/Redis automatically — Docker is
+        # available on the GitHub-hosted runner.
+        run: pnpm --filter @bugspotter/backend run test:integration
+
   playwright-admin:
     name: Admin E2E Tests
     runs-on: ubuntu-latest
@@ -706,7 +754,11 @@ jobs:
   ci-success:
     name: CI
     runs-on: ubuntu-latest
-    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, playwright-admin, build, test-coverage, validate-compose]
+    # `test-backend-integration` is in `needs` AND in the result-check
+    # block below. Both must move together: removing it from one without
+    # the other either lets a failure slip through (only in `needs`) or
+    # waits on a job that doesn't gate (only in checks).
+    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, test-backend-integration, playwright-admin, build, test-coverage, validate-compose]
     if: always()
     steps:
       - name: Check all jobs succeeded
@@ -730,6 +782,10 @@ jobs:
           fi
           if [[ "${{ needs.test-backend-other.result }}" != "success" ]]; then
             echo "❌ Backend Other Tests job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-backend-integration.result }}" != "success" ]]; then
+            echo "❌ Backend Integration Tests job failed"
             exit 1
           fi
           if [[ "${{ needs.playwright-admin.result }}" != "success" ]]; then

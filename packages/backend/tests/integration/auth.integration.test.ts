@@ -60,26 +60,12 @@ describe('Authentication Flow Integration Tests', () => {
       cleanup.trackUser(body.data.user.id);
     });
 
-    it('should register admin user with admin role', async () => {
-      const email = `admin-${generateUniqueId()}@example.com`;
-      const password = 'AdminPassword123!';
-
-      const response = await server.inject({
-        method: 'POST',
-        url: '/api/v1/auth/register',
-        payload: {
-          email,
-          password,
-          role: 'admin',
-        },
-      });
-
-      expect(response.statusCode).toBe(201);
-      const body = JSON.parse(response.body);
-      expect(body.data.user.role).toBe('admin');
-
-      cleanup.trackUser(body.data.user.id);
-    });
+    // Removed: "should register admin user with admin role" — the
+    // /auth/register handler now hardcodes role: 'user' to prevent
+    // privilege escalation via the public registration endpoint, and
+    // `registerSchema` rejects extra properties including `role`. This
+    // test asserted behavior that's been deliberately removed. Admin
+    // users are created via admin endpoints, not via /register.
 
     it('should reject duplicate email registration', async () => {
       const email = `duplicate-${generateUniqueId()}@example.com`;
@@ -289,6 +275,33 @@ describe('Authentication Flow Integration Tests', () => {
       expect(response.statusCode).toBe(401);
       const body = JSON.parse(response.body);
       expect(body.error).toBe('Unauthorized');
+    });
+
+    it('should reject token signed with alg:none (CVE-2026-35042 mitigation)', async () => {
+      // The @fastify/jwt registration restricts `verify.algorithms` to
+      // ['HS256']. Without it, fast-jwt would accept any algorithm
+      // including `none`, letting an attacker bypass signature
+      // verification with a forged unsigned token. Forge one explicitly
+      // and confirm the server rejects it. If anyone removes the
+      // `algorithms` allowlist in server.ts, this test fails.
+      const noneToken = [
+        Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
+        Buffer.from(JSON.stringify({ userId, sub: userId })).toString('base64url'),
+        '', // empty signature — what `alg:none` is supposed to mean
+      ].join('.');
+
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/projects',
+        headers: {
+          authorization: `Bearer ${noneToken}`,
+        },
+        payload: {
+          name: 'Should Not Be Created',
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
     });
 
     it('should reject request with malformed authorization header', async () => {
@@ -607,6 +620,9 @@ describe('Authentication Flow Integration Tests', () => {
       const token2 = JSON.parse(login2.body).data.access_token;
 
       expect(token1).toBeDefined();
+      expect(token2).toBeDefined();
+      // Test name says "different tokens for different users" — assert it.
+      expect(token1).not.toBe(token2);
     });
   });
 });

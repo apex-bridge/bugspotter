@@ -6,7 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import { sendSuccess, sendCreated } from '../utils/response.js';
-import { checkProjectAccess } from '../utils/resource.js';
+import { checkProjectAccess, findOrThrow } from '../utils/resource.js';
 import { AppError } from '../middleware/error.js';
 import { requireAuth, requirePermission, requireProjectRole } from '../middleware/auth.js';
 import { requireProjectAccess } from '../middleware/project-access.js';
@@ -181,7 +181,8 @@ export async function registerIntegrationRuleRoutes(
         projectId,
         integrationId: integration.id,
         rulesCount: rules.length,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       return sendSuccess(reply, rules);
@@ -226,7 +227,8 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         name,
         filtersCount: filters.length,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Create rule with validation
@@ -282,7 +284,8 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         updateFields: Object.keys(updateData),
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Verify rule ownership before update
@@ -328,7 +331,8 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         ruleName: rule.name,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Delete rule
@@ -359,14 +363,34 @@ export async function registerIntegrationRuleRoutes(
         requireAuth,
         requirePermission(db, 'integration_rules', 'create'),
         requireProjectAccess(db, { paramName: 'projectId' }),
+        // Source project requires `member` role minimum (closes
+        // GH-96: cross-tenant exfiltration). Without this, a user
+        // with only `viewer` membership on the source could read
+        // the source rule's filters / field_mappings /
+        // description_template / attachment_config and persist them
+        // in a target project they admin — extracting business-
+        // sensitive logic across project boundaries. The target
+        // project still requires `admin` (inline check below).
+        // API-key auth still bypasses this gate by design (see the
+        // checkProjectAccess JSDoc on `minProjectRole`).
+        requireProjectRole('member'),
       ],
     },
     async (request, reply) => {
       const { platform, projectId, ruleId } = request.params;
       const { targetProjectId, targetIntegrationId } = request.body;
 
-      // Source project access validated by middleware (viewer+ via requireProjectAccess)
-      // Target project requires admin — inline check needed since it's a different project
+      // Load target project up-front so we can both pass its
+      // organization_id to the inline access check (skipping the
+      // redundant findById inside lookupInheritedProjectRole) and
+      // enforce the cross-org guard a few lines below.
+      const targetProject = await findOrThrow(
+        () => db.projects.findById(targetProjectId),
+        'Target project'
+      );
+
+      // Source project: `member`+ enforced via preHandler above.
+      // Target project requires `admin` — inline check needed since it's a different project
       await checkProjectAccess(
         targetProjectId,
         request.authUser,
@@ -376,8 +400,30 @@ export async function registerIntegrationRuleRoutes(
         {
           apiKey: request.apiKey,
           minProjectRole: 'admin',
+          organizationId: targetProject.organization_id,
         }
       );
+
+      // Cross-organisation guard (closes GH-101). Even a user who
+      // satisfies BOTH project-level gates above cannot copy rules
+      // across organisation boundaries: rule configurations contain
+      // tenant-specific business logic (custom field mappings,
+      // PII filters, internal description templates) that should
+      // stay within the org they originated in. Strict equality
+      // handles all four cases:
+      //   - both null  → standalone projects, equal, allowed
+      //   - both same  → same org, allowed
+      //   - one null, one set → not equal, blocked
+      //   - different orgs  → not equal, blocked
+      // The check applies uniformly to JWT and API-key auth — full-
+      // scope keys still need source and target to be in the same
+      // org. If a future deployment legitimately needs cross-org
+      // copying for sufficiently-privileged callers, add an explicit
+      // bypass rather than relaxing this guard.
+      const sourceProject = request.project;
+      if (sourceProject?.organization_id !== targetProject.organization_id) {
+        throw new AppError('Cannot copy rules across organizations', 403, 'Forbidden');
+      }
 
       // Get source rule to verify ownership
       const sourceRule = await db.integrationRules.findById(ruleId);
@@ -442,7 +488,8 @@ export async function registerIntegrationRuleRoutes(
         targetProjectId,
         targetIntegrationId: targetIntegration.id,
         platform,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Copy rule using repository method

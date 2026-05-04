@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { createServer } from '../../src/api/server.js';
 import { createDatabaseClient } from '../../src/db/client.js';
 import type { DatabaseClient } from '../../src/db/client.js';
+import { ApiKeyService } from '../../src/services/api-key/index.js';
 import { createMockPluginRegistry, createMockStorage } from '../test-helpers.js';
 
 describe('Audit Middleware', () => {
@@ -458,6 +459,160 @@ describe('Audit Middleware', () => {
       const loginLog = auditLogs.find((l) => l.resource === '/api/v1/auth/login');
 
       expect(loginLog).toBeUndefined();
+    });
+  });
+
+  // Runtime / DB-layer regression coverage for the GH-97 audit-identity
+  // pairing. The ESLint rule (`no-restricted-syntax` for `'api-key'` literal)
+  // catches source-level regressions at lint time, but a refactor that
+  // accidentally drops `api_key_id` from `auditData.details` — or that
+  // re-introduces the masked `'api-key'` literal via a runtime path the
+  // selector doesn't reach — would still slip past. Asserting on the
+  // produced audit row closes that gap.
+  describe('API Key Identity Recording', () => {
+    let bugReportId: string;
+
+    beforeEach(async () => {
+      // Fresh project + bug-report per test so PATCH /api/v1/reports/:id
+      // (which accepts api-key auth and is an auditable method) succeeds.
+      const project = await db.projects.create({
+        name: `audit-id-project-${Date.now()}-${Math.random()}`,
+        created_by: testUserId,
+      });
+      const report = await db.bugReports.create({
+        project_id: project.id,
+        title: 'audit identity fixture',
+        description: 'fixture for audit-identity regression coverage',
+      });
+      bugReportId = report.id;
+    });
+
+    async function findLatestReportAudit(reportId: string) {
+      const logs = await db.auditLogs.findByResource(`/api/v1/reports/${reportId}`, undefined, 5);
+      return logs.find((l) => l.action === 'PATCH');
+    }
+
+    async function waitForReportAudit(reportId: string) {
+      // Budget: 60 attempts × 50ms = 3s. Generous because the audit
+      // middleware writes fire-and-forget on the onResponse hook
+      // (audit.ts: `db.auditLogs.create(...).catch(...)`), so on a
+      // loaded CI runner the write can land tens to hundreds of ms
+      // after the response. If this throws, the production failure
+      // mode is the same: a row was *expected* but never landed —
+      // either DB error swallowed by the .catch, or a regression
+      // dropped the call entirely. (Underlying reliability gap —
+      // fire-and-forget with no retry / DLQ — is pre-existing and
+      // out of scope for PR-105; tracked separately.)
+      const ATTEMPTS = 60;
+      const DELAY_MS = 50;
+      for (let i = 0; i < ATTEMPTS; i++) {
+        const log = await findLatestReportAudit(reportId);
+        if (log) {
+          return log;
+        }
+        await new Promise((r) => setTimeout(r, DELAY_MS));
+      }
+      throw new Error(
+        `audit row for PATCH /api/v1/reports/${reportId} not written within ` +
+          `${(ATTEMPTS * DELAY_MS) / 1000}s. ` +
+          `If this fires repeatedly: check the audit middleware's onResponse ` +
+          `hook (audit.ts) — the route already returned 200, so either the ` +
+          `db.auditLogs.create fire-and-forget swallowed an error (.catch ` +
+          `at audit.ts) or a regression dropped the audit write entirely.`
+      );
+    }
+
+    it('records api_key_id in details and user_id null on api-key-only request', async () => {
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-key-only-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: { 'x-api-key': plaintext, 'content-type': 'application/json' },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('records api_key_id and user_id null on dual-header (JWT + api-key) request', async () => {
+      // Pins the *current* dual-header limitation: auth middleware
+      // short-circuits on the api-key header (auth/middleware.ts:71)
+      // and never populates request.authUser, so the audit row
+      // mirrors the api-key-only case (machine attribution captured,
+      // human attribution lost).
+      //
+      // **When #97's follow-up lands, this test WILL fail — that's
+      // expected.** The follow-up is supposed to populate `user_id`
+      // from the JWT alongside the api-key for *identity* purposes
+      // (without changing authz precedence). At that point, invert
+      // the assertion to `expect(log.user_id).toBe(testUserId)` and
+      // update the comment. Don't revert the change or delete the
+      // assertion — that would re-open the human-attribution gap.
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      // Current behaviour. See the describe-block comment above for
+      // when this assertion needs to be inverted.
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('records api_key_id null on JWT-only request', async () => {
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBe(testUserId);
+      const details = log.details as { api_key_id?: string | null };
+      // Always present (uniform JSONB shape for the GH-104 column-level
+      // migration), null for JWT-only.
+      expect(details).toHaveProperty('api_key_id');
+      expect(details.api_key_id).toBeNull();
     });
   });
 });

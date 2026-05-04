@@ -53,9 +53,13 @@ import { resolvePermissions } from './key-permissions.js';
 const logger = getLogger();
 
 /**
- * Grace period for key rotation (milliseconds)
+ * Grace period for key rotation (milliseconds). After a key is rotated,
+ * the old plaintext keeps working for this long so callers in flight have
+ * time to swap to the new value. Exported so integration tests can derive
+ * "outside grace" offsets without hardcoding the duration — if this gets
+ * bumped (e.g. for an enterprise tier), test backdating stays correct.
  */
-const ROTATION_GRACE_PERIOD = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const ROTATION_GRACE_PERIOD = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
  * Generated API key result

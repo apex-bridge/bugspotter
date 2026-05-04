@@ -12,28 +12,53 @@ import {
   hasPermissionLevel,
   isProjectRole,
   getInheritedProjectRole,
+  pickHigherProjectRole,
 } from '../../types/project-roles.js';
 import { checkProjectPermission } from '../../services/api-key/key-permissions.js';
 
 /**
  * Look up inherited project role from org membership.
- * Fetches project → org → membership from DB, then maps via shared getInheritedProjectRole.
- * Returns null if no inheritance applies (no org, not a member).
+ * Maps the user's org membership role via shared getInheritedProjectRole.
+ * Returns null if no inheritance applies (project has no org, or user is
+ * not an org member).
+ *
+ * **`organizationId` parameter — TRUSTED OVERRIDE**:
+ * If supplied, this function uses it directly and SKIPS the
+ * `db.projects.findById(projectId)` round-trip that would otherwise
+ * derive `organization_id` from the project row. This is the hot-path
+ * optimisation that `requireProjectAccess` relies on (the middleware
+ * just loaded the project a few lines up; re-fetching it inside this
+ * helper would N+1 every JWT-authenticated request).
+ *
+ * **Trust contract for callers**: when you pass `organizationId`, you
+ * are asserting that it was just read from the project row identified
+ * by `projectId` (or is `null` because that project has none). The
+ * helper does NOT re-validate this — passing a mismatched/stale value
+ * would let `userId` inherit from the wrong organisation. Callers MUST:
+ *   - Have just fetched the project synchronously in the same request
+ *     (no async gap that could let the org_id change), AND
+ *   - Pass exactly `project.organization_id` (do not derive from
+ *     unrelated state like `request.authUser.organization_id`).
+ *
+ * `undefined` (or omitted) is the safe default: the helper does its
+ * own `findById` and is unconditionally correct.
  */
-async function lookupInheritedProjectRole(
+export async function lookupInheritedProjectRole(
   projectId: string,
   userId: string,
-  db: DatabaseClient
+  db: DatabaseClient,
+  organizationId?: string | null
 ): Promise<ProjectRole | null> {
-  const project = await db.projects.findById(projectId);
-  if (!project?.organization_id) {
+  let orgId: string | null | undefined = organizationId;
+  if (orgId === undefined) {
+    const project = await db.projects.findById(projectId);
+    orgId = project?.organization_id ?? null;
+  }
+  if (!orgId) {
     return null;
   }
 
-  const { membership } = await db.organizationMembers.checkOrganizationAccess(
-    project.organization_id,
-    userId
-  );
+  const { membership } = await db.organizationMembers.checkOrganizationAccess(orgId, userId);
   if (!membership) {
     return null;
   }
@@ -95,13 +120,42 @@ export async function checkPermission(
  * Optionally checks permissions for specific resource/action
  * Optionally enforces a minimum project role (e.g., 'admin' for config changes)
  *
- * **Authentication Precedence**: When multiple authentication methods are present:
- * 1. JWT user authentication takes highest priority (user's project permissions are checked)
- * 2. Project-scoped API keys (authProject) are checked next
- * 3. Multi-project/full-scope API keys (options.apiKey without authProject) are checked last
+ * **Authentication branch order** (within this function): the first matching
+ * branch returns and the rest are skipped.
  *
- * This ensures that even if a full-scope API key is provided alongside a JWT token,
- * the user's permissions are still enforced, preventing privilege escalation.
+ *   1. `options.apiKey && !authUser` — API-key-only request (full-scope or
+ *      multi-project). Validated against `checkProjectPermission` only.
+ *      **`options.minProjectRole` is NOT enforced on this branch** — API
+ *      keys authenticate as a machine, not a project member, so callers
+ *      that pass `minProjectRole: 'admin'` (or similar) are NOT given that
+ *      gate against API-key auth. If the route needs admin-level
+ *      enforcement against API keys, either reject API-key auth at the
+ *      preHandler or add a separate explicit check. Same applies to
+ *      `options.resource` / `options.action` (system-permission check) —
+ *      those run only on the JWT branch.
+ *   2. `authProject` — project-scoped (single-project) API key. Project must
+ *      match. `minProjectRole` also bypassed (same reason).
+ *   3. `authUser` — JWT path. Platform admin bypass first; otherwise checks
+ *      explicit/inherited project role + optional `resource:action`
+ *      permission. This is the ONLY branch that honours
+ *      `options.minProjectRole`.
+ *
+ * **Important caveat**: `request.authUser` is set ONLY by the JWT auth
+ * handler (`handleJwtAuth`). The auth middleware (`auth/middleware.ts:54-76`)
+ * tries the `x-api-key` header first and short-circuits as soon as the
+ * key validates — JWT is only consulted when no API-key header is present.
+ * So a request that arrives with BOTH headers reaches this function with
+ * `authUser = undefined` and `apiKey` populated, meaning branch (1) above
+ * runs and any JWT-based restrictions are NOT enforced. The "JWT takes
+ * highest priority" wording that previously sat in this docstring was
+ * aspirational — the middleware ordering makes it unreachable in practice.
+ *
+ * That's not currently a privilege-escalation surface: a leaked full-scope
+ * API key alone already grants the same access an attacker would get by
+ * also presenting a JWT, so adding the JWT yields nothing extra. But if
+ * any future caller relies on "user restrictions still apply when both
+ * are present", they need to authenticate JWT-only or change the auth
+ * middleware to populate `authUser` even when an API key is also present.
  */
 export async function checkProjectAccess(
   projectId: string,
@@ -118,6 +172,15 @@ export async function checkProjectAccess(
     apiKey?: ApiKey;
     /** Minimum project role required (e.g., 'admin' for config, 'member' for data). API keys bypass this. */
     minProjectRole?: ProjectRole;
+    /**
+     * Project's `organization_id`, if the caller already loaded the
+     * project. Avoids a redundant `db.projects.findById` inside
+     * `lookupInheritedProjectRole` on hot paths like
+     * `requireProjectAccess`. `undefined` (the default) keeps the
+     * original behaviour for direct callers that don't have the
+     * project in hand.
+     */
+    organizationId?: string | null;
   }
 ): Promise<void> {
   // API key authentication without JWT user — verify project permission via API key rules
@@ -160,17 +223,13 @@ export async function checkProjectAccess(
 
     // If minProjectRole specified, check effective role = max(explicit, inherited)
     if (options?.minProjectRole) {
-      const explicitRole = await db.projects.getUserRole(projectId, authUser.id);
-      const inheritedRole = await lookupInheritedProjectRole(projectId, authUser.id, db);
+      const [explicitRole, inheritedRole] = await Promise.all([
+        db.projects.getUserRole(projectId, authUser.id),
+        lookupInheritedProjectRole(projectId, authUser.id, db, options?.organizationId),
+      ]);
 
-      // Pick the higher of explicit and inherited
-      let effectiveRole: ProjectRole | null = null;
-      const explicit = explicitRole && isProjectRole(explicitRole) ? explicitRole : null;
-      if (explicit && inheritedRole) {
-        effectiveRole = hasPermissionLevel(explicit, inheritedRole) ? explicit : inheritedRole;
-      } else {
-        effectiveRole = explicit ?? inheritedRole;
-      }
+      const explicit = isProjectRole(explicitRole) ? explicitRole : null;
+      const effectiveRole = pickHigherProjectRole(explicit, inheritedRole);
 
       if (!effectiveRole) {
         throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
@@ -188,8 +247,15 @@ export async function checkProjectAccess(
     // Fallback: check boolean membership (backward compatible)
     const hasAccess = await db.projects.hasAccess(projectId, authUser.id);
     if (!hasAccess) {
-      // Check org inheritance as fallback
-      const inheritedRole = await lookupInheritedProjectRole(projectId, authUser.id, db);
+      // Check org inheritance as fallback. Pass organizationId through
+      // so the helper skips the redundant `db.projects.findById` when
+      // the caller already loaded the project.
+      const inheritedRole = await lookupInheritedProjectRole(
+        projectId,
+        authUser.id,
+        db,
+        options?.organizationId
+      );
       if (!inheritedRole) {
         throw new AppError(`Access denied to ${resourceName}`, 403, 'Forbidden');
       }

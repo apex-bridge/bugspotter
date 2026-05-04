@@ -118,6 +118,16 @@ describe('Cache Keys', () => {
         expect(CacheKeys.integrationRulesPattern('project-1')).toBe('rules:project-1:*');
       });
 
+      // Pin the exact output so a typo in argument order to `buildCacheKey`
+      // (e.g. swapping `projectId` and `'auto'`) can't silently produce a
+      // pattern that doesn't match real auto-create cache keys at runtime.
+      // The shape-invariant test in cache-service.test.ts is necessary but
+      // not sufficient: `startsWith(prefix)` would pass for several wrong
+      // shapes that have the right components in the wrong order.
+      it('should generate auto-create rules pattern for project', () => {
+        expect(CacheKeys.autoCreateRulesPattern('project-1')).toBe('rules:auto:project-1:*');
+      });
+
       it('should generate all integration rules pattern', () => {
         expect(CacheKeys.allIntegrationRulesPattern()).toBe('rules:*');
       });
