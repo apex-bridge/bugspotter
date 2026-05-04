@@ -262,8 +262,18 @@ export function createAuditMiddleware(db: DatabaseClient) {
 }
 
 /**
- * Manually create an audit log entry
- * Use this for custom audit events not captured by middleware
+ * Manually create an audit log entry. Use this for custom audit
+ * events not captured by middleware.
+ *
+ * **`details` is always non-null in the persisted row** — even when
+ * the caller passes no `details`, the helper writes
+ * `{ api_key_id: <value | null> }` so every audit row has a uniform
+ * JSONB shape. This is intentional for the GH-104 column-level
+ * migration (api_key_id moves out of JSONB) and matches the global
+ * middleware's behaviour. **Implication for callers / SIEM rules**:
+ * `WHERE details IS NULL` will never match rows written by this
+ * helper; filter on `details ? 'api_key_id'` or `details->>'api_key_id'`
+ * instead if you want "no machine attribution" semantics.
  */
 export async function createAuditLog(
   db: DatabaseClient,
