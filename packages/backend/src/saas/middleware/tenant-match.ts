@@ -55,11 +55,15 @@ import { TENANT_EXEMPT_PREFIXES } from './tenant.js';
  *     working per product decision; users without an org context
  *     are validated via `assertUserHasActiveOrgAccess` separately)
  *
- * @throws AppError(401 'InvalidCredentials') if the user has no
- *         org membership matching `organizationId`. The 401 shape
- *         is intentional for login-style routes; callers that want
- *         a more specific error (e.g., magic-login) should catch
- *         and re-throw with their own status / code.
+ * @throws AppError(401 'Unauthorized') if the user has no org
+ *         membership matching `organizationId`. The 401 shape and
+ *         the 'Unauthorized' code are intentionally identical to
+ *         the wrong-password path (`sendUnauthorizedWithAttempts`
+ *         in api/middleware/auth/responses.ts emits the same
+ *         shape) so that an attacker cannot diff error codes to
+ *         enumerate "is this email registered to org X?". Callers
+ *         that want a more specific error (e.g., magic-login) can
+ *         catch and re-throw with their own status / code.
  */
 export async function assertUserBelongsToTenant(
   db: DatabaseClient,
@@ -153,5 +157,6 @@ export function createTenantMatchMiddleware(db: DatabaseClient) {
       "Your account does not have access to this organization's workspace.",
       request.id
     );
+    return;
   };
 }
