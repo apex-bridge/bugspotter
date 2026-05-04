@@ -80,6 +80,12 @@ describe('Project Routes — SaaS Mode', () => {
       current_period_end: thirtyDaysLater,
       quotas: { max_projects: 10, max_bug_reports: 1000, max_storage_mb: 500 },
     });
+
+    // Tenant-match middleware (cross-tenant guard) requires the authenticated
+    // user to be a member of the org whose subdomain they're acting under.
+    // application-level `role: 'admin'` is not platform-admin, so it gets
+    // checked too — add the test admin as a member of the test org.
+    await db.organizationMembers.createWithUser(orgId, admin.user.id, 'admin');
   });
 
   describe('POST /api/v1/projects — org subdomain', () => {
