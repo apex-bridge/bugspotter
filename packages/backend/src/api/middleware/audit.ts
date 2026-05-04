@@ -183,9 +183,34 @@ export function createAuditMiddleware(db: DatabaseClient) {
       return;
     }
 
-    // Get user info from auth context
+    // Get user info from auth context. The honest scope of what this
+    // middleware records:
+    //
+    //   - api-key-only requests: `user_id` null, `details.api_key_id`
+    //     populated. Attribution captured.
+    //   - JWT-only requests: `user_id` populated, `details.api_key_id`
+    //     null. Attribution captured.
+    //   - DUAL-HEADER (JWT + api-key): `user_id` STILL null,
+    //     `details.api_key_id` populated. The auth middleware
+    //     short-circuits on api-key (auth/middleware.ts:71) and never
+    //     populates `request.authUser`, so the JWT user's id is
+    //     unreachable from this hook. The audit trail therefore
+    //     captures the machine identity but loses the human actor.
+    //     Handler-level loggers (e.g. routes/integrations.ts,
+    //     routes/integration-rules.ts) read the same
+    //     `request.authUser?.id ?? null`, so they share this gap —
+    //     they do NOT partially close it. Closing it here requires
+    //     a deeper auth-middleware change that runs JWT parsing
+    //     alongside api-key validation for identity purposes; out
+    //     of scope for #97's Option B fix and warrants its own
+    //     design pass.
+    //
+    // Schema-level `audit_logs.api_key_id` column is also still
+    // deferred (GH-104) — until that lands, api-key attribution
+    // queries scan the `details` JSONB.
     const authUser = request.authUser;
-    const userId = authUser?.id || null;
+    const userId = authUser?.id ?? null;
+    const apiKeyId = request.apiKey?.id ?? null;
 
     // Capture organization context (set by guard/org-access middleware on org/project routes)
     const organizationId = request.organizationId ?? null;
@@ -218,6 +243,12 @@ export function createAuditMiddleware(db: DatabaseClient) {
         body: sanitizeData(request.body),
         query: sanitizeData(request.query),
         params: sanitizeData(request.params),
+        // `api_key_id` lives in details (JSONB) because the audit_logs
+        // table has no first-class api_key_id column today. Indexed
+        // schema-level migration tracked separately so api-key-attributed
+        // queries (e.g., "all actions from this leaked key") don't have
+        // to scan JSONB.
+        api_key_id: apiKeyId,
       },
       success,
       error_message: errorMessage,
@@ -231,13 +262,43 @@ export function createAuditMiddleware(db: DatabaseClient) {
 }
 
 /**
- * Manually create an audit log entry
- * Use this for custom audit events not captured by middleware
+ * Manually create an audit log entry. Use this for custom audit
+ * events not captured by middleware.
+ *
+ * **`details` is always non-null in the persisted row** — even when
+ * the caller passes no `details`, the helper writes
+ * `{ api_key_id: <value | null> }` so every audit row has a uniform
+ * JSONB shape. This is intentional for the GH-104 column-level
+ * migration (api_key_id moves out of JSONB) and matches the global
+ * middleware's behaviour. **Implication for callers / SIEM rules**:
+ * `WHERE details IS NULL` will never match rows written by this
+ * helper; filter on `details ? 'api_key_id'` or `details->>'api_key_id'`
+ * instead if you want "no machine attribution" semantics.
  */
 export async function createAuditLog(
   db: DatabaseClient,
   data: {
-    userId?: string;
+    /**
+     * Human actor id, or `null` for machine-only actions. Required
+     * (`string | null`) — symmetric with `apiKeyId` for the same
+     * reason: callers must make an explicit attribution choice.
+     * Allowing optional/omit silently dropped `user_id` to null on
+     * any path where the caller forgot to thread it through, hiding
+     * the JWT user from audit queries even when the user was the
+     * actor.
+     */
+    userId: string | null;
+    /**
+     * API-key id when the action was driven by a machine credential
+     * (or by a user with an api-key in the same request — see GH-97
+     * audit-identity gap). Required (`string | null`) so callers must
+     * explicitly pass `null` for human-only actions; this prevents the
+     * silent-omission bug where `apiKeyId` was optional and forgetting
+     * to pass it dropped `api_key_id` from the audit row entirely,
+     * hiding machine-attributed actions from queries that filter on
+     * `details.api_key_id`.
+     */
+    apiKeyId: string | null;
     action: string;
     resource: string;
     resourceId?: string;
@@ -248,11 +309,14 @@ export async function createAuditLog(
 ) {
   try {
     await db.auditLogs.create({
-      user_id: data.userId || null,
+      user_id: data.userId,
       action: data.action,
       resource: data.resource,
       resource_id: data.resourceId || null,
-      details: data.details || null,
+      // Always include `api_key_id` in details (matching the global
+      // middleware) so the column-level migration in GH-104 can
+      // backfill from a uniform JSONB shape.
+      details: { ...(data.details ?? {}), api_key_id: data.apiKeyId },
       success: data.success ?? true,
       error_message: data.errorMessage || null,
     });

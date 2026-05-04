@@ -102,7 +102,8 @@ export async function registerIntegrationRoutes(
 
       logger.info('Testing integration connection', {
         platform,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       const result = await service.validateConfig(config);
@@ -182,7 +183,8 @@ export async function registerIntegrationRoutes(
 
     logger.info('Listing projects for integration', {
       platform,
-      userId: request.authUser?.id || 'api-key',
+      userId: request.authUser?.id ?? null,
+      apiKeyId: request.apiKey?.id ?? null,
       hasQuery: !!query,
       maxResults,
     });
@@ -226,7 +228,8 @@ export async function registerIntegrationRoutes(
       logger.info('Saving integration configuration', {
         platform,
         projectId,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Merge partial credentials with existing saved credentials
@@ -395,7 +398,8 @@ export async function registerIntegrationRoutes(
         platform,
         projectId,
         enabled,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       const updated = await db.projectIntegrations.setEnabled(projectId, platform, enabled);
@@ -434,7 +438,8 @@ export async function registerIntegrationRoutes(
       logger.info('Deleting integration configuration', {
         platform,
         projectId,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       const deleted = await db.projectIntegrations.deleteByProjectAndPlatform(projectId, platform);
@@ -518,7 +523,8 @@ export async function registerIntegrationRoutes(
       logger.info('Searching users in integration', {
         platform,
         projectId,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
         queryLength: query.length,
       });
 
