@@ -317,6 +317,80 @@ describe('Tenant cross-access guards (SaaS mode)', () => {
       // Project ref consumed elsewhere (kept to avoid unused-var lint).
       void userAOrgAProject;
     });
+
+    // The PR explicitly omits an `isPlatformAdmin` exemption from
+    // both `assertUserBelongsToTenant` and `createTenantMatchMiddleware`.
+    // `assertUserHasActiveOrgAccess` (in api/routes/auth.ts) DOES exempt
+    // platform admins so they can hub-login without org membership —
+    // that divergence is the security boundary, and these tests pin
+    // it. A future developer who copies the pattern from
+    // `assertUserHasActiveOrgAccess` and adds a matching exemption to
+    // either guard would silently reopen the cross-tenant surface;
+    // these tests turn that into a red CI signal.
+    it('rejects a platform-admin JWT at a tenant subdomain the admin is not a member of', async () => {
+      const adminPassword = 'PlatformAdmin!1';
+      const adminHash = await bcrypt.hash(adminPassword, 10);
+      const platformAdmin = await db.users.create({
+        email: `platform-admin-${generateUniqueId()}@test.com`,
+        password_hash: adminHash,
+        role: 'admin',
+      });
+      cleanup.trackUser(platformAdmin.id);
+      // The application-level `role: 'admin'` is NOT platform-admin —
+      // platform-admin is gated by `security.is_platform_admin`. Set
+      // it here so the issued JWT carries `isPlatformAdmin: true`
+      // (see generateAuthTokens in api/utils/auth-tokens.ts).
+      await db.query(
+        `UPDATE application.users
+         SET security = jsonb_set(COALESCE(security, '{}'::jsonb), '{is_platform_admin}', 'true'::jsonb)
+         WHERE id = $1`,
+        [platformAdmin.id]
+      );
+
+      // Hub login succeeds because assertUserHasActiveOrgAccess
+      // exempts platform admins (auth.ts:55) — no membership in any
+      // org needed.
+      const adminLogin = await login(HUB_HOST, platformAdmin.email, adminPassword);
+      expect(adminLogin.statusCode).toBe(200);
+      const adminJwt = JSON.parse(adminLogin.body).data.access_token;
+
+      // The same admin JWT used against orgA's subdomain must 403 at
+      // the request-time middleware — no platform-admin exemption
+      // there by design.
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/projects',
+        headers: { host: orgAHost(), authorization: `Bearer ${adminJwt}` },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(JSON.parse(response.body).error).toBe('TenantMismatch');
+    });
+
+    it('rejects platform-admin login at a tenant subdomain (login-time guard, no exemption)', async () => {
+      // Same divergence as above, exercised at the login-time guard
+      // (assertUserBelongsToTenant). Login at a tenant subdomain the
+      // platform admin doesn't belong to should fail with the same
+      // wrong-password shape (401 Unauthorized) used elsewhere.
+      const adminPassword = 'PlatformAdminLogin!1';
+      const adminHash = await bcrypt.hash(adminPassword, 10);
+      const platformAdmin = await db.users.create({
+        email: `platform-admin-login-${generateUniqueId()}@test.com`,
+        password_hash: adminHash,
+        role: 'admin',
+      });
+      cleanup.trackUser(platformAdmin.id);
+      await db.query(
+        `UPDATE application.users
+         SET security = jsonb_set(COALESCE(security, '{}'::jsonb), '{is_platform_admin}', 'true'::jsonb)
+         WHERE id = $1`,
+        [platformAdmin.id]
+      );
+
+      const response = await login(orgAHost(), platformAdmin.email, adminPassword);
+      expect(response.statusCode).toBe(401);
+      expect(JSON.parse(response.body).error).toBe('Unauthorized');
+    });
   });
 
   describe('Bug 1: subdomain-existence check fires before exempt-prefix bypass', () => {

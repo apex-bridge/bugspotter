@@ -13,10 +13,14 @@
  * Two layers of defence (defense-in-depth):
  *
  *   1. Login-time (`assertUserBelongsToTenant`) — auth routes
- *      (login, register, refresh, magic-login) call this before
- *      issuing tokens. Stops the wrong JWT from being issued in
- *      the first place. Returns same error shape as wrong-password
- *      to avoid user enumeration via differing error codes.
+ *      (login, refresh, magic-login) call this before issuing
+ *      tokens. Stops the wrong JWT from being issued in the first
+ *      place. Returns same error shape as wrong-password to avoid
+ *      user enumeration via differing error codes. Register is
+ *      deliberately NOT instrumented — the request-time middleware
+ *      (layer 2) self-corrects on the very next authenticated
+ *      request, and gating registration would block legitimate
+ *      cross-tenant signup flows.
  *
  *   2. Request-time (`createTenantMatchMiddleware`) — runs after
  *      auth + tenant resolution on every authenticated request.
@@ -40,13 +44,15 @@ import { TENANT_EXEMPT_PREFIXES } from './tenant.js';
 
 /**
  * Assert that `user` belongs to the tenant identified by
- * `organizationId`. Used at auth-issuance time (login/register/refresh/
- * magic-login) when the request arrived on a tenant subdomain.
+ * `organizationId`. Used at auth-issuance time (login / refresh /
+ * magic-login) when the request arrived on a tenant subdomain. The
+ * register endpoint deliberately does NOT call this — see the
+ * defense-in-depth comment at the top of this file.
  *
  * The error shape deliberately matches wrong-credentials (401
- * `Invalid email or password`) on login/register/refresh paths to
- * avoid user enumeration via differing error codes. Magic-login
- * uses a more specific message because the caller already proved
+ * `Invalid email or password`) on login / refresh paths to avoid
+ * user enumeration via differing error codes. Magic-login uses a
+ * more specific message because the caller already proved
  * possession of the magic token — no enumeration concern.
  *
  * Skips when:
