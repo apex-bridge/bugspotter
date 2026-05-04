@@ -278,7 +278,16 @@ export function createAuditMiddleware(db: DatabaseClient) {
 export async function createAuditLog(
   db: DatabaseClient,
   data: {
-    userId?: string;
+    /**
+     * Human actor id, or `null` for machine-only actions. Required
+     * (`string | null`) — symmetric with `apiKeyId` for the same
+     * reason: callers must make an explicit attribution choice.
+     * Allowing optional/omit silently dropped `user_id` to null on
+     * any path where the caller forgot to thread it through, hiding
+     * the JWT user from audit queries even when the user was the
+     * actor.
+     */
+    userId: string | null;
     /**
      * API-key id when the action was driven by a machine credential
      * (or by a user with an api-key in the same request — see GH-97
@@ -300,7 +309,7 @@ export async function createAuditLog(
 ) {
   try {
     await db.auditLogs.create({
-      user_id: data.userId || null,
+      user_id: data.userId,
       action: data.action,
       resource: data.resource,
       resource_id: data.resourceId || null,

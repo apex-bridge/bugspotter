@@ -493,14 +493,33 @@ describe('Audit Middleware', () => {
     }
 
     async function waitForReportAudit(reportId: string) {
-      for (let i = 0; i < 30; i++) {
+      // Budget: 60 attempts × 50ms = 3s. Generous because the audit
+      // middleware writes fire-and-forget on the onResponse hook
+      // (audit.ts: `db.auditLogs.create(...).catch(...)`), so on a
+      // loaded CI runner the write can land tens to hundreds of ms
+      // after the response. If this throws, the production failure
+      // mode is the same: a row was *expected* but never landed —
+      // either DB error swallowed by the .catch, or a regression
+      // dropped the call entirely. (Underlying reliability gap —
+      // fire-and-forget with no retry / DLQ — is pre-existing and
+      // out of scope for PR-105; tracked separately.)
+      const ATTEMPTS = 60;
+      const DELAY_MS = 50;
+      for (let i = 0; i < ATTEMPTS; i++) {
         const log = await findLatestReportAudit(reportId);
         if (log) {
           return log;
         }
-        await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, DELAY_MS));
       }
-      throw new Error(`audit row for /api/v1/reports/${reportId} not written within 1.5s`);
+      throw new Error(
+        `audit row for PATCH /api/v1/reports/${reportId} not written within ` +
+          `${(ATTEMPTS * DELAY_MS) / 1000}s. ` +
+          `If this fires repeatedly: check the audit middleware's onResponse ` +
+          `hook (audit.ts) — the route already returned 200, so either the ` +
+          `db.auditLogs.create fire-and-forget swallowed an error (.catch ` +
+          `at audit.ts) or a regression dropped the audit write entirely.`
+      );
     }
 
     it('records api_key_id in details and user_id null on api-key-only request', async () => {
@@ -530,12 +549,19 @@ describe('Audit Middleware', () => {
     });
 
     it('records api_key_id and user_id null on dual-header (JWT + api-key) request', async () => {
-      // Auth middleware short-circuits on the api-key header
-      // (auth/middleware.ts:71) and never populates request.authUser even
-      // when a JWT is present, so the audit row mirrors the api-key-only
-      // case. This is the GH-97 attack-shape guard: a regression that
-      // "fixes" the precedence by reading the JWT alongside the api-key
-      // would surface here as user_id no longer being null.
+      // Pins the *current* dual-header limitation: auth middleware
+      // short-circuits on the api-key header (auth/middleware.ts:71)
+      // and never populates request.authUser, so the audit row
+      // mirrors the api-key-only case (machine attribution captured,
+      // human attribution lost).
+      //
+      // **When #97's follow-up lands, this test WILL fail — that's
+      // expected.** The follow-up is supposed to populate `user_id`
+      // from the JWT alongside the api-key for *identity* purposes
+      // (without changing authz precedence). At that point, invert
+      // the assertion to `expect(log.user_id).toBe(testUserId)` and
+      // update the comment. Don't revert the change or delete the
+      // assertion — that would re-open the human-attribution gap.
       const apiKeyService = new ApiKeyService(db);
       const { plaintext, key } = await apiKeyService.createKey({
         name: `audit-id-dual-${Date.now()}`,
@@ -560,9 +586,8 @@ describe('Audit Middleware', () => {
       expect(response.statusCode).toBe(200);
 
       const log = await waitForReportAudit(bugReportId);
-      // user_id stays null — api-key short-circuits, authUser is never set.
-      // This is the documented dual-header limitation; closing it requires
-      // a deeper auth-middleware change (out of scope for this PR).
+      // Current behaviour. See the describe-block comment above for
+      // when this assertion needs to be inverted.
       expect(log.user_id).toBeNull();
       const details = log.details as { api_key_id?: string };
       expect(details.api_key_id).toBe(key.id);
