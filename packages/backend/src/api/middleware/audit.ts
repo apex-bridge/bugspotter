@@ -272,10 +272,14 @@ export async function createAuditLog(
     /**
      * API-key id when the action was driven by a machine credential
      * (or by a user with an api-key in the same request — see GH-97
-     * audit-identity gap). Both fields are recorded so dual-header
-     * requests attribute correctly.
+     * audit-identity gap). Required (`string | null`) so callers must
+     * explicitly pass `null` for human-only actions; this prevents the
+     * silent-omission bug where `apiKeyId` was optional and forgetting
+     * to pass it dropped `api_key_id` from the audit row entirely,
+     * hiding machine-attributed actions from queries that filter on
+     * `details.api_key_id`.
      */
-    apiKeyId?: string;
+    apiKeyId: string | null;
     action: string;
     resource: string;
     resourceId?: string;
@@ -290,10 +294,10 @@ export async function createAuditLog(
       action: data.action,
       resource: data.resource,
       resource_id: data.resourceId || null,
-      details:
-        data.apiKeyId !== undefined
-          ? { ...(data.details ?? {}), api_key_id: data.apiKeyId }
-          : (data.details ?? null),
+      // Always include `api_key_id` in details (matching the global
+      // middleware) so the column-level migration in GH-104 can
+      // backfill from a uniform JSONB shape.
+      details: { ...(data.details ?? {}), api_key_id: data.apiKeyId },
       success: data.success ?? true,
       error_message: data.errorMessage || null,
     });

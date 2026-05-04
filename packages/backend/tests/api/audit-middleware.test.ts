@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { createServer } from '../../src/api/server.js';
 import { createDatabaseClient } from '../../src/db/client.js';
 import type { DatabaseClient } from '../../src/db/client.js';
+import { ApiKeyService } from '../../src/services/api-key/index.js';
 import { createMockPluginRegistry, createMockStorage } from '../test-helpers.js';
 
 describe('Audit Middleware', () => {
@@ -458,6 +459,135 @@ describe('Audit Middleware', () => {
       const loginLog = auditLogs.find((l) => l.resource === '/api/v1/auth/login');
 
       expect(loginLog).toBeUndefined();
+    });
+  });
+
+  // Runtime / DB-layer regression coverage for the GH-97 audit-identity
+  // pairing. The ESLint rule (`no-restricted-syntax` for `'api-key'` literal)
+  // catches source-level regressions at lint time, but a refactor that
+  // accidentally drops `api_key_id` from `auditData.details` — or that
+  // re-introduces the masked `'api-key'` literal via a runtime path the
+  // selector doesn't reach — would still slip past. Asserting on the
+  // produced audit row closes that gap.
+  describe('API Key Identity Recording', () => {
+    let bugReportId: string;
+
+    beforeEach(async () => {
+      // Fresh project + bug-report per test so PATCH /api/v1/reports/:id
+      // (which accepts api-key auth and is an auditable method) succeeds.
+      const project = await db.projects.create({
+        name: `audit-id-project-${Date.now()}-${Math.random()}`,
+        created_by: testUserId,
+      });
+      const report = await db.bugReports.create({
+        project_id: project.id,
+        title: 'audit identity fixture',
+        description: 'fixture for audit-identity regression coverage',
+      });
+      bugReportId = report.id;
+    });
+
+    async function findLatestReportAudit(reportId: string) {
+      const logs = await db.auditLogs.findByResource(`/api/v1/reports/${reportId}`, undefined, 5);
+      return logs.find((l) => l.action === 'PATCH');
+    }
+
+    async function waitForReportAudit(reportId: string) {
+      for (let i = 0; i < 30; i++) {
+        const log = await findLatestReportAudit(reportId);
+        if (log) {
+          return log;
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error(`audit row for /api/v1/reports/${reportId} not written within 1.5s`);
+    }
+
+    it('records api_key_id in details and user_id null on api-key-only request', async () => {
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-key-only-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: { 'x-api-key': plaintext, 'content-type': 'application/json' },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('records api_key_id and user_id null on dual-header (JWT + api-key) request', async () => {
+      // Auth middleware short-circuits on the api-key header
+      // (auth/middleware.ts:71) and never populates request.authUser even
+      // when a JWT is present, so the audit row mirrors the api-key-only
+      // case. This is the GH-97 attack-shape guard: a regression that
+      // "fixes" the precedence by reading the JWT alongside the api-key
+      // would surface here as user_id no longer being null.
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      // user_id stays null — api-key short-circuits, authUser is never set.
+      // This is the documented dual-header limitation; closing it requires
+      // a deeper auth-middleware change (out of scope for this PR).
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('records api_key_id null on JWT-only request', async () => {
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBe(testUserId);
+      const details = log.details as { api_key_id?: string | null };
+      // Always present (uniform JSONB shape for the GH-104 column-level
+      // migration), null for JWT-only.
+      expect(details).toHaveProperty('api_key_id');
+      expect(details.api_key_id).toBeNull();
     });
   });
 });
