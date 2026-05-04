@@ -181,7 +181,8 @@ export async function registerIntegrationRuleRoutes(
         projectId,
         integrationId: integration.id,
         rulesCount: rules.length,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       return sendSuccess(reply, rules);
@@ -226,7 +227,8 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         name,
         filtersCount: filters.length,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Create rule with validation
@@ -282,7 +284,8 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         updateFields: Object.keys(updateData),
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Verify rule ownership before update
@@ -328,7 +331,8 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         ruleName: rule.name,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Delete rule
@@ -484,7 +488,8 @@ export async function registerIntegrationRuleRoutes(
         targetProjectId,
         targetIntegrationId: targetIntegration.id,
         platform,
-        userId: request.authUser?.id || 'api-key',
+        userId: request.authUser?.id ?? null,
+        apiKeyId: request.apiKey?.id ?? null,
       });
 
       // Copy rule using repository method

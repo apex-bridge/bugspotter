@@ -44,6 +44,38 @@ export default tseslint.config(
       ],
       'no-console': 'off',
       curly: ['error', 'all'],
+      // Prevent regression on the audit-identity gap (partial fix in
+      // GH-97): do not use the literal 'api-key' as a fallback `userId`
+      // in audit logs or audit_log row writes. Record `userId` and
+      // `apiKeyId` as separate fields so dual-header (JWT + api-key)
+      // requests attribute correctly. See packages/backend/docs/auth.md
+      // §audit-identity.
+      //
+      // The selector covers four regression shapes:
+      //   1. `{ userId: 'api-key' }`         — unquoted key, Literal
+      //   2. `{ 'userId': 'api-key' }`       — quoted key, Literal
+      //   3. `{ userId: \`api-key\` }`        — unquoted key, no-interp
+      //                                         TemplateLiteral
+      //   4. `{ 'userId': \`api-key\` }`      — quoted key, no-interp
+      //                                         TemplateLiteral
+      //
+      // The first `:matches()` covers the property-key shape (the AST
+      // splits unquoted `userId` into `key.name` on an Identifier node
+      // and quoted `'userId'` into `key.value` on a Literal node — same
+      // semantic key, two different AST shapes; without `:matches()`
+      // only one of them is caught). The second `:matches()` covers
+      // the value shape (string literal vs. zero-interpolation template
+      // literal, which produces the same runtime value but a different
+      // AST node).
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "Property:matches([key.name='userId'], [key.value='userId']) :matches(Literal[value='api-key'], TemplateLiteral[quasis.length=1][quasis.0.value.raw='api-key'])",
+          message:
+            "Don't use the 'api-key' literal as a userId. Record `userId: authUser?.id ?? null` and `apiKeyId: apiKey?.id ?? null` as separate fields. See packages/backend/docs/auth.md §audit-identity.",
+        },
+      ],
     },
   },
   {
