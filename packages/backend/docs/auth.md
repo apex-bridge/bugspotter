@@ -153,7 +153,31 @@ than shipping it silently.
 
 ---
 
-## 6. Open questions
+## 6. Tenant resolution & cross-tenant guards (SaaS mode)
+
+In SaaS mode (`DEPLOYMENT_MODE=saas`), every authenticated request
+that arrives on a tenant subdomain is checked against the user's
+org membership. Three layers of defence:
+
+| Layer                         | Source                                                                                                  | What it does                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tenant resolution**         | [`saas/middleware/tenant.ts`](../src/saas/middleware/tenant.ts)                                         | Extracts subdomain → looks up org. Unknown subdomain → 404 (even on `TENANT_EXEMPT_PREFIXES`). Inactive subscription → 403. Sets `request.organization` + `request.organizationId` for tenant routes. Skips org-context for exempt routes (admin / users-me / audit-logs) so a user clicking "preferences" inside their tenant dashboard still hits the same handler the hub serves |
+| **Login-time tenant-match**   | [`saas/middleware/tenant-match.ts:assertUserBelongsToTenant`](../src/saas/middleware/tenant-match.ts)   | Login / refresh / magic-login routes verify the credential holder belongs to the subdomain's org BEFORE issuing tokens. Same error shape as wrong-credentials so attackers can't enumerate "is this email registered to org X?" by diffing error codes. Hub-domain (no `request.organizationId`) keeps current product behaviour — a single-purpose login portal                    |
+| **Request-time tenant-match** | [`saas/middleware/tenant-match.ts:createTenantMatchMiddleware`](../src/saas/middleware/tenant-match.ts) | Runs after auth + tenant resolution on every authenticated request. If `authUser.organization_id` and `request.organizationId` are both set and the user has no membership matching the org, returns 403 `TenantMismatch`. Catches stolen / hub-issued / replayed JWTs being used at the wrong tenant subdomain                                                                     |
+
+### What's intentionally NOT enforced
+
+- **Hub-domain login**: `app.kz.bugspotter.io` continues to issue tokens for any valid user. Product policy: hub serves as the universal login portal; per-tenant entry happens client-side after auth
+- **Platform admins on tenant subdomains**: per product policy, SaaS admins only authenticate at the hub. Both guards still fire — there's no platform-admin exemption — so an admin JWT showing up on a tenant subdomain is rejected as anomalous
+- **API-key requests**: full-scope API keys are intentionally project- and tenant-unbounded. The request-time middleware runs only when both `authUser` and `organizationId` are set; api-key-only requests skip it. Limited-scope keys are still bounded by their `allowed_projects`
+
+### What's available for hardening
+
+- **Org-bound JWTs**: bake `organizationId` into the JWT payload, verify on every request. Strongest guarantee but requires a forced re-login on rollout (in-flight tokens become invalid). Defense-in-depth on top of the layers above; not currently needed because A+B (login-time + request-time) close the practical attack surfaces
+
+---
+
+## 7. Open questions
 
 These behaviours are documented, tested, and consistent with the current
 design — but they're known design choices that may change. New work

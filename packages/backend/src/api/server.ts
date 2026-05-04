@@ -406,6 +406,23 @@ export async function createServer(options: ServerOptions): Promise<FastifyInsta
   // preValidation: Check POST body for share tokens (after body parsing)
   fastify.addHook('preValidation', bodyAuthMiddleware);
 
+  // Register tenant-match middleware (closes the cross-tenant access
+  // surface left open by tenant resolution alone — JWTs aren't org-bound,
+  // so a JWT issued for org A would otherwise be bearer-equivalent on
+  // every tenant subdomain). Registered AFTER auth + tenant so both
+  // `request.authUser` and `request.organizationId` are populated when
+  // it runs. SaaS-only — same pattern as `registerTenantMiddleware`,
+  // so self-hosted deployments don't pay the per-request hook cost.
+  // See packages/backend/src/saas/middleware/tenant-match.ts for the
+  // trust contract.
+  {
+    const { getDeploymentConfig, DEPLOYMENT_MODE } = await import('../saas/config.js');
+    if (getDeploymentConfig().mode === DEPLOYMENT_MODE.SAAS) {
+      const { createTenantMatchMiddleware } = await import('../saas/middleware/tenant-match.js');
+      fastify.addHook('onRequest', createTenantMatchMiddleware(db));
+    }
+  }
+
   // Register audit logging middleware (after auth, logs admin actions)
   const { createAuditMiddleware } = await import('./middleware/audit.js');
   const auditMiddleware = createAuditMiddleware(db);
