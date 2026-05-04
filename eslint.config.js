@@ -49,10 +49,16 @@ export default tseslint.config(
       // logs or audit_log row writes. Record `userId` and `apiKeyId` as
       // separate fields so dual-header (JWT + api-key) requests attribute
       // correctly. See packages/backend/docs/auth.md §audit-identity.
+      // The selector uses `:matches()` so it catches both forms of the
+      // `userId` property: unquoted (Identifier — `key.name`) and
+      // quoted (Literal — `key.value`). Without `:matches()` only the
+      // unquoted form is detected and a developer writing
+      // `{ 'userId': 'api-key' }` would slip past.
       'no-restricted-syntax': [
         'error',
         {
-          selector: "Property[key.name='userId'] Literal[value='api-key']",
+          selector:
+            "Property:matches([key.name='userId'], [key.value='userId']) Literal[value='api-key']",
           message:
             "Don't use the 'api-key' literal as a userId. Record `userId: authUser?.id ?? null` and `apiKeyId: apiKey?.id ?? null` as separate fields. See packages/backend/docs/auth.md §audit-identity.",
         },

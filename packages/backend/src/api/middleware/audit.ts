@@ -183,12 +183,30 @@ export function createAuditMiddleware(db: DatabaseClient) {
       return;
     }
 
-    // Get user info from auth context. Both `authUser` and `apiKey`
-    // are recorded so that audit trails attribute api-key-only and
-    // dual-header (JWT + api-key) requests correctly. The
-    // `audit_logs.user_id` column stays null for api-key-only requests
-    // (see GH-97 for the deferred schema-level api_key_id column);
-    // until then, the api-key id rides along in the `details` JSONB.
+    // Get user info from auth context. The honest scope of what this
+    // middleware records:
+    //
+    //   - api-key-only requests: `user_id` null, `details.api_key_id`
+    //     populated. Attribution captured.
+    //   - JWT-only requests: `user_id` populated, `details.api_key_id`
+    //     null. Attribution captured.
+    //   - DUAL-HEADER (JWT + api-key): `user_id` STILL null,
+    //     `details.api_key_id` populated. The auth middleware
+    //     short-circuits on api-key (auth/middleware.ts:71) and never
+    //     populates `request.authUser`, so the JWT user's id is
+    //     unreachable from this hook. The audit trail therefore
+    //     captures the machine identity but loses the human actor —
+    //     the same gap GH-97 named, only partially closed by the
+    //     handler-level loggers (which compute `userId` from the route
+    //     context, not from `request.authUser`). Closing it here
+    //     requires a deeper auth-middleware change that runs JWT
+    //     parsing alongside api-key validation for identity purposes;
+    //     out of scope for #97's Option B fix and warrants its own
+    //     design pass.
+    //
+    // Schema-level `audit_logs.api_key_id` column is also still
+    // deferred (GH-104) — until that lands, api-key attribution
+    // queries scan the `details` JSONB.
     const authUser = request.authUser;
     const userId = authUser?.id ?? null;
     const apiKeyId = request.apiKey?.id ?? null;
