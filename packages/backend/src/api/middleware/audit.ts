@@ -183,33 +183,31 @@ export function createAuditMiddleware(db: DatabaseClient) {
       return;
     }
 
-    // Get user info from auth context. The honest scope of what this
-    // middleware records:
+    // Get user info from auth context. The audit shape across the
+    // three authentication paths (#97 fully closed by recording both
+    // identities for dual-header requests):
     //
-    //   - api-key-only requests: `user_id` null, `details.api_key_id`
-    //     populated. Attribution captured.
-    //   - JWT-only requests: `user_id` populated, `details.api_key_id`
-    //     null. Attribution captured.
-    //   - DUAL-HEADER (JWT + api-key): `user_id` STILL null,
-    //     `details.api_key_id` populated. The auth middleware
-    //     short-circuits on api-key (auth/middleware.ts:71) and never
-    //     populates `request.authUser`, so the JWT user's id is
-    //     unreachable from this hook. The audit trail therefore
-    //     captures the machine identity but loses the human actor.
-    //     Handler-level loggers (e.g. routes/integrations.ts,
-    //     routes/integration-rules.ts) read the same
-    //     `request.authUser?.id ?? null`, so they share this gap —
-    //     they do NOT partially close it. Closing it here requires
-    //     a deeper auth-middleware change that runs JWT parsing
-    //     alongside api-key validation for identity purposes; out
-    //     of scope for #97's Option B fix and warrants its own
-    //     design pass.
+    //   - api-key-only: `user_id` null, `details.api_key_id` set.
+    //   - JWT-only: `user_id` set (from `request.authUser`),
+    //     `details.api_key_id` null.
+    //   - DUAL-HEADER (JWT + api-key): `user_id` set (from
+    //     `request.jwtUserIdentity`, populated by the auth middleware
+    //     for attribution-only — does NOT make this code path use the
+    //     JWT user for authz), `details.api_key_id` set. Both actors
+    //     captured, no masking.
     //
-    // Schema-level `audit_logs.api_key_id` column is also still
-    // deferred (GH-104) — until that lands, api-key attribution
-    // queries scan the `details` JSONB.
+    // The fallback order — `authUser?.id ?? jwtUserIdentity?.id ?? null`
+    // — never double-counts: `authUser` and `jwtUserIdentity` are
+    // mutually exclusive by construction. The api-key short-circuit
+    // path leaves `authUser` undefined (so the fallback applies); the
+    // JWT-only path leaves `jwtUserIdentity` undefined (so it never
+    // overrides `authUser`).
+    //
+    // Schema-level `audit_logs.api_key_id` column is still deferred
+    // (GH-104) — until that lands, api-key attribution queries scan
+    // the `details` JSONB.
     const authUser = request.authUser;
-    const userId = authUser?.id ?? null;
+    const userId = authUser?.id ?? request.jwtUserIdentity?.id ?? null;
     const apiKeyId = request.apiKey?.id ?? null;
 
     // Capture organization context (set by guard/org-access middleware on org/project routes)

@@ -548,20 +548,28 @@ describe('Audit Middleware', () => {
       expect(details.api_key_id).toBe(key.id);
     });
 
-    it('records api_key_id and user_id null on dual-header (JWT + api-key) request', async () => {
-      // Pins the *current* dual-header limitation: auth middleware
-      // short-circuits on the api-key header (auth/middleware.ts:71)
-      // and never populates request.authUser, so the audit row
-      // mirrors the api-key-only case (machine attribution captured,
-      // human attribution lost).
+    it('records BOTH user_id and api_key_id on dual-header (JWT + api-key) request', async () => {
+      // GH-97 fully closed: the auth middleware now also verifies the
+      // accompanying JWT (signature only — no DB lookup) and stores
+      // the claimed userId in `request.jwtUserIdentity` for
+      // attribution-only. `request.authUser` stays undefined (api-key
+      // remains the authoritative authz path; precedence unchanged),
+      // so this attribution flows through the audit middleware's
+      // `authUser?.id ?? jwtUserIdentity?.id ?? null` fallback.
       //
-      // **When #97's follow-up lands, this test WILL fail — that's
-      // expected.** The follow-up is supposed to populate `user_id`
-      // from the JWT alongside the api-key for *identity* purposes
-      // (without changing authz precedence). At that point, invert
-      // the assertion to `expect(log.user_id).toBe(testUserId)` and
-      // update the comment. Don't revert the change or delete the
-      // assertion — that would re-open the human-attribution gap.
+      // The test pins both halves of the contract:
+      //   - user_id = the JWT user (human attribution)
+      //   - details.api_key_id = the api-key id (machine attribution)
+      //
+      // Regression guards this catches:
+      //   - Removing the JWT-verify-alongside-api-key block in auth
+      //     middleware → user_id goes back to null.
+      //   - Inadvertently populating `request.authUser` on the api-key
+      //     path → would surface elsewhere (authz changes), but the
+      //     audit row still records the right id thanks to the
+      //     fallback ordering.
+      //   - Replacing the audit fallback with `authUser?.id ?? null`
+      //     (dropping the jwtUserIdentity branch) → user_id null again.
       const apiKeyService = new ApiKeyService(db);
       const { plaintext, key } = await apiKeyService.createKey({
         name: `audit-id-dual-${Date.now()}`,
@@ -586,8 +594,41 @@ describe('Audit Middleware', () => {
       expect(response.statusCode).toBe(200);
 
       const log = await waitForReportAudit(bugReportId);
-      // Current behaviour. See the describe-block comment above for
-      // when this assertion needs to be inverted.
+      expect(log.user_id).toBe(testUserId);
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('records user_id null on dual-header request when the accompanying JWT is invalid', async () => {
+      // Defense-in-depth: a forged / expired / malformed JWT alongside
+      // a valid api-key must not poison the audit row. The api-key
+      // already authenticated the request; we simply have no second
+      // identity to attribute. user_id falls back to null rather than
+      // recording an unverified claim.
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-bad-jwt-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: 'Bearer not.a.valid.jwt',
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
       expect(log.user_id).toBeNull();
       const details = log.details as { api_key_id?: string };
       expect(details.api_key_id).toBe(key.id);

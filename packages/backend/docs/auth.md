@@ -49,15 +49,19 @@ When `x-api-key` AND `Authorization: Bearer` are both present and the
 API key validates:
 
 - `request.apiKey` is populated
-- `request.authUser` stays **undefined** (JWT was never consulted)
+- `request.authUser` stays **undefined** — authz precedence is
+  unchanged; the api-key path remains authoritative
+- `request.jwtUserIdentity` is populated (just `{ id }`) IF the
+  accompanying JWT's signature verifies, otherwise undefined. This
+  is **attribution-only** — never authz. Audit consumers fall back
+  to `jwtUserIdentity?.id` when `authUser` is unset, so dual-header
+  requests record both the human and machine actor
 
-This is _not_ a privilege-escalation surface (a leaked full-scope key
-already grants full access; presenting JWT alongside adds nothing). But
-it does have an audit-trail consequence: downstream loggers that read
-`userId: request.authUser?.id || 'api-key'` record `'api-key'` even
-when the JWT user is the actual actor. A user can deliberately combine
-their JWT with an org's full-scope key to mask attribution. Tracked in
-[#97](https://github.com/apex-bridge/bugspotter/issues/97).
+The asymmetry between authz (api-key wins) and attribution (record
+both) closed [#97](https://github.com/apex-bridge/bugspotter/issues/97):
+the audit trail now never silently drops the human actor when an
+api-key is presented alongside a JWT, while the authz path never
+escalates the JWT user above what the api-key was scoped for.
 
 ---
 

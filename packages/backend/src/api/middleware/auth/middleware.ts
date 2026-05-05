@@ -65,6 +65,28 @@ export function createAuthMiddleware(db: DatabaseClient) {
           startTime
         );
         if (success) {
+          // Closes the GH-97 dual-header gap: when a JWT is presented
+          // alongside the api-key, capture the JWT user's id for AUDIT
+          // ATTRIBUTION ONLY. `request.authUser` stays undefined — the
+          // api-key remains the authoritative authz path (precedence
+          // unchanged). On any failure we fall through silently; this
+          // must never fail an otherwise-successful api-key request.
+          if (authorization?.startsWith('Bearer ')) {
+            try {
+              const decoded = await request.jwtVerify();
+              if (decoded?.userId && typeof decoded.userId === 'string') {
+                request.jwtUserIdentity = { id: decoded.userId };
+              }
+            } catch (error) {
+              // Invalid / expired / forged JWT alongside a valid
+              // api-key. The api-key already authenticated the request;
+              // we simply have no second identity to attribute.
+              request.log.debug(
+                { error },
+                'Dual-header: JWT verify failed; recording api-key attribution only'
+              );
+            }
+          }
           return;
         }
         // Reply already sent by helper

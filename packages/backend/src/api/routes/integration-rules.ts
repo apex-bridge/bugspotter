@@ -181,7 +181,7 @@ export async function registerIntegrationRuleRoutes(
         projectId,
         integrationId: integration.id,
         rulesCount: rules.length,
-        userId: request.authUser?.id ?? null,
+        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -227,7 +227,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         name,
         filtersCount: filters.length,
-        userId: request.authUser?.id ?? null,
+        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -284,7 +284,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         updateFields: Object.keys(updateData),
-        userId: request.authUser?.id ?? null,
+        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -331,7 +331,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         ruleName: rule.name,
-        userId: request.authUser?.id ?? null,
+        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -488,7 +488,7 @@ export async function registerIntegrationRuleRoutes(
         targetProjectId,
         targetIntegrationId: targetIntegration.id,
         platform,
-        userId: request.authUser?.id ?? null,
+        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
         apiKeyId: request.apiKey?.id ?? null,
       });
 

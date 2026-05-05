@@ -42,6 +42,28 @@ declare module 'fastify' {
     /** Share token for anonymous bug report access - set by auth middleware */
     authShareToken?: { bug_report_id: string };
 
+    /**
+     * Shadow JWT identity for audit attribution on dual-header (api-key
+     * + JWT) requests. Set by the auth middleware AFTER a successful
+     * api-key authentication when an `Authorization: Bearer` header is
+     * also present and its signature verifies.
+     *
+     * **Attribution-only — never authz.** The api-key path is the
+     * authoritative auth (api-key wins precedence), so `request.authUser`
+     * stays undefined on this code path. This field exists purely so
+     * audit consumers can record both identities and close the GH-97
+     * dual-header gap.
+     *
+     * Carries only `userId` from the JWT claims — no DB lookup, no
+     * user-existence verification. The semantic is "this is the user
+     * the JWT claimed to be at request time," which is the right level
+     * for an audit trail (a historical record of what credentials were
+     * presented). Anything that needs a fresh user object should
+     * continue to read from `authUser` and accept that this code path
+     * doesn't populate it.
+     */
+    jwtUserIdentity?: { id: string };
+
     /** JWT verification method - provided by @fastify/jwt plugin */
     jwtVerify(): Promise<{ userId: string }>;
 
