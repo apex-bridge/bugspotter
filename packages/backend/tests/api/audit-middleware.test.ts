@@ -610,19 +610,19 @@ describe('Audit Middleware', () => {
       expect(details.api_key_id).toBe(key.id);
     });
 
-    it('records user_id null on dual-header request (full-scope key) when JWT is invalid', async () => {
+    it('records user_id null on dual-header request when JWT is invalid', async () => {
       // Defense-in-depth: a forged / expired / malformed JWT alongside
-      // a full-scope api-key must not poison the audit row. The api-key
-      // already authenticated the request; we simply have no second
-      // identity to attribute. user_id falls back to null rather than
-      // recording an unverified claim.
+      // a valid api-key must not poison the audit row, AND must not
+      // 500 the request. `jwt.verify` runs first in middleware.ts and
+      // throws on malformed input — the surrounding try/catch swallows
+      // it so api-key auth (already successful at this point) carries
+      // the request through with user_id null. Removing that try/catch
+      // would surface as a 500 here.
       //
-      // Note this test exits the cross-check at the singleton-only
-      // guard (full-scope key → length !== 1 → false) before
-      // `jwt.verify` is even reached, so the bad-JWT-handling
-      // try/catch isn't actually exercised here. The companion test
-      // below uses a single-project key to exercise the JWT-verify
-      // failure path.
+      // The api-key shape (full-scope vs single-project) doesn't change
+      // which path runs for this test — both reach the same
+      // `jwt.verify` throw before any singleton-guard check. Full-scope
+      // is used here just to keep the fixture minimal.
       const apiKeyService = new ApiKeyService(db);
       const { plaintext, key } = await apiKeyService.createKey({
         name: `audit-id-dual-bad-jwt-${Date.now()}`,
@@ -644,47 +644,6 @@ describe('Audit Middleware', () => {
         payload: JSON.stringify({ status: 'in-progress' }),
       });
 
-      expect(response.statusCode).toBe(200);
-
-      const log = await waitForReportAudit(bugReportId);
-      expect(log.user_id).toBeNull();
-      const details = log.details as { api_key_id?: string };
-      expect(details.api_key_id).toBe(key.id);
-    });
-
-    it('records user_id null on dual-header request (single-project key) when JWT is invalid', async () => {
-      // Companion to the full-scope test above — exercises the
-      // JWT-verify failure path that the full-scope test bypasses.
-      // With `allowed_projects: [projectId]`, the cross-check
-      // doesn't early-exit at the singleton guard, so we actually
-      // reach `request.server.jwt.verify(token)`. The malformed
-      // JWT must throw and be swallowed by the surrounding try/catch
-      // — without that try/catch, the error would propagate to
-      // Fastify's global handler and surface as a 500 response.
-      const apiKeyService = new ApiKeyService(db);
-      const { plaintext, key } = await apiKeyService.createKey({
-        name: `audit-id-dual-bad-jwt-singleton-${Date.now()}`,
-        type: 'development',
-        permission_scope: 'full',
-        permissions: ['bugs:read', 'bugs:write'],
-        created_by: testUserId,
-        allowed_projects: [projectId],
-      });
-
-      const response = await server.inject({
-        method: 'PATCH',
-        url: `/api/v1/reports/${bugReportId}`,
-        headers: {
-          authorization: 'Bearer not.a.valid.jwt',
-          'x-api-key': plaintext,
-          'content-type': 'application/json',
-        },
-        payload: JSON.stringify({ status: 'in-progress' }),
-      });
-
-      // 200 (NOT 500) — the JWT-verify error must be swallowed by
-      // the try/catch in middleware.ts; the api-key is authoritative
-      // and the request must not fail because the alongside JWT is bad.
       expect(response.statusCode).toBe(200);
 
       const log = await waitForReportAudit(bugReportId);

@@ -57,7 +57,22 @@ export function createAuthMiddleware(db: DatabaseClient) {
       const startTime = Date.now();
 
       try {
-        await handleNewApiKeyAuth(apiKeyHeader, apiKeyService, db, request, reply, startTime);
+        // Return value is intentionally discarded — `handleNewApiKeyAuth`'s
+        // boolean has two semantically different `true` meanings (auth
+        // succeeded vs auth rejected & 401 already sent). The dual-header
+        // attribution block below uses `request.apiKey` (only set on the
+        // genuine success path) as the source of truth, not this return.
+        // Explicit `void` so a future reader doesn't "fix" the unused
+        // result by re-adding `if (success) return` and re-introducing
+        // the revoked-key audit-poisoning bug from round 4.
+        void (await handleNewApiKeyAuth(
+          apiKeyHeader,
+          apiKeyService,
+          db,
+          request,
+          reply,
+          startTime
+        ));
         // Closes the GH-97 dual-header gap: when a JWT is presented
         // alongside the api-key, capture the JWT user's id for AUDIT
         // ATTRIBUTION ONLY. `request.authUser` stays undefined — the

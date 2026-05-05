@@ -35,7 +35,10 @@
 import type { FastifyRequest } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import type { ApiKey } from '../../db/types.js';
+import { getLogger } from '../../logger.js';
 import { lookupInheritedProjectRole } from './resource.js';
+
+const logger = getLogger();
 
 export function getAuditUserId(request: FastifyRequest): string | null {
   return request.authUser?.id ?? request.jwtUserIdentity?.id ?? null;
@@ -151,7 +154,17 @@ export async function jwtUserCanAttributeForApiKey(
       lookupInheritedProjectRole(projectId, userId, db, organizationId),
     ]);
     return explicit !== null || inherited !== null;
-  } catch {
+  } catch (err) {
+    // Fail-closed (don't fail the request) but surface the error —
+    // a transient DB hiccup degrading attribution to null is fine
+    // for a single request, but a persistent error (schema change,
+    // query bug, connection pool exhaustion) would silently
+    // degrade attribution for every dual-header request with no
+    // observable signal.
+    logger.warn(
+      { err, userId, projectId, apiKeyId: apiKey.id },
+      'jwtUserCanAttributeForApiKey: role lookup failed; falling back to no attribution'
+    );
     return false;
   }
 }
