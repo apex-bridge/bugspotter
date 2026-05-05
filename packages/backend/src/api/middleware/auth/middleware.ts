@@ -104,9 +104,14 @@ export function createAuthMiddleware(db: DatabaseClient) {
         //
         // On any failure we fall through silently; this must never
         // fail an otherwise-successful api-key request.
-        if (request.apiKey && authorization?.startsWith('Bearer ')) {
+        //
+        // Normalize: HTTP forbids multiple Authorization headers but
+        // Fastify types it as `string | string[] | undefined`. Take
+        // the first if it's an array so `.startsWith` doesn't TypeError.
+        const authHeader = Array.isArray(authorization) ? authorization[0] : authorization;
+        if (request.apiKey && authHeader?.startsWith('Bearer ')) {
           try {
-            const token = authorization.slice('Bearer '.length).trim();
+            const token = authHeader.slice('Bearer '.length).trim();
             const decoded = (await request.server.jwt.verify(token)) as {
               userId?: unknown;
             };
