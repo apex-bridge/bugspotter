@@ -114,7 +114,14 @@ export function createAuthMiddleware(db: DatabaseClient) {
               const canAttribute = await jwtUserCanAttributeForApiKey(
                 db,
                 decoded.userId,
-                request.apiKey
+                request.apiKey,
+                // `handleNewApiKeyAuth` already loaded the project for
+                // single-project keys (handlers.ts:95-100). Reusing
+                // `organization_id` here lets `lookupInheritedProjectRole`
+                // skip its internal findById on the org-inheritance
+                // branch — same optimization the JWT-only path's
+                // `requireProjectAccess` uses.
+                request.authProject?.organization_id
               );
               if (canAttribute) {
                 request.jwtUserIdentity = { id: decoded.userId };
@@ -201,9 +208,18 @@ export function createBodyAuthMiddleware(db: DatabaseClient) {
       try {
         const success = await handleShareTokenAuth(request, db);
         if (success) {
-          // Clear previous authentication to prioritize shareToken
+          // Clear previous authentication to prioritize shareToken.
+          // `jwtUserIdentity` MUST be cleared too — the dual-header
+          // block in `createAuthMiddleware` (onRequest) may have
+          // already populated it for an api-key + JWT pair, and
+          // since `getAuditUserId` falls back to `jwtUserIdentity?.id`
+          // when `authUser` is unset, leaving it set here would
+          // attribute the shareToken-authenticated action to the
+          // JWT user — exactly the cross-channel attribution
+          // poisoning this PR was designed to close.
           request.authUser = undefined;
           request.apiKey = undefined;
+          request.jwtUserIdentity = undefined;
           return;
         }
         // Invalid share token - fail authentication

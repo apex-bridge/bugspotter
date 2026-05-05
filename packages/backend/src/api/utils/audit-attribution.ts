@@ -85,7 +85,21 @@ export function getAuditUserId(request: FastifyRequest): string | null {
 export async function jwtUserCanAttributeForApiKey(
   db: DatabaseClient,
   userId: string,
-  apiKey: ApiKey
+  apiKey: ApiKey,
+  /**
+   * The api-key's target project's `organization_id`, if the caller
+   * already loaded the project. `handleNewApiKeyAuth` always loads
+   * the project for single-project keys ([handlers.ts:95-100]) and
+   * stores it in `request.authProject`, and that's the only api-key
+   * shape this helper attributes for, so the call site in the auth
+   * middleware can pass `request.authProject?.organization_id`
+   * directly to skip the redundant `db.projects.findById` that
+   * `lookupInheritedProjectRole` would otherwise run internally.
+   * Same optimization the standard `requireProjectAccess` uses on
+   * the JWT-only path. `undefined` is the safe default — the helper
+   * just falls back to its own lookup.
+   */
+  organizationId?: string | null
 ): Promise<boolean> {
   // Singleton-only: only attribute when the api-key's scope is
   // unambiguous. Anything else (multi-project or full-scope) leaves
@@ -104,7 +118,7 @@ export async function jwtUserCanAttributeForApiKey(
     // is the typical access path. Fail-closed via the outer try/catch.
     const [explicit, inherited] = await Promise.all([
       db.projects.getUserRole(projectId, userId),
-      lookupInheritedProjectRole(projectId, userId, db),
+      lookupInheritedProjectRole(projectId, userId, db, organizationId),
     ]);
     return explicit !== null || inherited !== null;
   } catch {
