@@ -829,19 +829,17 @@ describe('Audit Middleware', () => {
     it('records user_id null on dual-header request when the JWT user no longer exists', async () => {
       // Defense-in-depth: a JWT for a deleted user (still
       // signature-valid until expiry) must not be recorded as the
-      // actor. The DB existence check after jwtVerify ensures we
-      // attribute only to users that still exist at request time.
-      // Without the check, a revoked / disabled / deleted user's
-      // cached JWT could continue to poison attribution alongside any
-      // valid api-key.
+      // actor. There is no longer a separate `findById` existence
+      // check — `jwtUserCanAttributeForApiKey` does the existence
+      // check transparently because neither `getUserRole` nor
+      // `lookupInheritedProjectRole` can match a row for a userId
+      // that doesn't exist (no `project_members` row, no
+      // `organization_members` row), so the helper returns false.
       //
-      // Use a single-project api-key here (not full-scope) so the
-      // `jwtUserCanAttributeForApiKey` early-exit on multi-project /
-      // full-scope keys doesn't short-circuit the existence check we
-      // actually want to exercise. With `allowed_projects: [projectId]`,
-      // the existence check is reachable; the ghost UUID then fails
-      // it and yields user_id null — pinning the existence check
-      // specifically rather than the broader scope guard.
+      // The api-key here is single-project (allowed_projects =
+      // [projectId]) so we exercise the cross-check branch rather
+      // than the multi-project / full-scope skip. The ghost UUID
+      // then fails both role lookups and yields user_id null.
       const apiKeyService = new ApiKeyService(db);
       const { plaintext, key } = await apiKeyService.createKey({
         name: `audit-id-dual-deleted-user-${Date.now()}`,

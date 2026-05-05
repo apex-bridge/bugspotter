@@ -46,23 +46,27 @@ declare module 'fastify' {
      * Shadow JWT identity for audit attribution on dual-header (api-key
      * + JWT) requests. Set by the auth middleware AFTER a successful
      * api-key authentication when an `Authorization: Bearer` header is
-     * also present and ALL THREE of these checks pass:
+     * also present and BOTH of these checks pass:
      *
-     *   1. JWT signature verifies (`request.jwtVerify`)
-     *   2. The claimed user exists in the database
-     *      (`db.users.findById`) — mirrors `handleJwtAuth`'s
-     *      existence check so a deleted / disabled-user JWT can't
-     *      poison attribution
-     *   3. The api-key targets exactly one project
+     *   1. JWT signature verifies (via `fastify.jwt.verify(token)`,
+     *      not `request.jwtVerify()` — the latter writes the decoded
+     *      claims to `request.user` as a `@fastify/jwt` side effect,
+     *      which would silently expose a JWT identity to any future
+     *      hook / plugin / route guard that uses the idiomatic
+     *      `request.user` field. The instance method validates
+     *      signature without touching the request).
+     *   2. The api-key targets exactly one project
      *      (`allowed_projects.length === 1`) AND the user has an
      *      effective role (explicit `project_members` OR org-inherited
      *      via the project's organization) on that project, checked
-     *      by `jwtUserCanAttributeForApiKey`. Multi-project and
-     *      full-scope api-keys skip attribution entirely — at this
-     *      point in the lifecycle the request-target is ambiguous,
-     *      so we can't unambiguously verify the JWT user has a
-     *      relationship to the project the request actually
-     *      operates on
+     *      by `jwtUserCanAttributeForApiKey`. Non-existent users are
+     *      rejected transparently here: neither the explicit-role nor
+     *      the inherited-role query can match a row, so the helper
+     *      returns false. Multi-project and full-scope api-keys also
+     *      skip — at this point in the lifecycle the request-target
+     *      is ambiguous, so we can't unambiguously verify the JWT
+     *      user has a relationship to the project the request will
+     *      actually operate on.
      *
      * Failing any of those leaves the field undefined and audit rows
      * record `user_id: null` — the same honest "unknown human actor"

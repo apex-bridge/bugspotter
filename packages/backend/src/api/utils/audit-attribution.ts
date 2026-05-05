@@ -97,12 +97,16 @@ export async function jwtUserCanAttributeForApiKey(
   const projectId = apiKey.allowed_projects[0];
 
   try {
-    const explicit = await db.projects.getUserRole(projectId, userId);
-    if (explicit) {
-      return true;
-    }
-    const inherited = await lookupInheritedProjectRole(projectId, userId, db);
-    return inherited !== null;
+    // Parallel — same pattern `requireProjectAccess` uses (auth.md §3).
+    // Slightly more DB load on the hit-explicit case (one extra query
+    // that wasn't needed) but lower worst-case latency on the
+    // org-inheritance case, which dominates SaaS where org membership
+    // is the typical access path. Fail-closed via the outer try/catch.
+    const [explicit, inherited] = await Promise.all([
+      db.projects.getUserRole(projectId, userId),
+      lookupInheritedProjectRole(projectId, userId, db),
+    ]);
+    return explicit !== null || inherited !== null;
   } catch {
     return false;
   }
