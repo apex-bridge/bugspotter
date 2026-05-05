@@ -162,8 +162,13 @@ export async function jwtUserCanAttributeForApiKey(
     // degrade attribution for every dual-header request with no
     // observable signal.
     logger.warn(
-      { err, userId, projectId, apiKeyId: apiKey.id },
-      'jwtUserCanAttributeForApiKey: role lookup failed; falling back to no attribution'
+      'jwtUserCanAttributeForApiKey: role lookup failed; falling back to no attribution',
+      {
+        err: err instanceof Error ? err.message : String(err),
+        userId,
+        projectId,
+        apiKeyId: apiKey.id,
+      }
     );
     return false;
   }
