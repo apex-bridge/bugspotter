@@ -15,6 +15,7 @@ import { getCacheService } from '../../cache/index.js';
 import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import type { FilterCondition, ThrottleConfig } from '../../types/notifications.js';
 import type { FieldMappings, AttachmentConfig } from '@bugspotter/types';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 import {
   createIntegrationRuleSchema,
   updateIntegrationRuleSchema,
@@ -181,7 +182,7 @@ export async function registerIntegrationRuleRoutes(
         projectId,
         integrationId: integration.id,
         rulesCount: rules.length,
-        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -227,7 +228,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         name,
         filtersCount: filters.length,
-        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -284,7 +285,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         updateFields: Object.keys(updateData),
-        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -331,7 +332,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         ruleId,
         ruleName: rule.name,
-        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -488,7 +489,7 @@ export async function registerIntegrationRuleRoutes(
         targetProjectId,
         targetIntegrationId: targetIntegration.id,
         platform,
-        userId: request.authUser?.id ?? request.jwtUserIdentity?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 

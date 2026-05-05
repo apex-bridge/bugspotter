@@ -6,6 +6,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import { getLogger } from '../../logger.js';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 
 const logger = getLogger();
 
@@ -206,8 +207,7 @@ export function createAuditMiddleware(db: DatabaseClient) {
     // Schema-level `audit_logs.api_key_id` column is still deferred
     // (GH-104) — until that lands, api-key attribution queries scan
     // the `details` JSONB.
-    const authUser = request.authUser;
-    const userId = authUser?.id ?? request.jwtUserIdentity?.id ?? null;
+    const userId = getAuditUserId(request);
     const apiKeyId = request.apiKey?.id ?? null;
 
     // Capture organization context (set by guard/org-access middleware on org/project routes)

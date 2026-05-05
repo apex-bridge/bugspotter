@@ -56,40 +56,54 @@ export function createAuthMiddleware(db: DatabaseClient) {
       const startTime = Date.now();
 
       try {
-        const success = await handleNewApiKeyAuth(
-          apiKeyHeader,
-          apiKeyService,
-          db,
-          request,
-          reply,
-          startTime
-        );
-        if (success) {
-          // Closes the GH-97 dual-header gap: when a JWT is presented
-          // alongside the api-key, capture the JWT user's id for AUDIT
-          // ATTRIBUTION ONLY. `request.authUser` stays undefined — the
-          // api-key remains the authoritative authz path (precedence
-          // unchanged). On any failure we fall through silently; this
-          // must never fail an otherwise-successful api-key request.
-          if (authorization?.startsWith('Bearer ')) {
-            try {
-              const decoded = await request.jwtVerify();
-              if (decoded?.userId && typeof decoded.userId === 'string') {
-                request.jwtUserIdentity = { id: decoded.userId };
+        await handleNewApiKeyAuth(apiKeyHeader, apiKeyService, db, request, reply, startTime);
+        // Closes the GH-97 dual-header gap: when a JWT is presented
+        // alongside the api-key, capture the JWT user's id for AUDIT
+        // ATTRIBUTION ONLY. `request.authUser` stays undefined — the
+        // api-key remains the authoritative authz path (precedence
+        // unchanged).
+        //
+        // Guard on `request.apiKey`, not on `handleNewApiKeyAuth`'s
+        // return value. The handler returns `true` for revoked /
+        // expired / inactive keys after sending a 401 (handlers.ts:
+        // ~66-74) — that's "request was handled," not "authentication
+        // succeeded." `request.apiKey` is only set on the genuine
+        // success path (handlers.ts:91), so it's the right signal
+        // for "should we record dual-header attribution." Without
+        // this, a rejected api-key request with an accompanying valid
+        // JWT would poison `audit_logs.user_id` with the JWT user's
+        // id on a 401-rejected row.
+        //
+        // We also DB-verify the JWT user before recording the claim
+        // — `jwtVerify()` confirms signature only, not that the
+        // claimed user exists or is active. Without the lookup, an
+        // actor with a leaked api-key could attribute to any deleted
+        // / disabled / arbitrary user by presenting their JWT
+        // alongside the key. The JWT-only path (handleJwtAuth) does
+        // this lookup; we mirror it here. On any failure we fall
+        // through silently; this must never fail an otherwise-
+        // successful api-key request.
+        if (request.apiKey && authorization?.startsWith('Bearer ')) {
+          try {
+            const decoded = await request.jwtVerify();
+            if (decoded?.userId && typeof decoded.userId === 'string') {
+              const user = await db.users.findById(decoded.userId);
+              if (user) {
+                request.jwtUserIdentity = { id: user.id };
               }
-            } catch (error) {
-              // Invalid / expired / forged JWT alongside a valid
-              // api-key. The api-key already authenticated the request;
-              // we simply have no second identity to attribute.
-              request.log.debug(
-                { error },
-                'Dual-header: JWT verify failed; recording api-key attribution only'
-              );
             }
+          } catch (error) {
+            // Invalid / expired / forged JWT alongside a valid
+            // api-key. The api-key already authenticated the request;
+            // we simply have no second identity to attribute.
+            request.log.debug(
+              { error },
+              'Dual-header: JWT verify failed; recording api-key attribution only'
+            );
           }
-          return;
         }
-        // Reply already sent by helper
+        // Whether api-key auth succeeded or sent its own 401, we're
+        // done at this layer — the JWT block below must not re-run.
         return;
       } catch (error) {
         request.log.error({ error }, 'Error during API key authentication');

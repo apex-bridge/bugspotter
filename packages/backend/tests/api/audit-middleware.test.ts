@@ -634,6 +634,99 @@ describe('Audit Middleware', () => {
       expect(details.api_key_id).toBe(key.id);
     });
 
+    it('does not poison the audit row when a revoked api-key is presented alongside a valid JWT', async () => {
+      // `handleNewApiKeyAuth` returns true for revoked / expired /
+      // inactive keys (after sending its own 401), and that "true" is
+      // *not* "auth succeeded." The dual-header attribution block in
+      // auth/middleware.ts must guard on `request.apiKey` (only set
+      // on the genuine success path), not on the handler return —
+      // otherwise a rejected api-key request with a valid JWT would
+      // record the JWT user as the actor on a 401-rejected row.
+      //
+      // What this test catches if it ever turns red:
+      //   - Reverting the guard to `if (success) {`
+      //   - Moving the jwtVerify block before the api-key check
+      //   - Setting `request.apiKey` on a non-success path
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-revoked-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+      // Revoke the key so handleNewApiKeyAuth sends a 401 and returns
+      // true without populating request.apiKey.
+      await apiKeyService.revokeKey(key.id, testUserId, 'test fixture');
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      // 401 — revoked api-key is rejected at auth time; no JWT
+      // fallback (auth precedence is short-circuit on api-key).
+      expect(response.statusCode).toBe(401);
+
+      // Audit row IS still written (audit middleware fires on
+      // onResponse for non-excluded routes regardless of status).
+      // user_id MUST be null — neither identity is authoritative for
+      // this request.
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      expect(log.success).toBe(false);
+    });
+
+    it('records user_id null on dual-header request when the JWT user no longer exists', async () => {
+      // Defense-in-depth: a JWT for a deleted user (still
+      // signature-valid until expiry) must not be recorded as the
+      // actor. The DB existence check after jwtVerify ensures we
+      // attribute only to users that still exist at request time.
+      // Without the check, a revoked / disabled / deleted user's
+      // cached JWT could continue to poison attribution alongside any
+      // valid api-key.
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-deleted-user-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+
+      // JWT minted for a userId that doesn't exist in the DB.
+      const ghostJwt = server.jwt.sign(
+        { userId: '00000000-0000-0000-0000-000000000000', isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${ghostJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
     it('records api_key_id null on JWT-only request', async () => {
       const response = await server.inject({
         method: 'PATCH',
