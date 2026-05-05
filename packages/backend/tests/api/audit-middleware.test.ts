@@ -1037,6 +1037,76 @@ describe('Audit Middleware', () => {
       expect(details.api_key_id).toBe(key.id);
     });
 
+    it('does not attribute on dual-header when JWT user is member of a DIFFERENT org from the api-key project', async () => {
+      // Tighter than the outsider cross-org test: the JWT user IS a
+      // real org member, just of the wrong org. `lookupInheritedProjectRole`
+      // is called with `organizationId = orgA.id` (from
+      // `request.authProject.organization_id`), so it must scope its
+      // membership query specifically to orgA — NOT match any org the
+      // user happens to belong to. A regression where the helper
+      // returns `true` for "user is a member of any org" rather than
+      // "user is a member of THIS org" would attribute an org-B user
+      // on org-A's project.
+      const orgA = await db.organizations.create({
+        name: `audit-id-orgA-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        subdomain: `audit-id-orga-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      });
+      const orgB = await db.organizations.create({
+        name: `audit-id-orgB-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        subdomain: `audit-id-orgb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      });
+      const projectInA = await db.projects.create({
+        name: `audit-id-projA-${Date.now()}-${Math.random()}`,
+        created_by: testUserId,
+        organization_id: orgA.id,
+      });
+      const reportInA = await db.bugReports.create({
+        project_id: projectInA.id,
+        title: 'cross-org membership fixture',
+        description: 'JWT user is in org B; api-key targets project in org A',
+      });
+
+      // User belongs to org B, NOT org A. No project_members row in A.
+      const orgBOnly = await db.users.create({
+        email: `org-b-only-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      await db.organizationMembers.createWithUser(orgB.id, orgBOnly.id, 'member');
+      const orgBOnlyJwt = server.jwt.sign(
+        { userId: orgBOnly.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-cross-org-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectInA.id],
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${reportInA.id}`,
+        headers: {
+          authorization: `Bearer ${orgBOnlyJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(reportInA.id);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
     it('does not attribute on dual-header POST when shareToken in body takes over auth', async () => {
       // Critical regression guard: `createBodyAuthMiddleware`
       // (preValidation) is supposed to clear all prior auth fields
