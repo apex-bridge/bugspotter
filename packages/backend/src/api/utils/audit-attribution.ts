@@ -33,7 +33,81 @@
  */
 
 import type { FastifyRequest } from 'fastify';
+import type { DatabaseClient } from '../../db/client.js';
+import type { ApiKey } from '../../db/types.js';
+import { lookupInheritedProjectRole } from './resource.js';
 
 export function getAuditUserId(request: FastifyRequest): string | null {
   return request.authUser?.id ?? request.jwtUserIdentity?.id ?? null;
+}
+
+/**
+ * Cross-check that a JWT user has a verifiable access relationship
+ * with an api-key's scope before recording them as the audit actor on
+ * a dual-header request.
+ *
+ * Why this exists. The attribution-only JWT branch in auth/middleware.ts
+ * verifies the JWT signature and confirms the user exists, but
+ * neither check restricts WHICH user can be attributed. Without the
+ * cross-check, an actor with two unrelated credentials — a leaked
+ * api-key for project P and a valid JWT for any user U with no
+ * relationship to P — could plant U.id as the audit actor on every
+ * request against P. The audit trail goes from the honest pre-PR-107
+ * `user_id: null` to an attacker-controlled user_id, which is worse
+ * than null.
+ *
+ * Resolution rules:
+ *   - **Project-scoped api-key** (`allowed_projects` non-empty):
+ *     attribute only if the JWT user has any effective role
+ *     (explicit project_members row OR org-inherited via the
+ *     project's organization) on at least one of the api-key's
+ *     allowed projects. "Effective role" mirrors what
+ *     `requireProjectAccess` enforces on the JWT-only path; without
+ *     this, dual-header would bypass the org-membership boundary
+ *     that JWT-only requests are bound by.
+ *   - **Full-scope api-key** (`allowed_projects` null or empty):
+ *     no verifiable project relationship to cross-check. Skip
+ *     attribution; audit row records `user_id: null`. This is the
+ *     same shape as pre-PR-107 for these requests, so it doesn't
+ *     regress anything — full-scope api-keys are typically platform-
+ *     level credentials where the operator-vs-key relationship
+ *     can't be inferred from headers alone.
+ *
+ * Failure mode is fail-closed: any error during the lookup yields
+ * `false` rather than throwing. The api-key already authenticated
+ * the request; a transient DB hiccup during attribution must not
+ * fail the request, but it also must not result in unverified
+ * attribution.
+ */
+export async function jwtUserCanAttributeForApiKey(
+  db: DatabaseClient,
+  userId: string,
+  apiKey: ApiKey
+): Promise<boolean> {
+  if (!apiKey.allowed_projects || apiKey.allowed_projects.length === 0) {
+    return false;
+  }
+
+  try {
+    const explicitRoles = await db.projects.getUserRolesForProjects(
+      apiKey.allowed_projects,
+      userId
+    );
+    for (const role of explicitRoles.values()) {
+      if (role !== null) {
+        return true;
+      }
+    }
+
+    for (const projectId of apiKey.allowed_projects) {
+      const inherited = await lookupInheritedProjectRole(projectId, userId, db);
+      if (inherited) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
 }

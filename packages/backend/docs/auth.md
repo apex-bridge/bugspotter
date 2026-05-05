@@ -52,16 +52,32 @@ API key validates:
 - `request.authUser` stays **undefined** — authz precedence is
   unchanged; the api-key path remains authoritative
 - `request.jwtUserIdentity` is populated (just `{ id }`) IF the
-  accompanying JWT's signature verifies, otherwise undefined. This
-  is **attribution-only** — never authz. Audit consumers fall back
-  to `jwtUserIdentity?.id` when `authUser` is unset, so dual-header
-  requests record both the human and machine actor
+  accompanying JWT (a) verifies its signature, (b) names a user
+  that still exists in the DB, and (c) the user has an effective
+  role (explicit or org-inherited) on at least one of the api-key's
+  `allowed_projects`. Failing any of those — invalid signature,
+  deleted user, or unrelated user with no membership in the api-key's
+  scope — leaves the field undefined. **Attribution-only — never
+  authz.** Audit consumers fall back to `jwtUserIdentity?.id` when
+  `authUser` is unset, so dual-header requests where all three checks
+  pass record both the human and machine actor
+
+Why the scope cross-check matters: without it, an actor with two
+unrelated credentials — a leaked api-key for project P plus any valid
+JWT for any user with no relationship to P — could plant that user as
+the audit actor for every request against P. That would make the audit
+trail strictly worse than the honest `user_id: null` of the pre-PR-107
+shape. Full-scope api-keys (no `allowed_projects`) have no project
+relationship to verify against, so attribution falls back to `null`
+for those — matching the pre-PR-107 shape exactly.
 
 The asymmetry between authz (api-key wins) and attribution (record
-both) closed [#97](https://github.com/apex-bridge/bugspotter/issues/97):
+both, but only when the JWT user has a verifiable relationship to the
+api-key's scope) closed [#97](https://github.com/apex-bridge/bugspotter/issues/97):
 the audit trail now never silently drops the human actor when an
-api-key is presented alongside a JWT, while the authz path never
-escalates the JWT user above what the api-key was scoped for.
+api-key is presented alongside a JWT for a related user, while the
+authz path never escalates the JWT user above what the api-key was
+scoped for.
 
 ---
 

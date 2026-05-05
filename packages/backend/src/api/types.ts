@@ -46,21 +46,32 @@ declare module 'fastify' {
      * Shadow JWT identity for audit attribution on dual-header (api-key
      * + JWT) requests. Set by the auth middleware AFTER a successful
      * api-key authentication when an `Authorization: Bearer` header is
-     * also present and its signature verifies.
+     * also present and ALL THREE of these checks pass:
+     *
+     *   1. JWT signature verifies (`request.jwtVerify`)
+     *   2. The claimed user exists in the database
+     *      (`db.users.findById`) — mirrors `handleJwtAuth`'s
+     *      existence check so a deleted / disabled-user JWT can't
+     *      poison attribution
+     *   3. The user has an effective role on at least one of the
+     *      api-key's `allowed_projects` (explicit project_members or
+     *      org-inherited via the project's organization), checked by
+     *      `jwtUserCanAttributeForApiKey`. Full-scope api-keys
+     *      (`allowed_projects` null/empty) skip attribution entirely
+     *      — there's no verifiable project relationship to ground
+     *      the cross-check on
+     *
+     * Failing any of those leaves the field undefined and audit rows
+     * record `user_id: null` — the same honest "unknown human actor"
+     * shape pre-PR-107 had.
      *
      * **Attribution-only — never authz.** The api-key path is the
-     * authoritative auth (api-key wins precedence), so `request.authUser`
+     * authoritative auth (api-key wins precedence); `request.authUser`
      * stays undefined on this code path. This field exists purely so
-     * audit consumers can record both identities and close the GH-97
-     * dual-header gap.
-     *
-     * Carries only `userId` from the JWT claims — no DB lookup, no
-     * user-existence verification. The semantic is "this is the user
-     * the JWT claimed to be at request time," which is the right level
-     * for an audit trail (a historical record of what credentials were
-     * presented). Anything that needs a fresh user object should
-     * continue to read from `authUser` and accept that this code path
-     * doesn't populate it.
+     * audit consumers can record both identities for dual-header
+     * requests where the JWT user has a verifiable relationship to the
+     * api-key's scope. Anything that needs a fresh user object should
+     * continue to read from `authUser`.
      */
     jwtUserIdentity?: { id: string };
 

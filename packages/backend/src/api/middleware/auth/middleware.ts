@@ -8,6 +8,7 @@ import type { DatabaseClient } from '../../../db/client.js';
 import { ApiKeyService } from '../../../services/api-key/index.js';
 import { handleNewApiKeyAuth, handleJwtAuth, handleShareTokenAuth } from './handlers.js';
 import { sendUnauthorized, sendInternalError } from './responses.js';
+import { jwtUserCanAttributeForApiKey } from '../../utils/audit-attribution.js';
 
 /**
  * Authentication middleware factory
@@ -74,22 +75,45 @@ export function createAuthMiddleware(db: DatabaseClient) {
         // JWT would poison `audit_logs.user_id` with the JWT user's
         // id on a 401-rejected row.
         //
-        // We also DB-verify the JWT user before recording the claim
-        // — `jwtVerify()` confirms signature only, not that the
-        // claimed user exists or is active. Without the lookup, an
-        // actor with a leaked api-key could attribute to any deleted
-        // / disabled / arbitrary user by presenting their JWT
-        // alongside the key. The JWT-only path (handleJwtAuth) does
-        // this lookup; we mirror it here. On any failure we fall
-        // through silently; this must never fail an otherwise-
-        // successful api-key request.
+        // We also DB-verify the JWT user AND cross-check that the
+        // user has access to the api-key's scope before recording
+        // the claim:
+        //
+        //   - `jwtVerify()` confirms signature only, not that the
+        //     claimed user exists or is active. Without the
+        //     existence check, an actor with a leaked api-key could
+        //     attribute to any deleted / disabled user by presenting
+        //     their cached JWT.
+        //   - The scope cross-check (`jwtUserCanAttributeForApiKey`)
+        //     verifies the JWT user has an effective role on at
+        //     least one of the api-key's allowed projects. Without
+        //     it, an actor with two unrelated credentials — a leaked
+        //     api-key for project P and a valid JWT for any user
+        //     with no relationship to P — could plant that user.id
+        //     as the audit actor on every request against P. That
+        //     would make the audit trail strictly worse than the
+        //     pre-PR-107 honest `user_id: null`. Full-scope api-keys
+        //     have no verifiable project relationship; the helper
+        //     returns false for those, so attribution falls back to
+        //     null (matching pre-PR-107 shape for full-scope dual-
+        //     header).
+        //
+        // On any failure we fall through silently; this must never
+        // fail an otherwise-successful api-key request.
         if (request.apiKey && authorization?.startsWith('Bearer ')) {
           try {
             const decoded = await request.jwtVerify();
             if (decoded?.userId && typeof decoded.userId === 'string') {
               const user = await db.users.findById(decoded.userId);
               if (user) {
-                request.jwtUserIdentity = { id: user.id };
+                const canAttribute = await jwtUserCanAttributeForApiKey(
+                  db,
+                  user.id,
+                  request.apiKey
+                );
+                if (canAttribute) {
+                  request.jwtUserIdentity = { id: user.id };
+                }
               }
             }
           } catch (error) {
