@@ -53,13 +53,16 @@ declare module 'fastify' {
      *      (`db.users.findById`) — mirrors `handleJwtAuth`'s
      *      existence check so a deleted / disabled-user JWT can't
      *      poison attribution
-     *   3. The user has an effective role on at least one of the
-     *      api-key's `allowed_projects` (explicit project_members or
-     *      org-inherited via the project's organization), checked by
-     *      `jwtUserCanAttributeForApiKey`. Full-scope api-keys
-     *      (`allowed_projects` null/empty) skip attribution entirely
-     *      — there's no verifiable project relationship to ground
-     *      the cross-check on
+     *   3. The api-key targets exactly one project
+     *      (`allowed_projects.length === 1`) AND the user has an
+     *      effective role (explicit `project_members` OR org-inherited
+     *      via the project's organization) on that project, checked
+     *      by `jwtUserCanAttributeForApiKey`. Multi-project and
+     *      full-scope api-keys skip attribution entirely — at this
+     *      point in the lifecycle the request-target is ambiguous,
+     *      so we can't unambiguously verify the JWT user has a
+     *      relationship to the project the request actually
+     *      operates on
      *
      * Failing any of those leaves the field undefined and audit rows
      * record `user_id: null` — the same honest "unknown human actor"

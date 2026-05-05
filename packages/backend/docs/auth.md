@@ -53,23 +53,31 @@ API key validates:
   unchanged; the api-key path remains authoritative
 - `request.jwtUserIdentity` is populated (just `{ id }`) IF the
   accompanying JWT (a) verifies its signature, (b) names a user
-  that still exists in the DB, and (c) the user has an effective
-  role (explicit or org-inherited) on at least one of the api-key's
-  `allowed_projects`. Failing any of those — invalid signature,
-  deleted user, or unrelated user with no membership in the api-key's
-  scope — leaves the field undefined. **Attribution-only — never
-  authz.** Audit consumers fall back to `jwtUserIdentity?.id` when
-  `authUser` is unset, so dual-header requests where all three checks
-  pass record both the human and machine actor
+  that still exists in the DB, and (c) the api-key targets exactly
+  one project (`allowed_projects.length === 1`) AND the user has an
+  effective role (explicit or org-inherited) on that project.
+  Failing any of those — invalid signature, deleted user, multi-
+  project or full-scope api-key, or user with no membership in the
+  single targeted project — leaves the field undefined.
+  **Attribution-only — never authz.** Audit consumers fall back to
+  `jwtUserIdentity?.id` when `authUser` is unset, so dual-header
+  requests where all three checks pass record both the human and
+  machine actor
 
-Why the scope cross-check matters: without it, an actor with two
-unrelated credentials — a leaked api-key for project P plus any valid
-JWT for any user with no relationship to P — could plant that user as
-the audit actor for every request against P. That would make the audit
-trail strictly worse than the honest `user_id: null` of the pre-PR-107
-shape. Full-scope api-keys (no `allowed_projects`) have no project
-relationship to verify against, so attribution falls back to `null`
-for those — matching the pre-PR-107 shape exactly.
+Why the scope cross-check matters, and why singleton-only: without
+the check, an actor with two unrelated credentials — a leaked api-key
+for project P plus any valid JWT for any user with no relationship to
+P — could plant that user as the audit actor for every request against
+P. That would be strictly worse than the honest `user_id: null` of the
+pre-PR-107 shape. The singleton restriction is what makes "user has a
+relationship to the api-key's target" verifiable: for a single-project
+key the target is unambiguous; for a multi-project key (`[A, B, C]`) a
+user who is a member of A could be falsely attributed on requests that
+actually targeted B, since the auth middleware doesn't know which
+project the request will end up resolving to. Multi-project and full-
+scope keys therefore fall back to `user_id: null` — matching the
+pre-PR-107 shape exactly so this PR never regresses attribution
+honesty in any case.
 
 The asymmetry between authz (api-key wins) and attribution (record
 both, but only when the JWT user has a verifiable relationship to the

@@ -747,6 +747,48 @@ describe('Audit Middleware', () => {
       expect(details.api_key_id).toBe(key.id);
     });
 
+    it('does not attribute on dual-header with a multi-project api-key (request target ambiguous)', async () => {
+      // Multi-project api-key (allowed_projects.length > 1) can be
+      // used against any of the listed projects, and the auth
+      // middleware doesn't yet know which project this request will
+      // resolve against. Even if the JWT user has access to one of
+      // them, the request might target a different one — so the
+      // singleton-only contract skips attribution rather than risk
+      // false attribution. Closes the multi-project residual case
+      // coderabbit raised on PR-107.
+      const otherProject = await db.projects.create({
+        name: `audit-id-other-project-${Date.now()}-${Math.random()}`,
+        created_by: testUserId,
+      });
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-multi-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId, otherProject.id],
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
     it('does not attribute on dual-header with a full-scope api-key (no verifiable scope to cross-check)', async () => {
       // Full-scope api-keys (allowed_projects = null/empty) have no
       // verifiable project relationship the cross-check can ground
@@ -792,6 +834,14 @@ describe('Audit Middleware', () => {
       // Without the check, a revoked / disabled / deleted user's
       // cached JWT could continue to poison attribution alongside any
       // valid api-key.
+      //
+      // Use a single-project api-key here (not full-scope) so the
+      // `jwtUserCanAttributeForApiKey` early-exit on multi-project /
+      // full-scope keys doesn't short-circuit the existence check we
+      // actually want to exercise. With `allowed_projects: [projectId]`,
+      // the existence check is reachable; the ghost UUID then fails
+      // it and yields user_id null — pinning the existence check
+      // specifically rather than the broader scope guard.
       const apiKeyService = new ApiKeyService(db);
       const { plaintext, key } = await apiKeyService.createKey({
         name: `audit-id-dual-deleted-user-${Date.now()}`,
@@ -799,7 +849,7 @@ describe('Audit Middleware', () => {
         permission_scope: 'full',
         permissions: ['bugs:read', 'bugs:write'],
         created_by: testUserId,
-        allowed_projects: null,
+        allowed_projects: [projectId],
       });
 
       // JWT minted for a userId that doesn't exist in the DB.

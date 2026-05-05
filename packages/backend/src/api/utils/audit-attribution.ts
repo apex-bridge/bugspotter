@@ -57,21 +57,24 @@ export function getAuditUserId(request: FastifyRequest): string | null {
  * than null.
  *
  * Resolution rules:
- *   - **Project-scoped api-key** (`allowed_projects` non-empty):
- *     attribute only if the JWT user has any effective role
- *     (explicit project_members row OR org-inherited via the
- *     project's organization) on at least one of the api-key's
- *     allowed projects. "Effective role" mirrors what
- *     `requireProjectAccess` enforces on the JWT-only path; without
- *     this, dual-header would bypass the org-membership boundary
- *     that JWT-only requests are bound by.
+ *   - **Single-project api-key** (`allowed_projects.length === 1`):
+ *     the api-key targets exactly one project, so the cross-check has
+ *     an unambiguous scope. Attribute only if the JWT user has any
+ *     effective role (explicit `project_members` row OR org-inherited
+ *     via the project's `organization_id`) on that project.
+ *     "Effective role" mirrors what `requireProjectAccess` enforces
+ *     on the JWT-only path; without this, dual-header would bypass
+ *     the org-membership boundary JWT-only requests are bound by.
+ *   - **Multi-project api-key** (`allowed_projects.length > 1`):
+ *     the request could target any of the listed projects, and at
+ *     auth-middleware time we don't know which. A user who is a
+ *     member of project A on a `[A, B, C]` api-key could otherwise
+ *     be falsely attributed for requests against B or C. Skip
+ *     attribution; audit row records `user_id: null`. Pre-PR-107
+ *     also recorded null for these, so this isn't a regression.
  *   - **Full-scope api-key** (`allowed_projects` null or empty):
- *     no verifiable project relationship to cross-check. Skip
- *     attribution; audit row records `user_id: null`. This is the
- *     same shape as pre-PR-107 for these requests, so it doesn't
- *     regress anything — full-scope api-keys are typically platform-
- *     level credentials where the operator-vs-key relationship
- *     can't be inferred from headers alone.
+ *     no verifiable project relationship at all. Skip attribution;
+ *     same shape as pre-PR-107.
  *
  * Failure mode is fail-closed: any error during the lookup yields
  * `false` rather than throwing. The api-key already authenticated
@@ -84,29 +87,22 @@ export async function jwtUserCanAttributeForApiKey(
   userId: string,
   apiKey: ApiKey
 ): Promise<boolean> {
-  if (!apiKey.allowed_projects || apiKey.allowed_projects.length === 0) {
+  // Singleton-only: only attribute when the api-key's scope is
+  // unambiguous. Anything else (multi-project or full-scope) leaves
+  // the request-target ambiguous at this point in the lifecycle.
+  if (!apiKey.allowed_projects || apiKey.allowed_projects.length !== 1) {
     return false;
   }
 
+  const projectId = apiKey.allowed_projects[0];
+
   try {
-    const explicitRoles = await db.projects.getUserRolesForProjects(
-      apiKey.allowed_projects,
-      userId
-    );
-    for (const role of explicitRoles.values()) {
-      if (role !== null) {
-        return true;
-      }
+    const explicit = await db.projects.getUserRole(projectId, userId);
+    if (explicit) {
+      return true;
     }
-
-    for (const projectId of apiKey.allowed_projects) {
-      const inherited = await lookupInheritedProjectRole(projectId, userId, db);
-      if (inherited) {
-        return true;
-      }
-    }
-
-    return false;
+    const inherited = await lookupInheritedProjectRole(projectId, userId, db);
+    return inherited !== null;
   } catch {
     return false;
   }
