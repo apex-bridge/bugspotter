@@ -52,17 +52,24 @@ API key validates:
 - `request.authUser` stays **undefined** — authz precedence is
   unchanged; the api-key path remains authoritative
 - `request.jwtUserIdentity` is populated (just `{ id }`) IF the
-  accompanying JWT (a) verifies its signature, (b) names a user
-  that still exists in the DB, and (c) the api-key targets exactly
-  one project (`allowed_projects.length === 1`) AND the user has an
-  effective role (explicit or org-inherited) on that project.
-  Failing any of those — invalid signature, deleted user, multi-
-  project or full-scope api-key, or user with no membership in the
-  single targeted project — leaves the field undefined.
-  **Attribution-only — never authz.** Audit consumers fall back to
-  `jwtUserIdentity?.id` when `authUser` is unset, so dual-header
-  requests where all three checks pass record both the human and
-  machine actor
+  accompanying JWT (a) verifies its signature AND (b) the api-key
+  targets exactly one project (`allowed_projects.length === 1`) AND
+  the JWT user has an effective role on that project (explicit
+  `project_members` row OR org-inherited via the project's
+  organization). The "user must exist" property is implicit, not
+  an explicit `findById` call: `project_members.user_id` and
+  `organization_members.user_id` both `ON DELETE CASCADE` against
+  `application.users.id`, so a hard-deleted user has no membership
+  rows for the cross-check to match. There is no `is_active` /
+  `deleted_at` column on `users` today, so hard-delete is the only
+  deactivation path; if soft-delete is ever introduced, this code
+  path needs an explicit active-status check. Failing any of these
+  — invalid signature, multi-project / full-scope api-key, or user
+  with no membership in the single targeted project — leaves the
+  field undefined. **Attribution-only — never authz.** Audit
+  consumers fall back to `jwtUserIdentity?.id` when `authUser` is
+  unset, so dual-header requests where all checks pass record both
+  the human and machine actor
 
 Why the scope cross-check matters, and why singleton-only: without
 the check, an actor with two unrelated credentials — a leaked api-key

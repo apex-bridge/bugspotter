@@ -875,15 +875,25 @@ describe('Audit Middleware', () => {
       expect(details.api_key_id).toBe(key.id);
     });
 
-    it('records user_id null on dual-header request when the JWT user no longer exists', async () => {
-      // Defense-in-depth: a JWT for a deleted user (still
-      // signature-valid until expiry) must not be recorded as the
-      // actor. There is no longer a separate `findById` existence
-      // check — `jwtUserCanAttributeForApiKey` does the existence
-      // check transparently because neither `getUserRole` nor
-      // `lookupInheritedProjectRole` can match a row for a userId
-      // that doesn't exist (no `project_members` row, no
-      // `organization_members` row), so the helper returns false.
+    it('records user_id null on dual-header request when the JWT userId has no membership rows', async () => {
+      // The helper does NOT call `db.users.findById`. Rejection of a
+      // non-existent / deleted user is *implicit* via the cascade
+      // invariant: `project_members.user_id` and
+      // `organization_members.user_id` both `ON DELETE CASCADE`
+      // against `application.users.id`, so a hard-deleted user has
+      // no membership rows left for either lookup to match. This
+      // test exercises the same shape — a UUID that was never in
+      // the DB has no rows in either table, so both lookups return
+      // null and `jwtUserCanAttributeForApiKey` returns false.
+      //
+      // What this test does NOT cover, deliberately: a hypothetical
+      // soft-deleted user (an account with stale membership rows
+      // outliving the `users` row). There is no `is_active` /
+      // `deleted_at` field on `users` today and no soft-delete code
+      // path exists, so the failure mode can't be exercised end-to-
+      // end. If soft-delete is introduced later, the audit-attribution
+      // helper must be updated to also check active status — see the
+      // "cascade-invariant dependency" note in the helper docstring.
       //
       // The api-key here is single-project (allowed_projects =
       // [projectId]) so we exercise the cross-check branch rather

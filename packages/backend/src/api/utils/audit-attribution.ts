@@ -82,6 +82,20 @@ export function getAuditUserId(request: FastifyRequest): string | null {
  * fail the request, but it also must not result in unverified
  * attribution.
  *
+ * **Cascade-invariant dependency**: the helper does NOT explicitly
+ * verify that `userId` exists in `application.users`. The
+ * "non-existent user → no attribution" property is *implicit* —
+ * `project_members.user_id` and `organization_members.user_id`
+ * both have `ON DELETE CASCADE` against `application.users.id`
+ * (db/migrations/001_initial_schema.sql), so a hard-deleted user
+ * has no rows for either lookup to match. There is no `is_active`
+ * or `deleted_at` field on `users` today, so this implicit
+ * guarantee covers every deactivation path the codebase currently
+ * supports. **If soft-delete for users is ever introduced** (e.g.,
+ * a `users.deleted_at` column that's set without removing
+ * memberships), this helper must be updated to also check the
+ * user's active status — the cascade dependency won't carry over.
+ *
  * **Known TOCTOU**: the explicit and inherited role lookups run in
  * parallel without an enclosing transaction snapshot, so a
  * membership revocation that commits between the two reads can
