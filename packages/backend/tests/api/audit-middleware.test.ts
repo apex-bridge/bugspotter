@@ -896,5 +896,96 @@ describe('Audit Middleware', () => {
       expect(details).toHaveProperty('api_key_id');
       expect(details.api_key_id).toBeNull();
     });
+
+    // Row-level attribution coverage. The previous round wired
+    // `getAuditUserId` into the audit middleware + the integration
+    // logger sites that write to `audit_logs`. But three sites also
+    // pass `userId` to DB write operations that persist the human
+    // actor in row-level columns (notably `bug_reports.deleted_by`
+    // on softDelete / hardDeleteReports). Audit_logs is honest for
+    // dual-header now, but `deleted_by` would silently regress to
+    // null if anyone reverts those callsites to
+    // `request.authUser?.id ?? null`. This test pins the swap.
+    it('writes the JWT user to bug_reports.deleted_by on dual-header DELETE', async () => {
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-deleted-by-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+
+      // Read the soft-deleted row directly. softDelete writes
+      // `deleted_at = now()` + `deleted_by = $userId`; the bug_reports
+      // repo's normal find* methods filter out soft-deleted rows, so
+      // we go through the raw query path.
+      const result = await db.query<{ deleted_by: string | null }>(
+        'SELECT deleted_by FROM application.bug_reports WHERE id = $1',
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].deleted_by).toBe(testUserId);
+    });
+
+    it('records null in bug_reports.deleted_by when dual-header cross-check fails (outsider JWT)', async () => {
+      // Mirror of the cross-org poisoning audit-log test, but at
+      // the row-level deleted_by column. Outsider JWT (no project
+      // membership, no org membership for the api-key's project)
+      // → `getAuditUserId` returns null → `deleted_by` is null.
+      const outsider = await db.users.create({
+        email: `outsider-del-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      const outsiderJwt = server.jwt.sign(
+        { userId: outsider.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-deleted-by-outsider-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${outsiderJwt}`,
+          'x-api-key': plaintext,
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+
+      const result = await db.query<{ deleted_by: string | null }>(
+        'SELECT deleted_by FROM application.bug_reports WHERE id = $1',
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      // Outsider's id MUST NOT land here. It also must not be
+      // `testUserId` (that would mean attribution leaked from the
+      // api-key's `created_by` field, which would be a different
+      // bug). Honest null is correct.
+      expect(result.rows[0].deleted_by).toBeNull();
+    });
   });
 });
