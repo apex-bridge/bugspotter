@@ -1146,6 +1146,113 @@ describe('Audit Middleware', () => {
       expect(log!.user_id).toBeNull();
     });
 
+    it('writes the JWT user to share_tokens.created_by on dual-header POST /replays/:id/share', async () => {
+      // Round-6 swap: share-tokens.ts:177 was reading
+      // `request.authUser?.id` and dropping JWT-user attribution on
+      // dual-header requests. Now uses `getAuditUserId(request)`.
+      // This test pins the swap. Mirror of the bug_reports.deleted_by
+      // positive test, but for the share_tokens.created_by column.
+      //
+      // The route's `hasShareableContent` check needs `replay_key` to
+      // be set; patch the fixture row directly.
+      const replayKey = `replays/test/${bugReportId}-share.json.gz`;
+      await db.query('UPDATE application.bug_reports SET replay_key = $1 WHERE id = $2', [
+        replayKey,
+        bugReportId,
+      ]);
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-share-create-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/replays/${bugReportId}/share`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ expires_in_hours: 24 }),
+      });
+
+      expect(response.statusCode).toBe(201);
+
+      // Read the share_tokens row directly to assert created_by.
+      const result = await db.query<{ created_by: string | null }>(
+        `SELECT created_by FROM application.share_tokens
+         WHERE bug_report_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].created_by).toBe(testUserId);
+    });
+
+    it('records null in share_tokens.created_by when dual-header cross-check fails (outsider JWT)', async () => {
+      // Negative mirror of the share_tokens.created_by positive test.
+      // Outsider JWT (no project membership, no org membership) → the
+      // cross-check returns false, jwtUserIdentity stays unset,
+      // getAuditUserId returns null, share_tokens.created_by is null.
+      // Catches a regression that loosens the cross-check or leaks
+      // attribution from the api-key's `created_by` field.
+      const outsider = await db.users.create({
+        email: `outsider-share-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      const outsiderJwt = server.jwt.sign(
+        { userId: outsider.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const replayKey = `replays/test/${bugReportId}-share-outsider.json.gz`;
+      await db.query('UPDATE application.bug_reports SET replay_key = $1 WHERE id = $2', [
+        replayKey,
+        bugReportId,
+      ]);
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-share-create-outsider-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/replays/${bugReportId}/share`,
+        headers: {
+          authorization: `Bearer ${outsiderJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ expires_in_hours: 24 }),
+      });
+
+      expect(response.statusCode).toBe(201);
+
+      const result = await db.query<{ created_by: string | null }>(
+        `SELECT created_by FROM application.share_tokens
+         WHERE bug_report_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].created_by).toBeNull();
+    });
+
     it('records null in bug_reports.deleted_by when dual-header cross-check fails (outsider JWT)', async () => {
       // Mirror of the cross-org poisoning audit-log test, but at
       // the row-level deleted_by column. Outsider JWT (no project
