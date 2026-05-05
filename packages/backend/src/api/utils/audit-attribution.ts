@@ -81,6 +81,22 @@ export function getAuditUserId(request: FastifyRequest): string | null {
  * the request; a transient DB hiccup during attribution must not
  * fail the request, but it also must not result in unverified
  * attribution.
+ *
+ * **Known TOCTOU**: the explicit and inherited role lookups run in
+ * parallel without an enclosing transaction snapshot, so a
+ * membership revocation that commits between the two reads can
+ * yield a false positive (one query sees pre-revocation state, the
+ * other post-) — the OR aggregation then attributes the ex-member.
+ * The window is sub-millisecond and this is attribution-only (no
+ * authz impact: the api-key was the authoritative auth and the
+ * action already completed by the time we get here), so the
+ * worst case is one audit row crediting an actor whose access was
+ * revoked during their request. Wrapping in
+ * `db.transaction(REPEATABLE READ, ...)` would close the race at
+ * the cost of an extra round-trip per dual-header request; not
+ * worth the steady overhead for a sub-millisecond window of
+ * post-hoc attribution drift on audit data. Revisit if the audit
+ * trail's strict-consistency requirements ever change.
  */
 export async function jwtUserCanAttributeForApiKey(
   db: DatabaseClient,
