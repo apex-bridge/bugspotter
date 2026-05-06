@@ -215,12 +215,23 @@ export async function registerIntegrationRuleRoutes(
         throttle = null,
         auto_create = false,
         field_mappings = null,
-        description_template = null,
         attachment_config = null,
       } = request.body;
 
       // Get integration (loads plugin + validates existence)
       const integration = await getIntegrationForProject(platform, projectId, registry, db);
+
+      // When auto_create is on and the caller omits the template key, seed
+      // the platform's default so newly-created rules render a sensible Jira
+      // description out of the box. An explicit `null` in the request is
+      // honoured as "the caller really wants no template"; an explicit empty
+      // string is preserved as-is (the column allows it).
+      const callerProvidedTemplate = 'description_template' in request.body;
+      const description_template = callerProvidedTemplate
+        ? (request.body.description_template ?? null)
+        : auto_create
+          ? (registry.getPluginMetadata(platform)?.defaultDescriptionTemplate ?? null)
+          : null;
 
       logger.info('Creating integration rule', {
         platform,
@@ -228,6 +239,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         name,
         filtersCount: filters.length,
+        seededDefaultTemplate: !callerProvidedTemplate && description_template !== null,
         userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });

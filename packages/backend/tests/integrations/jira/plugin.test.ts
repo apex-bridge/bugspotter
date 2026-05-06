@@ -14,6 +14,7 @@ vi.mock('../../../src/integrations/jira/client.js', () => ({
   })),
 }));
 import { jiraPlugin } from '../../../src/integrations/jira/plugin.js';
+import { JIRA_DEFAULT_DESCRIPTION_TEMPLATE } from '../../../src/integrations/jira/default-template.js';
 import type { PluginContext } from '../../../src/integrations/plugin.types.js';
 
 describe('jiraPlugin', () => {
@@ -40,6 +41,7 @@ describe('jiraPlugin', () => {
         author: 'BugSpotter Team',
         requiredEnvVars: ['ENCRYPTION_KEY'],
         isBuiltIn: true,
+        defaultDescriptionTemplate: JIRA_DEFAULT_DESCRIPTION_TEMPLATE,
       });
     });
 
