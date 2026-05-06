@@ -7,21 +7,42 @@ import { integrationService } from '../services/integration-service';
 import { projectService, bugReportService } from '../services/api';
 
 /**
- * Hook that derives whether the freshly-created-tenant quick-setup CTAs
- * should be visible. Composes the existing permissions, projects,
- * integrations and bug-reports queries so React Query de-duplicates with
- * pages that already load the same data.
- *
- * Visibility rule: only org admins/owners (or platform admins) on a
- * tenant that has 0 integrations AND 0 bug reports yet. Once either
- * condition is no longer true, the CTAs disappear for good.
+ * Raw signals describing the tenant's onboarding state. Each
+ * `<QuickAction>` declares its own `visible(state)` predicate against
+ * this shape, so adding a new state signal is a matter of extending
+ * this interface, populating it in the hook below, and referencing it
+ * from the relevant predicate in `quick-actions.ts`.
  */
-export function useOnboardingStatus() {
+export interface OnboardingState {
+  /** True iff the user can configure integrations / view secrets. */
+  canConfigure: boolean;
+  /** True iff there is at least one project in the active organization. */
+  hasProject: boolean;
+  /** First project's id (used as the SDK snippet's projectId). Null when no project. */
+  primaryProjectId: string | null;
+  /** Number of integrations enabled in the active organization. */
+  integrationCount: number;
+  /** Number of bug reports for `primaryProjectId`. */
+  bugReportCount: number;
+}
+
+/**
+ * Hook that fetches the raw onboarding signals used by the quick-setup
+ * CTAs in the admin top-bar. Composes the existing permissions /
+ * projects / integrations / bug-reports queries so React Query
+ * de-duplicates with pages that already load them.
+ *
+ * The downstream queries (integrations + bug reports) are gated on
+ * `canConfigure` so the typical member/viewer pays no extra cost on
+ * every page load.
+ */
+export function useOnboardingStatus(): OnboardingState {
   const { user } = useAuth();
   const { currentOrganization, hasOrganization } = useOrganization();
 
-  // Reuse the same query key as `useOrgPermissions` so a single network
-  // round-trip backs both — see `src/hooks/use-org-permissions.ts`.
+  // Reuse the same query key as `useOrgPermissions` and the inline
+  // query in dashboard-layout.tsx so a single round-trip backs all of
+  // them — see `src/hooks/use-org-permissions.ts`.
   const { data: permissionsData } = useQuery({
     queryKey: ['permissions', undefined, currentOrganization?.id],
     staleTime: 5 * 60 * 1000,
@@ -40,15 +61,9 @@ export function useOnboardingStatus() {
   });
 
   const orgRole = permissionsData?.organization?.role;
-  // Platform admins always pass; org admins/owners do too. Other roles
-  // (member, viewer) cannot configure integrations and so should not see
-  // the CTAs even when the rest of the empty-state shape matches.
   const isSystemAdmin = permissionsData?.system.isAdmin ?? isPlatformAdmin(user);
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
-  // Gate the remaining queries on `canConfigure` so the typical
-  // member/viewer never pays the cost of two extra requests on every
-  // page load.
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: projectService.getAll,
@@ -77,15 +92,11 @@ export function useOnboardingStatus() {
     staleTime: 60 * 1000,
   });
 
-  const noIntegrations = integrations.length === 0;
-  const noBugReports = (bugReports?.pagination?.total ?? 0) === 0;
-  // The tenant has to have at least one project for the SDK snippet CTA
-  // to make sense — without a project there's nothing to send reports to.
-  const hasProject = projects.length >= 1;
-
   return {
-    shouldShowQuickSetup: canConfigure && hasProject && noIntegrations && noBugReports,
-    primaryProjectId,
     canConfigure,
+    hasProject: projects.length >= 1,
+    primaryProjectId,
+    integrationCount: integrations.length,
+    bugReportCount: bugReports?.pagination?.total ?? 0,
   };
 }
