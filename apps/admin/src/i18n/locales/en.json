@@ -1842,5 +1842,20 @@
       "sending": "Sending...",
       "success": "A new verification email has been sent."
     }
+  },
+  "quickSetup": {
+    "label": "Quick setup:",
+    "sdkSnippet": "SDK snippet",
+    "connectJira": "Connect Jira",
+    "snippetDialog": {
+      "title": "Install the BugSpotter SDK",
+      "description": "Drop this snippet near your app's entry point. Reports start flowing the moment a real bug fires.",
+      "languageLabel": "Code language",
+      "copy": "Copy snippet",
+      "copied": "Snippet copied",
+      "apiKeyTitle": "Bring your API key",
+      "apiKeyHelp": "API keys are shown once at creation. Open the API Keys page to copy an existing one or generate a new key.",
+      "manageKeys": "Manage API keys"
+    }
   }
 }
