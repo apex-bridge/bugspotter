@@ -16,6 +16,7 @@ import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import type { FilterCondition, ThrottleConfig } from '../../types/notifications.js';
 import type { FieldMappings, AttachmentConfig } from '@bugspotter/types';
 import { getAuditUserId } from '../utils/audit-attribution.js';
+import { DEFAULT_JIRA_TICKET_BODY } from '../../integrations/jira/default-ticket-body.js';
 import {
   createIntegrationRuleSchema,
   updateIntegrationRuleSchema,
@@ -215,12 +216,22 @@ export async function registerIntegrationRuleRoutes(
         throttle = null,
         auto_create = false,
         field_mappings = null,
-        description_template = null,
         attachment_config = null,
       } = request.body;
 
       // Get integration (loads plugin + validates existence)
       const integration = await getIntegrationForProject(platform, projectId, registry, db);
+
+      // When auto_create is on and the caller omits a description, seed the
+      // default Jira ticket body so freshly-created rules render a sensible
+      // ticket out of the box. An explicit null in the request is honoured
+      // as "the caller really wants no description".
+      const callerProvidedDescription = request.body.description_template != null;
+      const description_template = callerProvidedDescription
+        ? (request.body.description_template ?? null)
+        : auto_create && platform.toLowerCase() === 'jira'
+          ? DEFAULT_JIRA_TICKET_BODY
+          : null;
 
       logger.info('Creating integration rule', {
         platform,
@@ -228,6 +239,7 @@ export async function registerIntegrationRuleRoutes(
         integrationId: integration.id,
         name,
         filtersCount: filters.length,
+        seededDefaultBody: !callerProvidedDescription && description_template !== null,
         userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });

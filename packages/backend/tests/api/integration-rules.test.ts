@@ -11,6 +11,7 @@ import type { DatabaseClient } from '../../src/db/client.js';
 import { createStorage } from '../../src/storage/index.js';
 import type { IStorageService } from '../../src/storage/types.js';
 import { PluginRegistry } from '../../src/integrations/plugin-registry.js';
+import { DEFAULT_JIRA_TICKET_BODY } from '../../src/integrations/jira/default-ticket-body.js';
 import type { FilterCondition } from '../../src/types/notifications.js';
 import { createProjectIntegrationSQL, createAdminUser } from '../test-helpers.js';
 
@@ -161,6 +162,59 @@ describe('Integration Rules API Routes', () => {
       expect(body.data.priority).toBe(0);
       // Throttle is null when not provided (JSONB null)
       expect(body.data.throttle).toBeNull();
+    });
+
+    it('seeds the default Jira ticket body when auto_create=true and description omitted', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProjectId}/rules`,
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          name: 'Auto-create with default',
+          filters: [],
+          auto_create: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body);
+      expect(body.data.description_template).toBe(DEFAULT_JIRA_TICKET_BODY);
+    });
+
+    it('does not seed default when auto_create is false', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProjectId}/rules`,
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          name: 'Filter-only rule',
+          filters: [],
+          auto_create: false,
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body);
+      expect(body.data.description_template).toBeNull();
+    });
+
+    it('preserves a caller-supplied description_template (no overwrite)', async () => {
+      const customTemplate = '# {{title}}\n\nCustom body for {{user_email}}';
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProjectId}/rules`,
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          name: 'Custom template rule',
+          filters: [],
+          auto_create: true,
+          description_template: customTemplate,
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body);
+      expect(body.data.description_template).toBe(customTemplate);
     });
 
     it('should reject invalid filter field', async () => {
