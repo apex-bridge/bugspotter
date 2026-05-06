@@ -99,21 +99,16 @@ export function getAuditUserId(request: FastifyRequest): string | null {
  * memberships), this helper must be updated to also check the
  * user's active status — the cascade dependency won't carry over.
  *
- * **Known TOCTOU**: the explicit and inherited role lookups run in
- * parallel without an enclosing transaction snapshot, so a
- * membership revocation that commits between the two reads can
- * yield a false positive (one query sees pre-revocation state, the
- * other post-) — the OR aggregation then attributes the ex-member.
- * The window is sub-millisecond and this is attribution-only (no
- * authz impact: the api-key was the authoritative auth and the
- * action already completed by the time we get here), so the
- * worst case is one audit row crediting an actor whose access was
- * revoked during their request. Wrapping in
- * `db.transaction(REPEATABLE READ, ...)` would close the race at
- * the cost of an extra round-trip per dual-header request; not
- * worth the steady overhead for a sub-millisecond window of
- * post-hoc attribution drift on audit data. Revisit if the audit
- * trail's strict-consistency requirements ever change.
+ * **Race semantics**: explicit and inherited role lookups run
+ * sequentially — explicit first, inherited only if explicit returns
+ * null. This avoids the OR-aggregation TOCTOU that parallel reads
+ * would have (revocation between reads → one returns role, the
+ * other null → false-positive attribution). With sequential reads
+ * each query attributes based on the snapshot it actually saw, so
+ * the worst case under concurrent revocation is a single false
+ * negative (null attribution) on one request — fail-closed, not
+ * fail-open. Side benefit: skips the inherited query entirely on
+ * the explicit-member hot path.
  */
 export async function jwtUserCanAttributeForApiKey(
   db: DatabaseClient,
@@ -144,16 +139,22 @@ export async function jwtUserCanAttributeForApiKey(
   const projectId = apiKey.allowed_projects[0];
 
   try {
-    // Parallel — same pattern `requireProjectAccess` uses (auth.md §3).
-    // Slightly more DB load on the hit-explicit case (one extra query
-    // that wasn't needed) but lower worst-case latency on the
-    // org-inheritance case, which dominates SaaS where org membership
-    // is the typical access path. Fail-closed via the outer try/catch.
-    const [explicit, inherited] = await Promise.all([
-      db.projects.getUserRole(projectId, userId),
-      lookupInheritedProjectRole(projectId, userId, db, organizationId),
-    ]);
-    return explicit !== null || inherited !== null;
+    // Sequential. Explicit first — if it returns a role, we attribute
+    // immediately and skip the inherited lookup (the hot path for
+    // direct project members). Inherited runs only when explicit is
+    // null. This eliminates the OR-aggregation TOCTOU that parallel
+    // reads would have (revocation committing between the two reads
+    // would let one see pre-revocation state and the other post-,
+    // false-positively attributing the ex-member). With sequential
+    // reads, each query attributes against its own snapshot, so the
+    // worst case is a false negative under concurrent revocation —
+    // fail-closed.
+    const explicit = await db.projects.getUserRole(projectId, userId);
+    if (explicit !== null) {
+      return true;
+    }
+    const inherited = await lookupInheritedProjectRole(projectId, userId, db, organizationId);
+    return inherited !== null;
   } catch (err) {
     // Fail-closed (don't fail the request) but surface the error —
     // a transient DB hiccup degrading attribution to null is fine
