@@ -1,10 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { useAuth } from '../contexts/auth-context';
 import { useOrganization } from '../contexts/organization-context';
-import { isPlatformAdmin } from '../types';
-import { api, API_ENDPOINTS } from '../lib/api-client';
 import { integrationService } from '../services/integration-service';
 import { projectService, bugReportService } from '../services/api';
+import { usePermissions } from './use-permissions';
 
 /**
  * Raw signals describing the tenant's onboarding state. Each
@@ -43,31 +41,9 @@ export interface OnboardingState {
  * every page load.
  */
 export function useOnboardingStatus(): OnboardingState {
-  const { user } = useAuth();
   const { currentOrganization, hasOrganization } = useOrganization();
 
-  // Reuse the same query key as `useOrgPermissions` and the inline
-  // query in dashboard-layout.tsx so a single round-trip backs all of
-  // them — see `src/hooks/use-org-permissions.ts`.
-  const { data: permissionsData } = useQuery({
-    queryKey: ['permissions', undefined, currentOrganization?.id],
-    staleTime: 5 * 60 * 1000,
-    queryFn: async () => {
-      const response = await api.get<{
-        data: {
-          system: { isAdmin: boolean };
-          organization?: { role: string };
-        };
-      }>(API_ENDPOINTS.permissions.me(), {
-        params: { organizationId: currentOrganization?.id },
-      });
-      return response.data.data;
-    },
-    enabled: !!currentOrganization?.id && !!user,
-  });
-
-  const orgRole = permissionsData?.organization?.role;
-  const isSystemAdmin = permissionsData?.system.isAdmin ?? isPlatformAdmin(user);
+  const { isSystemAdmin, orgRole } = usePermissions();
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
   const { data: projects = [] } = useQuery({
