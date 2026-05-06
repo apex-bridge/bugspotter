@@ -127,6 +127,68 @@ describe('Auth Handler Functions', () => {
       expect(mockApiKeyService.trackUsage).toHaveBeenCalled();
     });
 
+    // GH-97 dual-header attribution invariant: `request.apiKey` MUST
+    // remain unset on every rejection branch. The audit-middleware
+    // dual-header block in auth/middleware.ts reads `request.apiKey`
+    // as the source of truth for "should we record JWT-user
+    // attribution," so any rejection path that pre-emptively sets
+    // it would cause a 401-rejected request with a valid JWT to
+    // poison the audit row with the JWT user. Pin each branch.
+    it('leaves request.apiKey unset when key is revoked', async () => {
+      mockApiKeyService.verifyAndGetKey.mockResolvedValue({
+        key: null,
+        failureReason: 'revoked',
+      });
+      const result = await handleNewApiKeyAuth(
+        'bgs_revoked',
+        mockApiKeyService,
+        mockDb,
+        mockRequest as FastifyRequest,
+        mockReply as FastifyReply,
+        Date.now()
+      );
+      expect(result).toBe(true); // "request handled" — 401 already sent
+      expect(mockRequest.apiKey).toBeUndefined();
+      expect(codeSpy).toHaveBeenCalledWith(401);
+    });
+
+    it('leaves request.apiKey unset when key is expired', async () => {
+      mockApiKeyService.verifyAndGetKey.mockResolvedValue({
+        key: null,
+        failureReason: 'expired',
+      });
+      const result = await handleNewApiKeyAuth(
+        'bgs_expired',
+        mockApiKeyService,
+        mockDb,
+        mockRequest as FastifyRequest,
+        mockReply as FastifyReply,
+        Date.now()
+      );
+      expect(result).toBe(true);
+      expect(mockRequest.apiKey).toBeUndefined();
+      expect(codeSpy).toHaveBeenCalledWith(401);
+    });
+
+    it('leaves request.apiKey unset when key is inactive', async () => {
+      mockApiKeyService.verifyAndGetKey.mockResolvedValue({
+        key: null,
+        failureReason: 'inactive',
+        existingKey: { ...mockApiKey, status: 'paused' },
+      });
+      const result = await handleNewApiKeyAuth(
+        'bgs_inactive',
+        mockApiKeyService,
+        mockDb,
+        mockRequest as FastifyRequest,
+        mockReply as FastifyReply,
+        Date.now()
+      );
+      expect(result).toBe(true);
+      expect(mockRequest.apiKey).toBeUndefined();
+      expect(codeSpy).toHaveBeenCalledWith(401);
+    });
+
     it('should return false for invalid API key without sending response', async () => {
       mockApiKeyService.verifyAndGetKey.mockResolvedValue({
         key: null,

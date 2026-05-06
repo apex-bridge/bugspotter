@@ -8,6 +8,7 @@ import type { DatabaseClient } from '../../../db/client.js';
 import { ApiKeyService } from '../../../services/api-key/index.js';
 import { handleNewApiKeyAuth, handleJwtAuth, handleShareTokenAuth } from './handlers.js';
 import { sendUnauthorized, sendInternalError } from './responses.js';
+import { jwtUserCanAttributeForApiKey } from '../../utils/audit-attribution.js';
 
 /**
  * Authentication middleware factory
@@ -56,18 +57,108 @@ export function createAuthMiddleware(db: DatabaseClient) {
       const startTime = Date.now();
 
       try {
-        const success = await handleNewApiKeyAuth(
+        // Return value is intentionally discarded — `handleNewApiKeyAuth`'s
+        // boolean has two semantically different `true` meanings (auth
+        // succeeded vs auth rejected & 401 already sent). The dual-header
+        // attribution block below uses `request.apiKey` (only set on the
+        // genuine success path) as the source of truth, not this return.
+        // Explicit `void` so a future reader doesn't "fix" the unused
+        // result by re-adding `if (success) return` and re-introducing
+        // the revoked-key audit-poisoning bug from round 4.
+        void (await handleNewApiKeyAuth(
           apiKeyHeader,
           apiKeyService,
           db,
           request,
           reply,
           startTime
-        );
-        if (success) {
-          return;
+        ));
+        // Closes the GH-97 dual-header gap: when a JWT is presented
+        // alongside the api-key, capture the JWT user's id for AUDIT
+        // ATTRIBUTION ONLY. `request.authUser` stays undefined — the
+        // api-key remains the authoritative authz path (precedence
+        // unchanged).
+        //
+        // Guard on `request.apiKey`, not on `handleNewApiKeyAuth`'s
+        // return value. The handler returns `true` for revoked /
+        // expired / inactive keys after sending a 401 (handlers.ts:
+        // ~66-74) — that's "request was handled," not "authentication
+        // succeeded." `request.apiKey` is only set on the genuine
+        // success path (handlers.ts:91), so it's the right signal
+        // for "should we record dual-header attribution." Without
+        // this, a rejected api-key request with an accompanying valid
+        // JWT would poison `audit_logs.user_id` with the JWT user's
+        // id on a 401-rejected row.
+        //
+        // The scope cross-check (`jwtUserCanAttributeForApiKey`)
+        // verifies the JWT user has an effective role on the
+        // api-key's single allowed project. Without it, an actor
+        // with two unrelated credentials — a leaked api-key for
+        // project P and a valid JWT for any user with no relationship
+        // to P — could plant that user.id as the audit actor on
+        // every request against P, which would make the audit trail
+        // strictly worse than the honest `user_id: null` of the
+        // pre-PR-107 shape. The cross-check itself does the
+        // existence check transparently: if the claimed userId
+        // doesn't exist, neither `getUserRole` nor
+        // `lookupInheritedProjectRole` can find a matching row, and
+        // the helper returns false. Multi-project / full-scope api-
+        // keys also return false (request-target ambiguous at
+        // auth-middleware time), matching pre-PR-107 shape.
+        //
+        // We use `request.server.jwt.verify(token)` rather than
+        // `request.jwtVerify()` because the latter writes the
+        // decoded claims to `request.user` as a `@fastify/jwt`
+        // side-effect. No current code reads `request.user`, but
+        // it's the idiomatic field for JWT identity in Fastify and
+        // any future hook / plugin / route guard that uses it would
+        // silently see a JWT identity on what's otherwise a pure
+        // machine-authenticated request. The instance method
+        // verifies signature and returns decoded claims without
+        // touching the request — strictly attribution-only.
+        //
+        // On any failure we fall through silently; this must never
+        // fail an otherwise-successful api-key request.
+        //
+        // Normalize: HTTP forbids multiple Authorization headers but
+        // Fastify types it as `string | string[] | undefined`. Take
+        // the first if it's an array so `.startsWith` doesn't TypeError.
+        const authHeader = Array.isArray(authorization) ? authorization[0] : authorization;
+        if (request.apiKey && authHeader?.startsWith('Bearer ')) {
+          try {
+            const token = authHeader.slice('Bearer '.length).trim();
+            const decoded = (await request.server.jwt.verify(token)) as {
+              userId?: unknown;
+            };
+            if (typeof decoded?.userId === 'string') {
+              const canAttribute = await jwtUserCanAttributeForApiKey(
+                db,
+                decoded.userId,
+                request.apiKey,
+                // `handleNewApiKeyAuth` already loaded the project for
+                // single-project keys (handlers.ts:95-100). Reusing
+                // `organization_id` here lets `lookupInheritedProjectRole`
+                // skip its internal findById on the org-inheritance
+                // branch — same optimization the JWT-only path's
+                // `requireProjectAccess` uses.
+                request.authProject?.organization_id
+              );
+              if (canAttribute) {
+                request.jwtUserIdentity = { id: decoded.userId };
+              }
+            }
+          } catch (error) {
+            // Invalid / expired / forged JWT alongside a valid
+            // api-key. The api-key already authenticated the request;
+            // we simply have no second identity to attribute.
+            request.log.debug(
+              { error },
+              'Dual-header: JWT verify failed; recording api-key attribution only'
+            );
+          }
         }
-        // Reply already sent by helper
+        // Whether api-key auth succeeded or sent its own 401, we're
+        // done at this layer — the JWT block below must not re-run.
         return;
       } catch (error) {
         request.log.error({ error }, 'Error during API key authentication');
@@ -137,9 +228,18 @@ export function createBodyAuthMiddleware(db: DatabaseClient) {
       try {
         const success = await handleShareTokenAuth(request, db);
         if (success) {
-          // Clear previous authentication to prioritize shareToken
+          // Clear previous authentication to prioritize shareToken.
+          // `jwtUserIdentity` MUST be cleared too — the dual-header
+          // block in `createAuthMiddleware` (onRequest) may have
+          // already populated it for an api-key + JWT pair, and
+          // since `getAuditUserId` falls back to `jwtUserIdentity?.id`
+          // when `authUser` is unset, leaving it set here would
+          // attribute the shareToken-authenticated action to the
+          // JWT user — exactly the cross-channel attribution
+          // poisoning this PR was designed to close.
           request.authUser = undefined;
           request.apiKey = undefined;
+          request.jwtUserIdentity = undefined;
           return;
         }
         // Invalid share token - fail authentication

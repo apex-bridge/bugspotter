@@ -19,6 +19,7 @@ import {
 } from '../schemas/bug-report-schema.js';
 import { requireProject, requireApiKeyPermission } from '../middleware/auth.js';
 import { sendSuccess, sendCreated, sendNoContent, sendPaginated } from '../utils/response.js';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 import { AppError } from '../middleware/error.js';
 import { buildPagination, buildSort, parseDateFilter } from '../utils/query-builder.js';
 import { buildAccessFilters, validateProjectAccess } from '../utils/bug-report-access.js';
@@ -449,7 +450,7 @@ export function bugReportRoutes(
         throw new AppError('Report is under legal hold and cannot be deleted', 409, 'Conflict');
       }
 
-      const userId = request.authUser?.id ?? null;
+      const userId = getAuditUserId(request);
       await db.bugReports.softDelete([id], userId);
 
       return sendNoContent(reply);
@@ -481,7 +482,7 @@ export function bugReportRoutes(
         );
       }
 
-      const userId = request.authUser?.id ?? null;
+      const userId = getAuditUserId(request);
       const deleted = await db.bugReports.softDelete(ids, userId);
 
       return sendSuccess(reply, { deleted });

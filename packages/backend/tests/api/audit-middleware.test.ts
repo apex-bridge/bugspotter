@@ -9,6 +9,7 @@ import { createServer } from '../../src/api/server.js';
 import { createDatabaseClient } from '../../src/db/client.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 import { ApiKeyService } from '../../src/services/api-key/index.js';
+import { generateShareToken } from '../../src/utils/token-generator.js';
 import { createMockPluginRegistry, createMockStorage } from '../test-helpers.js';
 
 describe('Audit Middleware', () => {
@@ -471,14 +472,18 @@ describe('Audit Middleware', () => {
   // produced audit row closes that gap.
   describe('API Key Identity Recording', () => {
     let bugReportId: string;
+    let projectId: string;
 
     beforeEach(async () => {
       // Fresh project + bug-report per test so PATCH /api/v1/reports/:id
       // (which accepts api-key auth and is an auditable method) succeeds.
+      // testUserId is the project's `created_by`, so they have implicit
+      // owner role — the dual-header attribution cross-check uses this.
       const project = await db.projects.create({
         name: `audit-id-project-${Date.now()}-${Math.random()}`,
         created_by: testUserId,
       });
+      projectId = project.id;
       const report = await db.bugReports.create({
         project_id: project.id,
         title: 'audit identity fixture',
@@ -548,23 +553,261 @@ describe('Audit Middleware', () => {
       expect(details.api_key_id).toBe(key.id);
     });
 
-    it('records api_key_id and user_id null on dual-header (JWT + api-key) request', async () => {
-      // Pins the *current* dual-header limitation: auth middleware
-      // short-circuits on the api-key header (auth/middleware.ts:71)
-      // and never populates request.authUser, so the audit row
-      // mirrors the api-key-only case (machine attribution captured,
-      // human attribution lost).
+    it('records BOTH user_id and api_key_id on dual-header (JWT + api-key) request when scope cross-check passes', async () => {
+      // GH-97 fully closed: the auth middleware verifies the
+      // accompanying JWT (signature, user existence, and scope
+      // membership) and stores the verified userId in
+      // `request.jwtUserIdentity` for attribution-only.
+      // `request.authUser` stays undefined (api-key remains the
+      // authoritative authz path; precedence unchanged), so this
+      // attribution flows through the audit middleware's
+      // `getAuditUserId` fallback.
       //
-      // **When #97's follow-up lands, this test WILL fail — that's
-      // expected.** The follow-up is supposed to populate `user_id`
-      // from the JWT alongside the api-key for *identity* purposes
-      // (without changing authz precedence). At that point, invert
-      // the assertion to `expect(log.user_id).toBe(testUserId)` and
-      // update the comment. Don't revert the change or delete the
-      // assertion — that would re-open the human-attribution gap.
+      // This test uses a project-scoped api-key (allowed_projects =
+      // [projectId]) and testUserId has implicit owner role on that
+      // project (created_by) — so the cross-check passes and
+      // attribution lands. Pins both halves of the contract:
+      //   - user_id = the JWT user (human attribution)
+      //   - details.api_key_id = the api-key id (machine attribution)
+      //
+      // Regression guards this catches:
+      //   - Removing the JWT-verify-alongside-api-key block in auth
+      //     middleware → user_id goes back to null.
+      //   - Inadvertently populating `request.authUser` on the api-key
+      //     path → would surface elsewhere (authz changes), but the
+      //     audit row still records the right id thanks to the
+      //     fallback ordering.
+      //   - Replacing `getAuditUserId` with `authUser?.id ?? null`
+      //     (dropping the jwtUserIdentity branch) → user_id null again.
+      //   - Removing the scope cross-check → still passes (no false
+      //     negative); verified by separate cross-org test below.
       const apiKeyService = new ApiKeyService(db);
       const { plaintext, key } = await apiKeyService.createKey({
         name: `audit-id-dual-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBe(testUserId);
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('records user_id null on dual-header request when JWT is invalid', async () => {
+      // Defense-in-depth: a forged / expired / malformed JWT alongside
+      // a valid api-key must not poison the audit row, AND must not
+      // 500 the request. `jwt.verify` runs first in middleware.ts and
+      // throws on malformed input — the surrounding try/catch swallows
+      // it so api-key auth (already successful at this point) carries
+      // the request through with user_id null. Removing that try/catch
+      // would surface as a 500 here.
+      //
+      // The api-key shape (full-scope vs single-project) doesn't change
+      // which path runs for this test — both reach the same
+      // `jwt.verify` throw before any singleton-guard check. Full-scope
+      // is used here just to keep the fixture minimal.
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-bad-jwt-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: 'Bearer not.a.valid.jwt',
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('does not poison the audit row when a revoked api-key is presented alongside a valid JWT', async () => {
+      // `handleNewApiKeyAuth` returns true for revoked / expired /
+      // inactive keys (after sending its own 401), and that "true" is
+      // *not* "auth succeeded." The dual-header attribution block in
+      // auth/middleware.ts must guard on `request.apiKey` (only set
+      // on the genuine success path), not on the handler return —
+      // otherwise a rejected api-key request with a valid JWT would
+      // record the JWT user as the actor on a 401-rejected row.
+      //
+      // What this test catches if it ever turns red:
+      //   - Reverting the guard to `if (success) {`
+      //   - Moving the jwtVerify block before the api-key check
+      //   - Setting `request.apiKey` on a non-success path
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-revoked-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: null,
+      });
+      // Revoke the key so handleNewApiKeyAuth sends a 401 and returns
+      // true without populating request.apiKey.
+      await apiKeyService.revokeKey(key.id, testUserId, 'test fixture');
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      // 401 — revoked api-key is rejected at auth time; no JWT
+      // fallback (auth precedence is short-circuit on api-key).
+      expect(response.statusCode).toBe(401);
+
+      // Audit row IS still written (audit middleware fires on
+      // onResponse for non-excluded routes regardless of status).
+      // user_id MUST be null — neither identity is authoritative for
+      // this request.
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      expect(log.success).toBe(false);
+    });
+
+    it('does not attribute on dual-header when the JWT user has no membership in the api-key projects (cross-org poisoning)', async () => {
+      // The attribution-poisoning attack the scope cross-check
+      // closes: an actor with two unrelated valid credentials — a
+      // leaked api-key for project P + a JWT for any user with no
+      // relationship to P — could otherwise plant that user as the
+      // audit actor for every request against P. Pre-PR-107 this
+      // case recorded user_id null (honest); without the cross-
+      // check, post-PR-107 would record the unrelated user, which
+      // is strictly worse than null.
+      //
+      // The test mints a JWT for a brand-new user that has no
+      // project_members row and no org membership for the project,
+      // pairs it with a project-scoped api-key for that project,
+      // and asserts user_id stays null.
+      const outsider = await db.users.create({
+        email: `outsider-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      const outsiderJwt = server.jwt.sign(
+        { userId: outsider.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-cross-org-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${outsiderJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('does not attribute on dual-header with a multi-project api-key (request target ambiguous)', async () => {
+      // Multi-project api-key (allowed_projects.length > 1) can be
+      // used against any of the listed projects, and the auth
+      // middleware doesn't yet know which project this request will
+      // resolve against. Even if the JWT user has access to one of
+      // them, the request might target a different one — so the
+      // singleton-only contract skips attribution rather than risk
+      // false attribution. Closes the multi-project residual case
+      // coderabbit raised on PR-107.
+      const otherProject = await db.projects.create({
+        name: `audit-id-other-project-${Date.now()}-${Math.random()}`,
+        created_by: testUserId,
+      });
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-multi-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId, otherProject.id],
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('does not attribute on dual-header with a full-scope api-key (no verifiable scope to cross-check)', async () => {
+      // Full-scope api-keys (allowed_projects = null/empty) have no
+      // verifiable project relationship the cross-check can ground
+      // on. Skipping attribution rather than recording an unverified
+      // claim matches the pre-PR-107 shape exactly for these
+      // requests, so this isn't a regression — full-scope keys are
+      // typically platform-level credentials where the operator-vs-
+      // key relationship can't be inferred from headers alone.
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-full-scope-${Date.now()}`,
         type: 'development',
         permission_scope: 'full',
         permissions: ['bugs:read', 'bugs:write'],
@@ -586,8 +829,65 @@ describe('Audit Middleware', () => {
       expect(response.statusCode).toBe(200);
 
       const log = await waitForReportAudit(bugReportId);
-      // Current behaviour. See the describe-block comment above for
-      // when this assertion needs to be inverted.
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('records user_id null on dual-header request when the JWT userId has no membership rows', async () => {
+      // The helper does NOT call `db.users.findById`. Rejection of a
+      // non-existent / deleted user is *implicit* via the cascade
+      // invariant: `project_members.user_id` and
+      // `organization_members.user_id` both `ON DELETE CASCADE`
+      // against `application.users.id`, so a hard-deleted user has
+      // no membership rows left for either lookup to match. This
+      // test exercises the same shape — a UUID that was never in
+      // the DB has no rows in either table, so both lookups return
+      // null and `jwtUserCanAttributeForApiKey` returns false.
+      //
+      // What this test does NOT cover, deliberately: a hypothetical
+      // soft-deleted user (an account with stale membership rows
+      // outliving the `users` row). There is no `is_active` /
+      // `deleted_at` field on `users` today and no soft-delete code
+      // path exists, so the failure mode can't be exercised end-to-
+      // end. If soft-delete is introduced later, the audit-attribution
+      // helper must be updated to also check active status — see the
+      // "cascade-invariant dependency" note in the helper docstring.
+      //
+      // The api-key here is single-project (allowed_projects =
+      // [projectId]) so we exercise the cross-check branch rather
+      // than the multi-project / full-scope skip. The ghost UUID
+      // then fails both role lookups and yields user_id null.
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-dual-deleted-user-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      // JWT minted for a userId that doesn't exist in the DB.
+      const ghostJwt = server.jwt.sign(
+        { userId: '00000000-0000-0000-0000-000000000000', isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${ghostJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(bugReportId);
       expect(log.user_id).toBeNull();
       const details = log.details as { api_key_id?: string };
       expect(details.api_key_id).toBe(key.id);
@@ -613,6 +913,431 @@ describe('Audit Middleware', () => {
       // migration), null for JWT-only.
       expect(details).toHaveProperty('api_key_id');
       expect(details.api_key_id).toBeNull();
+    });
+
+    // Row-level attribution coverage. The previous round wired
+    // `getAuditUserId` into the audit middleware + the integration
+    // logger sites that write to `audit_logs`. But three sites also
+    // pass `userId` to DB write operations that persist the human
+    // actor in row-level columns (notably `bug_reports.deleted_by`
+    // on softDelete / hardDeleteReports). Audit_logs is honest for
+    // dual-header now, but `deleted_by` would silently regress to
+    // null if anyone reverts those callsites to
+    // `request.authUser?.id ?? null`. This test pins the swap.
+    it('writes the JWT user to bug_reports.deleted_by on dual-header DELETE', async () => {
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-deleted-by-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+
+      // Read the soft-deleted row directly. softDelete writes
+      // `deleted_at = now()` + `deleted_by = $userId`; the bug_reports
+      // repo's normal find* methods filter out soft-deleted rows, so
+      // we go through the raw query path.
+      const result = await db.query<{ deleted_by: string | null }>(
+        'SELECT deleted_by FROM application.bug_reports WHERE id = $1',
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].deleted_by).toBe(testUserId);
+    });
+
+    it('attributes via org-inherited project role on dual-header (positive test for the inherited-role branch)', async () => {
+      // The dual-header positive test above pins the `getUserRole`
+      // path (testUserId is the project's `created_by`, so they have
+      // implicit owner role via project_members). That's the explicit
+      // branch of `jwtUserCanAttributeForApiKey`. The other branch —
+      // `lookupInheritedProjectRole` — is exercised when the user
+      // has org membership but no direct `project_members` row, which
+      // is the dominant access pattern for SaaS users who joined an
+      // org and haven't been added to specific projects.
+      //
+      // Without this test, a regression in the inherited branch
+      // (e.g., `lookupInheritedProjectRole` silently returning null,
+      // or a bad `organizationId` thread-through dropping the
+      // org-membership query) would drop attribution for SaaS
+      // users with no test catching it. The cross-org rejection
+      // test would still pass because outsiders have no membership
+      // either way, so the inherited-rejection signal is identical
+      // to the explicit-rejection signal.
+      const org = await db.organizations.create({
+        name: `audit-id-org-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        subdomain: `audit-id-org-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      });
+      const orgProject = await db.projects.create({
+        name: `audit-id-org-project-${Date.now()}-${Math.random()}`,
+        // Note: NOT created by the user we're attributing — `created_by`
+        // would give them implicit owner role via `getUserRole` and
+        // mask the inherited path we're testing.
+        created_by: testUserId,
+        organization_id: org.id,
+      });
+      const orgReport = await db.bugReports.create({
+        project_id: orgProject.id,
+        title: 'org-inherited fixture',
+        description: 'fixture for inherited-role attribution test',
+      });
+
+      const orgMember = await db.users.create({
+        email: `org-member-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      // Add as org member (NOT as project member — that's the point
+      // of this test). Inherited role kicks in via the project's
+      // organization_id linkage.
+      await db.organizationMembers.createWithUser(org.id, orgMember.id, 'member');
+      const orgMemberJwt = server.jwt.sign(
+        { userId: orgMember.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-inherited-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [orgProject.id],
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${orgReport.id}`,
+        headers: {
+          authorization: `Bearer ${orgMemberJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(orgReport.id);
+      expect(log.user_id).toBe(orgMember.id);
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('does not attribute on dual-header when JWT user is member of a DIFFERENT org from the api-key project', async () => {
+      // Tighter than the outsider cross-org test: the JWT user IS a
+      // real org member, just of the wrong org. `lookupInheritedProjectRole`
+      // is called with `organizationId = orgA.id` (from
+      // `request.authProject.organization_id`), so it must scope its
+      // membership query specifically to orgA — NOT match any org the
+      // user happens to belong to. A regression where the helper
+      // returns `true` for "user is a member of any org" rather than
+      // "user is a member of THIS org" would attribute an org-B user
+      // on org-A's project.
+      const orgA = await db.organizations.create({
+        name: `audit-id-orgA-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        subdomain: `audit-id-orga-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      });
+      const orgB = await db.organizations.create({
+        name: `audit-id-orgB-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        subdomain: `audit-id-orgb-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      });
+      const projectInA = await db.projects.create({
+        name: `audit-id-projA-${Date.now()}-${Math.random()}`,
+        created_by: testUserId,
+        organization_id: orgA.id,
+      });
+      const reportInA = await db.bugReports.create({
+        project_id: projectInA.id,
+        title: 'cross-org membership fixture',
+        description: 'JWT user is in org B; api-key targets project in org A',
+      });
+
+      // User belongs to org B, NOT org A. No project_members row in A.
+      const orgBOnly = await db.users.create({
+        email: `org-b-only-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      await db.organizationMembers.createWithUser(orgB.id, orgBOnly.id, 'member');
+      const orgBOnlyJwt = server.jwt.sign(
+        { userId: orgBOnly.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext, key } = await apiKeyService.createKey({
+        name: `audit-id-cross-org-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectInA.id],
+      });
+
+      const response = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/reports/${reportInA.id}`,
+        headers: {
+          authorization: `Bearer ${orgBOnlyJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ status: 'in-progress' }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const log = await waitForReportAudit(reportInA.id);
+      expect(log.user_id).toBeNull();
+      const details = log.details as { api_key_id?: string };
+      expect(details.api_key_id).toBe(key.id);
+    });
+
+    it('does not attribute on dual-header POST when shareToken in body takes over auth', async () => {
+      // Critical regression guard: `createBodyAuthMiddleware`
+      // (preValidation) is supposed to clear all prior auth fields
+      // when a body shareToken takes over the request. Before the
+      // round-5 fix, it cleared `request.authUser` and
+      // `request.apiKey` but left `request.jwtUserIdentity` set —
+      // so for a POST with all three credentials, `getAuditUserId`
+      // would still see `jwtUserIdentity` and attribute the
+      // shareToken-authenticated action to the JWT user. That's
+      // exactly the cross-channel attribution-poisoning shape this
+      // PR was designed to close.
+      //
+      // The test sends single-project api-key + valid JWT for the
+      // project owner + valid shareToken in body, and asserts the
+      // audit row records `user_id: null`. If this turns red,
+      // either (a) the clear in `createBodyAuthMiddleware` got
+      // reverted, or (b) `getAuditUserId` started reading a field
+      // shareToken auth doesn't clear.
+      const replayKey = `replays/test/${bugReportId}.json.gz`;
+      // Need a replay_key for the storage URL route to find an
+      // object to sign for. Patch it via a direct UPDATE (the
+      // create route doesn't take replay_key directly here).
+      await db.query('UPDATE application.bug_reports SET replay_key = $1 WHERE id = $2', [
+        replayKey,
+        bugReportId,
+      ]);
+
+      const token = generateShareToken();
+      await db.shareTokens.create({
+        bug_report_id: bugReportId,
+        token,
+        created_by: null,
+        password_hash: null,
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      });
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-share-token-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/storage/url/${bugReportId}/replay`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ shareToken: token }),
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      // Find the audit row for THIS specific URL (the existing
+      // helpers index by /api/v1/reports/:id, which doesn't apply).
+      let log: { user_id: string | null; success: boolean } | undefined;
+      const expectedResource = `/api/v1/storage/url/${bugReportId}/replay`;
+      for (let i = 0; i < 60; i++) {
+        const logs = await db.auditLogs.findByResource(expectedResource, undefined, 5);
+        log = logs.find((l) => l.action === 'POST');
+        if (log) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(log).toBeDefined();
+      // Critical assertion. Must be null — shareToken won, jwtUserIdentity
+      // was cleared, no human actor recorded for an anonymous-shareToken
+      // request.
+      expect(log!.user_id).toBeNull();
+    });
+
+    it('writes the JWT user to share_tokens.created_by on dual-header POST /replays/:id/share', async () => {
+      // Round-6 swap: share-tokens.ts:177 was reading
+      // `request.authUser?.id` and dropping JWT-user attribution on
+      // dual-header requests. Now uses `getAuditUserId(request)`.
+      // This test pins the swap. Mirror of the bug_reports.deleted_by
+      // positive test, but for the share_tokens.created_by column.
+      //
+      // The route's `hasShareableContent` check needs `replay_key` to
+      // be set; patch the fixture row directly.
+      const replayKey = `replays/test/${bugReportId}-share.json.gz`;
+      await db.query('UPDATE application.bug_reports SET replay_key = $1 WHERE id = $2', [
+        replayKey,
+        bugReportId,
+      ]);
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-share-create-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/replays/${bugReportId}/share`,
+        headers: {
+          authorization: `Bearer ${testAccessToken}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ expires_in_hours: 24 }),
+      });
+
+      expect(response.statusCode).toBe(201);
+
+      // Read the share_tokens row directly to assert created_by.
+      const result = await db.query<{ created_by: string | null }>(
+        `SELECT created_by FROM application.share_tokens
+         WHERE bug_report_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].created_by).toBe(testUserId);
+    });
+
+    it('records null in share_tokens.created_by when dual-header cross-check fails (outsider JWT)', async () => {
+      // Negative mirror of the share_tokens.created_by positive test.
+      // Outsider JWT (no project membership, no org membership) → the
+      // cross-check returns false, jwtUserIdentity stays unset,
+      // getAuditUserId returns null, share_tokens.created_by is null.
+      // Catches a regression that loosens the cross-check or leaks
+      // attribution from the api-key's `created_by` field.
+      const outsider = await db.users.create({
+        email: `outsider-share-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      const outsiderJwt = server.jwt.sign(
+        { userId: outsider.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const replayKey = `replays/test/${bugReportId}-share-outsider.json.gz`;
+      await db.query('UPDATE application.bug_reports SET replay_key = $1 WHERE id = $2', [
+        replayKey,
+        bugReportId,
+      ]);
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-share-create-outsider-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/replays/${bugReportId}/share`,
+        headers: {
+          authorization: `Bearer ${outsiderJwt}`,
+          'x-api-key': plaintext,
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ expires_in_hours: 24 }),
+      });
+
+      expect(response.statusCode).toBe(201);
+
+      const result = await db.query<{ created_by: string | null }>(
+        `SELECT created_by FROM application.share_tokens
+         WHERE bug_report_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].created_by).toBeNull();
+    });
+
+    it('records null in bug_reports.deleted_by when dual-header cross-check fails (outsider JWT)', async () => {
+      // Mirror of the cross-org poisoning audit-log test, but at
+      // the row-level deleted_by column. Outsider JWT (no project
+      // membership, no org membership for the api-key's project)
+      // → `getAuditUserId` returns null → `deleted_by` is null.
+      const outsider = await db.users.create({
+        email: `outsider-del-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        password_hash: 'unused',
+        role: 'user',
+      });
+      const outsiderJwt = server.jwt.sign(
+        { userId: outsider.id, isPlatformAdmin: false },
+        { expiresIn: '5m' }
+      );
+
+      const apiKeyService = new ApiKeyService(db);
+      const { plaintext } = await apiKeyService.createKey({
+        name: `audit-id-deleted-by-outsider-${Date.now()}`,
+        type: 'development',
+        permission_scope: 'full',
+        permissions: ['bugs:read', 'bugs:write'],
+        created_by: testUserId,
+        allowed_projects: [projectId],
+      });
+
+      const response = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/reports/${bugReportId}`,
+        headers: {
+          authorization: `Bearer ${outsiderJwt}`,
+          'x-api-key': plaintext,
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+
+      const result = await db.query<{ deleted_by: string | null }>(
+        'SELECT deleted_by FROM application.bug_reports WHERE id = $1',
+        [bugReportId]
+      );
+      expect(result.rows).toHaveLength(1);
+      // Outsider's id MUST NOT land here. It also must not be
+      // `testUserId` (that would mean attribution leaked from the
+      // api-key's `created_by` field, which would be a different
+      // bug). Honest null is correct.
+      expect(result.rows[0].deleted_by).toBeNull();
     });
   });
 });

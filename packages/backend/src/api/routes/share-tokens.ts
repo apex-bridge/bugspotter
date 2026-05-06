@@ -13,6 +13,7 @@ import {
   getActiveShareTokenSchema,
 } from '../schemas/share-token-schema.js';
 import { sendSuccess, sendCreated } from '../utils/response.js';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 import { findReportWithAccess } from '../utils/bug-report-helpers.js';
 import { generateShareToken, hashPassword } from '../../utils/token-generator.js';
 import { AppError } from '../middleware/error.js';
@@ -174,7 +175,11 @@ export function shareTokenRoutes(
   }>('/api/v1/replays/:id/share', { schema: createShareTokenSchema }, async (request, reply) => {
     const { id: bugReportId } = request.params;
     const { password, expires_in_hours = config.shareToken.defaultExpirationHours } = request.body;
-    const userId = request.authUser?.id;
+    // Use the audit-attribution helper so dual-header (api-key + JWT)
+    // requests record the JWT user as the share-token creator instead
+    // of dropping the attribution to null. Same pattern as the audit
+    // middleware and the bug_reports.deleted_by callsites.
+    const userId = getAuditUserId(request);
 
     logger.debug('Creating share token', { bugReportId, userId, hasPassword: !!password });
 
@@ -222,7 +227,7 @@ export function shareTokenRoutes(
       token,
       expires_at: expiresAt,
       password_hash: passwordHash,
-      created_by: userId || null,
+      created_by: userId,
     });
 
     // Build share URL (frontend route is /shared/:token)

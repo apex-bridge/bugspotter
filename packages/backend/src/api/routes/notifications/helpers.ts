@@ -275,7 +275,7 @@ export function logResourceOperation(
   operation: string,
   resourceType: string,
   resourceId: string,
-  userId: string | undefined,
+  userId: string | null | undefined,
   metadata?: Record<string, unknown>
 ) {
   logger.info(`Notification ${resourceType.toLowerCase()} ${operation}`, {
