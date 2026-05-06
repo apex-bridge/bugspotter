@@ -199,6 +199,24 @@ describe('Integration Rules API Routes', () => {
       expect(body.data.description_template).toBeNull();
     });
 
+    it('honours explicit description_template: null as caller opt-out', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProjectId}/rules`,
+        headers: { authorization: `Bearer ${authToken}` },
+        payload: {
+          name: 'Opt-out rule',
+          filters: [],
+          auto_create: true,
+          description_template: null,
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body);
+      expect(body.data.description_template).toBeNull();
+    });
+
     it('preserves a caller-supplied description_template (no overwrite)', async () => {
       const customTemplate = '# {{title}}\n\nCustom body for {{user_email}}';
       const response = await server.inject({

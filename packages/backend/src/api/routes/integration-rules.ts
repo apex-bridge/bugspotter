@@ -221,10 +221,11 @@ export async function registerIntegrationRuleRoutes(
       // Get integration (loads plugin + validates existence)
       const integration = await getIntegrationForProject(platform, projectId, registry, db);
 
-      // When auto_create is on and the caller omits a template, seed the
-      // platform's default so newly-created rules render a sensible Jira
-      // description out of the box. An explicit null/empty in the request
-      // is honoured as "the caller really wants no template".
+      // When auto_create is on and the caller omits the template key, seed
+      // the platform's default so newly-created rules render a sensible Jira
+      // description out of the box. An explicit `null` in the request is
+      // honoured as "the caller really wants no template"; an explicit empty
+      // string is preserved as-is (the column allows it).
       const callerProvidedTemplate = 'description_template' in request.body;
       const description_template = callerProvidedTemplate
         ? (request.body.description_template ?? null)
