@@ -225,7 +225,7 @@ export async function registerIntegrationRuleRoutes(
       // platform's default so newly-created rules render a sensible Jira
       // description out of the box. An explicit null/empty in the request
       // is honoured as "the caller really wants no template".
-      const callerProvidedTemplate = request.body.description_template != null;
+      const callerProvidedTemplate = 'description_template' in request.body;
       const description_template = callerProvidedTemplate
         ? (request.body.description_template ?? null)
         : auto_create
