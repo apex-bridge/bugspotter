@@ -11,7 +11,7 @@ import type { DatabaseClient } from '../../src/db/client.js';
 import { createStorage } from '../../src/storage/index.js';
 import type { IStorageService } from '../../src/storage/types.js';
 import { PluginRegistry } from '../../src/integrations/plugin-registry.js';
-import { JIRA_DEFAULT_DESCRIPTION_TEMPLATE } from '../../src/integrations/jira/default-template.js';
+import { DEFAULT_JIRA_TICKET_BODY } from '../../src/integrations/jira/default-ticket-body.js';
 import type { FilterCondition } from '../../src/types/notifications.js';
 import { createProjectIntegrationSQL, createAdminUser } from '../test-helpers.js';
 
@@ -41,7 +41,6 @@ describe('Integration Rules API Routes', () => {
         platform: 'jira',
         version: '1.0.0',
         name: 'Jira Integration (Mock)',
-        defaultDescriptionTemplate: JIRA_DEFAULT_DESCRIPTION_TEMPLATE,
       },
       factory: (_context: any) => ({
         async validateConfig() {
@@ -165,7 +164,7 @@ describe('Integration Rules API Routes', () => {
       expect(body.data.throttle).toBeNull();
     });
 
-    it('seeds platform default description_template when auto_create=true and template omitted', async () => {
+    it('seeds the default Jira ticket body when auto_create=true and description omitted', async () => {
       const response = await server.inject({
         method: 'POST',
         url: `/api/v1/integrations/jira/${testProjectId}/rules`,
@@ -179,7 +178,7 @@ describe('Integration Rules API Routes', () => {
 
       expect(response.statusCode).toBe(201);
       const body = JSON.parse(response.body);
-      expect(body.data.description_template).toBe(JIRA_DEFAULT_DESCRIPTION_TEMPLATE);
+      expect(body.data.description_template).toBe(DEFAULT_JIRA_TICKET_BODY);
     });
 
     it('does not seed default when auto_create is false', async () => {

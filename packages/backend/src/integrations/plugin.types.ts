@@ -83,7 +83,6 @@ export interface PluginMetadata {
   author?: string; // Plugin author
   requiredEnvVars?: string[]; // Required environment variables
   isBuiltIn?: boolean; // Whether this is a built-in plugin (vs custom from database)
-  defaultDescriptionTemplate?: string; // Seeded into rule.description_template when auto_create=true and the caller omits one
 }
 
 /**

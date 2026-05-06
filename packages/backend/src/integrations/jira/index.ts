@@ -7,7 +7,7 @@ export { JiraClient } from './client.js';
 export { JiraBugReportMapper } from './mapper.js';
 export { JiraConfigManager } from './config.js';
 export { JiraIntegrationService } from './service.js';
-export { JIRA_DEFAULT_DESCRIPTION_TEMPLATE } from './default-template.js';
+export { DEFAULT_JIRA_TICKET_BODY } from './default-ticket-body.js';
 
 export type {
   JiraConfig,
