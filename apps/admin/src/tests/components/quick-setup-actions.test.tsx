@@ -49,13 +49,26 @@ describe('QuickSetupActions', () => {
     onboardingStatusMock.mockReset();
   });
 
-  it('renders nothing when the user cannot configure (member/viewer)', () => {
+  // ---- Visibility contract -------------------------------------------------
+  // The two CTAs intentionally have different gating:
+  //   SDK snippet  : canConfigure && hasProject && bugReportCount === 0
+  //   Connect Jira : canConfigure && hasProject && integrationCount === 0
+  // The Jira CTA stays visible even after bugs start flowing because that's
+  // exactly when configuring ticketing is most useful.
+
+  it('hides both CTAs when the user cannot configure (member/viewer)', () => {
     onboardingStatusMock.mockReturnValue({ ...baseState, canConfigure: false });
     const { container } = renderInRouter();
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders both CTAs in the empty-state for an admin', () => {
+  it('hides both CTAs when the org has no project yet', () => {
+    onboardingStatusMock.mockReturnValue({ ...baseState, hasProject: false });
+    const { container } = renderInRouter();
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders both CTAs in the empty-state for an admin with a project', () => {
     onboardingStatusMock.mockReturnValue(baseState);
     renderInRouter();
     expect(screen.getByTestId('quick-setup-actions')).toBeDefined();
@@ -63,7 +76,7 @@ describe('QuickSetupActions', () => {
     expect(screen.getByTestId('quick-setup-connect-jira')).toBeDefined();
   });
 
-  it('hides only the SDK CTA once any bug report has come in', () => {
+  it('hides only the SDK CTA once any bug report has come in (Jira CTA still useful)', () => {
     onboardingStatusMock.mockReturnValue({ ...baseState, bugReportCount: 1 });
     renderInRouter();
     expect(screen.queryByTestId('quick-setup-sdk-snippet')).toBeNull();
@@ -77,7 +90,7 @@ describe('QuickSetupActions', () => {
     expect(screen.getByTestId('quick-setup-sdk-snippet')).toBeDefined();
   });
 
-  it('renders nothing once both signals have moved past zero', () => {
+  it('hides both CTAs once bugs are flowing AND an integration is configured', () => {
     onboardingStatusMock.mockReturnValue({
       ...baseState,
       integrationCount: 1,
@@ -86,6 +99,8 @@ describe('QuickSetupActions', () => {
     const { container } = renderInRouter();
     expect(container.firstChild).toBeNull();
   });
+
+  // ---- Click behaviour -----------------------------------------------------
 
   it('navigates to the Jira integration page on Connect Jira click', () => {
     onboardingStatusMock.mockReturnValue(baseState);

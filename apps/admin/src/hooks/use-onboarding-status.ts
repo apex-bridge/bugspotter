@@ -22,7 +22,13 @@ export interface OnboardingState {
   primaryProjectId: string | null;
   /** Number of integrations enabled in the active organization. */
   integrationCount: number;
-  /** Number of bug reports for `primaryProjectId`. */
+  /**
+   * Number of bug reports the current user can see in the active org.
+   * The list endpoint scopes by project memberships when called without
+   * `project_id` (see `bug-report-access.ts:buildAccessFilters`), so for
+   * org admins/owners — who are members of every project in the org —
+   * this is effectively a tenant-wide count.
+   */
   bugReportCount: number;
 }
 
@@ -80,15 +86,14 @@ export function useOnboardingStatus(): OnboardingState {
 
   const primaryProjectId = projects[0]?.id ?? null;
 
+  // Tenant-wide count — no `project_id` filter means the backend scopes
+  // by the user's project memberships (org admins/owners are members of
+  // every project, so this counts across the whole org). Page size 1
+  // because we only need `pagination.total`.
   const { data: bugReports } = useQuery({
-    queryKey: ['bug-reports', 'count', primaryProjectId],
-    queryFn: () =>
-      bugReportService.getAll(
-        primaryProjectId ? { project_id: primaryProjectId } : undefined,
-        1,
-        1
-      ),
-    enabled: canConfigure && hasOrganization && !!primaryProjectId,
+    queryKey: ['bug-reports', 'count', currentOrganization?.id],
+    queryFn: () => bugReportService.getAll(undefined, 1, 1),
+    enabled: canConfigure && hasOrganization,
     staleTime: 60 * 1000,
   });
 

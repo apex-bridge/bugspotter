@@ -35,11 +35,16 @@ export function QuickSetupActions() {
         visible: (s) => s.canConfigure && s.hasProject && s.bugReportCount === 0,
       },
       {
+        // Intentionally NOT gated on bugReportCount: a tenant with bugs
+        // already flowing but no integration is exactly when the CTA is
+        // most useful (tickets aren't being filed anywhere). hasProject
+        // is required because configuring Jira without a project to
+        // associate is empty-state pollution.
         id: 'connect-jira',
         labelKey: 'quickSetup.connectJira',
         icon: Plug,
         variant: 'secondary',
-        visible: (s) => s.canConfigure && s.integrationCount === 0,
+        visible: (s) => s.canConfigure && s.hasProject && s.integrationCount === 0,
       },
     ],
     []
