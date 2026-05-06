@@ -9,6 +9,7 @@ import type { DatabaseClient } from '../../db/client.js';
 import type { RetentionService } from '../../retention/retention-service.js';
 import type { RetentionScheduler } from '../../retention/retention-scheduler.js';
 import { requireProjectAccess } from '../middleware/project-access.js';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 import { requireProjectRole } from '../utils/authorization.js';
 import { requireUser, requirePlatformAdmin, isPlatformAdmin } from '../middleware/auth.js';
 import {
@@ -427,7 +428,7 @@ export function retentionRoutes(
 
       const certificate = await retentionService.hardDeleteReports(
         reportIds,
-        request.authUser?.id ?? null,
+        getAuditUserId(request),
         generateCertificate
       );
 

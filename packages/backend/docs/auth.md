@@ -49,15 +49,50 @@ When `x-api-key` AND `Authorization: Bearer` are both present and the
 API key validates:
 
 - `request.apiKey` is populated
-- `request.authUser` stays **undefined** (JWT was never consulted)
+- `request.authUser` stays **undefined** — authz precedence is
+  unchanged; the api-key path remains authoritative
+- `request.jwtUserIdentity` is populated (just `{ id }`) IF the
+  accompanying JWT (a) verifies its signature AND (b) the api-key
+  targets exactly one project (`allowed_projects.length === 1`) AND
+  the JWT user has an effective role on that project (explicit
+  `project_members` row OR org-inherited via the project's
+  organization). The "user must exist" property is implicit, not
+  an explicit `findById` call: `project_members.user_id` and
+  `organization_members.user_id` both `ON DELETE CASCADE` against
+  `application.users.id`, so a hard-deleted user has no membership
+  rows for the cross-check to match. There is no `is_active` /
+  `deleted_at` column on `users` today, so hard-delete is the only
+  deactivation path; if soft-delete is ever introduced, this code
+  path needs an explicit active-status check. Failing any of these
+  — invalid signature, multi-project / full-scope api-key, or user
+  with no membership in the single targeted project — leaves the
+  field undefined. **Attribution-only — never authz.** Audit
+  consumers fall back to `jwtUserIdentity?.id` when `authUser` is
+  unset, so dual-header requests where all checks pass record both
+  the human and machine actor
 
-This is _not_ a privilege-escalation surface (a leaked full-scope key
-already grants full access; presenting JWT alongside adds nothing). But
-it does have an audit-trail consequence: downstream loggers that read
-`userId: request.authUser?.id || 'api-key'` record `'api-key'` even
-when the JWT user is the actual actor. A user can deliberately combine
-their JWT with an org's full-scope key to mask attribution. Tracked in
-[#97](https://github.com/apex-bridge/bugspotter/issues/97).
+Why the scope cross-check matters, and why singleton-only: without
+the check, an actor with two unrelated credentials — a leaked api-key
+for project P plus any valid JWT for any user with no relationship to
+P — could plant that user as the audit actor for every request against
+P. That would be strictly worse than the honest `user_id: null` of the
+pre-PR-107 shape. The singleton restriction is what makes "user has a
+relationship to the api-key's target" verifiable: for a single-project
+key the target is unambiguous; for a multi-project key (`[A, B, C]`) a
+user who is a member of A could be falsely attributed on requests that
+actually targeted B, since the auth middleware doesn't know which
+project the request will end up resolving to. Multi-project and full-
+scope keys therefore fall back to `user_id: null` — matching the
+pre-PR-107 shape exactly so this PR never regresses attribution
+honesty in any case.
+
+The asymmetry between authz (api-key wins) and attribution (record
+both, but only when the JWT user has a verifiable relationship to the
+api-key's scope) closed [#97](https://github.com/apex-bridge/bugspotter/issues/97):
+the audit trail now never silently drops the human actor when an
+api-key is presented alongside a JWT for a related user, while the
+authz path never escalates the JWT user above what the api-key was
+scoped for.
 
 ---
 

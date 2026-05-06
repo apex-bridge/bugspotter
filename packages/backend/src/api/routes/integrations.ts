@@ -16,6 +16,7 @@ import { getLogger } from '../../logger.js';
 import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js';
 import { hardenedFetch } from '../../integrations/security/hardened-http.js';
 
+import { getAuditUserId } from '../utils/audit-attribution.js';
 const logger = getLogger();
 
 /**
@@ -102,7 +103,7 @@ export async function registerIntegrationRoutes(
 
       logger.info('Testing integration connection', {
         platform,
-        userId: request.authUser?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -183,7 +184,7 @@ export async function registerIntegrationRoutes(
 
     logger.info('Listing projects for integration', {
       platform,
-      userId: request.authUser?.id ?? null,
+      userId: getAuditUserId(request),
       apiKeyId: request.apiKey?.id ?? null,
       hasQuery: !!query,
       maxResults,
@@ -228,7 +229,7 @@ export async function registerIntegrationRoutes(
       logger.info('Saving integration configuration', {
         platform,
         projectId,
-        userId: request.authUser?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -398,7 +399,7 @@ export async function registerIntegrationRoutes(
         platform,
         projectId,
         enabled,
-        userId: request.authUser?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -438,7 +439,7 @@ export async function registerIntegrationRoutes(
       logger.info('Deleting integration configuration', {
         platform,
         projectId,
-        userId: request.authUser?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
       });
 
@@ -523,7 +524,7 @@ export async function registerIntegrationRoutes(
       logger.info('Searching users in integration', {
         platform,
         projectId,
-        userId: request.authUser?.id ?? null,
+        userId: getAuditUserId(request),
         apiKeyId: request.apiKey?.id ?? null,
         queryLength: query.length,
       });

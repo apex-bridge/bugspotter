@@ -22,6 +22,7 @@ import {
 } from '../../schemas/notification-schema.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { sendSuccess, sendCreated } from '../../utils/response.js';
+import { getAuditUserId } from '../../utils/audit-attribution.js';
 import { checkProjectAccess } from '../../utils/resource.js';
 import { buildPagination, buildEmptyPagination } from '../../utils/query-builder.js';
 import { testChannelDelivery, findChannelAndCheckAccess, logResourceOperation } from './helpers.js';
@@ -116,7 +117,7 @@ export function registerChannelRoutes(fastify: FastifyInstance, db: DatabaseClie
         active,
       });
 
-      logResourceOperation('created', 'channel', channel.id, request.authUser?.id, {
+      logResourceOperation('created', 'channel', channel.id, getAuditUserId(request), {
         projectId: project_id,
         type,
       });
@@ -179,7 +180,7 @@ export function registerChannelRoutes(fastify: FastifyInstance, db: DatabaseClie
         config: updates.config as unknown as ChannelConfig | undefined,
       });
 
-      logResourceOperation('updated', 'channel', id, request.authUser?.id, {
+      logResourceOperation('updated', 'channel', id, getAuditUserId(request), {
         updates: Object.keys(updates),
       });
 
@@ -211,7 +212,7 @@ export function registerChannelRoutes(fastify: FastifyInstance, db: DatabaseClie
 
       await db.notificationChannels.delete(id);
 
-      logResourceOperation('deleted', 'channel', id, request.authUser?.id);
+      logResourceOperation('deleted', 'channel', id, getAuditUserId(request));
 
       return sendSuccess(reply, {
         message: 'Notification channel deleted successfully',

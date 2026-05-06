@@ -42,6 +42,55 @@ declare module 'fastify' {
     /** Share token for anonymous bug report access - set by auth middleware */
     authShareToken?: { bug_report_id: string };
 
+    /**
+     * Shadow JWT identity for audit attribution on dual-header (api-key
+     * + JWT) requests. Set by the auth middleware AFTER a successful
+     * api-key authentication when an `Authorization: Bearer` header is
+     * also present and BOTH of these checks pass:
+     *
+     *   1. JWT signature verifies (via `fastify.jwt.verify(token)`,
+     *      not `request.jwtVerify()` — the latter writes the decoded
+     *      claims to `request.user` as a `@fastify/jwt` side effect,
+     *      which would silently expose a JWT identity to any future
+     *      hook / plugin / route guard that uses the idiomatic
+     *      `request.user` field. The instance method validates
+     *      signature without touching the request).
+     *   2. The api-key targets exactly one project
+     *      (`allowed_projects.length === 1`) AND the user has an
+     *      effective role (explicit `project_members` OR org-inherited
+     *      via the project's organization) on that project, checked
+     *      by `jwtUserCanAttributeForApiKey`. **Note**: this helper
+     *      does NOT call `db.users.findById` — the "user must exist"
+     *      property is *implicit*, derived from the cascade invariant
+     *      (`project_members.user_id` and `organization_members.user_id`
+     *      both have `ON DELETE CASCADE` against `application.users.id`,
+     *      see `db/migrations/001_initial_schema.sql`), so a hard-
+     *      deleted user has no membership rows left to match. There
+     *      is no `is_active`/`deleted_at` field on users today, so
+     *      hard-delete is the only deactivation path. If soft-delete
+     *      for users is ever introduced, this helper must be updated
+     *      to also check the user's active status — the implicit
+     *      cascade guarantee won't extend to soft-deletion.
+     *      Multi-project and full-scope api-keys also skip — at this
+     *      point in the lifecycle the request-target is ambiguous,
+     *      so we can't unambiguously verify the JWT user has a
+     *      relationship to the project the request will actually
+     *      operate on.
+     *
+     * Failing any of those leaves the field undefined and audit rows
+     * record `user_id: null` — the same honest "unknown human actor"
+     * shape pre-PR-107 had.
+     *
+     * **Attribution-only — never authz.** The api-key path is the
+     * authoritative auth (api-key wins precedence); `request.authUser`
+     * stays undefined on this code path. This field exists purely so
+     * audit consumers can record both identities for dual-header
+     * requests where the JWT user has a verifiable relationship to the
+     * api-key's scope. Anything that needs a fresh user object should
+     * continue to read from `authUser`.
+     */
+    jwtUserIdentity?: { id: string };
+
     /** JWT verification method - provided by @fastify/jwt plugin */
     jwtVerify(): Promise<{ userId: string }>;
 

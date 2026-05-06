@@ -16,6 +16,7 @@ import {
 } from '../../schemas/notification-schema.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { sendSuccess, sendCreated } from '../../utils/response.js';
+import { getAuditUserId } from '../../utils/audit-attribution.js';
 import { checkProjectAccess } from '../../utils/resource.js';
 import { buildPagination, buildEmptyPagination } from '../../utils/query-builder.js';
 import { findRuleAndCheckAccess, logResourceOperation } from './helpers.js';
@@ -107,7 +108,7 @@ export function registerRuleRoutes(fastify: FastifyInstance, db: DatabaseClient)
         channel_ids,
       } as unknown as CreateRuleInput);
 
-      logResourceOperation('created', 'rule', rule.id, request.authUser?.id, {
+      logResourceOperation('created', 'rule', rule.id, getAuditUserId(request), {
         projectId: project_id,
         channelCount: channel_ids.length,
       });
@@ -173,7 +174,7 @@ export function registerRuleRoutes(fastify: FastifyInstance, db: DatabaseClient)
         ...(channel_ids && { channel_ids }),
       } as unknown as UpdateRuleInput);
 
-      logResourceOperation('updated', 'rule', id, request.authUser?.id, {
+      logResourceOperation('updated', 'rule', id, getAuditUserId(request), {
         updates: Object.keys(updates),
       });
 
@@ -206,7 +207,7 @@ export function registerRuleRoutes(fastify: FastifyInstance, db: DatabaseClient)
 
       await db.notificationRules.delete(id);
 
-      logResourceOperation('deleted', 'rule', id, request.authUser?.id);
+      logResourceOperation('deleted', 'rule', id, getAuditUserId(request));
 
       return sendSuccess(reply, {
         message: 'Notification rule deleted successfully',
