@@ -5,8 +5,9 @@ import { useOrganization } from '../contexts/organization-context';
 import { useIsSaaS } from '../contexts/deployment-context';
 import { useTranslation } from 'react-i18next';
 import { useMemo, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { LanguageSwitcher } from './language-switcher';
+import { QuickSetupActions } from './onboarding/quick-setup-actions';
+import { usePermissions } from '../hooks/use-permissions';
 import {
   Activity,
   Settings,
@@ -101,24 +102,12 @@ const getRoleBadgeStyles = (label: string) => {
 export default function DashboardLayout() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
-  const { hasOrganization, currentOrganization } = useOrganization();
+  const { hasOrganization } = useOrganization();
   const isSaaS = useIsSaaS();
 
-  // Lightweight org role query — only fetches permissions, not full member list
-  const { data: permissionsData } = useQuery({
-    queryKey: ['permissions', undefined, currentOrganization?.id],
-    staleTime: 5 * 60 * 1000,
-    queryFn: async () => {
-      const { api, API_ENDPOINTS } = await import('../lib/api-client');
-      const response = await api.get<{ data: { organization?: { role: string } } }>(
-        API_ENDPOINTS.permissions.me(),
-        { params: { organizationId: currentOrganization?.id } }
-      );
-      return response.data.data;
-    },
-    enabled: !!currentOrganization?.id && !!user,
-  });
-  const myOrgRole = permissionsData?.organization?.role;
+  // Org role for the user-info badge below. Shared with `useOrgPermissions`
+  // and `useOnboardingStatus` via `usePermissions()` — single round-trip.
+  const { orgRole: myOrgRole } = usePermissions();
   const location = useLocation();
   const { pathname } = location;
 
@@ -261,9 +250,10 @@ export default function DashboardLayout() {
 
       {/* Main Content */}
       <div className="ml-64">
-        {/* Header with Language Switcher */}
+        {/* Header with Quick-setup CTAs (empty-state only) and Language Switcher */}
         <div className="bg-white border-b border-gray-200 px-8 py-4">
-          <div className="flex justify-end">
+          <div className="flex items-center justify-end gap-4">
+            <QuickSetupActions />
             <LanguageSwitcher />
           </div>
         </div>
