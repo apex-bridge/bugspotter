@@ -135,7 +135,7 @@ export function QuickSetupActions() {
 
   return (
     <>
-      <div className="flex items-center gap-2" data-testid="quick-setup-actions">
+      <div className="flex items-center gap-3" data-testid="quick-setup-actions">
         <span className="text-xs font-medium text-gray-600 mr-1 hidden sm:inline">
           {t('quickSetup.label')}
         </span>
@@ -164,7 +164,7 @@ export function QuickSetupActions() {
                   data-testid="quick-setup-sdk-snippet-dismiss"
                   onClick={dismissSdk}
                   aria-label={t('quickSetup.dismissSdk')}
-                  className="ml-1 inline-flex items-center justify-center rounded-md p-1 text-gray-600 hover:bg-gray-100 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="ml-0.5 inline-flex items-center justify-center rounded-md p-1 text-gray-600 hover:bg-gray-100 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <X className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
