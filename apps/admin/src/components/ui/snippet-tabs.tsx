@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState, type KeyboardEvent } from 'react';
 import { cn } from '../../lib/utils';
 import { CodeSnippet } from './code-snippet';
 
@@ -29,10 +29,54 @@ export interface SnippetTabsProps {
  * strip and `<CodeSnippet>` so any snippet flow with multiple
  * language variants gets a consistent UX without re-implementing
  * the picker.
+ *
+ * Keyboard nav follows the WAI-ARIA tablist pattern: ArrowLeft /
+ * ArrowRight wrap, Home / End jump to ends. The focused tab is
+ * activated immediately (manual activation is not used).
  */
 export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: SnippetTabsProps) {
   const [activeId, setActiveId] = useState<string>(tabs[0]?.id ?? '');
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+
+  const activate = useCallback(
+    (id: string, focus: boolean) => {
+      setActiveId(id);
+      onTabChange?.(id);
+      if (focus) {
+        // Focus the new tab so subsequent arrow presses keep working.
+        // Defer to next tick so React has a chance to flip `tabIndex`.
+        setTimeout(() => {
+          document.getElementById(`snippet-tab-${id}`)?.focus();
+        }, 0);
+      }
+    },
+    [onTabChange]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      if (!active) {
+        return;
+      }
+      const idx = tabs.findIndex((t) => t.id === active.id);
+      let nextIdx: number | null = null;
+      if (e.key === 'ArrowRight') {
+        nextIdx = (idx + 1) % tabs.length;
+      } else if (e.key === 'ArrowLeft') {
+        nextIdx = (idx - 1 + tabs.length) % tabs.length;
+      } else if (e.key === 'Home') {
+        nextIdx = 0;
+      } else if (e.key === 'End') {
+        nextIdx = tabs.length - 1;
+      }
+      if (nextIdx === null) {
+        return;
+      }
+      e.preventDefault();
+      activate(tabs[nextIdx].id, true);
+    },
+    [active, tabs, activate]
+  );
 
   if (!active) {
     return null;
@@ -40,7 +84,12 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
 
   return (
     <div className={cn('space-y-3', className)}>
-      <div role="tablist" aria-label={ariaLabel} className="flex gap-1 border-b border-gray-200">
+      <div
+        role="tablist"
+        aria-label={ariaLabel}
+        className="flex gap-1 border-b border-gray-200"
+        onKeyDown={handleKeyDown}
+      >
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -50,10 +99,7 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
             aria-selected={tab.id === active.id}
             aria-controls={`snippet-panel-${tab.id}`}
             tabIndex={tab.id === active.id ? 0 : -1}
-            onClick={() => {
-              setActiveId(tab.id);
-              onTabChange?.(tab.id);
-            }}
+            onClick={() => activate(tab.id, false)}
             className={cn(
               'px-3 py-1.5 text-sm font-medium border-b-2 transition-colors',
               tab.id === active.id

@@ -80,7 +80,7 @@ export function CodeSnippet({
         type="button"
         onClick={handleCopy}
         className="absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-md bg-slate-800/90 px-2.5 py-1 text-xs font-medium text-slate-100 hover:bg-slate-700/90 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        aria-label={copyLabel ?? t('common.copy')}
+        aria-label={copied ? t('common.copied') : (copyLabel ?? t('common.copy'))}
       >
         {copied ? (
           <>

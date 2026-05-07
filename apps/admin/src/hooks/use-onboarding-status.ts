@@ -38,20 +38,27 @@ export interface OnboardingState {
  * typical member/viewer pays no extra cost on every page load.
  */
 export function useOnboardingStatus(): OnboardingState {
-  const { currentOrganization, hasOrganization } = useOrganization();
+  const { hasOrganization } = useOrganization();
 
   const { isSystemAdmin, orgRole } = usePermissions();
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
+  // Plain `['projects']` / `['integrations']` keys to dedupe with every
+  // other consumer in the admin (api-keys, bug-reports, notifications,
+  // integrations overview, …). Org scoping isn't needed in the key
+  // because each project / integration belongs to exactly one org
+  // (`organization_id` FK), the list endpoints scope server-side by the
+  // tenant context, and prod routes orgs to subdomains so an org switch
+  // is a full reload (cache resets naturally).
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects', currentOrganization?.id],
+    queryKey: ['projects'],
     queryFn: projectService.getAll,
     enabled: canConfigure && hasOrganization,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: integrations = [] } = useQuery({
-    queryKey: ['integrations', currentOrganization?.id],
+    queryKey: ['integrations'],
     queryFn: integrationService.list,
     enabled: canConfigure && hasOrganization,
     staleTime: 60 * 1000,
