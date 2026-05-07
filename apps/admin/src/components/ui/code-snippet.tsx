@@ -72,7 +72,9 @@ export function CodeSnippet({
       <pre
         data-testid={testId}
         data-language={language}
-        className="overflow-x-auto p-4 text-xs font-mono leading-relaxed whitespace-pre"
+        // `pr-16` keeps long lines from scrolling under the
+        // absolutely-positioned copy button in the top-right.
+        className="overflow-x-auto p-4 pr-16 text-xs font-mono leading-relaxed whitespace-pre"
       >
         <code>{code}</code>
       </pre>

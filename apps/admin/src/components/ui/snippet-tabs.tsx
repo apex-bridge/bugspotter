@@ -1,4 +1,4 @@
-import { useCallback, useState, type KeyboardEvent } from 'react';
+import { useCallback, useId, useState, type KeyboardEvent } from 'react';
 import { cn } from '../../lib/utils';
 import { CodeSnippet } from './code-snippet';
 
@@ -38,6 +38,14 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
   const [activeId, setActiveId] = useState<string>(tabs[0]?.id ?? '');
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
 
+  // Per-instance prefix so multiple `<SnippetTabs>` rendered on the same
+  // page don't collide on `id="snippet-tab-javascript"` etc. — that
+  // would break `aria-controls` / `aria-labelledby` and cause arrow-key
+  // focus to land on the wrong instance's tab.
+  const instanceId = useId();
+  const tabDomId = useCallback((tabId: string) => `${instanceId}-tab-${tabId}`, [instanceId]);
+  const panelDomId = useCallback((tabId: string) => `${instanceId}-panel-${tabId}`, [instanceId]);
+
   const activate = useCallback(
     (id: string, focus: boolean) => {
       setActiveId(id);
@@ -46,11 +54,11 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
         // Focus the new tab so subsequent arrow presses keep working.
         // Defer to next tick so React has a chance to flip `tabIndex`.
         setTimeout(() => {
-          document.getElementById(`snippet-tab-${id}`)?.focus();
+          document.getElementById(tabDomId(id))?.focus();
         }, 0);
       }
     },
-    [onTabChange]
+    [onTabChange, tabDomId]
   );
 
   const handleKeyDown = useCallback(
@@ -93,11 +101,11 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            id={`snippet-tab-${tab.id}`}
+            id={tabDomId(tab.id)}
             type="button"
             role="tab"
             aria-selected={tab.id === active.id}
-            aria-controls={`snippet-panel-${tab.id}`}
+            aria-controls={panelDomId(tab.id)}
             tabIndex={tab.id === active.id ? 0 : -1}
             onClick={() => activate(tab.id, false)}
             className={cn(
@@ -111,11 +119,7 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
           </button>
         ))}
       </div>
-      <div
-        role="tabpanel"
-        id={`snippet-panel-${active.id}`}
-        aria-labelledby={`snippet-tab-${active.id}`}
-      >
+      <div role="tabpanel" id={panelDomId(active.id)} aria-labelledby={tabDomId(active.id)}>
         <CodeSnippet code={active.code} language={active.language ?? active.id} />
       </div>
     </div>

@@ -119,6 +119,13 @@ export function QuickSetupActions() {
       case 'connect-jira':
         navigate('/integrations/jira');
         break;
+      default: {
+        // Exhaustiveness check: if `QuickActionId` gains a new variant
+        // without a matching case here, this assignment becomes a
+        // compile error.
+        const _exhaustiveCheck: never = id;
+        return _exhaustiveCheck;
+      }
     }
   };
 
@@ -129,7 +136,7 @@ export function QuickSetupActions() {
   return (
     <>
       <div className="flex items-center gap-2" data-testid="quick-setup-actions">
-        <span className="text-xs font-medium text-gray-400 mr-1 hidden sm:inline">
+        <span className="text-xs font-medium text-gray-600 mr-1 hidden sm:inline">
           {t('quickSetup.label')}
         </span>
         {visibleActions.map((action) => {
@@ -157,7 +164,7 @@ export function QuickSetupActions() {
                   data-testid="quick-setup-sdk-snippet-dismiss"
                   onClick={dismissSdk}
                   aria-label={t('quickSetup.dismissSdk')}
-                  className="ml-1 inline-flex items-center justify-center rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="ml-1 inline-flex items-center justify-center rounded-md p-1 text-gray-600 hover:bg-gray-100 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <X className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
