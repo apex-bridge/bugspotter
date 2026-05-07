@@ -47,14 +47,14 @@ export function useOnboardingStatus(): OnboardingState {
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects'],
+    queryKey: ['projects', currentOrganization?.id],
     queryFn: projectService.getAll,
     enabled: canConfigure && hasOrganization,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: integrations = [] } = useQuery({
-    queryKey: ['integrations'],
+    queryKey: ['integrations', currentOrganization?.id],
     queryFn: integrationService.list,
     enabled: canConfigure && hasOrganization,
     staleTime: 60 * 1000,

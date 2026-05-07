@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Copy, Check } from 'lucide-react';
@@ -35,6 +35,7 @@ export function CodeSnippet({
 }: CodeSnippetProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const revertTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const handleCopy = useCallback(async () => {
     if (!navigator.clipboard) {
@@ -45,11 +46,26 @@ export function CodeSnippet({
       await navigator.clipboard.writeText(code);
       setCopied(true);
       toast.success(copiedToast ?? t('common.copied'));
-      setTimeout(() => setCopied(false), 2000);
+      // Cancel any in-flight revert from a prior click so rapid re-clicks
+      // don't flicker the label back to "Copy" mid-second.
+      if (revertTimerRef.current) {
+        clearTimeout(revertTimerRef.current);
+      }
+      revertTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error(t('common.copyFailed'));
     }
   }, [code, copiedToast, t]);
+
+  // Clean up on unmount so we don't setState on a torn-down component
+  // (e.g. snippet dialog closed before the 2s revert fires).
+  useEffect(() => {
+    return () => {
+      if (revertTimerRef.current) {
+        clearTimeout(revertTimerRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className={cn('relative rounded-md bg-slate-900 text-slate-100', className)}>

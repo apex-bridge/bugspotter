@@ -44,9 +44,12 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
         {tabs.map((tab) => (
           <button
             key={tab.id}
+            id={`snippet-tab-${tab.id}`}
             type="button"
             role="tab"
             aria-selected={tab.id === active.id}
+            aria-controls={`snippet-panel-${tab.id}`}
+            tabIndex={tab.id === active.id ? 0 : -1}
             onClick={() => {
               setActiveId(tab.id);
               onTabChange?.(tab.id);
@@ -62,7 +65,13 @@ export function SnippetTabs({ tabs, ariaLabel, className, onTabChange }: Snippet
           </button>
         ))}
       </div>
-      <CodeSnippet code={active.code} language={active.language ?? active.id} />
+      <div
+        role="tabpanel"
+        id={`snippet-panel-${active.id}`}
+        aria-labelledby={`snippet-tab-${active.id}`}
+      >
+        <CodeSnippet code={active.code} language={active.language ?? active.id} />
+      </div>
     </div>
   );
 }
