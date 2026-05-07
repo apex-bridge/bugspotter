@@ -250,11 +250,16 @@ export default function DashboardLayout() {
 
       {/* Main Content */}
       <div className="ml-64">
-        {/* Header with Quick-setup CTAs (empty-state only) and Language Switcher */}
+        {/* Header: quick-setup CTAs on the left (empty-state only),
+            language switcher right-anchored via `ml-auto` so it stays
+            on the right whether QuickSetupActions renders or returns
+            null. */}
         <div className="bg-white border-b border-gray-200 px-8 py-4">
-          <div className="flex items-center justify-end gap-4">
+          <div className="flex items-center gap-4">
             <QuickSetupActions />
-            <LanguageSwitcher />
+            <div className="ml-auto">
+              <LanguageSwitcher />
+            </div>
           </div>
         </div>
         <main className="p-8">
