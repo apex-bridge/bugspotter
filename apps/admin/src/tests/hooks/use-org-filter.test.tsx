@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { useOrgFilter } from '../../hooks/use-org-filter';
 import type { ReactNode } from 'react';
 
@@ -38,11 +38,20 @@ describe('useOrgFilter', () => {
   });
 
   it('setSelectedOrgId(null) deletes the param without nuking other query params', () => {
-    const { result } = renderHook(() => useOrgFilter(), {
-      // Existing pagination + sort that the page is using; switching org
-      // scope must not blow these away.
-      wrapper: makeWrapper(['/users?organizationId=acme-id&page=3&sort=name']),
-    });
+    // Pull both the hook output and the router's location.search so we
+    // can assert positively that `page` and `sort` survive — the test
+    // name promises "without nuking" and the negative assertion alone
+    // wouldn't catch a regression that drops siblings.
+    const { result } = renderHook(
+      () => {
+        const filter = useOrgFilter();
+        const location = useLocation();
+        return { ...filter, search: location.search };
+      },
+      {
+        wrapper: makeWrapper(['/users?organizationId=acme-id&page=3&sort=name']),
+      }
+    );
 
     expect(result.current.selectedOrgId).toBe('acme-id');
 
@@ -51,6 +60,10 @@ describe('useOrgFilter', () => {
     });
 
     expect(result.current.selectedOrgId).toBeNull();
+    const params = new URLSearchParams(result.current.search);
+    expect(params.get('organizationId')).toBeNull();
+    expect(params.get('page')).toBe('3');
+    expect(params.get('sort')).toBe('name');
   });
 
   it('setSelectedOrgId replaces an existing value', () => {

@@ -35,7 +35,11 @@ export function useOrgFilter(): {
       } else {
         next.delete('organizationId');
       }
-      setSearchParams(next, { replace: false });
+      // `replace: true` so each dropdown change doesn't push a new
+      // entry onto the browser history. Without this, the Back button
+      // would walk through every filter selection instead of returning
+      // to the previous page — a known footgun for filter widgets.
+      setSearchParams(next, { replace: true });
     },
     [searchParams, setSearchParams]
   );

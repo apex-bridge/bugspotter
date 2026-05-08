@@ -22,13 +22,15 @@ export function DeflectionStatsCard({ orgId }: DeflectionStatsCardProps) {
     setSelectedProjectId('');
   }, [orgId]);
 
-  const { data: allProjects = [] } = useQuery({
+  // Backend scopes by `organization_id` (PR #115); pass `orgId` instead
+  // of fetching all projects and filtering client-side. Avoids both an
+  // over-fetch AND a security-by-frontend-filter pattern (other-org
+  // project data shouldn't be flowing over the wire to begin with).
+  const { data: projects = [] } = useQuery({
     queryKey: ['projects', orgId],
-    queryFn: () => projectService.getAll(),
+    queryFn: () => projectService.getAll(orgId),
     enabled: !!orgId,
   });
-
-  const projects = allProjects.filter((p) => p.organization_id === orgId);
 
   const {
     data: stats,
