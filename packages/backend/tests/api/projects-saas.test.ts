@@ -295,5 +295,97 @@ describe('Project Routes — SaaS Mode', () => {
       expect(json.success).toBe(true);
       expect(Array.isArray(json.data)).toBe(true);
     });
+
+    it('platform admin filters by organization_id query param on hub domain', async () => {
+      // Create a second org with one project so we can prove the filter narrows.
+      const otherOrg = await db.organizations.create({
+        name: `Other Org ${Date.now()}`,
+        subdomain: `otherorg-${Date.now()}`,
+        subscription_status: 'trial',
+      });
+      const now = new Date();
+      await db.subscriptions.create({
+        organization_id: otherOrg.id,
+        plan_name: 'starter',
+        status: 'trial',
+        current_period_start: now,
+        current_period_end: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+        quotas: { max_projects: 10, max_bug_reports: 1000, max_storage_mb: 500 },
+      });
+
+      await db.projects.create({ name: 'In Test Org', organization_id: orgId });
+      await db.projects.create({ name: 'In Other Org', organization_id: otherOrg.id });
+
+      // Hub domain, filter to first org
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/projects?organization_id=${orgId}`,
+        headers: { authorization: `Bearer ${adminToken}`, host: 'example.com' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      const orgIds: string[] = json.data.map((p: { organization_id: string }) => p.organization_id);
+      expect(orgIds.every((id) => id === orgId)).toBe(true);
+      expect(orgIds).toContain(orgId);
+      expect(orgIds).not.toContain(otherOrg.id);
+    });
+
+    it('rejects malformed organization_id query param', async () => {
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/projects?organization_id=not-a-uuid',
+        headers: { authorization: `Bearer ${adminToken}`, host: 'example.com' },
+      });
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('non-admin user has organization_id query param ignored (still scoped to their access)', async () => {
+      // Create a regular (non-platform-admin) user, member of test org only
+      const timestamp = Date.now();
+      const memberEmail = `regular-${timestamp}@example.com`;
+      const passwordHash = await bcrypt.hash('Password123!', 10);
+      const memberUser = await db.users.create({
+        email: memberEmail,
+        name: 'Regular Member',
+        password_hash: passwordHash,
+        role: 'user', // app-level role, NOT platform admin
+        email_verified_at: new Date(),
+      });
+      await db.organizationMembers.createWithUser(orgId, memberUser.id, 'member');
+
+      // Project in test org (member should see it) + project in OTHER org (member must NOT)
+      const otherOrg = await db.organizations.create({
+        name: `Other Org ${timestamp}`,
+        subdomain: `otherorg2-${timestamp}`,
+        subscription_status: 'trial',
+      });
+      await db.projects.create({ name: 'Member-org project', organization_id: orgId });
+      await db.projects.create({ name: 'Other-org project', organization_id: otherOrg.id });
+
+      const loginRes = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: memberEmail, password: 'Password123!' },
+      });
+      const token = loginRes.json().data.access_token as string;
+
+      // Pass `?organization_id=` pointing at the OTHER org. A platform admin
+      // would get the other-org's projects; a regular user should still only
+      // see their own org's, because the param is consumed inside the
+      // platform-admin branch only.
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/projects?organization_id=${otherOrg.id}`,
+        headers: { authorization: `Bearer ${token}`, host: 'example.com' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const orgIds: string[] = response
+        .json()
+        .data.map((p: { organization_id: string }) => p.organization_id);
+      // Filter ignored: caller never sees the other org's data.
+      expect(orgIds).not.toContain(otherOrg.id);
+    });
   });
 });

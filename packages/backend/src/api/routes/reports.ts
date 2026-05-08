@@ -302,6 +302,7 @@ export function bugReportRoutes(
         status,
         priority,
         project_id,
+        organization_id,
         created_after,
         created_before,
         sort_by,
@@ -322,7 +323,8 @@ export function bugReportRoutes(
           priority,
           created_after: createdAfterDate,
           created_before: createdBeforeDate,
-        }
+        },
+        organization_id
       );
 
       // Validate project access if required (regular user + specific project_id)

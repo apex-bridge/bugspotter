@@ -83,15 +83,28 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
    * GET /api/v1/projects
    * Get all projects for the authenticated user
    */
-  fastify.get(
+  fastify.get<{ Querystring: { organization_id?: string } }>(
     '/api/v1/projects',
     {
       preHandler: [requireUser],
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            organization_id: { type: 'string', format: 'uuid' },
+          },
+          additionalProperties: false,
+        },
+      },
     },
     async (request, reply) => {
-      // Platform admin users see all projects (scoped to org in SaaS mode)
+      // Platform admin users see all projects (scoped to org in SaaS mode).
+      // On the hub domain (no `request.organizationId`), they may pass
+      // `?organization_id=` to narrow the cross-org view to a single tenant.
+      // Param is consumed only inside this branch — regular users never reach it.
       if (isPlatformAdmin(request)) {
-        const projects = await db.projects.findAll(request.organizationId);
+        const adminOrgFilter = request.query.organization_id;
+        const projects = await db.projects.findAll(adminOrgFilter ?? request.organizationId);
         return sendSuccess(reply, projects);
       }
 

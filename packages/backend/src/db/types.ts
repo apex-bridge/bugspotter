@@ -514,6 +514,13 @@ export interface ApiKeyFilters {
   created_by?: string;
   /** Show keys created by this user OR scoped to projects in their org */
   accessible_by_user_id?: string;
+  /**
+   * Restrict to keys whose `allowed_projects` overlaps any project in the
+   * given org. Used by platform admin's cross-org filter; trusted by the
+   * caller — the route handler is responsible for only setting this when
+   * `isPlatformAdmin`.
+   */
+  organization_id?: string;
   tag?: string;
   expires_before?: Date;
   expires_after?: Date;

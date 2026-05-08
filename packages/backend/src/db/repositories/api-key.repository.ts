@@ -54,6 +54,7 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
       team_id,
       created_by,
       accessible_by_user_id,
+      organization_id,
       tag,
       expires_before,
       expires_after,
@@ -86,6 +87,21 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
       );
     } else if (created_by) {
       filter.equals('created_by', created_by);
+    }
+
+    // Cross-org filter for platform admin: keep only keys whose
+    // `allowed_projects` overlaps any project in the given org. Composes
+    // with the access filter above (an admin filtering their own org-scoped
+    // view would still get the AND).
+    if (organization_id) {
+      const p = filter.getParamCount();
+      filter.raw(
+        `EXISTS (
+          SELECT 1 FROM ${this.schema}.projects p
+          WHERE p.organization_id = $${p} AND p.id = ANY(allowed_projects)
+        )`,
+        [organization_id]
+      );
     }
 
     const { whereClause, values, paramCount } = filter.build();

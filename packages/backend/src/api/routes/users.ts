@@ -36,14 +36,22 @@ export function userRoutes(fastify: FastifyInstance, userRepo: UserRepository) {
         limit = 20,
         role,
         email,
+        organization_id,
       } = request.query as {
         page?: number;
         limit?: number;
         role?: 'admin' | 'user' | 'viewer';
         email?: string;
+        organization_id?: string;
       };
 
-      const result = await userRepo.listWithFilters({ page, limit, role, email });
+      const result = await userRepo.listWithFilters({
+        page,
+        limit,
+        role,
+        email,
+        organization_id,
+      });
 
       return reply.send({
         success: true,

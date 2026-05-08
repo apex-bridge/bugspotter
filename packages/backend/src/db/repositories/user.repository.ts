@@ -135,11 +135,31 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
     limit?: number;
     role?: 'admin' | 'user' | 'viewer';
     email?: string;
+    /**
+     * Restrict to users who are members of the given organization
+     * (SaaS only — falls through to no-op in self-hosted where the
+     * `saas.organization_members` table is empty).
+     */
+    organization_id?: string;
   }): Promise<PaginatedResult<Omit<User, 'password_hash'>>> {
-    const { page = 1, limit = 20, role, email } = options;
+    const { page = 1, limit = 20, role, email, organization_id } = options;
 
     // Build WHERE clause using unified FilterBuilder
     const filter = createFilter().equals('role', role).ilike('email', email);
+
+    if (organization_id) {
+      // EXISTS keeps the JOIN out of the projection and avoids row-multiplication
+      // for users with multiple memberships to the same org (shouldn't happen,
+      // but the unique constraint isn't enforced in older deployments).
+      const p = filter.getParamCount();
+      filter.raw(
+        `EXISTS (
+          SELECT 1 FROM saas.organization_members om
+          WHERE om.user_id = users.id AND om.organization_id = $${p}
+        )`,
+        [organization_id]
+      );
+    }
 
     const { whereClause, values, paramCount } = filter.build();
 
