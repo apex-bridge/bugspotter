@@ -166,9 +166,13 @@ describe('OnboardingPage', () => {
     expect(screen.getByTestId('onboarding-install-snippet')).toHaveTextContent(
       'apiKey: "bgs_abc123"'
     );
-    expect(screen.getByTestId('onboarding-install-snippet')).toHaveTextContent(
-      'projectId: "proj-1"'
-    );
+    // The SDK config (`BugSpotterConfig`) does NOT have a `projectId`
+    // field — the API key encodes which projects it can write to via
+    // its `allowed_projects` server-side scope. The snippet emits
+    // `endpoint` instead, set to the current origin (the tenant's
+    // own subdomain on SaaS, the deployment URL on self-hosted).
+    expect(screen.getByTestId('onboarding-install-snippet')).not.toHaveTextContent('projectId');
+    expect(screen.getByTestId('onboarding-install-snippet')).toHaveTextContent('endpoint:');
   });
 
   it('seeds the auth context with access token and user from the handoff', async () => {

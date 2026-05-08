@@ -10,13 +10,24 @@ import { buildSdkInstallSnippets } from './sdk-install-snippets';
 interface SdkSnippetDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Project the snippet should target. The id is inlined into the snippet. */
-  projectId: string | null;
 }
 
-export function SdkSnippetDialog({ open, onOpenChange, projectId }: SdkSnippetDialogProps) {
+/**
+ * The current page origin is the BugSpotter API endpoint the user
+ * needs to point the SDK at:
+ *   - SaaS: tenants live at `<subdomain>.kz.bugspotter.io`, so
+ *     `window.location.origin` IS the tenant's API host.
+ *   - Self-hosted: same — the user is on their own deployment.
+ * `null` during SSR / non-browser contexts; the snippet then shows
+ * a placeholder the user replaces by hand.
+ */
+function currentEndpoint(): string | null {
+  return typeof window === 'undefined' ? null : window.location.origin;
+}
+
+export function SdkSnippetDialog({ open, onOpenChange }: SdkSnippetDialogProps) {
   const { t } = useTranslation();
-  const tabs = useMemo(() => buildSdkInstallSnippets(projectId), [projectId]);
+  const tabs = useMemo(() => buildSdkInstallSnippets(currentEndpoint()), []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -22,7 +22,15 @@ export interface OnboardingState {
   canConfigure: boolean;
   /** True iff there is at least one project in the active organization. */
   hasProject: boolean;
-  /** First project's id (used as the SDK snippet's projectId). Null when no project. */
+  /** Total number of projects in the active org (drives single-vs-multi UX branches). */
+  projectCount: number;
+  /**
+   * First project's id, used to short-circuit single-project flows
+   * (e.g. routing Connect Jira straight to the project's configure
+   * page instead of dumping the user on a project picker). Null when
+   * no project. Don't rely on this for multi-project tenants — server
+   * order isn't documented.
+   */
   primaryProjectId: string | null;
   /** Number of integrations enabled in the active organization. */
   integrationCount: number;
@@ -67,6 +75,7 @@ export function useOnboardingStatus(): OnboardingState {
   return {
     canConfigure,
     hasProject: projects.length >= 1,
+    projectCount: projects.length,
     primaryProjectId: projects[0]?.id ?? null,
     integrationCount: integrations.length,
   };
