@@ -5,8 +5,27 @@ name: Claude PR Review
 # workflow; failures here don't gate merges.
 
 on:
+  # Auto-review the PR ONCE on open / ready-for-review / reopen.
+  # `synchronize` (per-push) is intentionally excluded — the previous
+  # configuration was firing a fresh review on every commit pushed to
+  # an open PR, which dominated the action's spend (~$15/day at peak).
+  # Reviews on a stale revision aren't useful anyway; if a PR moves
+  # significantly during review, the requester can re-run via
+  # `@claude review PR` (handled below) and that path is rate-limited
+  # by being human-driven.
+  #
+  # `paths-ignore` skips reviews on changes that don't benefit from
+  # one: documentation, workflow YAML (the action's own validation
+  # guardrail rejects modified workflows from PR branches anyway),
+  # marketing HTML, etc.
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+      - '*.html'
+      - 'apps/**/*.html'
   # @claude mentions in PR comments and review threads. The `if:` guard
   # below keeps the workflow from running on issue-comments outside of
   # PRs and on comments that don't address Claude.
@@ -131,6 +150,15 @@ jobs:
           # (`'' || ',Bash(...)'` evaluates to the fallback). Keep the
           # expression in this form: condition true → non-empty branch
           # appended; condition false → `''` as the fallback.
+          #
+          # Model selection: Haiku for auto-runs (per-PR sanity check,
+          # cheap), Opus for human-triggered `@claude review` pings
+          # (deeper read on demand). Haiku is roughly 1/12 the cost of
+          # Opus per token and finishes well inside the 25-turn budget
+          # for typical diffs. Both branches of this conditional are
+          # non-empty model ids, so the `&& A || B` ternary is safe
+          # here (unlike the allowedTools line above).
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob${{ github.event_name != 'pull_request' && ',Bash(gh pr comment:*)' || '' }}"
             --max-turns 25
+            --model ${{ github.event_name == 'pull_request' && 'claude-haiku-4-5-20251001' || 'claude-opus-4-7' }}
