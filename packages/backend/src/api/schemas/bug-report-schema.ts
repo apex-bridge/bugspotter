@@ -124,6 +124,9 @@ export const listBugReportsSchema = {
       status: { type: 'string', enum: bugStatusEnum },
       priority: { type: 'string', enum: bugPriorityEnum },
       project_id: { type: 'string', format: 'uuid' },
+      // Cross-org filter for platform admin on the hub domain. Ignored
+      // for non-platform-admin callers (see `buildAccessFilters`).
+      organization_id: { type: 'string', format: 'uuid' },
       created_after: { type: 'string', format: 'date' },
       created_before: { type: 'string', format: 'date' },
       sort_by: {

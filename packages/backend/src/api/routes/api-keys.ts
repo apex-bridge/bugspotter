@@ -268,6 +268,7 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         type,
         status,
         created_by,
+        organization_id,
         sort_by = 'created_at',
         sort_order = 'desc',
       } = request.query as {
@@ -277,6 +278,7 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         status?: 'active' | 'revoked' | 'expired';
         permission_scope?: PermissionScope;
         created_by?: string;
+        organization_id?: string;
         sort_by?: 'created_at' | 'updated_at' | 'last_used_at' | 'name';
         sort_order?: 'asc' | 'desc';
       };
@@ -293,8 +295,21 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       // Non-admin users see their own keys + keys for projects in their org
       if (!isPlatformAdmin(request)) {
         filters.accessible_by_user_id = request.authUser.id;
-      } else if (created_by) {
-        filters.created_by = created_by;
+      } else {
+        if (created_by) {
+          filters.created_by = created_by;
+        }
+        // Cross-org filter — only honored for platform admin. Tenant
+        // subdomain context wins over the query param (matches the
+        // precedence applied in `projects.ts` and `reports.ts`): an
+        // admin already on `acme.kz.bugspotter.io` cannot widen to a
+        // different org via the query string. A regular user passing
+        // the param has it ignored entirely (the branch above already
+        // set `accessible_by_user_id`).
+        const effectiveOrgId = request.organizationId ?? organization_id;
+        if (effectiveOrgId) {
+          filters.organization_id = effectiveOrgId;
+        }
       }
 
       const result = await apiKeyService.listKeys(

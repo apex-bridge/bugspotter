@@ -3,7 +3,7 @@
  * Comprehensive tests for API key management operations
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { DatabaseClient } from '../../src/db/client.js';
 import { createHash } from 'crypto';
 import type { ApiKey, User, Project } from '../../src/db/types.js';
@@ -16,7 +16,7 @@ describe('ApiKeyRepository', () => {
   let testUser: User;
   let testProject1: Project;
   let testProject2: Project;
-  let createdApiKeys: string[] = [];
+  const createdApiKeys: string[] = [];
 
   beforeAll(async () => {
     db = DatabaseClient.create({
@@ -52,15 +52,21 @@ describe('ApiKeyRepository', () => {
     for (const id of createdApiKeys) {
       try {
         await db.apiKeys.delete(id);
-      } catch (error) {
+      } catch {
         // Ignore errors during cleanup
       }
     }
 
     // Cleanup test data
-    if (testProject1?.id) await db.projects.delete(testProject1.id);
-    if (testProject2?.id) await db.projects.delete(testProject2.id);
-    if (testUser?.id) await db.users.delete(testUser.id);
+    if (testProject1?.id) {
+      await db.projects.delete(testProject1.id);
+    }
+    if (testProject2?.id) {
+      await db.projects.delete(testProject2.id);
+    }
+    if (testUser?.id) {
+      await db.users.delete(testUser.id);
+    }
 
     await db.close();
   });
@@ -303,6 +309,121 @@ describe('ApiKeyRepository', () => {
       // Ensure pages don't overlap
       if (page1.data.length > 0 && page2.data.length > 0) {
         expect(page1.data[0].id).not.toBe(page2.data[0].id);
+      }
+    });
+  });
+
+  describe('organization_id filter', () => {
+    // The cross-org filter is what the platform-admin sidebar widget
+    // ultimately passes to this method. The risk surface is exactly the
+    // wildcard-key case claude flagged on PR #115: a key with
+    // `allowed_projects = NULL` grants access to every project, so it
+    // can touch the filtered org's data and must appear in the result —
+    // but `p.id = ANY(NULL)` evaluates to NULL, not match.
+
+    let orgScopedKeyId: string;
+    let otherOrgKeyId: string;
+    let wildcardKeyId: string;
+    let orgWithProject: { id: string };
+    let projectInOrg: { id: string };
+    let otherOrg: { id: string };
+    let projectInOtherOrg: { id: string };
+    // Track per-test-created fixtures so the suite can clean them up;
+    // emptyOrg is created inside one test but pushed onto the same list
+    // so the teardown sweeps it too.
+    const createdOrgIds: string[] = [];
+    const createdProjectIds: string[] = [];
+
+    beforeEach(async () => {
+      const ts = Date.now();
+
+      // Two orgs, each with one project. Wildcard key via NULL allowed_projects.
+      orgWithProject = await db.organizations.create({
+        name: `KeyFilter Org A ${ts}`,
+        subdomain: `keyfilter-a-${ts}`,
+        subscription_status: 'active',
+      });
+      otherOrg = await db.organizations.create({
+        name: `KeyFilter Org B ${ts}`,
+        subdomain: `keyfilter-b-${ts}`,
+        subscription_status: 'active',
+      });
+      createdOrgIds.push(orgWithProject.id, otherOrg.id);
+      projectInOrg = await db.projects.create({
+        name: `Proj in A ${ts}`,
+        created_by: testUser.id,
+        organization_id: orgWithProject.id,
+      });
+      projectInOtherOrg = await db.projects.create({
+        name: `Proj in B ${ts}`,
+        created_by: testUser.id,
+        organization_id: otherOrg.id,
+      });
+      createdProjectIds.push(projectInOrg.id, projectInOtherOrg.id);
+
+      const orgScoped = await db.apiKeys.create(
+        createTestApiKey(`Org-A-scoped ${ts}`, { allowed_projects: [projectInOrg.id] })
+      );
+      const otherScoped = await db.apiKeys.create(
+        createTestApiKey(`Org-B-scoped ${ts}`, { allowed_projects: [projectInOtherOrg.id] })
+      );
+      const wildcard = await db.apiKeys.create(
+        createTestApiKey(`Wildcard ${ts}`, { allowed_projects: null })
+      );
+
+      orgScopedKeyId = orgScoped.id;
+      otherOrgKeyId = otherScoped.id;
+      wildcardKeyId = wildcard.id;
+      createdApiKeys.push(orgScopedKeyId, otherOrgKeyId, wildcardKeyId);
+    });
+
+    it('returns keys whose allowed_projects overlaps the filtered org', async () => {
+      const result = await db.apiKeys.list({ organization_id: orgWithProject.id });
+      const ids = result.data.map((k) => k.id);
+
+      expect(ids).toContain(orgScopedKeyId);
+      expect(ids).not.toContain(otherOrgKeyId);
+    });
+
+    it('includes wildcard keys (allowed_projects = NULL) — they grant access to every project', async () => {
+      const result = await db.apiKeys.list({ organization_id: orgWithProject.id });
+      const ids = result.data.map((k) => k.id);
+
+      // Bug claude flagged: `p.id = ANY(NULL)` evaluates to NULL, so without
+      // the explicit `allowed_projects IS NULL` branch in the EXISTS clause,
+      // wildcard keys would be silently excluded from the filtered view.
+      expect(ids).toContain(wildcardKeyId);
+    });
+
+    it('returns no keys when filtering on an org with no projects', async () => {
+      const ts = Date.now();
+      const emptyOrg = await db.organizations.create({
+        name: `Empty Org ${ts}`,
+        subdomain: `empty-org-${ts}`,
+        subscription_status: 'active',
+      });
+      createdOrgIds.push(emptyOrg.id);
+
+      const result = await db.apiKeys.list({ organization_id: emptyOrg.id });
+      // Wildcard keys grant access to every project, but if the org has zero
+      // projects there's nothing to grant access TO. Empty result is correct.
+      const ids = result.data.map((k) => k.id);
+      expect(ids).not.toContain(orgScopedKeyId);
+      expect(ids).not.toContain(otherOrgKeyId);
+      expect(ids).not.toContain(wildcardKeyId);
+    });
+
+    afterEach(async () => {
+      // Children first (projects FK org); both lists drained.
+      for (const id of createdProjectIds.splice(0)) {
+        await db.projects.delete(id).catch(() => {
+          /* swallow — best-effort cleanup */
+        });
+      }
+      for (const id of createdOrgIds.splice(0)) {
+        await db.organizations.delete(id).catch(() => {
+          /* swallow */
+        });
       }
     });
   });

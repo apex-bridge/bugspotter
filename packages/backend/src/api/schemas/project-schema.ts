@@ -16,6 +16,21 @@ export const projectSchema = {
   },
 } as const;
 
+/**
+ * `GET /api/v1/projects` — querystring schema.
+ * Currently only carries the platform-admin cross-org filter; the route
+ * itself is open to all authenticated users (handler branches by role).
+ */
+export const listProjectsSchema = {
+  querystring: {
+    type: 'object',
+    properties: {
+      organization_id: { type: 'string', format: 'uuid' },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
 export const createProjectSchema = {
   body: {
     type: 'object',

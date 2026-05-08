@@ -94,6 +94,8 @@ export interface ListReportsQuery {
   status?: BugStatus;
   priority?: BugPriority;
   project_id?: string;
+  /** Cross-org filter; only consumed for platform admins (see `buildAccessFilters`). */
+  organization_id?: string;
   created_after?: string;
   created_before?: string;
   sort_by?: 'created_at' | 'updated_at' | 'priority';

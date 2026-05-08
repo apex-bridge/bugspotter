@@ -105,6 +105,31 @@ describe('buildAccessFilters', () => {
       });
     });
 
+    it('should filter by organization_id when admin requests it (cross-org filter)', () => {
+      const result = buildAccessFilters(
+        mockAdmin,
+        undefined,
+        undefined,
+        { status: 'open' },
+        'org-123'
+      );
+
+      expect(result).toEqual({
+        filters: {
+          organization_id: 'org-123',
+          status: 'open',
+        },
+        requiresValidation: false,
+      });
+    });
+
+    it('should compose project_id + organization_id when admin sets both', () => {
+      const result = buildAccessFilters(mockAdmin, undefined, 'proj-abc', undefined, 'org-123');
+
+      expect(result.filters.project_id).toBe('proj-abc');
+      expect(result.filters.organization_id).toBe('org-123');
+    });
+
     it('should work with date filters', () => {
       const createdAfter = new Date('2024-01-01');
       const createdBefore = new Date('2024-12-31');
@@ -116,6 +141,32 @@ describe('buildAccessFilters', () => {
 
       expect(result.filters.created_after).toBe(createdAfter);
       expect(result.filters.created_before).toBe(createdBefore);
+    });
+  });
+
+  describe('Regular user passing organization_id (security boundary)', () => {
+    it('ignores organization_id from a regular user with no project_id (falls through to user_id JOIN)', () => {
+      const result = buildAccessFilters(
+        mockUser,
+        undefined,
+        undefined,
+        { status: 'open' },
+        'org-evil'
+      );
+
+      // The org filter is consumed only inside the platform-admin branch.
+      // A regular user passing it must NOT have it applied — that would let
+      // them probe / enumerate other tenants' data.
+      expect(result.filters).not.toHaveProperty('organization_id');
+      expect(result.filters.user_id).toBe(mockUser.id);
+    });
+
+    it('ignores organization_id from a regular user with project_id (falls through to validated project filter)', () => {
+      const result = buildAccessFilters(mockUser, undefined, 'proj-456', undefined, 'org-evil');
+
+      expect(result.filters).not.toHaveProperty('organization_id');
+      expect(result.filters.project_id).toBe('proj-456');
+      expect(result.requiresValidation).toBe(true);
     });
   });
 
