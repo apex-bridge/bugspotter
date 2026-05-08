@@ -331,6 +331,47 @@ describe('Project Routes — SaaS Mode', () => {
       expect(orgIds).not.toContain(otherOrg.id);
     });
 
+    it('tenant subdomain context wins over query param (admin cannot widen via ?organization_id=)', async () => {
+      // Set up a second org with its own project.
+      const ts = Date.now();
+      const otherOrg = await db.organizations.create({
+        name: `Precedence Other ${ts}`,
+        subdomain: `precedence-${ts}`,
+        subscription_status: 'trial',
+      });
+      const now = new Date();
+      await db.subscriptions.create({
+        organization_id: otherOrg.id,
+        plan_name: 'starter',
+        status: 'trial',
+        current_period_start: now,
+        current_period_end: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+        quotas: { max_projects: 10, max_bug_reports: 1000, max_storage_mb: 500 },
+      });
+
+      await db.projects.create({ name: 'In test org', organization_id: orgId });
+      await db.projects.create({ name: 'In other org', organization_id: otherOrg.id });
+
+      // Hit the test org's subdomain BUT pass `?organization_id=` pointing at
+      // the other org. The subdomain context should win, so we should see
+      // ONLY test-org's projects.
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/projects?organization_id=${otherOrg.id}`,
+        headers: {
+          authorization: `Bearer ${adminToken}`,
+          host: `${orgSubdomain}.example.com`,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const orgIds: string[] = response
+        .json()
+        .data.map((p: { organization_id: string }) => p.organization_id);
+      expect(orgIds).toContain(orgId);
+      expect(orgIds).not.toContain(otherOrg.id);
+    });
+
     it('rejects malformed organization_id query param', async () => {
       const response = await server.inject({
         method: 'GET',
@@ -368,6 +409,7 @@ describe('Project Routes — SaaS Mode', () => {
         url: '/api/v1/auth/login',
         payload: { email: memberEmail, password: 'Password123!' },
       });
+      expect(loginRes.statusCode).toBe(200);
       const token = loginRes.json().data.access_token as string;
 
       // Pass `?organization_id=` pointing at the OTHER org. A platform admin

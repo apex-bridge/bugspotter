@@ -8,6 +8,7 @@ import type { User, UserInsert, PaginatedResult } from '../types.js';
 import { createFilter } from '../filter-builder.js';
 import { createPagination } from '../pagination-builder.js';
 import { getLogger } from '../../logger.js';
+import { getDeploymentConfig, DEPLOYMENT_MODE } from '../../saas/config.js';
 
 const logger = getLogger();
 
@@ -147,7 +148,12 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
     // Build WHERE clause using unified FilterBuilder
     const filter = createFilter().equals('role', role).ilike('email', email);
 
-    if (organization_id) {
+    // SaaS-only filter: `saas.organization_members` only exists in SaaS
+    // deployments. In self-hosted, the schema may not be present at all —
+    // applying this predicate would error with "schema saas does not exist"
+    // even though the route is gated to platform admins. Skip silently in
+    // self-hosted mode (no orgs to filter by anyway).
+    if (organization_id && getDeploymentConfig().mode === DEPLOYMENT_MODE.SAAS) {
       // EXISTS keeps the JOIN out of the projection and avoids row-multiplication
       // for users with multiple memberships to the same org (shouldn't happen,
       // but the unique constraint isn't enforced in older deployments).

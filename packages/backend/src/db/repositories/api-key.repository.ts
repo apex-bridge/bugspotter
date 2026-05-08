@@ -89,16 +89,23 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
       filter.equals('created_by', created_by);
     }
 
-    // Cross-org filter for platform admin: keep only keys whose
-    // `allowed_projects` overlaps any project in the given org. Composes
-    // with the access filter above (an admin filtering their own org-scoped
-    // view would still get the AND).
+    // Cross-org filter for platform admin: keep only keys that can touch
+    // projects in the given org. Wildcard keys (`allowed_projects = NULL`,
+    // documented in `001_initial_schema.sql:1211` as "NULL = all projects")
+    // grant access to every project, so by definition they can touch this
+    // org's data and must be included in the filtered view.
+    // `p.id = ANY(NULL)` evaluates to NULL → not match, so we have to check
+    // the wildcard case explicitly. The `EXISTS` still requires the org to
+    // have at least one project — a wildcard key on an empty org returns
+    // empty, which matches the use case ("what keys can touch THIS org's
+    // data?" — none, because the org has no data yet).
     if (organization_id) {
       const p = filter.getParamCount();
       filter.raw(
         `EXISTS (
           SELECT 1 FROM ${this.schema}.projects p
-          WHERE p.organization_id = $${p} AND p.id = ANY(allowed_projects)
+          WHERE p.organization_id = $${p}
+            AND (allowed_projects IS NULL OR p.id = ANY(allowed_projects))
         )`,
         [organization_id]
       );

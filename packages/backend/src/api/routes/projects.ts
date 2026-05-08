@@ -8,6 +8,7 @@ import type { DatabaseClient } from '../../db/client.js';
 import {
   createProjectSchema,
   getProjectSchema,
+  listProjectsSchema,
   updateProjectSchema,
   deleteProjectSchema,
 } from '../schemas/project-schema.js';
@@ -87,24 +88,19 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
     '/api/v1/projects',
     {
       preHandler: [requireUser],
-      schema: {
-        querystring: {
-          type: 'object',
-          properties: {
-            organization_id: { type: 'string', format: 'uuid' },
-          },
-          additionalProperties: false,
-        },
-      },
+      schema: listProjectsSchema,
     },
     async (request, reply) => {
       // Platform admin users see all projects (scoped to org in SaaS mode).
-      // On the hub domain (no `request.organizationId`), they may pass
+      // On the hub domain (no tenant subdomain), they may pass
       // `?organization_id=` to narrow the cross-org view to a single tenant.
+      // Tenant-subdomain context wins when present — a platform admin
+      // already on `acme.kz.bugspotter.io` cannot widen to a different
+      // org via the query param, they have to navigate to that subdomain.
       // Param is consumed only inside this branch — regular users never reach it.
       if (isPlatformAdmin(request)) {
-        const adminOrgFilter = request.query.organization_id;
-        const projects = await db.projects.findAll(adminOrgFilter ?? request.organizationId);
+        const orgScope = request.organizationId ?? request.query.organization_id;
+        const projects = await db.projects.findAll(orgScope);
         return sendSuccess(reply, projects);
       }
 
