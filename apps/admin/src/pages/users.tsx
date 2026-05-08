@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { userService, projectMemberService } from '../services/api';
 import { formatDateShort } from '../utils/format';
 import { useModalFocus } from '../hooks/use-modal-focus';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -25,14 +26,16 @@ export default function UsersPage() {
     name: string;
   } | null>(null);
 
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
   const { data, isLoading } = useQuery({
-    queryKey: ['users', page, searchEmail, roleFilter],
+    queryKey: ['users', page, searchEmail, roleFilter, adminOrgScope],
     queryFn: () =>
       userService.getAll({
         page,
         limit: 20,
         ...(searchEmail && { email: searchEmail }),
         ...(roleFilter && { role: roleFilter }),
+        ...(adminOrgScope && { organization_id: adminOrgScope }),
       }),
   });
 

@@ -19,7 +19,8 @@ export const bugReportService = {
     page = 1,
     limit = 20,
     sortBy = 'created_at',
-    order: 'asc' | 'desc' = 'desc'
+    order: 'asc' | 'desc' = 'desc',
+    organizationId?: string | null
   ): Promise<BugReportListResponse> => {
     const params = new URLSearchParams();
     params.append('page', page.toString());
@@ -41,6 +42,11 @@ export const bugReportService = {
     }
     if (filters?.created_before) {
       params.append('created_before', filters.created_before);
+    }
+    // Platform admin can narrow the cross-org list via `?organization_id=`.
+    // The backend ignores it for non-admins (see PR #115 security boundary).
+    if (organizationId) {
+      params.append('organization_id', organizationId);
     }
 
     const response = await api.get<{

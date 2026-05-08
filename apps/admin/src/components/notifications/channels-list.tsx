@@ -62,7 +62,7 @@ export function ChannelsList({ onRefresh, readOnly }: ChannelsListProps) {
 
   const { data: projects, isLoading: projectsLoading } = useQuery({
     queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
   });
 
   const projectMap = useMemo(() => {

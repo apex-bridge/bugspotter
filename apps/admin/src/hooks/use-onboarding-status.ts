@@ -52,7 +52,7 @@ export function useOnboardingStatus(): OnboardingState {
   // is a full reload (cache resets naturally).
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
     enabled: canConfigure && hasOrganization,
     staleTime: 5 * 60 * 1000,
   });

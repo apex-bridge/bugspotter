@@ -20,6 +20,10 @@ export const userService = {
       limit?: number;
       role?: UserRole;
       email?: string;
+      // Platform-admin cross-org filter. The backend ignores it for
+      // non-admins (see PR #115 security boundary). Snake_case key
+      // because Fastify schema validates by that name.
+      organization_id?: string;
     } = {}
   ): Promise<UserManagementResponse> => {
     const response = await api.get<{ success: boolean; data: UserManagementResponse }>(

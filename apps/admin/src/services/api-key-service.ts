@@ -16,7 +16,8 @@ export const apiKeyService = {
   getAll: async (
     page = 1,
     limit = 20,
-    status?: 'active' | 'expiring' | 'expired' | 'revoked'
+    status?: 'active' | 'expiring' | 'expired' | 'revoked',
+    organizationId?: string | null
   ): Promise<ApiKeyListResponse> => {
     const params = new URLSearchParams({
       page: page.toString(),
@@ -24,6 +25,11 @@ export const apiKeyService = {
     });
     if (status) {
       params.append('status', status);
+    }
+    // Platform admin can narrow the cross-org list via `?organization_id=`.
+    // The backend ignores it for non-admins (see PR #115 security boundary).
+    if (organizationId) {
+      params.append('organization_id', organizationId);
     }
     const response = await api.get<{
       success: boolean;

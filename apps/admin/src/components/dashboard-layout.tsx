@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { useMemo, useCallback } from 'react';
 import { LanguageSwitcher } from './language-switcher';
 import { QuickSetupActions } from './onboarding/quick-setup-actions';
+import { AdminOrgFilter } from './admin-org-filter';
 import { usePermissions } from '../hooks/use-permissions';
 import {
   Activity,
@@ -152,6 +153,12 @@ export default function DashboardLayout() {
             <h1 className="text-2xl font-bold text-primary">BugSpotter</h1>
             <p className="text-sm text-gray-500 mt-1">{t('nav.adminPanel')}</p>
           </div>
+
+          {/* Cross-org filter — renders only for platform admins.
+              Sets `?organizationId=` in the URL; the four list pages
+              (Projects, API Keys, Users, Bug Reports) read the param
+              via `useOrgFilter()` and pass it to their service calls. */}
+          <AdminOrgFilter />
 
           {/* Navigation — overflow-y-auto so a long list of items (platform
               admin + org sections together can be 20+) scrolls INSIDE the

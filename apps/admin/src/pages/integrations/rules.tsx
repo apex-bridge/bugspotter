@@ -45,7 +45,7 @@ export default function IntegrationRulesPage() {
   // Fetch all projects for copy dialog
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
   });
 
   // Memoize filtered projects list

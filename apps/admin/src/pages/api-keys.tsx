@@ -6,6 +6,7 @@ import { Key, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiKeyService } from '../services/api-key-service';
 import { projectService } from '../services/api';
 import { useAuth } from '../contexts/auth-context';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { Button } from '../components/ui/button';
 import { ApiKeyTable } from '../components/api-keys/api-key-table';
@@ -32,10 +33,12 @@ export default function ApiKeysPage() {
     operation: 'created' | 'rotated';
   } | null>(null);
 
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
   // Fetch projects for dropdown
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryKey: ['projects', adminOrgScope],
+    queryFn: () => projectService.getAll(adminOrgScope),
   });
 
   // Fetch API keys with pagination and status filter
@@ -46,8 +49,9 @@ export default function ApiKeysPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: [...API_KEYS_QUERY_KEY, page, PAGE_LIMIT, status],
-    queryFn: () => apiKeyService.getAll(page, PAGE_LIMIT, status as 'active' | undefined),
+    queryKey: [...API_KEYS_QUERY_KEY, page, PAGE_LIMIT, status, adminOrgScope],
+    queryFn: () =>
+      apiKeyService.getAll(page, PAGE_LIMIT, status as 'active' | undefined, adminOrgScope),
   });
 
   // Fetch usage data for selected API key

@@ -24,7 +24,7 @@ export function DeflectionStatsCard({ orgId }: DeflectionStatsCardProps) {
 
   const { data: allProjects = [] } = useQuery({
     queryKey: ['projects', orgId],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
     enabled: !!orgId,
   });
 

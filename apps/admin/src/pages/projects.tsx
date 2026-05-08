@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { projectService } from '../services/api';
 import { organizationService } from '../services/organization-service';
 import { useAuth } from '../contexts/auth-context';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { formatDateShort } from '../utils/format';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -52,9 +53,12 @@ export default function ProjectsPage() {
     }
   }, [organizations]);
 
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
   const { data: projects, isLoading } = useQuery({
-    queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    // Include the admin filter in the key so switching orgs in the
+    // sidebar widget triggers a re-fetch instead of serving stale data.
+    queryKey: ['projects', adminOrgScope],
+    queryFn: () => projectService.getAll(adminOrgScope),
   });
 
   // Derive org filter options from actual projects (works for admins who see all projects)

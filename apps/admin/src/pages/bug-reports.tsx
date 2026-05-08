@@ -6,6 +6,7 @@ import { Bug, ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatNumber } from '../utils/format';
 import { bugReportService, projectService } from '../services/api';
 import { useAuth } from '../contexts/auth-context';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { Button } from '../components/ui/button';
 import { BugReportFilters } from '../components/bug-reports/bug-report-filters';
@@ -29,10 +30,12 @@ export default function BugReportsPage() {
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const limit = 20;
 
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
   // Fetch projects for filter dropdown
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryKey: ['projects', adminOrgScope],
+    queryFn: () => projectService.getAll(adminOrgScope),
   });
 
   // Fetch bug reports with filters and pagination
@@ -41,8 +44,9 @@ export default function BugReportsPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['bugReports', filters, page, limit],
-    queryFn: () => bugReportService.getAll(filters, page, limit),
+    queryKey: ['bugReports', filters, page, limit, adminOrgScope],
+    queryFn: () =>
+      bugReportService.getAll(filters, page, limit, 'created_at', 'desc', adminOrgScope),
   });
 
   // Delete mutation
