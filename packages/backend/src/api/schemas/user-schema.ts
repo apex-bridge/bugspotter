@@ -13,6 +13,8 @@ export const listUsersSchema = {
       limit: { type: 'number', minimum: 1, maximum: 100 },
       role: { type: 'string', enum: ['admin', 'user', 'viewer'] },
       email: { type: 'string', maxLength: 255 },
+      // Filter to users who are members of a specific org (SaaS only).
+      organization_id: { type: 'string', format: 'uuid' },
     },
     additionalProperties: false,
   },

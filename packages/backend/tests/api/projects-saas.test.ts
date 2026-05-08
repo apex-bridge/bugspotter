@@ -295,5 +295,277 @@ describe('Project Routes — SaaS Mode', () => {
       expect(json.success).toBe(true);
       expect(Array.isArray(json.data)).toBe(true);
     });
+
+    it('platform admin filters by organization_id query param on hub domain', async () => {
+      // Create a second org with one project so we can prove the filter narrows.
+      const otherOrg = await db.organizations.create({
+        name: `Other Org ${Date.now()}`,
+        subdomain: `otherorg-${Date.now()}`,
+        subscription_status: 'trial',
+      });
+      const now = new Date();
+      await db.subscriptions.create({
+        organization_id: otherOrg.id,
+        plan_name: 'starter',
+        status: 'trial',
+        current_period_start: now,
+        current_period_end: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+        quotas: { max_projects: 10, max_bug_reports: 1000, max_storage_mb: 500 },
+      });
+
+      await db.projects.create({ name: 'In Test Org', organization_id: orgId });
+      await db.projects.create({ name: 'In Other Org', organization_id: otherOrg.id });
+
+      // Hub domain, filter to first org
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/projects?organization_id=${orgId}`,
+        headers: { authorization: `Bearer ${adminToken}`, host: 'example.com' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      const orgIds: string[] = json.data.map((p: { organization_id: string }) => p.organization_id);
+      expect(orgIds.every((id) => id === orgId)).toBe(true);
+      expect(orgIds).toContain(orgId);
+      expect(orgIds).not.toContain(otherOrg.id);
+    });
+
+    it('tenant subdomain context wins over query param (admin cannot widen via ?organization_id=)', async () => {
+      // Set up a second org with its own project.
+      const ts = Date.now();
+      const otherOrg = await db.organizations.create({
+        name: `Precedence Other ${ts}`,
+        subdomain: `precedence-${ts}`,
+        subscription_status: 'trial',
+      });
+      const now = new Date();
+      await db.subscriptions.create({
+        organization_id: otherOrg.id,
+        plan_name: 'starter',
+        status: 'trial',
+        current_period_start: now,
+        current_period_end: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+        quotas: { max_projects: 10, max_bug_reports: 1000, max_storage_mb: 500 },
+      });
+
+      await db.projects.create({ name: 'In test org', organization_id: orgId });
+      await db.projects.create({ name: 'In other org', organization_id: otherOrg.id });
+
+      // Hit the test org's subdomain BUT pass `?organization_id=` pointing at
+      // the other org. The subdomain context should win, so we should see
+      // ONLY test-org's projects.
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/projects?organization_id=${otherOrg.id}`,
+        headers: {
+          authorization: `Bearer ${adminToken}`,
+          host: `${orgSubdomain}.example.com`,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const orgIds: string[] = response
+        .json()
+        .data.map((p: { organization_id: string }) => p.organization_id);
+      expect(orgIds).toContain(orgId);
+      expect(orgIds).not.toContain(otherOrg.id);
+    });
+
+    it('rejects malformed organization_id query param', async () => {
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/projects?organization_id=not-a-uuid',
+        headers: { authorization: `Bearer ${adminToken}`, host: 'example.com' },
+      });
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('non-admin user has organization_id query param ignored (still scoped to their access)', async () => {
+      // Create a regular (non-platform-admin) user, member of test org only
+      const timestamp = Date.now();
+      const memberEmail = `regular-${timestamp}@example.com`;
+      const passwordHash = await bcrypt.hash('Password123!', 10);
+      const memberUser = await db.users.create({
+        email: memberEmail,
+        name: 'Regular Member',
+        password_hash: passwordHash,
+        role: 'user', // app-level role, NOT platform admin
+        email_verified_at: new Date(),
+      });
+      await db.organizationMembers.createWithUser(orgId, memberUser.id, 'member');
+
+      // Project in test org (member should see it) + project in OTHER org (member must NOT)
+      const otherOrg = await db.organizations.create({
+        name: `Other Org ${timestamp}`,
+        subdomain: `otherorg2-${timestamp}`,
+        subscription_status: 'trial',
+      });
+      await db.projects.create({ name: 'Member-org project', organization_id: orgId });
+      await db.projects.create({ name: 'Other-org project', organization_id: otherOrg.id });
+
+      const loginRes = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: memberEmail, password: 'Password123!' },
+      });
+      expect(loginRes.statusCode).toBe(200);
+      const token = loginRes.json().data.access_token as string;
+
+      // Pass `?organization_id=` pointing at the OTHER org. A platform admin
+      // would get the other-org's projects; a regular user should still only
+      // see their own org's, because the param is consumed inside the
+      // platform-admin branch only.
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/projects?organization_id=${otherOrg.id}`,
+        headers: { authorization: `Bearer ${token}`, host: 'example.com' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const orgIds: string[] = response
+        .json()
+        .data.map((p: { organization_id: string }) => p.organization_id);
+      // Filter ignored: caller never sees the other org's data.
+      expect(orgIds).not.toContain(otherOrg.id);
+    });
+  });
+
+  // Tenant-subdomain precedence over the cross-org query param applies to
+  // all four list endpoints, not just projects. The original commit
+  // (8652bfb) only fixed projects.ts and only tested projects; these
+  // tests pin the same invariant on the other three so a future regression
+  // on any one of them surfaces here.
+  describe('Tenant subdomain precedence across all 4 admin list endpoints', () => {
+    it('GET /api/v1/api-keys — subdomain wins over ?organization_id=', async () => {
+      const ts = Date.now();
+      const otherOrg = await db.organizations.create({
+        name: `Precedence ApiKeys ${ts}`,
+        subdomain: `precedence-ak-${ts}`,
+        subscription_status: 'active',
+      });
+      const projectInTest = await db.projects.create({
+        name: `Test Org Project ${ts}`,
+        organization_id: orgId,
+      });
+      const projectInOther = await db.projects.create({
+        name: `Other Org Project ${ts}`,
+        organization_id: otherOrg.id,
+      });
+
+      // One API key per org, scoped via allowed_projects
+      const testOrgKey = await db.apiKeys.create({
+        key_hash: `hash-test-${ts}`,
+        key_prefix: 'bgs_test',
+        key_suffix: '0001',
+        name: `Test-org key ${ts}`,
+        allowed_projects: [projectInTest.id],
+      });
+      const otherOrgKey = await db.apiKeys.create({
+        key_hash: `hash-other-${ts}`,
+        key_prefix: 'bgs_othr',
+        key_suffix: '0002',
+        name: `Other-org key ${ts}`,
+        allowed_projects: [projectInOther.id],
+      });
+
+      // Hit test-org subdomain, query points at the other org. Subdomain wins.
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/api-keys?organization_id=${otherOrg.id}`,
+        headers: { authorization: `Bearer ${adminToken}`, host: `${orgSubdomain}.example.com` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const ids: string[] = response.json().data.map((k: { id: string }) => k.id);
+      expect(ids).toContain(testOrgKey.id);
+      expect(ids).not.toContain(otherOrgKey.id);
+    });
+
+    it('GET /api/v1/admin/users — ?organization_id= narrows the list (precedence n/a — route is tenant-exempt)', async () => {
+      // `/api/v1/admin/*` is in `TENANT_EXEMPT_PREFIXES` (see
+      // `tenant.ts:48-52`), which means tenant-resolution middleware
+      // deliberately does NOT set `request.organizationId` on this
+      // route — admin endpoints are global-admin, independently
+      // access-controlled. The `request.organizationId ?? query` guard
+      // in the handler is therefore a defensive no-op on this route
+      // (kept for consistency with the other three endpoints), and
+      // there is no "subdomain wins" semantics to assert. What we CAN
+      // pin is the positive filter behaviour: `?organization_id=` does
+      // narrow the list to that org's members.
+      const ts = Date.now();
+      const otherOrg = await db.organizations.create({
+        name: `Filter Users ${ts}`,
+        subdomain: `filter-u-${ts}`,
+        subscription_status: 'active',
+      });
+
+      const testOrgUser = await db.users.create({
+        email: `filter-test-${ts}@example.com`,
+        name: 'Test Org Member',
+        password_hash: 'hash',
+        role: 'user',
+      });
+      await db.organizationMembers.createWithUser(orgId, testOrgUser.id, 'member');
+      const otherOrgUser = await db.users.create({
+        email: `filter-other-${ts}@example.com`,
+        name: 'Other Org Member',
+        password_hash: 'hash',
+        role: 'user',
+      });
+      await db.organizationMembers.createWithUser(otherOrg.id, otherOrgUser.id, 'member');
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/admin/users?organization_id=${otherOrg.id}`,
+        headers: { authorization: `Bearer ${adminToken}`, host: 'example.com' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const userEmails: string[] = response
+        .json()
+        .data.users.map((u: { email: string }) => u.email);
+      expect(userEmails).toContain(otherOrgUser.email);
+      expect(userEmails).not.toContain(testOrgUser.email);
+    });
+
+    it('GET /api/v1/reports — subdomain wins over ?organization_id=', async () => {
+      const ts = Date.now();
+      const otherOrg = await db.organizations.create({
+        name: `Precedence Reports ${ts}`,
+        subdomain: `precedence-r-${ts}`,
+        subscription_status: 'active',
+      });
+      const projectInTest = await db.projects.create({
+        name: `Test Reports Proj ${ts}`,
+        organization_id: orgId,
+      });
+      const projectInOther = await db.projects.create({
+        name: `Other Reports Proj ${ts}`,
+        organization_id: otherOrg.id,
+      });
+
+      const testOrgReport = await db.bugReports.create({
+        project_id: projectInTest.id,
+        organization_id: orgId,
+        title: 'In test org',
+      });
+      const otherOrgReport = await db.bugReports.create({
+        project_id: projectInOther.id,
+        organization_id: otherOrg.id,
+        title: 'In other org',
+      });
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/reports?organization_id=${otherOrg.id}`,
+        headers: { authorization: `Bearer ${adminToken}`, host: `${orgSubdomain}.example.com` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const ids: string[] = response.json().data.map((r: { id: string }) => r.id);
+      expect(ids).toContain(testOrgReport.id);
+      expect(ids).not.toContain(otherOrgReport.id);
+    });
   });
 });

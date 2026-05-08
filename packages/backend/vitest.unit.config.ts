@@ -50,6 +50,7 @@ export default defineConfig({
       'tests/db/base-repository-validation.test.ts',
       'tests/db/base-repository-date-filter.test.ts',
       'tests/db/retry.test.ts',
+      'tests/db/user-repository-org-filter.test.ts',
       // Jira config tests (pure unit, mocked repository)
       'tests/integrations/jira/config.test.ts',
       // Jira mapper tests (pure unit, no database)

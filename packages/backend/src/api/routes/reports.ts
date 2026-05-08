@@ -302,6 +302,7 @@ export function bugReportRoutes(
         status,
         priority,
         project_id,
+        organization_id,
         created_after,
         created_before,
         sort_by,
@@ -312,7 +313,13 @@ export function bugReportRoutes(
       const createdAfterDate = parseDateFilter(created_after, 'created_after');
       const createdBeforeDate = parseDateFilter(created_before, 'created_before');
 
-      // Build access control filters based on authentication type
+      // Tenant subdomain context wins over the query param (matches
+      // the precedence applied in `projects.ts`, `api-keys.ts`, and
+      // `users.ts`): a platform admin on `acme.kz.bugspotter.io`
+      // cannot widen to a different org via the query string. The
+      // resulting `effectiveOrgId` is consumed by `buildAccessFilters`
+      // only inside its `isPlatformAdmin` branch.
+      const effectiveOrgId = request.organizationId ?? organization_id;
       const { filters, requiresValidation } = buildAccessFilters(
         request.authUser,
         request.authProject,
@@ -322,7 +329,8 @@ export function bugReportRoutes(
           priority,
           created_after: createdAfterDate,
           created_before: createdBeforeDate,
-        }
+        },
+        effectiveOrgId
       );
 
       // Validate project access if required (regular user + specific project_id)

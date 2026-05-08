@@ -234,6 +234,10 @@ export const listApiKeysSchema = {
       team_id: { type: 'string', format: 'uuid' },
       created_by: { type: 'string', format: 'uuid' },
       tag: { type: 'string', minLength: 1, maxLength: 50 },
+      // Cross-org filter for platform admin. Restricts to keys whose
+      // `allowed_projects` overlaps any project in the given org.
+      // Ignored for non-platform-admin callers.
+      organization_id: { type: 'string', format: 'uuid' },
       expires_before: { type: 'string', format: 'date-time' },
       expires_after: { type: 'string', format: 'date-time' },
       search: { type: 'string', minLength: 1, maxLength: 255 },

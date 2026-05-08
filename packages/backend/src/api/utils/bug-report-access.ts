@@ -23,7 +23,7 @@ export interface AccessControlResult {
  * Returns filters and whether additional validation is needed.
  * This function implements the access control strategy:
  * - API key → direct project filter
- * - Admin user → optional project filter (sees all if not specified)
+ * - Admin user → optional project filter / organization filter (sees all if neither specified)
  * - Regular user with project_id → requires validation, then project filter
  * - Regular user without project_id → optimized user_id JOIN filter
  *
@@ -31,6 +31,7 @@ export interface AccessControlResult {
  * @param authProject - Authenticated project (API key)
  * @param requestedProjectId - Optional project_id from query params
  * @param additionalFilters - Additional filters (status, priority, dates, etc.)
+ * @param requestedOrganizationId - Optional organization_id from query params (platform admin only)
  * @returns Object with filters to apply and validation requirement flag
  * @throws AppError(401) if not authenticated
  */
@@ -38,7 +39,8 @@ export function buildAccessFilters(
   authUser: User | undefined,
   authProject: Project | undefined,
   requestedProjectId?: string,
-  additionalFilters?: Partial<BugReportFilters>
+  additionalFilters?: Partial<BugReportFilters>,
+  requestedOrganizationId?: string
 ): AccessControlResult {
   // API key authentication - restrict to authenticated project only
   if (authProject) {
@@ -53,11 +55,16 @@ export function buildAccessFilters(
     throw new AppError('Authentication required', 401, 'Unauthorized');
   }
 
-  // Platform admin - can see all projects or filter by specific project
+  // Platform admin - can see all projects or filter by specific project /
+  // organization. The `organization_id` filter is the cross-org-investigation
+  // hatch for the hub domain; only consumed in this branch so a regular user
+  // sending the param has it ignored entirely (see the regular-user branches
+  // below — neither reads `requestedOrganizationId`).
   if (isPlatformAdmin(authUser)) {
     return {
       filters: {
         ...(requestedProjectId && { project_id: requestedProjectId }),
+        ...(requestedOrganizationId && { organization_id: requestedOrganizationId }),
         ...additionalFilters,
       },
       requiresValidation: false,

@@ -8,6 +8,7 @@ import type { User, UserInsert, PaginatedResult } from '../types.js';
 import { createFilter } from '../filter-builder.js';
 import { createPagination } from '../pagination-builder.js';
 import { getLogger } from '../../logger.js';
+import { getDeploymentConfig, DEPLOYMENT_MODE } from '../../saas/config.js';
 
 const logger = getLogger();
 
@@ -135,11 +136,36 @@ export class UserRepository extends BaseRepository<User, UserInsert, Partial<Use
     limit?: number;
     role?: 'admin' | 'user' | 'viewer';
     email?: string;
+    /**
+     * Restrict to users who are members of the given organization
+     * (SaaS only — falls through to no-op in self-hosted where the
+     * `saas.organization_members` table is empty).
+     */
+    organization_id?: string;
   }): Promise<PaginatedResult<Omit<User, 'password_hash'>>> {
-    const { page = 1, limit = 20, role, email } = options;
+    const { page = 1, limit = 20, role, email, organization_id } = options;
 
     // Build WHERE clause using unified FilterBuilder
     const filter = createFilter().equals('role', role).ilike('email', email);
+
+    // SaaS-only filter: `saas.organization_members` only exists in SaaS
+    // deployments. In self-hosted, the schema may not be present at all —
+    // applying this predicate would error with "schema saas does not exist"
+    // even though the route is gated to platform admins. Skip silently in
+    // self-hosted mode (no orgs to filter by anyway).
+    if (organization_id && getDeploymentConfig().mode === DEPLOYMENT_MODE.SAAS) {
+      // EXISTS keeps the JOIN out of the projection and avoids row-multiplication
+      // for users with multiple memberships to the same org (shouldn't happen,
+      // but the unique constraint isn't enforced in older deployments).
+      const p = filter.getParamCount();
+      filter.raw(
+        `EXISTS (
+          SELECT 1 FROM saas.organization_members om
+          WHERE om.user_id = users.id AND om.organization_id = $${p}
+        )`,
+        [organization_id]
+      );
+    }
 
     const { whereClause, values, paramCount } = filter.build();
 
