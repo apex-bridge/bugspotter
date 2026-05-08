@@ -45,12 +45,16 @@ export function userRoutes(fastify: FastifyInstance, userRepo: UserRepository) {
         organization_id?: string;
       };
 
+      // Tenant subdomain context wins over the query param (matches the
+      // precedence applied in `projects.ts`, `api-keys.ts`, and
+      // `reports.ts`): a platform admin on `acme.kz.bugspotter.io`
+      // cannot widen to a different org via the query string.
       const result = await userRepo.listWithFilters({
         page,
         limit,
         role,
         email,
-        organization_id,
+        organization_id: request.organizationId ?? organization_id,
       });
 
       return reply.send({

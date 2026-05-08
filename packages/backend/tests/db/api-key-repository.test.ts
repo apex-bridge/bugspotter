@@ -3,7 +3,7 @@
  * Comprehensive tests for API key management operations
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { DatabaseClient } from '../../src/db/client.js';
 import { createHash } from 'crypto';
 import type { ApiKey, User, Project } from '../../src/db/types.js';
@@ -328,6 +328,11 @@ describe('ApiKeyRepository', () => {
     let projectInOrg: { id: string };
     let otherOrg: { id: string };
     let projectInOtherOrg: { id: string };
+    // Track per-test-created fixtures so the suite can clean them up;
+    // emptyOrg is created inside one test but pushed onto the same list
+    // so the teardown sweeps it too.
+    const createdOrgIds: string[] = [];
+    const createdProjectIds: string[] = [];
 
     beforeEach(async () => {
       const ts = Date.now();
@@ -343,6 +348,7 @@ describe('ApiKeyRepository', () => {
         subdomain: `keyfilter-b-${ts}`,
         subscription_status: 'active',
       });
+      createdOrgIds.push(orgWithProject.id, otherOrg.id);
       projectInOrg = await db.projects.create({
         name: `Proj in A ${ts}`,
         created_by: testUser.id,
@@ -353,6 +359,7 @@ describe('ApiKeyRepository', () => {
         created_by: testUser.id,
         organization_id: otherOrg.id,
       });
+      createdProjectIds.push(projectInOrg.id, projectInOtherOrg.id);
 
       const orgScoped = await db.apiKeys.create(
         createTestApiKey(`Org-A-scoped ${ts}`, { allowed_projects: [projectInOrg.id] })
@@ -395,6 +402,7 @@ describe('ApiKeyRepository', () => {
         subdomain: `empty-org-${ts}`,
         subscription_status: 'active',
       });
+      createdOrgIds.push(emptyOrg.id);
 
       const result = await db.apiKeys.list({ organization_id: emptyOrg.id });
       // Wildcard keys grant access to every project, but if the org has zero
@@ -403,6 +411,20 @@ describe('ApiKeyRepository', () => {
       expect(ids).not.toContain(orgScopedKeyId);
       expect(ids).not.toContain(otherOrgKeyId);
       expect(ids).not.toContain(wildcardKeyId);
+    });
+
+    afterEach(async () => {
+      // Children first (projects FK org); both lists drained.
+      for (const id of createdProjectIds.splice(0)) {
+        await db.projects.delete(id).catch(() => {
+          /* swallow — best-effort cleanup */
+        });
+      }
+      for (const id of createdOrgIds.splice(0)) {
+        await db.organizations.delete(id).catch(() => {
+          /* swallow */
+        });
+      }
     });
   });
 
