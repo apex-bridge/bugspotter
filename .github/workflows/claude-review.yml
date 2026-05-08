@@ -123,6 +123,14 @@ jobs:
           # `-X POST/PATCH/DELETE` so the wildcard would let Claude
           # mutate any GitHub resource the workflow's GITHUB_TOKEN can
           # touch).
+          # Note on the `${{ ... && ... || '' }}` expression below: GitHub
+          # Actions treats empty strings as falsy, so the common
+          # `cond && truthyA || B` ternary trick only works when `A` is
+          # truthy. Writing `cond == 'pull_request' && '' || ',Bash(...)'`
+          # would return the fallback even when the condition is true
+          # (`'' || ',Bash(...)'` evaluates to the fallback). Keep the
+          # expression in this form: condition true → non-empty branch
+          # appended; condition false → `''` as the fallback.
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob${{ github.event_name == 'pull_request' && '' || ',Bash(gh pr comment:*)' }}"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob${{ github.event_name != 'pull_request' && ',Bash(gh pr comment:*)' || '' }}"
             --max-turns 25
