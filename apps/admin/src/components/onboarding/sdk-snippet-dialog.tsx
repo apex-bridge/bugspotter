@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '../ui/button';
 import { SnippetTabs } from '../ui/snippet-tabs';
 import { buildSdkInstallSnippets } from './sdk-install-snippets';
+import { API_BASE_URL } from '../../lib/api-client';
 
 interface SdkSnippetDialogProps {
   open: boolean;
@@ -13,16 +14,25 @@ interface SdkSnippetDialogProps {
 }
 
 /**
- * The current page origin is the BugSpotter API endpoint the user
- * needs to point the SDK at:
- *   - SaaS: tenants live at `<subdomain>.kz.bugspotter.io`, so
- *     `window.location.origin` IS the tenant's API host.
- *   - Self-hosted: same — the user is on their own deployment.
- * `null` during SSR / non-browser contexts; the snippet then shows
- * a placeholder the user replaces by hand.
+ * The endpoint the SDK needs to point at — the *API* host, not the
+ * admin UI host. These can be the same origin on some deployments
+ * (admin's nginx proxies `/api/*`), but in cross-origin setups (SaaS
+ * prod has admin at `[org].kz.bugspotter.io` and API at
+ * `api.kz.bugspotter.io`; local dev runs admin on `:5173` and API on
+ * `:3000`) `window.location.origin` is the admin UI host and would
+ * misdirect the SDK.
+ *
+ * `API_BASE_URL` (`lib/api-client.ts:16`) is exactly the value
+ * `axios.create({ baseURL })` uses for this admin's own API calls,
+ * so the SDK ends up pointed at the same place the admin agrees on.
+ *
+ * Falls back to `null` when `API_BASE_URL` is empty (local dev with
+ * same-origin proxy — there's no absolute URL to hand the SDK in
+ * that case, so the snippet shows a placeholder for the user to
+ * replace by hand).
  */
 function currentEndpoint(): string | null {
-  return typeof window === 'undefined' ? null : window.location.origin;
+  return API_BASE_URL || null;
 }
 
 export function SdkSnippetDialog({ open, onOpenChange }: SdkSnippetDialogProps) {

@@ -40,10 +40,16 @@ export default function BugReportsPage() {
   //      backend returns empty data.
   //   2. `filters.project_id` — points at a project from org A that
   //      doesn't exist in org B; backend ANDs the filters → empty.
-  // Reset both whenever the scope flips.
+  // Destructure-and-rest the project_id key out of `filters` rather
+  // than setting it to `undefined`: leaving the key in place would
+  // mislead any `Object.keys(filters).length > 0` "are filters
+  // active" check downstream.
   useEffect(() => {
     setPage(1);
-    setFilters((prev) => ({ ...prev, project_id: undefined }));
+    setFilters((prev) => {
+      const { project_id: _removed, ...rest } = prev;
+      return rest;
+    });
   }, [adminOrgScope]);
 
   // Fetch projects for filter dropdown

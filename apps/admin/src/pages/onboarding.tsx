@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { useAuth } from '../contexts/auth-context';
 import { authService } from '../services/api';
-import { handleApiError } from '../lib/api-client';
+import { handleApiError, API_BASE_URL } from '../lib/api-client';
 import type { User } from '../types';
 
 /**
@@ -286,9 +286,15 @@ export default function OnboardingPage() {
       // `apiKey` (required) and `endpoint` (optional, base URL of the
       // BugSpotter API). There is NO `projectId` field — the API key
       // already encodes which projects it can write to via its
-      // `allowed_projects` server-side scope. `INSTANCE_URL` is
-      // `window.location.origin`, which on SaaS is the tenant's
-      // subdomain and on self-hosted is their own deployment.
+      // `allowed_projects` server-side scope.
+      //
+      // `endpoint` uses `API_BASE_URL`, NOT `INSTANCE_URL` (the admin
+      // origin). The SDK runs in the customer's own app — a
+      // different origin from the admin UI — so it needs the actual
+      // API host, not whatever URL the admin happens to be served
+      // from. `INSTANCE_URL` below stays right for the Chrome
+      // extension card because the extension talks back to the
+      // admin's nginx (which proxies `/api/*` same-origin).
       //
       // `JSON.stringify` so single-quotes, backslashes, or newlines
       // in a key / origin (unlikely, but cheap defense) don't break
@@ -297,7 +303,7 @@ export default function OnboardingPage() {
 
 BugSpotter.init({
   apiKey: ${JSON.stringify(handoff.api_key)},
-  endpoint: ${JSON.stringify(INSTANCE_URL)},
+  endpoint: ${JSON.stringify(API_BASE_URL || '<your BugSpotter API URL>')},
 });`,
     [handoff.api_key]
   );

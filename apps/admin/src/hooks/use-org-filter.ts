@@ -23,7 +23,18 @@ export function useOrgFilter(): {
   setSelectedOrgId: (id: string | null) => void;
 } {
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedOrgId = searchParams.get('organizationId');
+  // `searchParams.get(...)` returns `''` (not `null`) when the URL
+  // contains the param key with no value — easy to land on via a
+  // stale bookmark, a misformed link, or an upstream `setSelectedOrgId('')`.
+  // Treat empty string as "no selection" here so:
+  //   - downstream consumers don't get `''` slipping past `?? null`
+  //     fallbacks (the `??` operator only short-circuits on
+  //     `null`/`undefined`),
+  //   - the widget's `<SelectItem value="">` would otherwise crash
+  //     Radix at runtime ("must have a value prop that is not an
+  //     empty string"), taking down the whole sidebar / admin shell.
+  const rawValue = searchParams.get('organizationId');
+  const selectedOrgId = rawValue === '' ? null : rawValue;
 
   const setSelectedOrgId = useCallback(
     (id: string | null) => {

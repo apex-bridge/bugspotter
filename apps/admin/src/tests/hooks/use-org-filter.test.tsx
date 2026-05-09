@@ -25,6 +25,17 @@ describe('useOrgFilter', () => {
     expect(result.current.selectedOrgId).toBeNull();
   });
 
+  it('treats empty-string `?organizationId=` as null (avoids Radix crash)', () => {
+    // `searchParams.get(...)` returns `''` (not `null`) when the URL
+    // has the key with no value. If we let `''` flow through, the
+    // sidebar widget would render `<SelectItem value="">` which Radix
+    // throws on at runtime, taking down the whole admin shell.
+    const { result } = renderHook(() => useOrgFilter(), {
+      wrapper: makeWrapper(['/projects?organizationId=&page=1']),
+    });
+    expect(result.current.selectedOrgId).toBeNull();
+  });
+
   it('setSelectedOrgId(id) updates the URL param', () => {
     const { result } = renderHook(() => useOrgFilter(), {
       wrapper: makeWrapper(['/projects']),

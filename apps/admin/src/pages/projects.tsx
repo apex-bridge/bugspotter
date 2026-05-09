@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -49,20 +49,25 @@ export default function ProjectsPage() {
   const { selectedOrgId: adminOrgScope } = useOrgFilter();
 
   // Auto-select org for the Create form. Priority order:
-  //   1. Sidebar admin filter (if a platform admin has narrowed to a
-  //      specific org, default the create form to that org — they're
-  //      almost certainly creating a project IN the filtered tenant).
+  //   1. Sidebar admin filter CHANGED (if a platform admin has just
+  //      narrowed/switched the filter, retarget the form to that org —
+  //      they're almost certainly creating IN the filtered tenant).
   //   2. Sole org membership (one-time initialisation when the user
   //      belongs to exactly one org and the form is still blank).
-  // Effect runs whenever either signal changes; the priority gate
-  // means switching the sidebar filter immediately retargets the
-  // form, but the per-form `selectedOrgId` state stays editable so
-  // the user can still change it before submitting.
+  // The `previousAdminOrgScope` ref is the key: gate the
+  // adminOrgScope branch on the value actually CHANGING, not just on
+  // the effect re-running. Without that gate, a background refetch of
+  // `organizations` (window focus, staleTime expiry) would re-run the
+  // effect and overwrite a manual selection the user made in the
+  // form. The sole-org fallback already self-gates via `current ||`.
+  const previousAdminOrgScope = useRef<string | null>(adminOrgScope);
   useEffect(() => {
-    if (adminOrgScope) {
+    if (adminOrgScope && adminOrgScope !== previousAdminOrgScope.current) {
       setSelectedOrgId(adminOrgScope);
+      previousAdminOrgScope.current = adminOrgScope;
       return;
     }
+    previousAdminOrgScope.current = adminOrgScope;
     if (organizations?.length === 1) {
       setSelectedOrgId((current) => current || organizations[0].id);
     }
