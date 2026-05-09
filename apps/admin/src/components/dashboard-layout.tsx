@@ -150,7 +150,18 @@ export default function DashboardLayout() {
   // page-specific params (page numbers, sort, filters) are intentionally
   // dropped because they don't apply to the destination page.
   const { selectedOrgId: adminOrgScope } = useOrgFilter();
-  const linkSuffix = adminOrgScope ? `?organizationId=${encodeURIComponent(adminOrgScope)}` : '';
+  const orgQueryFragment = adminOrgScope
+    ? `organizationId=${encodeURIComponent(adminOrgScope)}`
+    : '';
+  // `withOrgScope` keeps the suffix safe even if a future NAV_ITEMS entry
+  // includes its own query string (`/foo?tab=bar` wouldn't otherwise
+  // round-trip through naive concatenation).
+  const withOrgScope = (path: string): string => {
+    if (!orgQueryFragment) {
+      return path;
+    }
+    return `${path}${path.includes('?') ? '&' : '?'}${orgQueryFragment}`;
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -189,7 +200,7 @@ export default function DashboardLayout() {
               return (
                 <Link
                   key={item.path}
-                  to={`${item.path}${linkSuffix}`}
+                  to={withOrgScope(item.path)}
                   className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
                     isActive(item.path)
                       ? 'bg-primary text-white'
@@ -216,7 +227,7 @@ export default function DashboardLayout() {
                   return (
                     <Link
                       key={item.path}
-                      to={`${item.path}${linkSuffix}`}
+                      to={withOrgScope(item.path)}
                       className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
                         isActive(item.path)
                           ? 'bg-primary text-white'

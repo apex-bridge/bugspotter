@@ -49,19 +49,28 @@ export default function ProjectsPage() {
   const { selectedOrgId: adminOrgScope } = useOrgFilter();
 
   // Auto-select org for the Create form. Two seeding triggers:
-  //   1. Sidebar admin filter is set AND either CHANGED or the form
-  //      is still empty. The "changed" gate stops a background refetch
-  //      of `organizations` (window focus / staleTime expiry) from
-  //      clobbering a manual selection. The "empty" fallback covers
-  //      the deep-link case (`/projects?organizationId=X` on first
-  //      load) — without it, `previousAdminOrgScope.current` would
-  //      already equal `adminOrgScope` and the form would open blank.
+  //   1. Sidebar admin filter is set AND the org actually exists in the
+  //      dropdown AND either it CHANGED or the form is still empty.
+  //      - "in dropdown" gate is critical: a non-admin pasting a foreign
+  //        `?organizationId=` (orgs they don't belong to) would otherwise
+  //        seed `selectedOrgId` to a value with no matching `<SelectItem>`,
+  //        and an admin with >100 orgs deep-linking past index 100 would
+  //        hit the same trap (sidebar fetches 500, this page fetches 100).
+  //        Bailing here keeps the form coherent with the dropdown.
+  //      - "changed" gate stops a background refetch of `organizations`
+  //        (window focus / staleTime expiry) from clobbering a manual
+  //        selection.
+  //      - "empty" fallback covers the deep-link case
+  //        (`/projects?organizationId=X` on first load) — without it,
+  //        `previousAdminOrgScope.current` would already equal
+  //        `adminOrgScope` and the form would open blank.
   //   2. Sole org membership — one-time initialisation when the user
   //      belongs to exactly one org and the form is still blank.
   const previousAdminOrgScope = useRef<string | null>(null);
   useEffect(() => {
-    if (adminOrgScope && (adminOrgScope !== previousAdminOrgScope.current || !selectedOrgId)) {
-      setSelectedOrgId(adminOrgScope);
+    const scopeIsKnown = !!adminOrgScope && !!organizations?.some((o) => o.id === adminOrgScope);
+    if (scopeIsKnown && (adminOrgScope !== previousAdminOrgScope.current || !selectedOrgId)) {
+      setSelectedOrgId(adminOrgScope!);
       previousAdminOrgScope.current = adminOrgScope;
       return;
     }

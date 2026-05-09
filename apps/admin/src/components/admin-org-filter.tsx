@@ -64,7 +64,14 @@ export function AdminOrgFilter() {
   // disabled item so the trigger always shows SOMETHING for the
   // current selection — usually just the id, which is enough for
   // the user to recognise the broken state.
-  const selectedIsMissing = selectedOrgId !== null && !orgs.some((org) => org.id === selectedOrgId);
+  //
+  // Gate on `!!orgsResponse` so the synthetic item only shows up after
+  // the fetch has actually returned. Without this, EVERY initial render
+  // with a deep-linked org briefly flashes the "Unknown organization (X)"
+  // item — `orgs === []` while the query is pending, so any non-null
+  // `selectedOrgId` evaluates as missing for one render.
+  const selectedIsMissing =
+    !!orgsResponse && selectedOrgId !== null && !orgs.some((org) => org.id === selectedOrgId);
 
   return (
     <div className="px-4 py-3 border-b border-gray-200" data-testid="admin-org-filter">
