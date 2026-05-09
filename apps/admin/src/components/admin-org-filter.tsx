@@ -9,20 +9,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 const ALL_ORGS_VALUE = '__all__';
 
 /**
- * Bumped from 100 to 500 because:
- *   - 100 silently truncates: anything past the 100th org is invisible
- *     and a deep-linked `?organizationId=<missing>` resolves to a
- *     `<SelectItem>` that doesn't exist, leaving the trigger in a
- *     blank/unmatched state with no recovery path through the UI.
- *   - 500 covers the realistic mid-term tenant count for this product
- *     without paging or typeahead. We can revisit (search-backed
- *     lookup, virtualised list) when actual scale demands it.
+ * Capped at 100 because the backend's `GET /api/v1/organizations`
+ * schema rejects `limit > 100` with 400 (organization-schema.ts:260,
+ * `maximum: 100`). PR #119 originally set this to 500 to cover the
+ * realistic mid-term tenant count, but that fired schema-validation
+ * 400s in prod and broke the entire admin shell for any platform
+ * admin (the sidebar widget is mounted by `<DashboardLayout>` which
+ * wraps every admin route).
  *
- * The `<MissingOrgFallback>` below provides a synthetic item for the
- * deep-link case so the trigger always shows SOMETHING for the
- * resolved id, even if the org isn't in the fetched window.
+ * The synthetic disabled item below already covers the case where a
+ * deep-linked org is past the fetched window — the trigger renders
+ * "Unknown organization (id)" with no crash. Restoring full
+ * dropdown access for >100 tenants requires either bumping the
+ * backend cap (tracked on issue #120) or adding a search-backed
+ * picker; both are follow-ups.
  */
-const ORG_LIST_LIMIT = 500;
+const ORG_LIST_LIMIT = 100;
 
 /**
  * Sidebar widget that lets a platform admin scope the four cross-org
