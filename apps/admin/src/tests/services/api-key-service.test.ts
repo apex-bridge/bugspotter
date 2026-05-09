@@ -58,7 +58,12 @@ describe('API Key Service', () => {
 
       const result = await apiKeyService.getAll();
 
-      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys?page=1&limit=20');
+      // Service now uses axios `params` option (gemini's review on
+      // PR #118 — consistency with project/user services). Assert
+      // shape rather than the serialized URL.
+      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys', {
+        params: { page: 1, limit: 20 },
+      });
       expect(result.data).toEqual(mockData);
       expect(result.pagination.page).toBe(1);
     });
@@ -79,7 +84,9 @@ describe('API Key Service', () => {
 
       await apiKeyService.getAll(2, 10);
 
-      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys?page=2&limit=10');
+      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys', {
+        params: { page: 2, limit: 10 },
+      });
     });
 
     it('should handle API errors', async () => {
@@ -87,6 +94,37 @@ describe('API Key Service', () => {
       vi.mocked(api.get).mockRejectedValue(mockError);
 
       await expect(apiKeyService.getAll()).rejects.toThrow('Network error');
+    });
+
+    it('serialises organizationId as `organization_id` for the wire', async () => {
+      vi.mocked(api.get).mockResolvedValue({
+        data: {
+          success: true,
+          data: [],
+          pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+        },
+      } as AxiosResponse);
+
+      await apiKeyService.getAll(1, 20, undefined, 'org-123');
+
+      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys', {
+        params: { page: 1, limit: 20, organization_id: 'org-123' },
+      });
+    });
+
+    it('drops organization_id when organizationId is null/undefined', async () => {
+      vi.mocked(api.get).mockResolvedValue({
+        data: {
+          success: true,
+          data: [],
+          pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+        },
+      } as AxiosResponse);
+
+      await apiKeyService.getAll(1, 20, undefined, null);
+
+      const params = vi.mocked(api.get).mock.calls[0][1]?.params as Record<string, unknown>;
+      expect(params).not.toHaveProperty('organization_id');
     });
   });
 

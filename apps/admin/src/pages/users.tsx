@@ -1,10 +1,11 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { userService, projectMemberService } from '../services/api';
 import { formatDateShort } from '../utils/format';
 import { useModalFocus } from '../hooks/use-modal-focus';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -25,14 +26,25 @@ export default function UsersPage() {
     name: string;
   } | null>(null);
 
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // Reset pagination on org-scope change. An admin on page 5 of org A
+  // (10 pages) switching to org B (2 pages) would otherwise hit
+  // `?page=5` against B's smaller list and see an empty "no results"
+  // view for an org that has data.
+  useEffect(() => {
+    setPage(1);
+  }, [adminOrgScope]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ['users', page, searchEmail, roleFilter],
+    queryKey: ['users', page, searchEmail, roleFilter, adminOrgScope],
     queryFn: () =>
       userService.getAll({
         page,
         limit: 20,
         ...(searchEmail && { email: searchEmail }),
         ...(roleFilter && { role: roleFilter }),
+        ...(adminOrgScope && { organizationId: adminOrgScope }),
       }),
   });
 
@@ -237,6 +249,7 @@ export default function UsersPage() {
                       variant="secondary"
                       disabled={page === 1}
                       onClick={() => setPage((p) => p - 1)}
+                      data-testid="users-prev-page"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </Button>
@@ -248,6 +261,7 @@ export default function UsersPage() {
                       variant="secondary"
                       disabled={page >= data.pagination.totalPages}
                       onClick={() => setPage((p) => p + 1)}
+                      data-testid="users-next-page"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </Button>

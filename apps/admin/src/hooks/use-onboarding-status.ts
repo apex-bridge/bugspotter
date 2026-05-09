@@ -22,7 +22,15 @@ export interface OnboardingState {
   canConfigure: boolean;
   /** True iff there is at least one project in the active organization. */
   hasProject: boolean;
-  /** First project's id (used as the SDK snippet's projectId). Null when no project. */
+  /** Total number of projects in the active org (drives single-vs-multi UX branches). */
+  projectCount: number;
+  /**
+   * First project's id, used to short-circuit single-project flows
+   * (e.g. routing Connect Jira straight to the project's configure
+   * page instead of dumping the user on a project picker). Null when
+   * no project. Don't rely on this for multi-project tenants — server
+   * order isn't documented.
+   */
   primaryProjectId: string | null;
   /** Number of integrations enabled in the active organization. */
   integrationCount: number;
@@ -44,15 +52,25 @@ export function useOnboardingStatus(): OnboardingState {
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
   // Plain `['projects']` / `['integrations']` keys to dedupe with every
-  // other consumer in the admin (api-keys, bug-reports, notifications,
-  // integrations overview, …). Org scoping isn't needed in the key
-  // because each project / integration belongs to exactly one org
-  // (`organization_id` FK), the list endpoints scope server-side by the
-  // tenant context, and prod routes orgs to subdomains so an org switch
-  // is a full reload (cache resets naturally).
+  // other consumer in the admin (notification dialogs, channels-list,
+  // integrations overview, …). Both queries reflect the user's CURRENT
+  // tenant context (subdomain on SaaS), not the platform-admin sidebar
+  // filter — the QuickSetup CTAs that consume this hook are tied to
+  // "what does THIS tenant have set up", and threading the sidebar
+  // filter only into the projects query was internally inconsistent
+  // (integrationService.list takes no org arg, so `integrationCount`
+  // would stay global, breaking predicates like
+  // `hasProject && integrationCount === 0` for any platform admin
+  // with the sidebar filter set). Either both signals follow the
+  // filter or neither does; "neither" is the only option without a
+  // backend change to `integrationService.list`.
+  // Wrap `getAll()` in an arrow to drop React Query's context arg —
+  // the service's first param is `organizationId?: string`, so passing
+  // the query context through would be a type error and (worse) send
+  // a junk org id to the backend.
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
     enabled: canConfigure && hasOrganization,
     staleTime: 5 * 60 * 1000,
   });
@@ -67,6 +85,7 @@ export function useOnboardingStatus(): OnboardingState {
   return {
     canConfigure,
     hasProject: projects.length >= 1,
+    projectCount: projects.length,
     primaryProjectId: projects[0]?.id ?? null,
     integrationCount: integrations.length,
   };

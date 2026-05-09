@@ -42,7 +42,7 @@ export function CreateChannelDialog({ open, onOpenChange, onSuccess }: CreateCha
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
   });
 
   const createMutation = useMutation({

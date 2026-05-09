@@ -19,35 +19,32 @@ export const bugReportService = {
     page = 1,
     limit = 20,
     sortBy = 'created_at',
-    order: 'asc' | 'desc' = 'desc'
+    order: 'asc' | 'desc' = 'desc',
+    organizationId?: string | null
   ): Promise<BugReportListResponse> => {
-    const params = new URLSearchParams();
-    params.append('page', page.toString());
-    params.append('limit', limit.toString());
-    params.append('sort_by', sortBy);
-    params.append('order', order);
-
-    if (filters?.project_id) {
-      params.append('project_id', filters.project_id);
-    }
-    if (filters?.status) {
-      params.append('status', filters.status);
-    }
-    if (filters?.priority) {
-      params.append('priority', filters.priority);
-    }
-    if (filters?.created_after) {
-      params.append('created_after', filters.created_after);
-    }
-    if (filters?.created_before) {
-      params.append('created_before', filters.created_before);
-    }
+    // Use the `params` option so axios handles serialization +
+    // url-encoding for us. Matches the call shape in `project-service`,
+    // `user-service`, and the api-key service. Conditional spreads
+    // drop falsy fields cleanly. Backend ignores `organization_id`
+    // for non-admins per PR #115's security boundary.
+    const params: Record<string, string | number> = {
+      page,
+      limit,
+      sort_by: sortBy,
+      order,
+      ...(filters?.project_id && { project_id: filters.project_id }),
+      ...(filters?.status && { status: filters.status }),
+      ...(filters?.priority && { priority: filters.priority }),
+      ...(filters?.created_after && { created_after: filters.created_after }),
+      ...(filters?.created_before && { created_before: filters.created_before }),
+      ...(organizationId && { organization_id: organizationId }),
+    };
 
     const response = await api.get<{
       success: boolean;
       data: BugReport[];
       pagination: { page: number; limit: number; total: number; totalPages: number };
-    }>(`${API_ENDPOINTS.bugReports.list()}?${params.toString()}`);
+    }>(API_ENDPOINTS.bugReports.list(), { params });
     // Paginated responses have data and pagination at the root level after unwrapping
     return { data: response.data.data, pagination: response.data.pagination };
   },

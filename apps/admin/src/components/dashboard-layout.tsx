@@ -7,7 +7,9 @@ import { useTranslation } from 'react-i18next';
 import { useMemo, useCallback } from 'react';
 import { LanguageSwitcher } from './language-switcher';
 import { QuickSetupActions } from './onboarding/quick-setup-actions';
+import { AdminOrgFilter } from './admin-org-filter';
 import { usePermissions } from '../hooks/use-permissions';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import {
   Activity,
   Settings,
@@ -142,6 +144,25 @@ export default function DashboardLayout() {
   const isAdmin = isPlatformAdmin(user);
   const adminLabel = isSaaS ? 'platform admin' : 'admin';
 
+  // Carry the platform-admin org filter (`?organizationId=`) through
+  // sidebar navigation so an admin investigating one tenant doesn't lose
+  // the filter on every click. Only `organizationId` is preserved —
+  // page-specific params (page numbers, sort, filters) are intentionally
+  // dropped because they don't apply to the destination page.
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+  const orgQueryFragment = adminOrgScope
+    ? `organizationId=${encodeURIComponent(adminOrgScope)}`
+    : '';
+  // `withOrgScope` keeps the suffix safe even if a future NAV_ITEMS entry
+  // includes its own query string (`/foo?tab=bar` wouldn't otherwise
+  // round-trip through naive concatenation).
+  const withOrgScope = (path: string): string => {
+    if (!orgQueryFragment) {
+      return path;
+    }
+    return `${path}${path.includes('?') ? '&' : '?'}${orgQueryFragment}`;
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Sidebar */}
@@ -152,6 +173,12 @@ export default function DashboardLayout() {
             <h1 className="text-2xl font-bold text-primary">BugSpotter</h1>
             <p className="text-sm text-gray-500 mt-1">{t('nav.adminPanel')}</p>
           </div>
+
+          {/* Cross-org filter — renders only for platform admins.
+              Sets `?organizationId=` in the URL; the four list pages
+              (Projects, API Keys, Users, Bug Reports) read the param
+              via `useOrgFilter()` and pass it to their service calls. */}
+          <AdminOrgFilter />
 
           {/* Navigation — overflow-y-auto so a long list of items (platform
               admin + org sections together can be 20+) scrolls INSIDE the
@@ -173,7 +200,7 @@ export default function DashboardLayout() {
               return (
                 <Link
                   key={item.path}
-                  to={item.path}
+                  to={withOrgScope(item.path)}
                   className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
                     isActive(item.path)
                       ? 'bg-primary text-white'
@@ -200,7 +227,7 @@ export default function DashboardLayout() {
                   return (
                     <Link
                       key={item.path}
-                      to={item.path}
+                      to={withOrgScope(item.path)}
                       className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
                         isActive(item.path)
                           ? 'bg-primary text-white'

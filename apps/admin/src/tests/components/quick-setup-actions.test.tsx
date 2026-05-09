@@ -30,6 +30,7 @@ vi.mock('sonner', () => ({
 const baseState: OnboardingState = {
   canConfigure: true,
   hasProject: true,
+  projectCount: 1,
   primaryProjectId: 'proj-1',
   integrationCount: 0,
 };
@@ -118,11 +119,29 @@ describe('QuickSetupActions', () => {
 
   // ---- Click behaviour -----------------------------------------------------
 
-  it('navigates to the Jira integration page on Connect Jira click', () => {
-    onboardingStatusMock.mockReturnValue(baseState);
+  it("Connect Jira (single-project): routes straight to that project's Jira configure page", () => {
+    onboardingStatusMock.mockReturnValue({
+      ...baseState,
+      projectCount: 1,
+      primaryProjectId: 'proj-1',
+    });
     renderInRouter();
     fireEvent.click(screen.getByTestId('quick-setup-connect-jira'));
-    expect(navigateMock).toHaveBeenCalledWith('/integrations/jira');
+    expect(navigateMock).toHaveBeenCalledWith('/projects/proj-1/integrations/jira/configure');
+  });
+
+  it('Connect Jira (multi-project): routes to the projects list (let user pick)', () => {
+    onboardingStatusMock.mockReturnValue({
+      ...baseState,
+      projectCount: 3,
+      primaryProjectId: 'proj-1',
+    });
+    renderInRouter();
+    fireEvent.click(screen.getByTestId('quick-setup-connect-jira'));
+    // Not /integrations/jira — that route is `<AdminRoute>`-wrapped
+    // (platform-admin only); an org admin clicking it would 403/redirect
+    // instead of landing in a configure flow.
+    expect(navigateMock).toHaveBeenCalledWith('/projects');
   });
 
   it('opens the SDK snippet dialog when the SDK CTA is clicked', () => {

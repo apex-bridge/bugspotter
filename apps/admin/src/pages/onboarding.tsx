@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { useAuth } from '../contexts/auth-context';
 import { authService } from '../services/api';
-import { handleApiError } from '../lib/api-client';
+import { handleApiError, API_BASE_URL } from '../lib/api-client';
 import type { User } from '../types';
 
 /**
@@ -281,16 +281,31 @@ export default function OnboardingPage() {
       // Default import to match the documented usage in README.md:96
       // and API_DOCUMENTATION.md — the SDK ships as a default export,
       // so a named import would break for anyone copy-pasting this.
+      //
+      // `BugSpotterConfig` (`bugspotter-sdk/src/index.ts:391`) accepts
+      // `apiKey` (required) and `endpoint` (optional, base URL of the
+      // BugSpotter API). There is NO `projectId` field — the API key
+      // already encodes which projects it can write to via its
+      // `allowed_projects` server-side scope.
+      //
+      // `endpoint` uses `API_BASE_URL`, NOT `INSTANCE_URL` (the admin
+      // origin). The SDK runs in the customer's own app — a
+      // different origin from the admin UI — so it needs the actual
+      // API host, not whatever URL the admin happens to be served
+      // from. `INSTANCE_URL` below stays right for the Chrome
+      // extension card because the extension talks back to the
+      // admin's nginx (which proxies `/api/*` same-origin).
+      //
       // `JSON.stringify` so single-quotes, backslashes, or newlines
-      // in a key / id (unlikely, but cheap defense) don't break the
-      // generated snippet or enable string-injection into the copy.
+      // in a key / origin (unlikely, but cheap defense) don't break
+      // the generated snippet or enable string-injection into the copy.
       `import BugSpotter from '@bugspotter/sdk';
 
 BugSpotter.init({
   apiKey: ${JSON.stringify(handoff.api_key)},
-  projectId: ${JSON.stringify(handoff.project.id)},
+  endpoint: ${JSON.stringify(API_BASE_URL || '<your BugSpotter API URL>')},
 });`,
-    [handoff.api_key, handoff.project.id]
+    [handoff.api_key]
   );
 
   const copyToClipboard = useCallback(

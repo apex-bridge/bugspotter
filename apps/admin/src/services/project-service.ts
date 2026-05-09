@@ -8,9 +8,12 @@ import type { Project } from '../types';
 import type { ProjectIntegration } from '../types/integration';
 
 export const projectService = {
-  getAll: async (): Promise<Project[]> => {
+  getAll: async (organizationId?: string | null): Promise<Project[]> => {
+    // Platform admin can narrow the cross-org list via `?organization_id=`.
+    // The backend ignores it for non-admins (see PR #115 security boundary).
     const response = await api.get<{ success: boolean; data: Project[] }>(
-      API_ENDPOINTS.projects.list()
+      API_ENDPOINTS.projects.list(),
+      { params: organizationId ? { organization_id: organizationId } : undefined }
     );
     return response.data.data;
   },
