@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { useAuth } from '../contexts/auth-context';
 import { authService } from '../services/api';
-import { handleApiError, API_BASE_URL } from '../lib/api-client';
+import { handleApiError } from '../lib/api-client';
 import type { User } from '../types';
 
 /**
@@ -288,13 +288,15 @@ export default function OnboardingPage() {
       // already encodes which projects it can write to via its
       // `allowed_projects` server-side scope.
       //
-      // `endpoint` uses `API_BASE_URL`, NOT `INSTANCE_URL` (the admin
-      // origin). The SDK runs in the customer's own app — a
-      // different origin from the admin UI — so it needs the actual
-      // API host, not whatever URL the admin happens to be served
-      // from. `INSTANCE_URL` below stays right for the Chrome
-      // extension card because the extension talks back to the
-      // admin's nginx (which proxies `/api/*` same-origin).
+      // `endpoint` is the tenant's own origin (`INSTANCE_URL`) — on
+      // SaaS that's the org subdomain (`[org].kz.bugspotter.io`),
+      // which is the URL the user already knows from the dashboard
+      // and the right surface to point the SDK at per product
+      // decision. The admin host proxies `/api/*` to the backend on
+      // every supported deployment (SaaS nginx, self-hosted reverse
+      // proxy, local-dev vite), so SDK requests reach the API
+      // through the same origin. The same value powers the Chrome
+      // extension card below.
       //
       // `JSON.stringify` so single-quotes, backslashes, or newlines
       // in a key / origin (unlikely, but cheap defense) don't break
@@ -303,7 +305,7 @@ export default function OnboardingPage() {
 
 BugSpotter.init({
   apiKey: ${JSON.stringify(handoff.api_key)},
-  endpoint: ${JSON.stringify(API_BASE_URL || '<your BugSpotter API URL>')},
+  endpoint: ${JSON.stringify(INSTANCE_URL || '<your BugSpotter URL>')},
 });`,
     [handoff.api_key]
   );

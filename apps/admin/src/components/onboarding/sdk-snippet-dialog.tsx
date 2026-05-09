@@ -6,7 +6,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '../ui/button';
 import { SnippetTabs } from '../ui/snippet-tabs';
 import { buildSdkInstallSnippets } from './sdk-install-snippets';
-import { API_BASE_URL } from '../../lib/api-client';
 
 interface SdkSnippetDialogProps {
   open: boolean;
@@ -14,25 +13,23 @@ interface SdkSnippetDialogProps {
 }
 
 /**
- * The endpoint the SDK needs to point at — the *API* host, not the
- * admin UI host. These can be the same origin on some deployments
- * (admin's nginx proxies `/api/*`), but in cross-origin setups (SaaS
- * prod has admin at `[org].kz.bugspotter.io` and API at
- * `api.kz.bugspotter.io`; local dev runs admin on `:5173` and API on
- * `:3000`) `window.location.origin` is the admin UI host and would
- * misdirect the SDK.
+ * Use the current page origin as the SDK endpoint. On every supported
+ * deployment, the admin host proxies `/api/*` to the backend:
+ *   - SaaS prod: `[org].kz.bugspotter.io` (admin nginx → backend) —
+ *     and the subdomain is the URL the user already knows from the
+ *     dashboard, so it's also the most discoverable endpoint to
+ *     hand them.
+ *   - Self-hosted: admin and API typically same-origin behind one
+ *     reverse proxy.
+ *   - Local dev: `vite.config.ts` proxies `/api/*` to `:3000`.
  *
- * `API_BASE_URL` (`lib/api-client.ts:16`) is exactly the value
- * `axios.create({ baseURL })` uses for this admin's own API calls,
- * so the SDK ends up pointed at the same place the admin agrees on.
- *
- * Falls back to `null` when `API_BASE_URL` is empty (local dev with
- * same-origin proxy — there's no absolute URL to hand the SDK in
- * that case, so the snippet shows a placeholder for the user to
- * replace by hand).
+ * Picking the API host directly (e.g. `api.kz.bugspotter.io`) would
+ * be technically equivalent on SaaS but contradicts the explicit
+ * product decision to surface the tenant subdomain everywhere
+ * customer-visible. SSR-safe via the `typeof window` guard.
  */
 function currentEndpoint(): string | null {
-  return API_BASE_URL || null;
+  return typeof window === 'undefined' ? null : window.location.origin;
 }
 
 export function SdkSnippetDialog({ open, onOpenChange }: SdkSnippetDialogProps) {
