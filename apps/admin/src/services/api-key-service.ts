@@ -19,23 +19,26 @@ export const apiKeyService = {
     status?: 'active' | 'expiring' | 'expired' | 'revoked',
     organizationId?: string | null
   ): Promise<ApiKeyListResponse> => {
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
-    });
+    // Use the `params` option so axios serialises and url-encodes for
+    // us — keeps the call shape consistent with `project-service` and
+    // `user-service`. `undefined` values are dropped automatically;
+    // explicit `null` for `organizationId` is also dropped here so
+    // non-admins (or "All organizations" mode) don't send the param.
+    // Backend ignores `organization_id` for non-admins per PR #115's
+    // security boundary; suppressing it client-side just keeps the
+    // wire format clean.
+    const params: Record<string, string | number> = { page, limit };
     if (status) {
-      params.append('status', status);
+      params.status = status;
     }
-    // Platform admin can narrow the cross-org list via `?organization_id=`.
-    // The backend ignores it for non-admins (see PR #115 security boundary).
     if (organizationId) {
-      params.append('organization_id', organizationId);
+      params.organization_id = organizationId;
     }
     const response = await api.get<{
       success: boolean;
       data: ApiKey[];
       pagination: ApiKeyListResponse['pagination'];
-    }>(`${API_ENDPOINTS.apiKeys.list()}?${params.toString()}`);
+    }>(API_ENDPOINTS.apiKeys.list(), { params });
     return {
       data: response.data.data,
       pagination: response.data.pagination,

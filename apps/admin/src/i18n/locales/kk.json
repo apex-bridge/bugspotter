@@ -1862,6 +1862,7 @@
   "adminOrgFilter": {
     "label": "Ұйым бойынша сүзу",
     "placeholder": "Ұйымды таңдаңыз",
-    "allOrgs": "Барлық ұйымдар"
+    "allOrgs": "Барлық ұйымдар",
+    "unknownOrg": "Белгісіз ұйым ({{id}})"
   }
 }

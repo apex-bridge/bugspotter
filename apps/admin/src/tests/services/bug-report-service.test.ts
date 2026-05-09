@@ -35,9 +35,12 @@ describe('bugReportService', () => {
 
       await bugReportService.getAll();
 
-      expect(api.get).toHaveBeenCalledWith(
-        expect.stringContaining('/reports?page=1&limit=20&sort_by=created_at&order=desc')
-      );
+      // Service now uses axios `params` option (gemini's review on
+      // PR #118 — consistency with project/user services). Inspect
+      // the params object instead of the serialized URL string.
+      expect(api.get).toHaveBeenCalledWith('/api/v1/reports', {
+        params: { page: 1, limit: 20, sort_by: 'created_at', order: 'desc' },
+      });
     });
 
     it('includes filters in query params', async () => {
@@ -59,12 +62,12 @@ describe('bugReportService', () => {
 
       await bugReportService.getAll(filters);
 
-      const call = vi.mocked(api.get).mock.calls[0][0] as string;
-      expect(call).toContain('project_id=project-123');
-      expect(call).toContain('status=open');
-      expect(call).toContain('priority=high');
-      expect(call).toContain('created_after=2024-01-01');
-      expect(call).toContain('created_before=2024-12-31');
+      const params = vi.mocked(api.get).mock.calls[0][1]?.params as Record<string, unknown>;
+      expect(params.project_id).toBe('project-123');
+      expect(params.status).toBe('open');
+      expect(params.priority).toBe('high');
+      expect(params.created_after).toBe('2024-01-01');
+      expect(params.created_before).toBe('2024-12-31');
     });
 
     it('supports custom pagination', async () => {
@@ -78,7 +81,9 @@ describe('bugReportService', () => {
 
       await bugReportService.getAll({}, 2, 50);
 
-      expect(api.get).toHaveBeenCalledWith(expect.stringContaining('page=2&limit=50'));
+      const params = vi.mocked(api.get).mock.calls[0][1]?.params as Record<string, unknown>;
+      expect(params.page).toBe(2);
+      expect(params.limit).toBe(50);
     });
 
     it('supports custom sorting', async () => {
@@ -92,7 +97,9 @@ describe('bugReportService', () => {
 
       await bugReportService.getAll({}, 1, 20, 'priority', 'asc');
 
-      expect(api.get).toHaveBeenCalledWith(expect.stringContaining('sort_by=priority&order=asc'));
+      const params = vi.mocked(api.get).mock.calls[0][1]?.params as Record<string, unknown>;
+      expect(params.sort_by).toBe('priority');
+      expect(params.order).toBe('asc');
     });
   });
 

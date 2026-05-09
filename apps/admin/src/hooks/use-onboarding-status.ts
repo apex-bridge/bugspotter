@@ -3,6 +3,7 @@ import { useOrganization } from '../contexts/organization-context';
 import { integrationService } from '../services/integration-service';
 import { projectService } from '../services/api';
 import { usePermissions } from './use-permissions';
+import { useOrgFilter } from './use-org-filter';
 
 /**
  * Raw signals describing the tenant's onboarding state. Each
@@ -51,16 +52,20 @@ export function useOnboardingStatus(): OnboardingState {
   const { isSystemAdmin, orgRole } = usePermissions();
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
-  // Plain `['projects']` / `['integrations']` keys to dedupe with every
-  // other consumer in the admin (api-keys, bug-reports, notifications,
-  // integrations overview, …). Org scoping isn't needed in the key
-  // because each project / integration belongs to exactly one org
-  // (`organization_id` FK), the list endpoints scope server-side by the
-  // tenant context, and prod routes orgs to subdomains so an org switch
-  // is a full reload (cache resets naturally).
+  // When a platform admin has narrowed the cross-org view via the
+  // sidebar widget, the QuickSetup CTAs need to reflect THAT org's
+  // state — not the global firehose. Without threading the scope
+  // through, the CTAs would show "no integrations" globally even
+  // when the filtered org has them, and vice versa.
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // Include the admin scope in the keys so filtering re-fetches.
+  // Backend ignores `organization_id` for non-admins (PR #115
+  // security boundary), so passing it from the hook is safe for
+  // all users — for non-admins the param is dropped server-side.
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => projectService.getAll(),
+    queryKey: ['projects', adminOrgScope],
+    queryFn: () => projectService.getAll(adminOrgScope),
     enabled: canConfigure && hasOrganization,
     staleTime: 5 * 60 * 1000,
   });

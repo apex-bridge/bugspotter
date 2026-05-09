@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -31,6 +31,20 @@ export default function BugReportsPage() {
   const limit = 20;
 
   const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // When the platform-admin org filter changes mid-session, two
+  // pieces of in-page state become stale and produce a misleading
+  // "no results" view:
+  //   1. `page` — admin on page 5 of org A (10 pages) switches to
+  //      org B (2 pages); query becomes `?page=5&organization_id=B`,
+  //      backend returns empty data.
+  //   2. `filters.project_id` — points at a project from org A that
+  //      doesn't exist in org B; backend ANDs the filters → empty.
+  // Reset both whenever the scope flips.
+  useEffect(() => {
+    setPage(1);
+    setFilters((prev) => ({ ...prev, project_id: undefined }));
+  }, [adminOrgScope]);
 
   // Fetch projects for filter dropdown
   const { data: projects = [] } = useQuery({

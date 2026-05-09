@@ -58,7 +58,12 @@ describe('API Key Service', () => {
 
       const result = await apiKeyService.getAll();
 
-      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys?page=1&limit=20');
+      // Service now uses axios `params` option (gemini's review on
+      // PR #118 — consistency with project/user services). Assert
+      // shape rather than the serialized URL.
+      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys', {
+        params: { page: 1, limit: 20 },
+      });
       expect(result.data).toEqual(mockData);
       expect(result.pagination.page).toBe(1);
     });
@@ -79,7 +84,9 @@ describe('API Key Service', () => {
 
       await apiKeyService.getAll(2, 10);
 
-      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys?page=2&limit=10');
+      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys', {
+        params: { page: 2, limit: 10 },
+      });
     });
 
     it('should handle API errors', async () => {

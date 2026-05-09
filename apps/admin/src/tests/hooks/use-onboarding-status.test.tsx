@@ -22,6 +22,15 @@ vi.mock('../../hooks/use-permissions', () => ({
   usePermissions: () => usePermissionsMock(),
 }));
 
+// `useOnboardingStatus` now reads `useOrgFilter()` to thread the
+// platform-admin sidebar scope into its projects query. The hook
+// internally calls `useSearchParams` which needs a Router context;
+// stub `useOrgFilter` to return `null` so the test wrapper stays
+// router-free and tests can focus on the hook's own logic.
+vi.mock('../../hooks/use-org-filter', () => ({
+  useOrgFilter: () => ({ selectedOrgId: null, setSelectedOrgId: vi.fn() }),
+}));
+
 vi.mock('../../services/api', () => ({
   projectService: { getAll: vi.fn() },
   bugReportService: { getAll: vi.fn() },

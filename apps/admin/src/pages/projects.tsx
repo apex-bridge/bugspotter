@@ -46,14 +46,27 @@ export default function ProjectsPage() {
     enabled: user !== null,
   });
 
-  // Auto-select org when user has exactly one (one-time initialization)
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // Auto-select org for the Create form. Priority order:
+  //   1. Sidebar admin filter (if a platform admin has narrowed to a
+  //      specific org, default the create form to that org — they're
+  //      almost certainly creating a project IN the filtered tenant).
+  //   2. Sole org membership (one-time initialisation when the user
+  //      belongs to exactly one org and the form is still blank).
+  // Effect runs whenever either signal changes; the priority gate
+  // means switching the sidebar filter immediately retargets the
+  // form, but the per-form `selectedOrgId` state stays editable so
+  // the user can still change it before submitting.
   useEffect(() => {
+    if (adminOrgScope) {
+      setSelectedOrgId(adminOrgScope);
+      return;
+    }
     if (organizations?.length === 1) {
       setSelectedOrgId((current) => current || organizations[0].id);
     }
-  }, [organizations]);
-
-  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+  }, [organizations, adminOrgScope]);
   const { data: projects, isLoading } = useQuery({
     // Include the admin filter in the key so switching orgs in the
     // sidebar widget triggers a re-fetch instead of serving stale data.

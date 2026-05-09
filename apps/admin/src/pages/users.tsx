@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -27,6 +27,15 @@ export default function UsersPage() {
   } | null>(null);
 
   const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // Reset pagination on org-scope change. An admin on page 5 of org A
+  // (10 pages) switching to org B (2 pages) would otherwise hit
+  // `?page=5` against B's smaller list and see an empty "no results"
+  // view for an org that has data.
+  useEffect(() => {
+    setPage(1);
+  }, [adminOrgScope]);
+
   const { data, isLoading } = useQuery({
     queryKey: ['users', page, searchEmail, roleFilter, adminOrgScope],
     queryFn: () =>
