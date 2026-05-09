@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { useAuth } from '../contexts/auth-context';
 import { authService } from '../services/api';
-import { handleApiError, API_BASE_URL } from '../lib/api-client';
+import { handleApiError, INSTANCE_ORIGIN } from '../lib/api-client';
 import type { User } from '../types';
 
 /**
@@ -36,15 +36,14 @@ const CHROME_WEB_STORE_URL =
   'https://chromewebstore.google.com/detail/bugspotter/mpefobgognkodaknpalkaohkaniddmhj';
 
 /**
- * Instance URL the extension's Options page accepts. Use the
- * tenant's own origin (e.g. `https://acme.kz.bugspotter.io`) — the
- * admin's nginx proxies `/api/*` to the backend, and the API key
- * still identifies the tenant, so requests succeed same-origin.
- * That's better UX than a generic `api.*` host the user has never
- * seen before, since they're already viewing the dashboard at this
- * URL.
+ * Local alias for the shared `INSTANCE_ORIGIN` from `lib/api-client.ts`.
+ * Same value as the SDK install snippet's endpoint and as the URL the
+ * Chrome-extension Options page expects — the tenant's own origin
+ * (e.g. `https://acme.kz.bugspotter.io`). Admin nginx proxies
+ * `/api/*` to backend, so requests succeed same-origin and the API
+ * key identifies the tenant.
  */
-const INSTANCE_URL = typeof window === 'undefined' ? '' : window.location.origin;
+const INSTANCE_URL = INSTANCE_ORIGIN;
 
 /**
  * Normalize a base64-encoded querystring value so `atob` accepts it.
@@ -288,13 +287,15 @@ export default function OnboardingPage() {
       // already encodes which projects it can write to via its
       // `allowed_projects` server-side scope.
       //
-      // `endpoint` uses `API_BASE_URL`, NOT `INSTANCE_URL` (the admin
-      // origin). The SDK runs in the customer's own app — a
-      // different origin from the admin UI — so it needs the actual
-      // API host, not whatever URL the admin happens to be served
-      // from. `INSTANCE_URL` below stays right for the Chrome
-      // extension card because the extension talks back to the
-      // admin's nginx (which proxies `/api/*` same-origin).
+      // `endpoint` is the tenant's own origin (`INSTANCE_URL`) — on
+      // SaaS that's the org subdomain (`[org].kz.bugspotter.io`),
+      // which is the URL the user already knows from the dashboard
+      // and the right surface to point the SDK at per product
+      // decision. The admin host proxies `/api/*` to the backend on
+      // every supported deployment (SaaS nginx, self-hosted reverse
+      // proxy, local-dev vite), so SDK requests reach the API
+      // through the same origin. The same value powers the Chrome
+      // extension card below.
       //
       // `JSON.stringify` so single-quotes, backslashes, or newlines
       // in a key / origin (unlikely, but cheap defense) don't break
@@ -303,7 +304,7 @@ export default function OnboardingPage() {
 
 BugSpotter.init({
   apiKey: ${JSON.stringify(handoff.api_key)},
-  endpoint: ${JSON.stringify(API_BASE_URL || '<your BugSpotter API URL>')},
+  endpoint: ${JSON.stringify(INSTANCE_URL || '<your BugSpotter URL>')},
 });`,
     [handoff.api_key]
   );

@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '../ui/button';
 import { SnippetTabs } from '../ui/snippet-tabs';
 import { buildSdkInstallSnippets } from './sdk-install-snippets';
-import { API_BASE_URL } from '../../lib/api-client';
+import { INSTANCE_ORIGIN } from '../../lib/api-client';
 
 interface SdkSnippetDialogProps {
   open: boolean;
@@ -14,30 +14,20 @@ interface SdkSnippetDialogProps {
 }
 
 /**
- * The endpoint the SDK needs to point at — the *API* host, not the
- * admin UI host. These can be the same origin on some deployments
- * (admin's nginx proxies `/api/*`), but in cross-origin setups (SaaS
- * prod has admin at `[org].kz.bugspotter.io` and API at
- * `api.kz.bugspotter.io`; local dev runs admin on `:5173` and API on
- * `:3000`) `window.location.origin` is the admin UI host and would
- * misdirect the SDK.
+ * Use the tenant's own origin as the SDK endpoint. On every supported
+ * deployment, the admin host proxies `/api/*` to the backend (SaaS
+ * nginx → backend, self-hosted reverse proxy, local-dev vite). The
+ * subdomain is also the URL the user already knows from the
+ * dashboard, so it's the most discoverable endpoint to hand them.
  *
- * `API_BASE_URL` (`lib/api-client.ts:16`) is exactly the value
- * `axios.create({ baseURL })` uses for this admin's own API calls,
- * so the SDK ends up pointed at the same place the admin agrees on.
- *
- * Falls back to `null` when `API_BASE_URL` is empty (local dev with
- * same-origin proxy — there's no absolute URL to hand the SDK in
- * that case, so the snippet shows a placeholder for the user to
- * replace by hand).
+ * `buildSdkInstallSnippets` accepts `null` to mean "show a
+ * placeholder", so normalise the SSR-empty-string case here.
  */
-function currentEndpoint(): string | null {
-  return API_BASE_URL || null;
-}
+const SDK_ENDPOINT: string | null = INSTANCE_ORIGIN || null;
 
 export function SdkSnippetDialog({ open, onOpenChange }: SdkSnippetDialogProps) {
   const { t } = useTranslation();
-  const tabs = useMemo(() => buildSdkInstallSnippets(currentEndpoint()), []);
+  const tabs = useMemo(() => buildSdkInstallSnippets(SDK_ENDPOINT), []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

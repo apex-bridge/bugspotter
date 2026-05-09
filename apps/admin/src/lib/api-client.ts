@@ -2,10 +2,13 @@ import axios, { AxiosError } from 'axios';
 import { API_ENDPOINTS } from './api-constants';
 
 // Runtime configuration from /config.js (injected by docker-entrypoint.sh)
-// Falls back to build-time env var for local development
-// Type definition in src/types/window.d.ts
+// Falls back to build-time env var for local development.
+// Type definition in src/types/window.d.ts.
+// Typeof-window guard so this module is import-safe from non-browser
+// contexts (SSR, tooling) — without it, INSTANCE_ORIGIN's own guard
+// at line 25 would never get a chance to run.
 const getRuntimeConfig = () => {
-  return window.__RUNTIME_CONFIG__ || {};
+  return typeof window === 'undefined' ? {} : window.__RUNTIME_CONFIG__ || {};
 };
 
 /**
@@ -14,6 +17,15 @@ const getRuntimeConfig = () => {
  * page import this instead of duplicating the precedence chain.
  */
 export const API_BASE_URL = getRuntimeConfig().apiUrl || import.meta.env.VITE_API_URL || '';
+
+/**
+ * Current page origin (e.g. `https://acme.kz.bugspotter.io` on SaaS,
+ * `http://localhost:3001` in local dev). Single source of truth for
+ * surfaces that need to show or hand the user their tenant's URL —
+ * SDK install snippet, Chrome-extension instance hint, etc. Empty
+ * string in non-browser contexts so callers can `||` to a placeholder.
+ */
+export const INSTANCE_ORIGIN = typeof window === 'undefined' ? '' : window.location.origin;
 
 // Re-export API constants for convenience
 export { API_VERSION, API_ENDPOINTS } from './api-constants';
