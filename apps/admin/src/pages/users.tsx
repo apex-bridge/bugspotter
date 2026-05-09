@@ -249,6 +249,7 @@ export default function UsersPage() {
                       variant="secondary"
                       disabled={page === 1}
                       onClick={() => setPage((p) => p - 1)}
+                      data-testid="users-prev-page"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </Button>
@@ -260,6 +261,7 @@ export default function UsersPage() {
                       variant="secondary"
                       disabled={page >= data.pagination.totalPages}
                       onClick={() => setPage((p) => p + 1)}
+                      data-testid="users-next-page"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </Button>

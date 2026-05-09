@@ -148,11 +148,10 @@ export default function ProjectsPage() {
     mutationFn: ({ name, orgId }: { name: string; orgId?: string }) =>
       projectService.create(name, orgId),
     onSuccess: () => {
-      // Invalidate both the unscoped key (notification dialogs / channels-list /
-      // useOnboardingStatus indirectly) and the admin-scoped key this page reads.
+      // Invalidate the unscoped key (notification dialogs / channels-list /
+      // useOnboardingStatus) and the admin-scoped key this page reads.
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['admin-projects'] });
-      queryClient.invalidateQueries({ queryKey: ['onboarding-projects'] });
       toast.success(t('projects.projectCreatedSuccess'));
       setProjectName('');
       setShowCreateForm(false);
@@ -167,7 +166,6 @@ export default function ProjectsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['admin-projects'] });
-      queryClient.invalidateQueries({ queryKey: ['onboarding-projects'] });
       toast.success(t('projects.projectDeletedSuccess'));
       setDeleteConfirm(null);
     },

@@ -3,7 +3,6 @@ import { useOrganization } from '../contexts/organization-context';
 import { integrationService } from '../services/integration-service';
 import { projectService } from '../services/api';
 import { usePermissions } from './use-permissions';
-import { useOrgFilter } from './use-org-filter';
 
 /**
  * Raw signals describing the tenant's onboarding state. Each
@@ -52,26 +51,26 @@ export function useOnboardingStatus(): OnboardingState {
   const { isSystemAdmin, orgRole } = usePermissions();
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
-  // When a platform admin has narrowed the cross-org view via the
-  // sidebar widget, the QuickSetup CTAs need to reflect THAT org's
-  // state — not the global firehose. Without threading the scope
-  // through, the CTAs would show "no integrations" globally even
-  // when the filtered org has them, and vice versa.
-  const { selectedOrgId: adminOrgScope } = useOrgFilter();
-
-  // Use a dedicated `onboarding-projects` namespace rather than the
-  // shared `['projects']` key. The shared key is intentionally
-  // unscoped (notification dialogs / channels-list / etc. dedup
-  // through it); reshaping it here would fragment that contract.
-  // The mutations in `projects.tsx` invalidate both namespaces
-  // explicitly so a created/deleted project still flushes the
-  // onboarding cache. Backend ignores `organization_id` for
-  // non-admins (PR #115 security boundary), so passing
-  // `adminOrgScope` from the hook is safe for all users — the
-  // param is dropped server-side when not applicable.
+  // Plain `['projects']` / `['integrations']` keys to dedupe with every
+  // other consumer in the admin (notification dialogs, channels-list,
+  // integrations overview, …). Both queries reflect the user's CURRENT
+  // tenant context (subdomain on SaaS), not the platform-admin sidebar
+  // filter — the QuickSetup CTAs that consume this hook are tied to
+  // "what does THIS tenant have set up", and threading the sidebar
+  // filter only into the projects query was internally inconsistent
+  // (integrationService.list takes no org arg, so `integrationCount`
+  // would stay global, breaking predicates like
+  // `hasProject && integrationCount === 0` for any platform admin
+  // with the sidebar filter set). Either both signals follow the
+  // filter or neither does; "neither" is the only option without a
+  // backend change to `integrationService.list`.
+  // Wrap `getAll()` in an arrow to drop React Query's context arg —
+  // the service's first param is `organizationId?: string`, so passing
+  // the query context through would be a type error and (worse) send
+  // a junk org id to the backend.
   const { data: projects = [] } = useQuery({
-    queryKey: ['onboarding-projects', adminOrgScope],
-    queryFn: () => projectService.getAll(adminOrgScope),
+    queryKey: ['projects'],
+    queryFn: () => projectService.getAll(),
     enabled: canConfigure && hasOrganization,
     staleTime: 5 * 60 * 1000,
   });

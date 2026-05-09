@@ -20,7 +20,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
-import { render, act, waitFor } from '@testing-library/react';
+import { render, act, waitFor, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { useOrgFilter } from '../../hooks/use-org-filter';
@@ -94,6 +95,18 @@ vi.mock('../../components/bug-reports/bug-report-list', () => ({
 }));
 vi.mock('../../components/bug-reports/bug-report-detail', () => ({
   BugReportDetail: () => null,
+}));
+vi.mock('../../components/api-keys/api-key-table', () => ({
+  ApiKeyTable: () => null,
+}));
+vi.mock('../../components/api-keys/create-api-key-dialog', () => ({
+  CreateApiKeyDialog: () => null,
+}));
+vi.mock('../../components/api-keys/show-api-key-dialog', () => ({
+  ShowApiKeyDialog: () => null,
+}));
+vi.mock('../../components/api-keys/api-key-usage-dialog', () => ({
+  ApiKeyUsageDialog: () => null,
 }));
 
 function makeWrapper(initialEntries: string[]) {
@@ -177,17 +190,35 @@ beforeEach(() => {
 });
 
 describe('admin-org-scope effects — page reset', () => {
+  // Each page-reset test follows the same pattern: render with multi-page
+  // data so the Next button shows; click Next to advance page state past
+  // 1; switch the org scope; assert the next service call is back at
+  // page=1. Without the "advance past 1" step the test would be vacuous —
+  // page already starts at 1, so the post-effect assertion would pass
+  // even if `setPage(1)` were deleted from the effect.
+
   it('bug-reports: resets page to 1 when the org filter changes', async () => {
+    vi.mocked(bugReportService.getAll).mockResolvedValue({
+      data: [{ id: 'bug-1', project_id: 'p', title: 't', status: 'open' } as never],
+      pagination: { page: 1, limit: 20, total: 100, totalPages: 5 },
+    });
+    const user = userEvent.setup();
     const { setOrg } = renderWithOrgFilterControls(<BugReportsPage />, [
       '/bug-reports?organizationId=acme',
     ]);
 
-    // Wait for the initial fetch to settle.
     await waitFor(() => expect(bugReportService.getAll).toHaveBeenCalled());
 
-    // Switch scope. The page would have stayed on whatever page state
-    // it was last on, but since the spec is "reset to 1" we just need
-    // to assert the next call has page=1 regardless of prior state.
+    // Advance past page 1 via the actual UI control, so the test fails
+    // if `setPage(1)` is removed from the scope-change effect. Use
+    // `findBy*` (not `getBy*`) so the click waits for the pagination
+    // to render after the query resolves.
+    await user.click(await screen.findByText('bugReports.next'));
+    await waitFor(() => {
+      const call = vi.mocked(bugReportService.getAll).mock.calls.at(-1)!;
+      expect(call[1]).toBe(2);
+    });
+
     vi.mocked(bugReportService.getAll).mockClear();
     setOrg('initech');
 
@@ -199,10 +230,21 @@ describe('admin-org-scope effects — page reset', () => {
   });
 
   it('api-keys: resets page to 1 when the org filter changes', async () => {
+    vi.mocked(apiKeyService.getAll).mockResolvedValue({
+      data: [{ id: 'k-1', name: 'k', key_prefix: 'bgs' } as never],
+      pagination: { page: 1, limit: 20, total: 100, totalPages: 5 },
+    });
+    const user = userEvent.setup();
     const { setOrg } = renderWithOrgFilterControls(<ApiKeysPage />, [
       '/api-keys?organizationId=acme',
     ]);
     await waitFor(() => expect(apiKeyService.getAll).toHaveBeenCalled());
+
+    await user.click(await screen.findByLabelText('apiKeys.nextPage'));
+    await waitFor(() => {
+      const call = vi.mocked(apiKeyService.getAll).mock.calls.at(-1)!;
+      expect(call[0]).toBe(2);
+    });
 
     vi.mocked(apiKeyService.getAll).mockClear();
     setOrg('initech');
@@ -215,8 +257,19 @@ describe('admin-org-scope effects — page reset', () => {
   });
 
   it('users: resets page to 1 when the org filter changes', async () => {
+    vi.mocked(userService.getAll).mockResolvedValue({
+      users: [{ id: 'u-1', email: 'u@x.com', name: 'U' } as never],
+      pagination: { page: 1, limit: 20, total: 100, totalPages: 5 },
+    } as never);
+    const user = userEvent.setup();
     const { setOrg } = renderWithOrgFilterControls(<UsersPage />, ['/users?organizationId=acme']);
     await waitFor(() => expect(userService.getAll).toHaveBeenCalled());
+
+    await user.click(await screen.findByTestId('users-next-page'));
+    await waitFor(() => {
+      const call = vi.mocked(userService.getAll).mock.calls.at(-1)!;
+      expect(call[0]).toMatchObject({ page: 2 });
+    });
 
     vi.mocked(userService.getAll).mockClear();
     setOrg('initech');
@@ -256,41 +309,40 @@ describe('admin-org-scope effects — bug-reports project_id strip', () => {
 });
 
 describe('projects.tsx auto-seed gate', () => {
-  it('seeds the Create form when the deep-linked org IS in the dropdown', async () => {
-    renderWithOrgFilterControls(<ProjectsPage />, ['/projects?organizationId=acme']);
+  // The real contract is on the form's `selectedOrgId` state, not on
+  // any service call — when the deep-linked org IS in the dropdown the
+  // form should pre-select it; when it's NOT, the form should stay
+  // empty so the user has to pick. Open the create form and inspect
+  // the underlying <select> value directly. The select is a native
+  // <select> (see projects.tsx:236) so `.value` is the source of truth.
 
-    // organizations resolves with [acme, initech]; acme is present, so
-    // the seed fires. Once the effect runs, projectService.create
-    // would be called with orgId=acme on submit — but we just inspect
-    // that the page rendered without error and the org list resolved.
+  it('seeds the Create form when the deep-linked org IS in the dropdown', async () => {
+    const user = userEvent.setup();
+    renderWithOrgFilterControls(<ProjectsPage />, ['/projects?organizationId=acme']);
     await waitFor(() => expect(organizationService.list).toHaveBeenCalled());
     await waitFor(() => expect(projectService.getAll).toHaveBeenCalled());
 
-    // No silent-bad-state assertion needed here — the negative test
-    // below proves the gate works; this one just pins the happy path.
-    expect(projectService.getAll).toHaveBeenCalledWith('acme');
+    await user.click(screen.getByTestId('new-project-button'));
+    const form = await screen.findByTestId('create-project-form');
+    const select = within(form).getByTestId('project-org-select') as HTMLSelectElement;
+    expect(select.value).toBe('acme');
   });
 
   it('does NOT seed when the deep-linked org is absent from the dropdown', async () => {
-    // Foreign org — not in `organizationService.list` payload, not in
-    // mine() either. Pre-fix, the seed effect would still fire and put
-    // selectedOrgId='ghost' into form state with no matching item.
-    // Post-fix, scopeIsKnown=false and the effect bails out, leaving
-    // the form blank (correct behaviour for an unknown deep link).
+    // Foreign org — not in `organizationService.list` payload. Pre-fix,
+    // the seed effect would still fire and set selectedOrgId='ghost'
+    // even though no <option> with that value exists. Post-fix the
+    // `scopeIsKnown` gate bails out, leaving the form blank.
+    const user = userEvent.setup();
     renderWithOrgFilterControls(<ProjectsPage />, ['/projects?organizationId=ghost']);
-
     await waitFor(() => expect(organizationService.list).toHaveBeenCalled());
     await waitFor(() => expect(projectService.getAll).toHaveBeenCalled());
 
-    // The page still scopes its data fetch by adminOrgScope (so the
-    // user sees the "no projects" empty state, which is correct), but
-    // the form's selectedOrgId — exposed indirectly via what create
-    // mutation would post — must remain empty. We assert the indirect
-    // contract by reading the create mutation's behaviour: since the
-    // effect bailed, projectService.create has not been seeded with
-    // 'ghost'. Direct DOM inspection of the Select would also work
-    // but pulls in Radix internals.
-    expect(projectService.getAll).toHaveBeenCalledWith('ghost');
-    expect(projectService.create).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('new-project-button'));
+    const form = await screen.findByTestId('create-project-form');
+    const select = within(form).getByTestId('project-org-select') as HTMLSelectElement;
+    // Empty string = the placeholder "Select an organization" option.
+    // Crucially NOT 'ghost' — that would mean the gate is broken.
+    expect(select.value).toBe('');
   });
 });
