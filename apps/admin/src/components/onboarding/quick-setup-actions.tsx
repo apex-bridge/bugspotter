@@ -117,7 +117,22 @@ export function QuickSetupActions() {
         setSnippetOpen(true);
         break;
       case 'connect-jira':
-        navigate('/integrations/jira');
+        // Single-project tenants get one-click into the configure form
+        // for that project. Multi-project tenants land on the projects
+        // list — they pick the right project, and click Integrations →
+        // Jira from there.
+        //
+        // Why not `/integrations/jira` for the multi-project case: that
+        // route is wrapped in `<AdminRoute>` (platform-admin only). An
+        // org admin clicking Connect Jira would otherwise hit a 403/
+        // redirect, not a configure flow. The project-scoped route
+        // `/projects/:id/integrations/:platform/configure` is the one
+        // actually open to org admins.
+        if (state.projectCount === 1 && state.primaryProjectId) {
+          navigate(`/projects/${state.primaryProjectId}/integrations/jira/configure`);
+        } else {
+          navigate('/projects');
+        }
         break;
       default: {
         // Exhaustiveness check: if `QuickActionId` gains a new variant
@@ -174,11 +189,7 @@ export function QuickSetupActions() {
         })}
       </div>
 
-      <SdkSnippetDialog
-        open={snippetOpen}
-        onOpenChange={setSnippetOpen}
-        projectId={state.primaryProjectId}
-      />
+      <SdkSnippetDialog open={snippetOpen} onOpenChange={setSnippetOpen} />
     </>
   );
 }

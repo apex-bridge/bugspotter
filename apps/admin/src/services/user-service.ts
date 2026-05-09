@@ -20,11 +20,23 @@ export const userService = {
       limit?: number;
       role?: UserRole;
       email?: string;
+      // Platform-admin cross-org filter. CamelCase here for parity with
+      // project-service / api-key-service / bug-report-service public
+      // signatures; mapped to snake_case `organization_id` (Fastify
+      // schema's expected wire name) below. Backend ignores the param
+      // for non-admins per PR #115's security boundary.
+      organizationId?: string;
     } = {}
   ): Promise<UserManagementResponse> => {
+    const { organizationId, ...rest } = params;
     const response = await api.get<{ success: boolean; data: UserManagementResponse }>(
       API_ENDPOINTS.adminUsers.list(),
-      { params }
+      {
+        params: {
+          ...rest,
+          ...(organizationId && { organization_id: organizationId }),
+        },
+      }
     );
     return response.data.data;
   },

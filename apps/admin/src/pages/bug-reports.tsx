@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -6,6 +6,7 @@ import { Bug, ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatNumber } from '../utils/format';
 import { bugReportService, projectService } from '../services/api';
 import { useAuth } from '../contexts/auth-context';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { Button } from '../components/ui/button';
 import { BugReportFilters } from '../components/bug-reports/bug-report-filters';
@@ -29,10 +30,35 @@ export default function BugReportsPage() {
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const limit = 20;
 
-  // Fetch projects for filter dropdown
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // When the platform-admin org filter changes mid-session, two
+  // pieces of in-page state become stale and produce a misleading
+  // "no results" view:
+  //   1. `page` — admin on page 5 of org A (10 pages) switches to
+  //      org B (2 pages); query becomes `?page=5&organization_id=B`,
+  //      backend returns empty data.
+  //   2. `filters.project_id` — points at a project from org A that
+  //      doesn't exist in org B; backend ANDs the filters → empty.
+  // Destructure-and-rest the project_id key out of `filters` rather
+  // than setting it to `undefined`: leaving the key in place would
+  // mislead any `Object.keys(filters).length > 0` "are filters
+  // active" check downstream.
+  useEffect(() => {
+    setPage(1);
+    setFilters((prev) => {
+      const { project_id: _removed, ...rest } = prev;
+      return rest;
+    });
+  }, [adminOrgScope]);
+
+  // Fetch projects for filter dropdown. Separate `admin-projects` namespace
+  // so we don't pollute the shared `['projects']` key (used by notification
+  // dialogs and channels-list for cross-consumer dedup of the user's
+  // unscoped project list).
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryKey: ['admin-projects', adminOrgScope],
+    queryFn: () => projectService.getAll(adminOrgScope),
   });
 
   // Fetch bug reports with filters and pagination
@@ -41,8 +67,9 @@ export default function BugReportsPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['bugReports', filters, page, limit],
-    queryFn: () => bugReportService.getAll(filters, page, limit),
+    queryKey: ['bugReports', filters, page, limit, adminOrgScope],
+    queryFn: () =>
+      bugReportService.getAll(filters, page, limit, 'created_at', 'desc', adminOrgScope),
   });
 
   // Delete mutation

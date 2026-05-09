@@ -1858,5 +1858,11 @@
       "apiKeyHelp": "API keys are shown once at creation. Open the API Keys page to copy an existing one or generate a new key.",
       "manageKeys": "Manage API keys"
     }
+  },
+  "adminOrgFilter": {
+    "label": "Filter by organization",
+    "placeholder": "Choose an organization",
+    "allOrgs": "All organizations",
+    "unknownOrg": "Unknown organization ({{id}})"
   }
 }

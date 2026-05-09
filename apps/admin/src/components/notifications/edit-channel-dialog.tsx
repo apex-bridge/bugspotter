@@ -46,7 +46,7 @@ export function EditChannelDialog({
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
   });
 
   // Initialize form when channel changes

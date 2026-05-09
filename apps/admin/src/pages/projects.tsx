@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { projectService } from '../services/api';
 import { organizationService } from '../services/organization-service';
 import { useAuth } from '../contexts/auth-context';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { formatDateShort } from '../utils/format';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -45,16 +46,50 @@ export default function ProjectsPage() {
     enabled: user !== null,
   });
 
-  // Auto-select org when user has exactly one (one-time initialization)
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // Auto-select org for the Create form. Two seeding triggers:
+  //   1. Sidebar admin filter is set AND the org actually exists in the
+  //      dropdown AND either it CHANGED or the form is still empty.
+  //      - "in dropdown" gate is critical: a non-admin pasting a foreign
+  //        `?organizationId=` (orgs they don't belong to) would otherwise
+  //        seed `selectedOrgId` to a value with no matching `<SelectItem>`,
+  //        and an admin with >100 orgs deep-linking past index 100 would
+  //        hit the same trap (sidebar fetches 500, this page fetches 100).
+  //        Bailing here keeps the form coherent with the dropdown.
+  //      - "changed" gate stops a background refetch of `organizations`
+  //        (window focus / staleTime expiry) from clobbering a manual
+  //        selection.
+  //      - "empty" fallback covers the deep-link case
+  //        (`/projects?organizationId=X` on first load) — without it,
+  //        `previousAdminOrgScope.current` would already equal
+  //        `adminOrgScope` and the form would open blank.
+  //   2. Sole org membership — one-time initialisation when the user
+  //      belongs to exactly one org and the form is still blank.
+  const previousAdminOrgScope = useRef<string | null>(null);
   useEffect(() => {
+    const scopeIsKnown = !!adminOrgScope && !!organizations?.some((o) => o.id === adminOrgScope);
+    if (scopeIsKnown && (adminOrgScope !== previousAdminOrgScope.current || !selectedOrgId)) {
+      setSelectedOrgId(adminOrgScope!);
+      previousAdminOrgScope.current = adminOrgScope;
+      return;
+    }
+    previousAdminOrgScope.current = adminOrgScope;
     if (organizations?.length === 1) {
       setSelectedOrgId((current) => current || organizations[0].id);
     }
-  }, [organizations]);
-
+  }, [organizations, adminOrgScope, selectedOrgId]);
   const { data: projects, isLoading } = useQuery({
-    queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    // Separate namespace from the unscoped `['projects']` key used by
+    // notification dialogs / channels-list etc. (see `use-onboarding-status`
+    // for the convention). The latter dedups across consumers that all
+    // fetch the user's projects via `projectService.getAll()`; this page
+    // fetches admin-scoped data via `projectService.getAll(adminOrgScope)`,
+    // which is fundamentally different data and needs its own cache space.
+    // Mutations below invalidate BOTH keys so a created/deleted project
+    // flushes the cache regardless of which surface triggered the change.
+    queryKey: ['admin-projects', adminOrgScope],
+    queryFn: () => projectService.getAll(adminOrgScope),
   });
 
   // Derive org filter options from actual projects (works for admins who see all projects)
@@ -113,7 +148,10 @@ export default function ProjectsPage() {
     mutationFn: ({ name, orgId }: { name: string; orgId?: string }) =>
       projectService.create(name, orgId),
     onSuccess: () => {
+      // Invalidate the unscoped key (notification dialogs / channels-list /
+      // useOnboardingStatus) and the admin-scoped key this page reads.
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-projects'] });
       toast.success(t('projects.projectCreatedSuccess'));
       setProjectName('');
       setShowCreateForm(false);
@@ -127,6 +165,7 @@ export default function ProjectsPage() {
     mutationFn: projectService.delete,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-projects'] });
       toast.success(t('projects.projectDeletedSuccess'));
       setDeleteConfirm(null);
     },

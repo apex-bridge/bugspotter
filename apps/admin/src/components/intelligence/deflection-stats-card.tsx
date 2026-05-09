@@ -22,12 +22,22 @@ export function DeflectionStatsCard({ orgId }: DeflectionStatsCardProps) {
     setSelectedProjectId('');
   }, [orgId]);
 
+  // Backend scopes by `organization_id` for platform admins (PR #115)
+  // but IGNORES it for non-admins per the same security boundary —
+  // they get their own access scope regardless of what we pass. This
+  // card is shared between the platform-admin org-detail view and
+  // the regular org-member view (`intelligence-settings-panel.tsx`),
+  // so we can't assume the response's project orgs match the caller's
+  // `orgId` prop. Pass `orgId` for the admin path AND keep the
+  // `p.organization_id === orgId` filter as belt-and-suspenders: if
+  // a caller ever passes a different org's id by mistake, the filter
+  // renders an empty list rather than displaying the caller's actual
+  // projects under a misleading org label.
   const { data: allProjects = [] } = useQuery({
     queryKey: ['projects', orgId],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(orgId),
     enabled: !!orgId,
   });
-
   const projects = allProjects.filter((p) => p.organization_id === orgId);
 
   const {

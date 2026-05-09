@@ -42,7 +42,7 @@ export function CreateRuleDialog({ open, onOpenChange, onSuccess }: CreateRuleDi
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryFn: () => projectService.getAll(),
   });
 
   const { data: channelsData } = useQuery({

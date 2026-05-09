@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -6,6 +6,7 @@ import { Key, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiKeyService } from '../services/api-key-service';
 import { projectService } from '../services/api';
 import { useAuth } from '../contexts/auth-context';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { Button } from '../components/ui/button';
 import { ApiKeyTable } from '../components/api-keys/api-key-table';
@@ -32,10 +33,22 @@ export default function ApiKeysPage() {
     operation: 'created' | 'rotated';
   } | null>(null);
 
-  // Fetch projects for dropdown
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+
+  // Reset pagination on org-scope change. An admin on page 5 of org A
+  // (10 pages) switching to org B (2 pages) would otherwise hit
+  // `?page=5` against B's smaller list and see an empty "no results"
+  // view for an org that has data.
+  useEffect(() => {
+    setPage(1);
+  }, [adminOrgScope]);
+
+  // Fetch projects for dropdown. Separate `admin-projects` namespace so we
+  // don't pollute the shared `['projects']` key (see bug-reports.tsx /
+  // projects.tsx for the convention).
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects'],
-    queryFn: projectService.getAll,
+    queryKey: ['admin-projects', adminOrgScope],
+    queryFn: () => projectService.getAll(adminOrgScope),
   });
 
   // Fetch API keys with pagination and status filter
@@ -46,8 +59,9 @@ export default function ApiKeysPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: [...API_KEYS_QUERY_KEY, page, PAGE_LIMIT, status],
-    queryFn: () => apiKeyService.getAll(page, PAGE_LIMIT, status as 'active' | undefined),
+    queryKey: [...API_KEYS_QUERY_KEY, page, PAGE_LIMIT, status, adminOrgScope],
+    queryFn: () =>
+      apiKeyService.getAll(page, PAGE_LIMIT, status as 'active' | undefined, adminOrgScope),
   });
 
   // Fetch usage data for selected API key

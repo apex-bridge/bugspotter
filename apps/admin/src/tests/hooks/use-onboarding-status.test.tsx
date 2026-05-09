@@ -124,7 +124,7 @@ describe('useOnboardingStatus', () => {
 
   // ---- OnboardingState shape after data resolves -------------------------
 
-  it('reports hasProject + primaryProjectId from the first project in the list', async () => {
+  it('reports hasProject, projectCount, and primaryProjectId from the first project in the list', async () => {
     useOrganizationMock.mockReturnValue({ currentOrganization: ORG, hasOrganization: true });
     usePermissionsMock.mockReturnValue({ isSystemAdmin: false, orgRole: 'admin' });
     vi.mocked(projectService.getAll).mockResolvedValue([
@@ -138,15 +138,18 @@ describe('useOnboardingStatus', () => {
     await waitFor(() => {
       expect(result.current.hasProject).toBe(true);
     });
-    // `primaryProjectId` is whatever the list returned first. Pinning this
-    // makes any future change to project ordering (server-side or client
-    // sort) visible — the SDK snippet inlines this value into the
-    // copy-pasteable code, so a silent reordering would change which
-    // project new bug reports target.
+    // `primaryProjectId` is whatever the list returned first. Pinning
+    // this makes any future change to project ordering (server-side
+    // or client sort) visible — Connect Jira's single-project
+    // shortcut inlines this id into the configure URL, so a silent
+    // reordering would land users on a different project's flow.
     expect(result.current.primaryProjectId).toBe('first');
+    // `projectCount` drives the single-vs-multi UX branch in
+    // `<QuickSetupActions>` Connect Jira routing.
+    expect(result.current.projectCount).toBe(2);
   });
 
-  it('reports hasProject=false and primaryProjectId=null for an empty project list', async () => {
+  it('reports hasProject=false, projectCount=0, primaryProjectId=null for an empty project list', async () => {
     useOrganizationMock.mockReturnValue({ currentOrganization: ORG, hasOrganization: true });
     usePermissionsMock.mockReturnValue({ isSystemAdmin: false, orgRole: 'admin' });
     vi.mocked(projectService.getAll).mockResolvedValue([]);
@@ -158,6 +161,7 @@ describe('useOnboardingStatus', () => {
       expect(result.current.hasProject).toBe(false);
     });
     expect(result.current.primaryProjectId).toBeNull();
+    expect(result.current.projectCount).toBe(0);
   });
 
   it('reports integrationCount from the integrations list length', async () => {
