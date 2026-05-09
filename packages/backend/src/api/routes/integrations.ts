@@ -8,7 +8,12 @@ import type { FastifyInstance } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import { sendSuccess, sendCreated } from '../utils/response.js';
 import { AppError } from '../middleware/error.js';
-import { requireAuth, requireProjectRole } from '../middleware/auth.js';
+import {
+  requireAuth,
+  requireProjectRole,
+  requireUser,
+  isPlatformAdmin,
+} from '../middleware/auth.js';
 import { requireProjectAccess } from '../middleware/project-access.js';
 import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import { getEncryptionService } from '../../utils/encryption.js';
@@ -83,6 +88,60 @@ export async function registerIntegrationRoutes(
     const platforms = registry.listPlugins();
     return sendSuccess(reply, platforms);
   });
+
+  /**
+   * Org-scoped integration summary.
+   * GET /api/v1/integrations/summary
+   *
+   * Returns aggregate counts of currently-active project integrations
+   * across the projects the caller can see. Powers the QuickSetup
+   * "Connect Jira" CTA in the admin UI: that CTA used to read from
+   * `GET /api/v1/admin/integrations`, which is `requirePlatformAdmin`-
+   * gated and silently 403s for org owners — leaving the CTA stuck on
+   * "0 integrations" forever and never disappearing after the user
+   * actually connected Jira.
+   *
+   * Scope rules mirror `GET /api/v1/projects` (projects.ts:84):
+   * platform admins see all projects in the current org context (or
+   * `?organization_id=` on the hub domain), regular users see the
+   * intersection of their org's projects and their own membership.
+   *
+   * Response shape is `{ total, by_platform: { [type]: count } }` —
+   * the predicate currently only needs `total === 0`, but per-platform
+   * counts cost nothing extra (single GROUP BY) and let future
+   * surfaces ask "is Jira connected specifically?" without a new
+   * endpoint.
+   */
+  server.get<{ Querystring: { organization_id?: string } }>(
+    '/api/v1/integrations/summary',
+    {
+      preHandler: [requireUser],
+    },
+    async (request, reply) => {
+      let projects: Array<{ id: string }>;
+      if (isPlatformAdmin(request)) {
+        const orgScope = request.organizationId ?? request.query.organization_id;
+        projects = await db.projects.findAll(orgScope);
+      } else {
+        projects = await db.projects.getUserAccessibleProjects(
+          request.authUser!.id,
+          request.organizationId
+        );
+      }
+
+      const projectIds = projects.map((p) => p.id);
+      const rows = await db.projectIntegrations.summarizeByPlatformForProjects(projectIds);
+
+      const by_platform: Record<string, number> = {};
+      let total = 0;
+      for (const row of rows) {
+        by_platform[row.type] = row.count;
+        total += row.count;
+      }
+
+      return sendSuccess(reply, { total, by_platform });
+    }
+  );
 
   /**
    * Test integration connection with provided config

@@ -96,6 +96,7 @@ export const API_ENDPOINTS = {
   // Integration endpoints (admin)
   integrations: {
     list: () => `${API_VERSION}/admin/integrations`,
+    summary: () => `${API_VERSION}/integrations/summary`,
     create: () => `${API_VERSION}/admin/integrations`,
     analyzeCode: () => `${API_VERSION}/admin/integrations/analyze-code`,
     getDetails: (type: string) => `${API_VERSION}/admin/integrations/${type}`,

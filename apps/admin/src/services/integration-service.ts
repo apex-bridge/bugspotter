@@ -1,10 +1,31 @@
 import { api, API_ENDPOINTS } from '../lib/api-client';
 import type { Integration, CreateIntegrationRequest, SecurityAnalysisResult } from '../types';
 
+/**
+ * Aggregate integration counts the caller can see, scoped through the
+ * backend's `getUserAccessibleProjects`. Used by `useOnboardingStatus`
+ * (and any future surface that needs "is this org connected to X?").
+ *
+ * Distinct from `list()` which hits the platform-admin-only
+ * `/admin/integrations` endpoint — that one 403s for org owners and
+ * leaves consumers stuck thinking the count is 0.
+ */
+export interface IntegrationSummary {
+  total: number;
+  by_platform: Record<string, number>;
+}
+
 export const integrationService = {
   list: async () => {
     const res = await api.get<{ success: boolean; data: Integration[] }>(
       API_ENDPOINTS.integrations.list()
+    );
+    return res.data.data;
+  },
+
+  summary: async (): Promise<IntegrationSummary> => {
+    const res = await api.get<{ success: boolean; data: IntegrationSummary }>(
+      API_ENDPOINTS.integrations.summary()
     );
     return res.data.data;
   },

@@ -299,7 +299,7 @@ export class ProjectIntegrationRepository extends BaseRepository<
    */
   async findEnabledByProjectWithType(projectId: string): Promise<ProjectIntegrationWithType[]> {
     const query = `
-      SELECT 
+      SELECT
         pi.*,
         i.type as integration_type
       FROM ${this.schema}.${this.tableName} pi
@@ -310,5 +310,37 @@ export class ProjectIntegrationRepository extends BaseRepository<
 
     const result = await this.getClient().query<ProjectIntegrationWithType>(query, [projectId]);
     return this.deserializeMany(result.rows) as ProjectIntegrationWithType[];
+  }
+
+  /**
+   * Aggregate per-platform counts of ENABLED integrations across the
+   * given project ids. Used by `GET /api/v1/integrations/summary` to
+   * answer "does this user already have an integration set up?"
+   * without forcing the caller to be a platform admin (the
+   * `/admin/integrations` endpoint is gated to platform admins and
+   * silently 403s for org owners).
+   *
+   * Empty input array short-circuits — pg's `= ANY($1)` works on
+   * empty arrays but returning early avoids the round-trip.
+   */
+  async summarizeByPlatformForProjects(
+    projectIds: string[]
+  ): Promise<Array<{ type: string; count: number }>> {
+    if (projectIds.length === 0) {
+      return [];
+    }
+    const query = `
+      SELECT i.type, COUNT(*)::int as count
+      FROM ${this.schema}.${this.tableName} pi
+      INNER JOIN ${this.schema}.integrations i ON i.id = pi.integration_id
+      WHERE pi.project_id = ANY($1::uuid[])
+        AND pi.enabled = TRUE
+        AND pi.disabled_at IS NULL
+      GROUP BY i.type
+    `;
+    const result = await this.getClient().query<{ type: string; count: number }>(query, [
+      projectIds,
+    ]);
+    return result.rows;
   }
 }

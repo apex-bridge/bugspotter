@@ -75,9 +75,17 @@ export function useOnboardingStatus(): OnboardingState {
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: integrations = [] } = useQuery({
-    queryKey: ['integrations'],
-    queryFn: integrationService.list,
+  // `integrationService.summary()` is the org-admin-accessible sibling
+  // of `list()` — same tenant scope, but `list()` hits the
+  // platform-admin-only `/admin/integrations` and silently 403s for
+  // org owners. That used to leave `integrationCount === 0` permanently
+  // for any non-platform-admin user, so the "Connect Jira" CTA never
+  // disappeared after they actually connected Jira. The summary endpoint
+  // projects through `getUserAccessibleProjects` so the count reflects
+  // what the caller can see.
+  const { data: integrationSummary } = useQuery({
+    queryKey: ['integrations-summary'],
+    queryFn: integrationService.summary,
     enabled: canConfigure && hasOrganization,
     staleTime: 60 * 1000,
   });
@@ -87,6 +95,6 @@ export function useOnboardingStatus(): OnboardingState {
     hasProject: projects.length >= 1,
     projectCount: projects.length,
     primaryProjectId: projects[0]?.id ?? null,
-    integrationCount: integrations.length,
+    integrationCount: integrationSummary?.total ?? 0,
   };
 }
