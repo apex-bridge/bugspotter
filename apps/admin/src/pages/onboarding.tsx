@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { useAuth } from '../contexts/auth-context';
 import { authService } from '../services/api';
-import { handleApiError } from '../lib/api-client';
+import { handleApiError, INSTANCE_ORIGIN } from '../lib/api-client';
 import type { User } from '../types';
 
 /**
@@ -36,15 +36,14 @@ const CHROME_WEB_STORE_URL =
   'https://chromewebstore.google.com/detail/bugspotter/mpefobgognkodaknpalkaohkaniddmhj';
 
 /**
- * Instance URL the extension's Options page accepts. Use the
- * tenant's own origin (e.g. `https://acme.kz.bugspotter.io`) — the
- * admin's nginx proxies `/api/*` to the backend, and the API key
- * still identifies the tenant, so requests succeed same-origin.
- * That's better UX than a generic `api.*` host the user has never
- * seen before, since they're already viewing the dashboard at this
- * URL.
+ * Local alias for the shared `INSTANCE_ORIGIN` from `lib/api-client.ts`.
+ * Same value as the SDK install snippet's endpoint and as the URL the
+ * Chrome-extension Options page expects — the tenant's own origin
+ * (e.g. `https://acme.kz.bugspotter.io`). Admin nginx proxies
+ * `/api/*` to backend, so requests succeed same-origin and the API
+ * key identifies the tenant.
  */
-const INSTANCE_URL = typeof window === 'undefined' ? '' : window.location.origin;
+const INSTANCE_URL = INSTANCE_ORIGIN;
 
 /**
  * Normalize a base64-encoded querystring value so `atob` accepts it.

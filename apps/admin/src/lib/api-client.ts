@@ -15,6 +15,15 @@ const getRuntimeConfig = () => {
  */
 export const API_BASE_URL = getRuntimeConfig().apiUrl || import.meta.env.VITE_API_URL || '';
 
+/**
+ * Current page origin (e.g. `https://acme.kz.bugspotter.io` on SaaS,
+ * `http://localhost:3001` in local dev). Single source of truth for
+ * surfaces that need to show or hand the user their tenant's URL —
+ * SDK install snippet, Chrome-extension instance hint, etc. Empty
+ * string in non-browser contexts so callers can `||` to a placeholder.
+ */
+export const INSTANCE_ORIGIN = typeof window === 'undefined' ? '' : window.location.origin;
+
 // Re-export API constants for convenience
 export { API_VERSION, API_ENDPOINTS } from './api-constants';
 

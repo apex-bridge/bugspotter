@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '../ui/button';
 import { SnippetTabs } from '../ui/snippet-tabs';
 import { buildSdkInstallSnippets } from './sdk-install-snippets';
+import { INSTANCE_ORIGIN } from '../../lib/api-client';
 
 interface SdkSnippetDialogProps {
   open: boolean;
@@ -13,28 +14,20 @@ interface SdkSnippetDialogProps {
 }
 
 /**
- * Use the current page origin as the SDK endpoint. On every supported
- * deployment, the admin host proxies `/api/*` to the backend:
- *   - SaaS prod: `[org].kz.bugspotter.io` (admin nginx → backend) —
- *     and the subdomain is the URL the user already knows from the
- *     dashboard, so it's also the most discoverable endpoint to
- *     hand them.
- *   - Self-hosted: admin and API typically same-origin behind one
- *     reverse proxy.
- *   - Local dev: `vite.config.ts` proxies `/api/*` to `:3000`.
+ * Use the tenant's own origin as the SDK endpoint. On every supported
+ * deployment, the admin host proxies `/api/*` to the backend (SaaS
+ * nginx → backend, self-hosted reverse proxy, local-dev vite). The
+ * subdomain is also the URL the user already knows from the
+ * dashboard, so it's the most discoverable endpoint to hand them.
  *
- * Picking the API host directly (e.g. `api.kz.bugspotter.io`) would
- * be technically equivalent on SaaS but contradicts the explicit
- * product decision to surface the tenant subdomain everywhere
- * customer-visible. SSR-safe via the `typeof window` guard.
+ * `buildSdkInstallSnippets` accepts `null` to mean "show a
+ * placeholder", so normalise the SSR-empty-string case here.
  */
-function currentEndpoint(): string | null {
-  return typeof window === 'undefined' ? null : window.location.origin;
-}
+const SDK_ENDPOINT: string | null = INSTANCE_ORIGIN || null;
 
 export function SdkSnippetDialog({ open, onOpenChange }: SdkSnippetDialogProps) {
   const { t } = useTranslation();
-  const tabs = useMemo(() => buildSdkInstallSnippets(currentEndpoint()), []);
+  const tabs = useMemo(() => buildSdkInstallSnippets(SDK_ENDPOINT), []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
