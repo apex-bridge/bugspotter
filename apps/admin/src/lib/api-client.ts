@@ -2,10 +2,13 @@ import axios, { AxiosError } from 'axios';
 import { API_ENDPOINTS } from './api-constants';
 
 // Runtime configuration from /config.js (injected by docker-entrypoint.sh)
-// Falls back to build-time env var for local development
-// Type definition in src/types/window.d.ts
+// Falls back to build-time env var for local development.
+// Type definition in src/types/window.d.ts.
+// Typeof-window guard so this module is import-safe from non-browser
+// contexts (SSR, tooling) — without it, INSTANCE_ORIGIN's own guard
+// at line 25 would never get a chance to run.
 const getRuntimeConfig = () => {
-  return window.__RUNTIME_CONFIG__ || {};
+  return typeof window === 'undefined' ? {} : window.__RUNTIME_CONFIG__ || {};
 };
 
 /**
