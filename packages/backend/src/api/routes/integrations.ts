@@ -112,7 +112,7 @@ export async function registerIntegrationRoutes(
    * surfaces ask "is Jira connected specifically?" without a new
    * endpoint.
    */
-  server.get<{ Querystring: { organization_id?: string } }>(
+  server.get<{ Querystring: { organization_id?: string | string[] } }>(
     '/api/v1/integrations/summary',
     {
       preHandler: [requireUser],
@@ -120,9 +120,18 @@ export async function registerIntegrationRoutes(
     async (request, reply) => {
       let projects: Array<{ id: string }>;
       if (isPlatformAdmin(request)) {
-        const orgScope = request.organizationId ?? request.query.organization_id;
+        // `firstString` matches the pattern used elsewhere in this file
+        // — Fastify's default parser returns `string[]` when the same
+        // key appears twice. Without coercion the array would flow
+        // straight to `findAll` and either crash or trigger pg's
+        // unsafe-cast path.
+        const orgScope = request.organizationId ?? firstString(request.query.organization_id);
         projects = await db.projects.findAll(orgScope);
       } else {
+        // Regular users are always scoped by the tenant subdomain
+        // (`request.organizationId`) — they cannot pass
+        // `?organization_id=` to widen scope. This mirrors the pattern
+        // in `projects.ts:108`; the query param is platform-admin-only.
         projects = await db.projects.getUserAccessibleProjects(
           request.authUser!.id,
           request.organizationId
