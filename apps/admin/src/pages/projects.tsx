@@ -48,21 +48,19 @@ export default function ProjectsPage() {
 
   const { selectedOrgId: adminOrgScope } = useOrgFilter();
 
-  // Auto-select org for the Create form. Priority order:
-  //   1. Sidebar admin filter CHANGED (if a platform admin has just
-  //      narrowed/switched the filter, retarget the form to that org —
-  //      they're almost certainly creating IN the filtered tenant).
-  //   2. Sole org membership (one-time initialisation when the user
-  //      belongs to exactly one org and the form is still blank).
-  // The `previousAdminOrgScope` ref is the key: gate the
-  // adminOrgScope branch on the value actually CHANGING, not just on
-  // the effect re-running. Without that gate, a background refetch of
-  // `organizations` (window focus, staleTime expiry) would re-run the
-  // effect and overwrite a manual selection the user made in the
-  // form. The sole-org fallback already self-gates via `current ||`.
-  const previousAdminOrgScope = useRef<string | null>(adminOrgScope);
+  // Auto-select org for the Create form. Two seeding triggers:
+  //   1. Sidebar admin filter is set AND either CHANGED or the form
+  //      is still empty. The "changed" gate stops a background refetch
+  //      of `organizations` (window focus / staleTime expiry) from
+  //      clobbering a manual selection. The "empty" fallback covers
+  //      the deep-link case (`/projects?organizationId=X` on first
+  //      load) — without it, `previousAdminOrgScope.current` would
+  //      already equal `adminOrgScope` and the form would open blank.
+  //   2. Sole org membership — one-time initialisation when the user
+  //      belongs to exactly one org and the form is still blank.
+  const previousAdminOrgScope = useRef<string | null>(null);
   useEffect(() => {
-    if (adminOrgScope && adminOrgScope !== previousAdminOrgScope.current) {
+    if (adminOrgScope && (adminOrgScope !== previousAdminOrgScope.current || !selectedOrgId)) {
       setSelectedOrgId(adminOrgScope);
       previousAdminOrgScope.current = adminOrgScope;
       return;
@@ -71,11 +69,17 @@ export default function ProjectsPage() {
     if (organizations?.length === 1) {
       setSelectedOrgId((current) => current || organizations[0].id);
     }
-  }, [organizations, adminOrgScope]);
+  }, [organizations, adminOrgScope, selectedOrgId]);
   const { data: projects, isLoading } = useQuery({
-    // Include the admin filter in the key so switching orgs in the
-    // sidebar widget triggers a re-fetch instead of serving stale data.
-    queryKey: ['projects', adminOrgScope],
+    // Separate namespace from the unscoped `['projects']` key used by
+    // notification dialogs / channels-list etc. (see `use-onboarding-status`
+    // for the convention). The latter dedups across consumers that all
+    // fetch the user's projects via `projectService.getAll()`; this page
+    // fetches admin-scoped data via `projectService.getAll(adminOrgScope)`,
+    // which is fundamentally different data and needs its own cache space.
+    // Mutations below invalidate BOTH keys so a created/deleted project
+    // flushes the cache regardless of which surface triggered the change.
+    queryKey: ['admin-projects', adminOrgScope],
     queryFn: () => projectService.getAll(adminOrgScope),
   });
 
@@ -135,7 +139,11 @@ export default function ProjectsPage() {
     mutationFn: ({ name, orgId }: { name: string; orgId?: string }) =>
       projectService.create(name, orgId),
     onSuccess: () => {
+      // Invalidate both the unscoped key (notification dialogs / channels-list /
+      // useOnboardingStatus indirectly) and the admin-scoped key this page reads.
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-projects'] });
+      queryClient.invalidateQueries({ queryKey: ['onboarding-projects'] });
       toast.success(t('projects.projectCreatedSuccess'));
       setProjectName('');
       setShowCreateForm(false);
@@ -149,6 +157,8 @@ export default function ProjectsPage() {
     mutationFn: projectService.delete,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-projects'] });
+      queryClient.invalidateQueries({ queryKey: ['onboarding-projects'] });
       toast.success(t('projects.projectDeletedSuccess'));
       setDeleteConfirm(null);
     },

@@ -43,9 +43,11 @@ export default function ApiKeysPage() {
     setPage(1);
   }, [adminOrgScope]);
 
-  // Fetch projects for dropdown
+  // Fetch projects for dropdown. Separate `admin-projects` namespace so we
+  // don't pollute the shared `['projects']` key (see bug-reports.tsx /
+  // projects.tsx for the convention).
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects', adminOrgScope],
+    queryKey: ['admin-projects', adminOrgScope],
     queryFn: () => projectService.getAll(adminOrgScope),
   });
 

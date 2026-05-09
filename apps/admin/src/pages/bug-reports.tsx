@@ -52,9 +52,12 @@ export default function BugReportsPage() {
     });
   }, [adminOrgScope]);
 
-  // Fetch projects for filter dropdown
+  // Fetch projects for filter dropdown. Separate `admin-projects` namespace
+  // so we don't pollute the shared `['projects']` key (used by notification
+  // dialogs and channels-list for cross-consumer dedup of the user's
+  // unscoped project list).
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects', adminOrgScope],
+    queryKey: ['admin-projects', adminOrgScope],
     queryFn: () => projectService.getAll(adminOrgScope),
   });
 

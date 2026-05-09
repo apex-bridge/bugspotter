@@ -44,7 +44,7 @@ export default function UsersPage() {
         limit: 20,
         ...(searchEmail && { email: searchEmail }),
         ...(roleFilter && { role: roleFilter }),
-        ...(adminOrgScope && { organization_id: adminOrgScope }),
+        ...(adminOrgScope && { organizationId: adminOrgScope }),
       }),
   });
 

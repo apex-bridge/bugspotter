@@ -101,6 +101,37 @@ describe('bugReportService', () => {
       expect(params.sort_by).toBe('priority');
       expect(params.order).toBe('asc');
     });
+
+    it('serialises organizationId as `organization_id` for the wire', async () => {
+      const mockResponse = {
+        data: {
+          data: [],
+          pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+        },
+      };
+      vi.mocked(api.get).mockResolvedValue(mockResponse);
+
+      await bugReportService.getAll(undefined, 1, 20, 'created_at', 'desc', 'org-123');
+
+      const params = vi.mocked(api.get).mock.calls[0][1]?.params as Record<string, unknown>;
+      expect(params.organization_id).toBe('org-123');
+      expect(params).not.toHaveProperty('organizationId');
+    });
+
+    it('omits organization_id when no scope is passed', async () => {
+      const mockResponse = {
+        data: {
+          data: [],
+          pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+        },
+      };
+      vi.mocked(api.get).mockResolvedValue(mockResponse);
+
+      await bugReportService.getAll();
+
+      const params = vi.mocked(api.get).mock.calls[0][1]?.params as Record<string, unknown>;
+      expect(params).not.toHaveProperty('organization_id');
+    });
   });
 
   describe('getById', () => {

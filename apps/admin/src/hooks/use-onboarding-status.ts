@@ -59,12 +59,18 @@ export function useOnboardingStatus(): OnboardingState {
   // when the filtered org has them, and vice versa.
   const { selectedOrgId: adminOrgScope } = useOrgFilter();
 
-  // Include the admin scope in the keys so filtering re-fetches.
-  // Backend ignores `organization_id` for non-admins (PR #115
-  // security boundary), so passing it from the hook is safe for
-  // all users — for non-admins the param is dropped server-side.
+  // Use a dedicated `onboarding-projects` namespace rather than the
+  // shared `['projects']` key. The shared key is intentionally
+  // unscoped (notification dialogs / channels-list / etc. dedup
+  // through it); reshaping it here would fragment that contract.
+  // The mutations in `projects.tsx` invalidate both namespaces
+  // explicitly so a created/deleted project still flushes the
+  // onboarding cache. Backend ignores `organization_id` for
+  // non-admins (PR #115 security boundary), so passing
+  // `adminOrgScope` from the hook is safe for all users — the
+  // param is dropped server-side when not applicable.
   const { data: projects = [] } = useQuery({
-    queryKey: ['projects', adminOrgScope],
+    queryKey: ['onboarding-projects', adminOrgScope],
     queryFn: () => projectService.getAll(adminOrgScope),
     enabled: canConfigure && hasOrganization,
     staleTime: 5 * 60 * 1000,

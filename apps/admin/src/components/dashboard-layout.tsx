@@ -9,6 +9,7 @@ import { LanguageSwitcher } from './language-switcher';
 import { QuickSetupActions } from './onboarding/quick-setup-actions';
 import { AdminOrgFilter } from './admin-org-filter';
 import { usePermissions } from '../hooks/use-permissions';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import {
   Activity,
   Settings,
@@ -143,6 +144,14 @@ export default function DashboardLayout() {
   const isAdmin = isPlatformAdmin(user);
   const adminLabel = isSaaS ? 'platform admin' : 'admin';
 
+  // Carry the platform-admin org filter (`?organizationId=`) through
+  // sidebar navigation so an admin investigating one tenant doesn't lose
+  // the filter on every click. Only `organizationId` is preserved —
+  // page-specific params (page numbers, sort, filters) are intentionally
+  // dropped because they don't apply to the destination page.
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
+  const linkSuffix = adminOrgScope ? `?organizationId=${encodeURIComponent(adminOrgScope)}` : '';
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Sidebar */}
@@ -180,7 +189,7 @@ export default function DashboardLayout() {
               return (
                 <Link
                   key={item.path}
-                  to={item.path}
+                  to={`${item.path}${linkSuffix}`}
                   className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
                     isActive(item.path)
                       ? 'bg-primary text-white'
@@ -207,7 +216,7 @@ export default function DashboardLayout() {
                   return (
                     <Link
                       key={item.path}
-                      to={item.path}
+                      to={`${item.path}${linkSuffix}`}
                       className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
                         isActive(item.path)
                           ? 'bg-primary text-white'

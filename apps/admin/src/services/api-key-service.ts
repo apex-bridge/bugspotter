@@ -27,13 +27,12 @@ export const apiKeyService = {
     // Backend ignores `organization_id` for non-admins per PR #115's
     // security boundary; suppressing it client-side just keeps the
     // wire format clean.
-    const params: Record<string, string | number> = { page, limit };
-    if (status) {
-      params.status = status;
-    }
-    if (organizationId) {
-      params.organization_id = organizationId;
-    }
+    const params: Record<string, string | number> = {
+      page,
+      limit,
+      ...(status && { status }),
+      ...(organizationId && { organization_id: organizationId }),
+    };
     const response = await api.get<{
       success: boolean;
       data: ApiKey[];
