@@ -295,15 +295,18 @@ describe('GET /api/v1/integrations/summary', () => {
         encrypted_credentials: '',
       });
 
-      // Hub domain: 2-part host, so tenant middleware does NOT set
-      // organizationId. Platform admin uses the query param to scope
-      // the lookup to the test org.
+      // Hub domain: 2-part host so `extractSubdomain` returns null
+      // and tenant middleware leaves `request.organizationId` unset.
+      // (Anything with 3+ parts is treated as a tenant subdomain and
+      // will 404 if no matching org exists — `hub.example.com` looks
+      // like the subdomain `hub`, not the hub itself.) Platform admin
+      // then uses `?organization_id=` to scope the lookup.
       const res = await server.inject({
         method: 'GET',
         url: `/api/v1/integrations/summary?organization_id=${orgId}`,
         headers: {
           authorization: `Bearer ${platformAdmin.token}`,
-          host: 'hub.example.com',
+          host: 'example.com',
         },
       });
       expect(res.statusCode).toBe(200);
