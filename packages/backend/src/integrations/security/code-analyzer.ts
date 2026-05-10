@@ -40,6 +40,10 @@ const TS_RUNTIME_WRAPPERS = new Set([
   'TSTypeAssertion',
   'TSSatisfiesExpression',
   'TSInstantiationExpression',
+  // TSEnumMember.initializer and TSExportAssignment.expression are runtime
+  // positions despite the TS- prefix.
+  'TSEnumMember',
+  'TSExportAssignment',
 ]);
 
 function isTypeOnlyParent(parentType: string): boolean {

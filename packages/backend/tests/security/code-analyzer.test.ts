@@ -426,6 +426,26 @@ describe('CodeSecurityAnalyzer', () => {
       expect(result.safe).toBe(true);
       expect(result.violations).toHaveLength(0);
     });
+
+    it('should reject Function used as TS enum member initializer', async () => {
+      const code = `enum Evil { F = Function }`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject `export = Function` (TSExportAssignment)', async () => {
+      const code = `export = Function;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
   });
 
   describe('Constructor Access Escape', () => {
@@ -499,6 +519,16 @@ describe('CodeSecurityAnalyzer', () => {
       expect(result.risk_level).toBe('critical');
     });
 
+    it('should reject combined optional + template-literal constructor access', async () => {
+      const code = '(1)?.[`constructor`]?.[`constructor`]("return this")()';
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
     it('should reject .constructor reflection (intentional strictness for plugin code)', async () => {
       // Plugins have no legitimate need for .constructor access, even for
       // reflection — keep the policy strict instead of adding a whitelist that
@@ -553,6 +583,7 @@ describe('CodeSecurityAnalyzer', () => {
 
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
     });
 
     it('should reject require.cache access', async () => {
@@ -562,6 +593,7 @@ describe('CodeSecurityAnalyzer', () => {
 
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dangerous global access: require.cache');
+      expect(result.risk_level).toBe('high');
     });
 
     it('should reject require.main access', async () => {
@@ -571,6 +603,7 @@ describe('CodeSecurityAnalyzer', () => {
 
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dangerous global access: require.main');
+      expect(result.risk_level).toBe('high');
     });
 
     it("should reject computed bracket access (process['binding'])", async () => {
@@ -580,6 +613,7 @@ describe('CodeSecurityAnalyzer', () => {
 
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
     });
 
     it('should reject template-literal access (require[`cache`])', async () => {
@@ -589,6 +623,7 @@ describe('CodeSecurityAnalyzer', () => {
 
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dangerous global access: require.cache');
+      expect(result.risk_level).toBe('high');
     });
   });
 
