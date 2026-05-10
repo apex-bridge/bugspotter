@@ -51,6 +51,34 @@ function isTypeOnlyParent(parentType: string): boolean {
 }
 
 /**
+ * TS expression wrappers that hold their inner runtime expression on `.expression`.
+ * Used to peel `(process as any)`, `process!`, `(0, process)` etc. back to a bare
+ * Identifier when reconstructing dotted-global names.
+ */
+const TS_EXPRESSION_WRAPPERS = new Set([
+  'TSAsExpression',
+  'TSNonNullExpression',
+  'TSTypeAssertion',
+  'TSSatisfiesExpression',
+  'TSInstantiationExpression',
+]);
+
+function unwrapToIdentifier(node: any): { name: string } | null {
+  let cur = node;
+  let safety = 16;
+  while (cur && safety-- > 0) {
+    if (TS_EXPRESSION_WRAPPERS.has(cur.type)) {
+      cur = cur.expression;
+    } else if (cur.type === 'SequenceExpression') {
+      cur = cur.expressions[cur.expressions.length - 1];
+    } else {
+      break;
+    }
+  }
+  return cur && cur.type === 'Identifier' ? cur : null;
+}
+
+/**
  * Code Security Analyzer
  * Performs static analysis on plugin code to detect security violations
  */
@@ -220,10 +248,13 @@ export class CodeSecurityAnalyzer {
 
           // Dotted DANGEROUS_GLOBALS entries (e.g. 'process.binding') — the
           // Identifier visitor only sees single names, so dotted matches must
-          // be reconstructed here. Both `process.binding` and `process['binding']`
-          // resolve to the same fullName once propName is normalized.
-          if (obj.type === 'Identifier' && propName) {
-            const fullName = `${obj.name}.${propName}`;
+          // be reconstructed here. Unwrap the `obj` side through TS expression
+          // wrappers and SequenceExpression so `(process as any).binding`,
+          // `process!.binding`, `(0, process).binding` etc. all resolve to
+          // `process.binding`.
+          const objIdentifier = unwrapToIdentifier(obj);
+          if (objIdentifier && propName) {
+            const fullName = `${objIdentifier.name}.${propName}`;
             if (this.DANGEROUS_GLOBALS.includes(fullName)) {
               violations.push(`Dangerous global access: ${fullName}`);
               risk_level = risk_level === 'critical' ? 'critical' : 'high';

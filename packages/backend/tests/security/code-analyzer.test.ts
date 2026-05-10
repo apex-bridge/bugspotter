@@ -625,6 +625,70 @@ describe('CodeSecurityAnalyzer', () => {
       expect(result.violations).toContain('Dangerous global access: require.cache');
       expect(result.risk_level).toBe('high');
     });
+
+    it('should reject `as any`-wrapped object (process as any).binding', async () => {
+      const code = `(process as any).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject non-null-assertion-wrapped object (process!.binding)', async () => {
+      const code = `process!.binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject angle-bracket type-assertion-wrapped object (<any>process).binding', async () => {
+      const code = `(<any>process).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject `satisfies any`-wrapped object (process satisfies any).binding', async () => {
+      const code = `(process satisfies any).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject sequence-expression-wrapped object (0, process).binding', async () => {
+      const code = `(0, process).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject wrapped require for require.cache / require.main', async () => {
+      const code = `
+        const c = (require as unknown).cache;
+        const m = (require!).main;
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.cache');
+      expect(result.violations).toContain('Dangerous global access: require.main');
+      expect(result.risk_level).toBe('high');
+    });
   });
 
   describe('Code Hash', () => {
