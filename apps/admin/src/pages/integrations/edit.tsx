@@ -108,6 +108,10 @@ export default function IntegrationEditPage() {
 
       queryClient.invalidateQueries({ queryKey: ['integration', type] });
       queryClient.invalidateQueries({ queryKey: ['integrations'] });
+      // Note: NOT invalidating `['integrations-summary']` — that key
+      // counts rows in `project_integrations` (per-project instances),
+      // and this PATCH only updates the `integrations` table's
+      // platform-level config (no project-instance row added/removed).
       toast.success('Integration updated successfully');
       navigate('/integrations');
     } catch (error) {

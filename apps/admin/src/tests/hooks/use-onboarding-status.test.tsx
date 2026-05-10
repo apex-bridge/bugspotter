@@ -28,7 +28,7 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../../services/integration-service', () => ({
-  integrationService: { list: vi.fn() },
+  integrationService: { summary: vi.fn() },
 }));
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -45,7 +45,7 @@ describe('useOnboardingStatus', () => {
     useOrganizationMock.mockReset();
     usePermissionsMock.mockReset();
     vi.mocked(projectService.getAll).mockReset();
-    vi.mocked(integrationService.list).mockReset();
+    vi.mocked(integrationService.summary).mockReset();
     vi.mocked(bugReportService.getAll).mockReset();
   });
 
@@ -65,7 +65,7 @@ describe('useOnboardingStatus', () => {
     useOrganizationMock.mockReturnValue({ currentOrganization: ORG, hasOrganization: true });
     usePermissionsMock.mockReturnValue({ isSystemAdmin: false, orgRole: role });
     vi.mocked(projectService.getAll).mockResolvedValue([]);
-    vi.mocked(integrationService.list).mockResolvedValue([]);
+    vi.mocked(integrationService.summary).mockResolvedValue({ total: 0, by_platform: {} });
 
     const { result } = renderHook(() => useOnboardingStatus(), { wrapper });
 
@@ -76,7 +76,7 @@ describe('useOnboardingStatus', () => {
     useOrganizationMock.mockReturnValue({ currentOrganization: ORG, hasOrganization: true });
     usePermissionsMock.mockReturnValue({ isSystemAdmin: true, orgRole: null });
     vi.mocked(projectService.getAll).mockResolvedValue([]);
-    vi.mocked(integrationService.list).mockResolvedValue([]);
+    vi.mocked(integrationService.summary).mockResolvedValue({ total: 0, by_platform: {} });
 
     const { result } = renderHook(() => useOnboardingStatus(), { wrapper });
 
@@ -95,7 +95,7 @@ describe('useOnboardingStatus', () => {
     renderHook(() => useOnboardingStatus(), { wrapper });
 
     expect(projectService.getAll).not.toHaveBeenCalled();
-    expect(integrationService.list).not.toHaveBeenCalled();
+    expect(integrationService.summary).not.toHaveBeenCalled();
   });
 
   it('does not fire downstream queries when no organization is active', () => {
@@ -105,20 +105,20 @@ describe('useOnboardingStatus', () => {
     renderHook(() => useOnboardingStatus(), { wrapper });
 
     expect(projectService.getAll).not.toHaveBeenCalled();
-    expect(integrationService.list).not.toHaveBeenCalled();
+    expect(integrationService.summary).not.toHaveBeenCalled();
   });
 
   it('fires both downstream queries for an org admin in an active org', async () => {
     useOrganizationMock.mockReturnValue({ currentOrganization: ORG, hasOrganization: true });
     usePermissionsMock.mockReturnValue({ isSystemAdmin: false, orgRole: 'admin' });
     vi.mocked(projectService.getAll).mockResolvedValue([{ id: 'p-1' } as never]);
-    vi.mocked(integrationService.list).mockResolvedValue([]);
+    vi.mocked(integrationService.summary).mockResolvedValue({ total: 0, by_platform: {} });
 
     renderHook(() => useOnboardingStatus(), { wrapper });
 
     await waitFor(() => {
       expect(projectService.getAll).toHaveBeenCalledTimes(1);
-      expect(integrationService.list).toHaveBeenCalledTimes(1);
+      expect(integrationService.summary).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -131,7 +131,7 @@ describe('useOnboardingStatus', () => {
       { id: 'first' } as never,
       { id: 'second' } as never,
     ]);
-    vi.mocked(integrationService.list).mockResolvedValue([]);
+    vi.mocked(integrationService.summary).mockResolvedValue({ total: 0, by_platform: {} });
 
     const { result } = renderHook(() => useOnboardingStatus(), { wrapper });
 
@@ -153,7 +153,7 @@ describe('useOnboardingStatus', () => {
     useOrganizationMock.mockReturnValue({ currentOrganization: ORG, hasOrganization: true });
     usePermissionsMock.mockReturnValue({ isSystemAdmin: false, orgRole: 'admin' });
     vi.mocked(projectService.getAll).mockResolvedValue([]);
-    vi.mocked(integrationService.list).mockResolvedValue([]);
+    vi.mocked(integrationService.summary).mockResolvedValue({ total: 0, by_platform: {} });
 
     const { result } = renderHook(() => useOnboardingStatus(), { wrapper });
 
@@ -164,14 +164,14 @@ describe('useOnboardingStatus', () => {
     expect(result.current.projectCount).toBe(0);
   });
 
-  it('reports integrationCount from the integrations list length', async () => {
+  it('reports integrationCount from the summary endpoint total field', async () => {
     useOrganizationMock.mockReturnValue({ currentOrganization: ORG, hasOrganization: true });
     usePermissionsMock.mockReturnValue({ isSystemAdmin: false, orgRole: 'admin' });
     vi.mocked(projectService.getAll).mockResolvedValue([{ id: 'p-1' } as never]);
-    vi.mocked(integrationService.list).mockResolvedValue([
-      { type: 'jira' } as never,
-      { type: 'slack' } as never,
-    ]);
+    vi.mocked(integrationService.summary).mockResolvedValue({
+      total: 2,
+      by_platform: { jira: 1, slack: 1 },
+    });
 
     const { result } = renderHook(() => useOnboardingStatus(), { wrapper });
 
