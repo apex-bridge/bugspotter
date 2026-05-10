@@ -397,6 +397,35 @@ describe('CodeSecurityAnalyzer', () => {
       expect(result.safe).toBe(true);
       expect(result.violations).toHaveLength(0);
     });
+
+    it('should reject Function wrapped in `as any` type assertion', async () => {
+      const code = `(Function as any)("return process")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject Function with non-null assertion', async () => {
+      const code = `Function!("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should still allow Function in TS type-reference position', async () => {
+      const code = `export const factory = (g: Function) => g;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(true);
+      expect(result.violations).toHaveLength(0);
+    });
   });
 
   describe('Constructor Access Escape', () => {
@@ -493,6 +522,26 @@ describe('CodeSecurityAnalyzer', () => {
 
       expect(result.safe).toBe(true);
       expect(result.violations).toHaveLength(0);
+    });
+
+    it('should reject .constructor wrapped in `as any` type assertion', async () => {
+      const code = `(obj.constructor as any).constructor("return process")();`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject .constructor with non-null assertion', async () => {
+      const code = `obj.constructor!.constructor("return this")();`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
     });
   });
 

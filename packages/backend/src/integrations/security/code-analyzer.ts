@@ -29,6 +29,24 @@ const ALLOWED_MODULES = [
 ];
 
 /**
+ * TypeScript nodes that wrap a runtime expression. Their child Identifier /
+ * MemberExpression IS evaluated at runtime — these must NOT be skipped by the
+ * "in TS type position" filter, otherwise constructs like `(Function as any)()`
+ * or `obj.constructor!.foo` bypass detection.
+ */
+const TS_RUNTIME_WRAPPERS = new Set([
+  'TSAsExpression',
+  'TSNonNullExpression',
+  'TSTypeAssertion',
+  'TSSatisfiesExpression',
+  'TSInstantiationExpression',
+]);
+
+function isTypeOnlyParent(parentType: string): boolean {
+  return parentType.startsWith('TS') && !TS_RUNTIME_WRAPPERS.has(parentType);
+}
+
+/**
  * Code Security Analyzer
  * Performs static analysis on plugin code to detect security violations
  */
@@ -153,11 +171,11 @@ export class CodeSecurityAnalyzer {
           }
 
           // Function constructor access (any reference, not just `new Function(...)`)
-          // Catches: Function('...')(), const F = Function, etc.
+          // Catches: Function('...')(), const F = Function, (Function as any)(), Function!(), etc.
           if (name === 'Function') {
-            const parentType = path.parent?.type ?? '';
-            // Skip TypeScript type positions (e.g. `(g: Function) => ...`)
-            if (parentType.startsWith('TS')) {
+            // Only skip pure type positions like `(g: Function) => ...`; runtime
+            // wrappers (`as`, `!`, `<T>x`, `satisfies`, `f<T>`) must NOT be skipped.
+            if (isTypeOnlyParent(path.parent?.type ?? '')) {
               return;
             }
             violations.push('Function constructor not allowed');
@@ -170,7 +188,7 @@ export class CodeSecurityAnalyzer {
         // Covers regular member access, optional chaining (obj?.constructor),
         // string-literal computed (obj['constructor']) and template literals (obj[`constructor`]).
         'MemberExpression|OptionalMemberExpression': (path: any) => {
-          if (path.parent?.type?.startsWith('TS')) {
+          if (isTypeOnlyParent(path.parent?.type ?? '')) {
             return;
           }
 
