@@ -93,7 +93,10 @@ export const API_ENDPOINTS = {
       `${API_VERSION}/projects/${projectId}/members/${userId}`,
   },
 
-  // Integration endpoints (admin)
+  // Integration endpoints — mostly platform-admin (`/admin/integrations`)
+  // with the exception of `summary`, which is org-admin-accessible
+  // (any authenticated user sees aggregate counts for projects they
+  // can access). Grouped together for discoverability.
   integrations: {
     list: () => `${API_VERSION}/admin/integrations`,
     summary: () => `${API_VERSION}/integrations/summary`,

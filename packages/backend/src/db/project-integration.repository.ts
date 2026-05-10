@@ -7,7 +7,17 @@ import type { Pool, PoolClient } from 'pg';
 import { BaseRepository } from './repositories/base-repository.js';
 
 /**
- * Project integration entity
+ * Project integration entity. Mirrors `application.project_integrations`
+ * as defined in migration 001 — keep in sync if the schema changes.
+ *
+ * The circuit-breaker fields (`error_count`, `last_error*`, `disabled_*`)
+ * and `last_sync_at` are managed by the worker / dispatch path, not by
+ * route handlers. They're still surfaced on the read shape so consumers
+ * (and SQL filters like `summarizeByPlatformForProjects` below, which
+ * gates on `disabled_at IS NULL`) have a typed view of the actual row.
+ * `ProjectIntegrationInsert` / `ProjectIntegrationUpdate` intentionally
+ * exclude them so route code can't flip them through the typed API —
+ * the worker reaches in via raw SQL.
  */
 export interface ProjectIntegration {
   id: string;
@@ -16,6 +26,14 @@ export interface ProjectIntegration {
   enabled: boolean;
   config: Record<string, unknown>;
   encrypted_credentials: string | null;
+  // Circuit-breaker state — schema enforces a CHECK that
+  // `disabled_at` and `disabled_reason` are both null or both set.
+  error_count: number;
+  last_error: string | null;
+  last_error_at: Date | null;
+  disabled_at: Date | null;
+  disabled_reason: string | null;
+  last_sync_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }

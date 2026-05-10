@@ -51,19 +51,25 @@ export function useOnboardingStatus(): OnboardingState {
   const { isSystemAdmin, orgRole } = usePermissions();
   const canConfigure = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
-  // Plain `['projects']` / `['integrations']` keys to dedupe with every
-  // other consumer in the admin (notification dialogs, channels-list,
-  // integrations overview, …). Both queries reflect the user's CURRENT
-  // tenant context (subdomain on SaaS), not the platform-admin sidebar
-  // filter — the QuickSetup CTAs that consume this hook are tied to
-  // "what does THIS tenant have set up", and threading the sidebar
-  // filter only into the projects query was internally inconsistent
-  // (integrationService.list takes no org arg, so `integrationCount`
-  // would stay global, breaking predicates like
-  // `hasProject && integrationCount === 0` for any platform admin
-  // with the sidebar filter set). Either both signals follow the
-  // filter or neither does; "neither" is the only option without a
-  // backend change to `integrationService.list`.
+  // Plain `['projects']` key to dedupe with every other consumer in
+  // the admin (notification dialogs, channels-list, integrations
+  // overview, …) — same shape, same fetch.
+  //
+  // The integrations query below uses its own `['integrations-summary']`
+  // namespace because the cached value is `{ total, by_platform }`, NOT
+  // the array of `Integration` rows that other consumers of
+  // `['integrations']` expect; sharing the key would let the wrong shape
+  // win whichever query resolved first.
+  //
+  // Both queries reflect the user's CURRENT tenant context (subdomain
+  // on SaaS), not the platform-admin sidebar filter — the QuickSetup
+  // CTAs that consume this hook are tied to "what does THIS tenant
+  // have set up". Threading the sidebar filter through this hook was
+  // tried and reverted (PR #119/#123): half-scoping was internally
+  // inconsistent because integration count couldn't be filtered the
+  // same way as projects without a separate backend route, breaking
+  // predicates like `hasProject && integrationCount === 0`.
+  //
   // Wrap `getAll()` in an arrow to drop React Query's context arg —
   // the service's first param is `organizationId?: string`, so passing
   // the query context through would be a type error and (worse) send
