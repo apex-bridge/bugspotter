@@ -164,16 +164,43 @@ export class CodeSecurityAnalyzer {
           }
         },
 
-        // Detect .constructor access — Function-constructor escape vector
-        // E.g. (1).constructor.constructor('return process')()
-        MemberExpression: (path: any) => {
-          const prop = path.node.property;
-          const isConstructor =
-            (!path.node.computed && prop.type === 'Identifier' && prop.name === 'constructor') ||
-            (path.node.computed && prop.type === 'StringLiteral' && prop.value === 'constructor');
-          if (isConstructor) {
+        // Detect .constructor access (Function-constructor escape vector) and
+        // dotted dangerous globals (process.binding, require.cache, etc.)
+        // Covers regular member access, optional chaining (obj?.constructor),
+        // string-literal computed (obj['constructor']) and template literals (obj[`constructor`]).
+        'MemberExpression|OptionalMemberExpression': (path: any) => {
+          if (path.parent?.type?.startsWith('TS')) {
+            return;
+          }
+
+          const node = path.node;
+          const prop = node.property;
+          const obj = node.object;
+
+          const isConstructorProp =
+            (!node.computed && prop.type === 'Identifier' && prop.name === 'constructor') ||
+            (node.computed && prop.type === 'StringLiteral' && prop.value === 'constructor') ||
+            (node.computed &&
+              prop.type === 'TemplateLiteral' &&
+              prop.expressions.length === 0 &&
+              prop.quasis.length === 1 &&
+              prop.quasis[0].value.cooked === 'constructor');
+
+          if (isConstructorProp) {
             violations.push('Constructor access not allowed (Function escape risk)');
             risk_level = 'critical';
+            return;
+          }
+
+          // Dotted DANGEROUS_GLOBALS entries (e.g. 'process.binding') — the
+          // Identifier visitor only sees single names, so dotted matches must
+          // be reconstructed here from MemberExpression structure.
+          if (!node.computed && obj.type === 'Identifier' && prop.type === 'Identifier') {
+            const fullName = `${obj.name}.${prop.name}`;
+            if (this.DANGEROUS_GLOBALS.includes(fullName)) {
+              violations.push(`Dangerous global access: ${fullName}`);
+              risk_level = risk_level === 'critical' ? 'critical' : 'high';
+            }
           }
         },
 

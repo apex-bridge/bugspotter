@@ -449,6 +449,80 @@ describe('CodeSecurityAnalyzer', () => {
       expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
       expect(result.risk_level).toBe('critical');
     });
+
+    it('should reject optional-chaining constructor access', async () => {
+      const code = `(1)?.constructor.constructor("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject template-literal constructor access', async () => {
+      const code = '(1)[`constructor`][`constructor`]("return this")()';
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject .constructor reflection (intentional strictness for plugin code)', async () => {
+      // Plugins have no legitimate need for .constructor access, even for
+      // reflection — keep the policy strict instead of adding a whitelist that
+      // attackers could pivot through.
+      const code = `class Foo {} export const factory = () => Foo.constructor.name;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should not flag .constructor inside TypeScript type positions', async () => {
+      const code = `
+        export interface HasCtor { constructor: () => void }
+        export const factory = () => ({});
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(true);
+      expect(result.violations).toHaveLength(0);
+    });
+  });
+
+  describe('Dotted Dangerous Globals', () => {
+    it('should reject process.binding access', async () => {
+      const code = `const natives = process.binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+    });
+
+    it('should reject require.cache access', async () => {
+      const code = `delete require.cache;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.cache');
+    });
+
+    it('should reject require.main access', async () => {
+      const code = `const m = require.main;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.main');
+    });
   });
 
   describe('Code Hash', () => {
