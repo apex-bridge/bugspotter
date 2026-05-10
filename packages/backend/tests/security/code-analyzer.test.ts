@@ -313,11 +313,9 @@ describe('CodeSecurityAnalyzer', () => {
 
       const result = await analyzer.analyze(code);
 
-      // Note: 'module' as variable name doesn't trigger global check
-      // Only checks for 'module.constructor' as string pattern
-      // This is acceptable - AST traversal looks for identifiers, not member expressions
-      expect(result.safe).toBe(true); // Changed expectation
-      expect(result.risk_level).toBe('low');
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
     });
   });
 
@@ -360,6 +358,96 @@ describe('CodeSecurityAnalyzer', () => {
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dynamic imports (import()) not allowed');
       expect(result.risk_level).toBe('high');
+    });
+  });
+
+  describe('Function Constructor (Indirect)', () => {
+    it('should reject bare Function() call', async () => {
+      const code = `Function("return process")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject Function alias', async () => {
+      const code = `
+        const F = Function;
+        F("return this")();
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should not flag class constructor declarations', async () => {
+      const code = `
+        export class Foo {
+          constructor() {}
+        }
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(true);
+      expect(result.violations).toHaveLength(0);
+    });
+  });
+
+  describe('Constructor Access Escape', () => {
+    it('should reject (literal).constructor.constructor pattern', async () => {
+      const code = `(1).constructor.constructor("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject string-literal constructor escape', async () => {
+      const code = `"".constructor.constructor("alert(1)")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject array-literal constructor escape', async () => {
+      const code = `[].constructor.constructor("return process")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject object-literal constructor escape', async () => {
+      const code = `({}).constructor.constructor("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject computed string-literal constructor access', async () => {
+      const code = `obj["constructor"]["constructor"]("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
     });
   });
 

@@ -150,6 +150,31 @@ export class CodeSecurityAnalyzer {
             violations.push(`Dangerous global access: ${name}`);
             risk_level = risk_level === 'critical' ? 'critical' : 'high';
           }
+
+          // Function constructor access (any reference, not just `new Function(...)`)
+          // Catches: Function('...')(), const F = Function, etc.
+          if (name === 'Function') {
+            const parentType = path.parent?.type ?? '';
+            // Skip TypeScript type positions (e.g. `(g: Function) => ...`)
+            if (parentType.startsWith('TS')) {
+              return;
+            }
+            violations.push('Function constructor not allowed');
+            risk_level = 'critical';
+          }
+        },
+
+        // Detect .constructor access — Function-constructor escape vector
+        // E.g. (1).constructor.constructor('return process')()
+        MemberExpression: (path: any) => {
+          const prop = path.node.property;
+          const isConstructor =
+            (!path.node.computed && prop.type === 'Identifier' && prop.name === 'constructor') ||
+            (path.node.computed && prop.type === 'StringLiteral' && prop.value === 'constructor');
+          if (isConstructor) {
+            violations.push('Constructor access not allowed (Function escape risk)');
+            risk_level = 'critical';
+          }
         },
 
         // Detect dynamic imports
