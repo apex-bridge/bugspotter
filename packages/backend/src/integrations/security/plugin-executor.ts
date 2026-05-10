@@ -74,9 +74,12 @@ export class SecurePluginExecutor {
 
   constructor(options?: ExecutionOptions) {
     this.analyzer = new CodeSecurityAnalyzer();
-    const envTimeout = process.env.PLUGIN_EXECUTION_TIMEOUT_MS
-      ? parseInt(process.env.PLUGIN_EXECUTION_TIMEOUT_MS, 10)
-      : 15000; // Default 15 seconds (allows 10s HTTP timeout + overhead)
+    // Default 15 s (allows 10 s HTTP timeout + overhead). Reject NaN, ≤ 0, and
+    // non-finite values from a misconfigured env var — a non-numeric string
+    // like "15s" would otherwise produce NaN and silently disable the
+    // wall-clock kill that bounds plugin execution.
+    const envParsed = Number(process.env.PLUGIN_EXECUTION_TIMEOUT_MS);
+    const envTimeout = Number.isFinite(envParsed) && envParsed > 0 ? envParsed : 15000;
     this.defaultTimeout = options?.timeout ?? envTimeout;
     this.defaultMemoryLimit = options?.memoryLimit ?? 128; // 128 MB
   }
