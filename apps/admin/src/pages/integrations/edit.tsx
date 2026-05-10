@@ -108,9 +108,10 @@ export default function IntegrationEditPage() {
 
       queryClient.invalidateQueries({ queryKey: ['integration', type] });
       queryClient.invalidateQueries({ queryKey: ['integrations'] });
-      // Org-wide QuickSetup count — see project-integration-config.tsx
-      // for the rationale.
-      queryClient.invalidateQueries({ queryKey: ['integrations-summary'] });
+      // Note: NOT invalidating `['integrations-summary']` — that key
+      // counts rows in `project_integrations` (per-project instances),
+      // and this PATCH only updates the `integrations` table's
+      // platform-level config (no project-instance row added/removed).
       toast.success('Integration updated successfully');
       navigate('/integrations');
     } catch (error) {
