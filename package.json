@@ -72,6 +72,6 @@
     "@babel/traverse": "^7.28.4",
     "@babel/types": "^7.28.4",
     "browser-sync": "^3.0.4",
-    "isolated-vm": "^6.0.2"
+    "isolated-vm": "6.0.2"
   }
 }
