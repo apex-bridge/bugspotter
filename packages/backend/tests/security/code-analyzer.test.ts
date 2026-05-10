@@ -523,6 +523,24 @@ describe('CodeSecurityAnalyzer', () => {
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dangerous global access: require.main');
     });
+
+    it("should reject computed bracket access (process['binding'])", async () => {
+      const code = `const natives = process['binding']('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+    });
+
+    it('should reject template-literal access (require[`cache`])', async () => {
+      const code = 'const c = require[`cache`];';
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.cache');
+    });
   });
 
   describe('Code Hash', () => {

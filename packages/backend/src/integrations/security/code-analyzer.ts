@@ -74,7 +74,8 @@ export class CodeSecurityAnalyzer {
     'process.binding',
     '__dirname',
     '__filename',
-    'module.constructor',
+    // 'module.constructor' is intentionally omitted — the .constructor check
+    // below handles it (and every other .constructor access) earlier.
     'require.cache',
     'require.main',
   ];
@@ -177,16 +178,19 @@ export class CodeSecurityAnalyzer {
           const prop = node.property;
           const obj = node.object;
 
-          const isConstructorProp =
-            (!node.computed && prop.type === 'Identifier' && prop.name === 'constructor') ||
-            (node.computed && prop.type === 'StringLiteral' && prop.value === 'constructor') ||
-            (node.computed &&
-              prop.type === 'TemplateLiteral' &&
-              prop.expressions.length === 0 &&
-              prop.quasis.length === 1 &&
-              prop.quasis[0].value.cooked === 'constructor');
+          const propName: string | null =
+            !node.computed && prop.type === 'Identifier'
+              ? prop.name
+              : node.computed && prop.type === 'StringLiteral'
+                ? prop.value
+                : node.computed &&
+                    prop.type === 'TemplateLiteral' &&
+                    prop.expressions.length === 0 &&
+                    prop.quasis.length === 1
+                  ? prop.quasis[0].value.cooked
+                  : null;
 
-          if (isConstructorProp) {
+          if (propName === 'constructor') {
             violations.push('Constructor access not allowed (Function escape risk)');
             risk_level = 'critical';
             return;
@@ -194,9 +198,10 @@ export class CodeSecurityAnalyzer {
 
           // Dotted DANGEROUS_GLOBALS entries (e.g. 'process.binding') — the
           // Identifier visitor only sees single names, so dotted matches must
-          // be reconstructed here from MemberExpression structure.
-          if (!node.computed && obj.type === 'Identifier' && prop.type === 'Identifier') {
-            const fullName = `${obj.name}.${prop.name}`;
+          // be reconstructed here. Both `process.binding` and `process['binding']`
+          // resolve to the same fullName once propName is normalized.
+          if (obj.type === 'Identifier' && propName) {
+            const fullName = `${obj.name}.${propName}`;
             if (this.DANGEROUS_GLOBALS.includes(fullName)) {
               violations.push(`Dangerous global access: ${fullName}`);
               risk_level = risk_level === 'critical' ? 'critical' : 'high';
