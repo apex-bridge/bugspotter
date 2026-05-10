@@ -313,11 +313,9 @@ describe('CodeSecurityAnalyzer', () => {
 
       const result = await analyzer.analyze(code);
 
-      // Note: 'module' as variable name doesn't trigger global check
-      // Only checks for 'module.constructor' as string pattern
-      // This is acceptable - AST traversal looks for identifiers, not member expressions
-      expect(result.safe).toBe(true); // Changed expectation
-      expect(result.risk_level).toBe('low');
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
     });
   });
 
@@ -359,6 +357,336 @@ describe('CodeSecurityAnalyzer', () => {
 
       expect(result.safe).toBe(false);
       expect(result.violations).toContain('Dynamic imports (import()) not allowed');
+      expect(result.risk_level).toBe('high');
+    });
+  });
+
+  describe('Function Constructor (Indirect)', () => {
+    it('should reject bare Function() call', async () => {
+      const code = `Function("return process")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject Function alias', async () => {
+      const code = `
+        const F = Function;
+        F("return this")();
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should not flag class constructor declarations', async () => {
+      const code = `
+        export class Foo {
+          constructor() {}
+        }
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(true);
+      expect(result.violations).toHaveLength(0);
+    });
+
+    it('should reject Function wrapped in `as any` type assertion', async () => {
+      const code = `(Function as any)("return process")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject Function with non-null assertion', async () => {
+      const code = `Function!("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should still allow Function in TS type-reference position', async () => {
+      const code = `export const factory = (g: Function) => g;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(true);
+      expect(result.violations).toHaveLength(0);
+    });
+
+    it('should reject Function used as TS enum member initializer', async () => {
+      const code = `enum Evil { F = Function }`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject `export = Function` (TSExportAssignment)', async () => {
+      const code = `export = Function;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Function constructor not allowed');
+      expect(result.risk_level).toBe('critical');
+    });
+  });
+
+  describe('Constructor Access Escape', () => {
+    it('should reject (literal).constructor.constructor pattern', async () => {
+      const code = `(1).constructor.constructor("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject string-literal constructor escape', async () => {
+      const code = `"".constructor.constructor("alert(1)")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject array-literal constructor escape', async () => {
+      const code = `[].constructor.constructor("return process")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject object-literal constructor escape', async () => {
+      const code = `({}).constructor.constructor("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject computed string-literal constructor access', async () => {
+      const code = `obj["constructor"]["constructor"]("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject optional-chaining constructor access', async () => {
+      const code = `(1)?.constructor.constructor("return this")()`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject template-literal constructor access', async () => {
+      const code = '(1)[`constructor`][`constructor`]("return this")()';
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject combined optional + template-literal constructor access', async () => {
+      const code = '(1)?.[`constructor`]?.[`constructor`]("return this")()';
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject .constructor reflection (intentional strictness for plugin code)', async () => {
+      // Plugins have no legitimate need for .constructor access, even for
+      // reflection — keep the policy strict instead of adding a whitelist that
+      // attackers could pivot through.
+      const code = `class Foo {} export const factory = () => Foo.constructor.name;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should not flag .constructor inside TypeScript type positions', async () => {
+      const code = `
+        export interface HasCtor { constructor: () => void }
+        export const factory = () => ({});
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(true);
+      expect(result.violations).toHaveLength(0);
+    });
+
+    it('should reject .constructor wrapped in `as any` type assertion', async () => {
+      const code = `(obj.constructor as any).constructor("return process")();`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+
+    it('should reject .constructor with non-null assertion', async () => {
+      const code = `obj.constructor!.constructor("return this")();`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Constructor access not allowed (Function escape risk)');
+      expect(result.risk_level).toBe('critical');
+    });
+  });
+
+  describe('Dotted Dangerous Globals', () => {
+    it('should reject process.binding access', async () => {
+      const code = `const natives = process.binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject require.cache access', async () => {
+      const code = `delete require.cache;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.cache');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject require.main access', async () => {
+      const code = `const m = require.main;`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.main');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it("should reject computed bracket access (process['binding'])", async () => {
+      const code = `const natives = process['binding']('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject template-literal access (require[`cache`])', async () => {
+      const code = 'const c = require[`cache`];';
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.cache');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject `as any`-wrapped object (process as any).binding', async () => {
+      const code = `(process as any).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject non-null-assertion-wrapped object (process!.binding)', async () => {
+      const code = `process!.binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject angle-bracket type-assertion-wrapped object (<any>process).binding', async () => {
+      const code = `(<any>process).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject `satisfies any`-wrapped object (process satisfies any).binding', async () => {
+      const code = `(process satisfies any).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject sequence-expression-wrapped object (0, process).binding', async () => {
+      const code = `(0, process).binding('natives');`;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: process.binding');
+      expect(result.risk_level).toBe('high');
+    });
+
+    it('should reject wrapped require for require.cache / require.main', async () => {
+      const code = `
+        const c = (require as unknown).cache;
+        const m = (require!).main;
+      `;
+
+      const result = await analyzer.analyze(code);
+
+      expect(result.safe).toBe(false);
+      expect(result.violations).toContain('Dangerous global access: require.cache');
+      expect(result.violations).toContain('Dangerous global access: require.main');
       expect(result.risk_level).toBe('high');
     });
   });

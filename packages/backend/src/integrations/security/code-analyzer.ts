@@ -29,6 +29,56 @@ const ALLOWED_MODULES = [
 ];
 
 /**
+ * TypeScript nodes that wrap a runtime expression. Their child Identifier /
+ * MemberExpression IS evaluated at runtime — these must NOT be skipped by the
+ * "in TS type position" filter, otherwise constructs like `(Function as any)()`
+ * or `obj.constructor!.foo` bypass detection.
+ */
+const TS_RUNTIME_WRAPPERS = new Set([
+  'TSAsExpression',
+  'TSNonNullExpression',
+  'TSTypeAssertion',
+  'TSSatisfiesExpression',
+  'TSInstantiationExpression',
+  // TSEnumMember.initializer and TSExportAssignment.expression are runtime
+  // positions despite the TS- prefix.
+  'TSEnumMember',
+  'TSExportAssignment',
+]);
+
+function isTypeOnlyParent(parentType: string): boolean {
+  return parentType.startsWith('TS') && !TS_RUNTIME_WRAPPERS.has(parentType);
+}
+
+/**
+ * TS expression wrappers that hold their inner runtime expression on `.expression`.
+ * Used to peel `(process as any)`, `process!`, `(0, process)` etc. back to a bare
+ * Identifier when reconstructing dotted-global names.
+ */
+const TS_EXPRESSION_WRAPPERS = new Set([
+  'TSAsExpression',
+  'TSNonNullExpression',
+  'TSTypeAssertion',
+  'TSSatisfiesExpression',
+  'TSInstantiationExpression',
+]);
+
+function unwrapToIdentifier(node: any): { name: string } | null {
+  let cur = node;
+  let safety = 16;
+  while (cur && safety-- > 0) {
+    if (TS_EXPRESSION_WRAPPERS.has(cur.type)) {
+      cur = cur.expression;
+    } else if (cur.type === 'SequenceExpression') {
+      cur = cur.expressions[cur.expressions.length - 1];
+    } else {
+      break;
+    }
+  }
+  return cur && cur.type === 'Identifier' ? cur : null;
+}
+
+/**
  * Code Security Analyzer
  * Performs static analysis on plugin code to detect security violations
  */
@@ -74,7 +124,8 @@ export class CodeSecurityAnalyzer {
     'process.binding',
     '__dirname',
     '__filename',
-    'module.constructor',
+    // 'module.constructor' is intentionally omitted — the .constructor check
+    // below handles it (and every other .constructor access) earlier.
     'require.cache',
     'require.main',
   ];
@@ -149,6 +200,65 @@ export class CodeSecurityAnalyzer {
           if (this.DANGEROUS_GLOBALS.includes(name)) {
             violations.push(`Dangerous global access: ${name}`);
             risk_level = risk_level === 'critical' ? 'critical' : 'high';
+          }
+
+          // Function constructor access (any reference, not just `new Function(...)`)
+          // Catches: Function('...')(), const F = Function, (Function as any)(), Function!(), etc.
+          if (name === 'Function') {
+            // Only skip pure type positions like `(g: Function) => ...`; runtime
+            // wrappers (`as`, `!`, `<T>x`, `satisfies`, `f<T>`) must NOT be skipped.
+            if (isTypeOnlyParent(path.parent?.type ?? '')) {
+              return;
+            }
+            violations.push('Function constructor not allowed');
+            risk_level = 'critical';
+          }
+        },
+
+        // Detect .constructor access (Function-constructor escape vector) and
+        // dotted dangerous globals (process.binding, require.cache, etc.)
+        // Covers regular member access, optional chaining (obj?.constructor),
+        // string-literal computed (obj['constructor']) and template literals (obj[`constructor`]).
+        'MemberExpression|OptionalMemberExpression': (path: any) => {
+          if (isTypeOnlyParent(path.parent?.type ?? '')) {
+            return;
+          }
+
+          const node = path.node;
+          const prop = node.property;
+          const obj = node.object;
+
+          const propName: string | null =
+            !node.computed && prop.type === 'Identifier'
+              ? prop.name
+              : node.computed && prop.type === 'StringLiteral'
+                ? prop.value
+                : node.computed &&
+                    prop.type === 'TemplateLiteral' &&
+                    prop.expressions.length === 0 &&
+                    prop.quasis.length === 1
+                  ? prop.quasis[0].value.cooked
+                  : null;
+
+          if (propName === 'constructor') {
+            violations.push('Constructor access not allowed (Function escape risk)');
+            risk_level = 'critical';
+            return;
+          }
+
+          // Dotted DANGEROUS_GLOBALS entries (e.g. 'process.binding') — the
+          // Identifier visitor only sees single names, so dotted matches must
+          // be reconstructed here. Unwrap the `obj` side through TS expression
+          // wrappers and SequenceExpression so `(process as any).binding`,
+          // `process!.binding`, `(0, process).binding` etc. all resolve to
+          // `process.binding`.
+          const objIdentifier = unwrapToIdentifier(obj);
+          if (objIdentifier && propName) {
+            const fullName = `${objIdentifier.name}.${propName}`;
+            if (this.DANGEROUS_GLOBALS.includes(fullName)) {
+              violations.push(`Dangerous global access: ${fullName}`);
+              risk_level = risk_level === 'critical' ? 'critical' : 'high';
+            }
           }
         },
 
