@@ -112,6 +112,11 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['integrations'] });
       queryClient.invalidateQueries({ queryKey: ['integration', type] });
+      // Note: NOT invalidating `['integrations-summary']` — that key
+      // counts rows in `project_integrations` (per-project instances),
+      // and this hook mutates `integrations.config` (platform-level
+      // config, no row created/destroyed). The invalidation belongs
+      // on the per-project save/delete sites in project-integration-config.tsx.
       onSaveSuccess?.();
     },
   });

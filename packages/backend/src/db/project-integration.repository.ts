@@ -7,7 +7,17 @@ import type { Pool, PoolClient } from 'pg';
 import { BaseRepository } from './repositories/base-repository.js';
 
 /**
- * Project integration entity
+ * Project integration entity. Mirrors `application.project_integrations`
+ * as defined in migration 001 — keep in sync if the schema changes.
+ *
+ * The circuit-breaker fields (`error_count`, `last_error*`, `disabled_*`)
+ * and `last_sync_at` are managed by the worker / dispatch path, not by
+ * route handlers. They're still surfaced on the read shape so consumers
+ * (and SQL filters like `summarizeByPlatformForProjects` below, which
+ * gates on `disabled_at IS NULL`) have a typed view of the actual row.
+ * `ProjectIntegrationInsert` / `ProjectIntegrationUpdate` intentionally
+ * exclude them so route code can't flip them through the typed API —
+ * the worker reaches in via raw SQL.
  */
 export interface ProjectIntegration {
   id: string;
@@ -16,6 +26,14 @@ export interface ProjectIntegration {
   enabled: boolean;
   config: Record<string, unknown>;
   encrypted_credentials: string | null;
+  // Circuit-breaker state — schema enforces a CHECK that
+  // `disabled_at` and `disabled_reason` are both null or both set.
+  error_count: number;
+  last_error: string | null;
+  last_error_at: Date | null;
+  disabled_at: Date | null;
+  disabled_reason: string | null;
+  last_sync_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -299,7 +317,7 @@ export class ProjectIntegrationRepository extends BaseRepository<
    */
   async findEnabledByProjectWithType(projectId: string): Promise<ProjectIntegrationWithType[]> {
     const query = `
-      SELECT 
+      SELECT
         pi.*,
         i.type as integration_type
       FROM ${this.schema}.${this.tableName} pi
@@ -310,5 +328,37 @@ export class ProjectIntegrationRepository extends BaseRepository<
 
     const result = await this.getClient().query<ProjectIntegrationWithType>(query, [projectId]);
     return this.deserializeMany(result.rows) as ProjectIntegrationWithType[];
+  }
+
+  /**
+   * Aggregate per-platform counts of ENABLED integrations across the
+   * given project ids. Used by `GET /api/v1/integrations/summary` to
+   * answer "does this user already have an integration set up?"
+   * without forcing the caller to be a platform admin (the
+   * `/admin/integrations` endpoint is gated to platform admins and
+   * silently 403s for org owners).
+   *
+   * Empty input array short-circuits — pg's `= ANY($1)` works on
+   * empty arrays but returning early avoids the round-trip.
+   */
+  async summarizeByPlatformForProjects(
+    projectIds: string[]
+  ): Promise<Array<{ type: string; count: number }>> {
+    if (projectIds.length === 0) {
+      return [];
+    }
+    const query = `
+      SELECT i.type, COUNT(*)::int as count
+      FROM ${this.schema}.${this.tableName} pi
+      INNER JOIN ${this.schema}.integrations i ON i.id = pi.integration_id
+      WHERE pi.project_id = ANY($1::uuid[])
+        AND pi.enabled = TRUE
+        AND pi.disabled_at IS NULL
+      GROUP BY i.type
+    `;
+    const result = await this.getClient().query<{ type: string; count: number }>(query, [
+      projectIds,
+    ]);
+    return result.rows;
   }
 }
