@@ -176,6 +176,11 @@ export default function ProjectIntegrationConfigPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-integration', platform, projectId] });
       queryClient.invalidateQueries({ queryKey: ['project-integrations', projectId] });
+      // QuickSetup CTA reads `integrationCount` from this org-wide
+      // summary; without invalidation it stays cached for staleTime
+      // (60s) so users who just connected Jira would still see
+      // "Connect Jira" in the top bar until the cache expires.
+      queryClient.invalidateQueries({ queryKey: ['integrations-summary'] });
       toast.success('Configuration saved successfully!');
       navigate(`/projects/${projectId}/integrations`);
     },
@@ -194,6 +199,7 @@ export default function ProjectIntegrationConfigPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-integrations', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['integrations-summary'] });
       toast.success('Configuration deleted successfully!');
       navigate(`/projects/${projectId}/integrations`);
     },

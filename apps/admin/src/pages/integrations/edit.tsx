@@ -108,6 +108,9 @@ export default function IntegrationEditPage() {
 
       queryClient.invalidateQueries({ queryKey: ['integration', type] });
       queryClient.invalidateQueries({ queryKey: ['integrations'] });
+      // Org-wide QuickSetup count — see project-integration-config.tsx
+      // for the rationale.
+      queryClient.invalidateQueries({ queryKey: ['integrations-summary'] });
       toast.success('Integration updated successfully');
       navigate('/integrations');
     } catch (error) {

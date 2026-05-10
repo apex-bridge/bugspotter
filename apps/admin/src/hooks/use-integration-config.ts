@@ -112,6 +112,9 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['integrations'] });
       queryClient.invalidateQueries({ queryKey: ['integration', type] });
+      // Org-wide QuickSetup count — see project-integration-config.tsx
+      // for the rationale.
+      queryClient.invalidateQueries({ queryKey: ['integrations-summary'] });
       onSaveSuccess?.();
     },
   });

@@ -39,7 +39,12 @@ const IntegrationsOverview: React.FC = () => {
 
   const deleteMutation = useMutation({
     mutationFn: (type: string) => integrationService.delete(type),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['integrations'] });
+      // Org-wide QuickSetup count — see project-integration-config.tsx
+      // for the rationale.
+      qc.invalidateQueries({ queryKey: ['integrations-summary'] });
+    },
   });
 
   if (isLoading) {
