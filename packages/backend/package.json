@@ -60,7 +60,7 @@
     "fastify-plugin": "^5.1.0",
     "handlebars": "^4.7.9",
     "ioredis": "^5.8.1",
-    "isolated-vm": "^6.0.2",
+    "isolated-vm": "6.0.2",
     "md-to-adf": "^0.6.4",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.10.1",
