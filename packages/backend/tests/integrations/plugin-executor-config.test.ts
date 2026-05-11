@@ -112,6 +112,26 @@ describe('SecurePluginExecutor — constructor timeout config', () => {
     const executor = new SecurePluginExecutor({ timeout: Infinity });
     expect((executor as any).defaultTimeout).toBe(DEFAULT_TIMEOUT);
   });
+
+  // Fractional-domain rejection: timeouts are integer milliseconds.
+  it('falls back when options.timeout is a fractional value', () => {
+    const executor = new SecurePluginExecutor({ timeout: 1.5 });
+    expect((executor as any).defaultTimeout).toBe(DEFAULT_TIMEOUT);
+  });
+
+  it('falls back when env var parses to a fractional number', () => {
+    process.env[ENV_KEY] = '15000.5';
+    const executor = new SecurePluginExecutor();
+    expect((executor as any).defaultTimeout).toBe(DEFAULT_TIMEOUT);
+  });
+
+  // Fallback-chain check: when options.timeout is invalid, env must still
+  // win over the hard-coded default.
+  it('falls back to valid env timeout when options.timeout is invalid', () => {
+    process.env[ENV_KEY] = '8000';
+    const executor = new SecurePluginExecutor({ timeout: NaN });
+    expect((executor as any).defaultTimeout).toBe(8000);
+  });
 });
 
 describe('SecurePluginExecutor — constructor memoryLimit config', () => {

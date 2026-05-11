@@ -14,7 +14,10 @@ import { ERROR_CODES } from '../plugin-utils/errors.js';
 const logger = getLogger();
 
 function isPositiveFinite(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+  // Timeouts (ms) and memory limits (MB) are integer-domain config values —
+  // accepting fractional inputs like `1.5` is almost always a typo. Reject
+  // anything that isn't a positive safe integer; fall back to the default.
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 /**
@@ -85,8 +88,9 @@ export class SecurePluginExecutor {
     // memory cap that bound plugin execution.
     const envParsed = Number(process.env.PLUGIN_EXECUTION_TIMEOUT_MS);
     const envTimeout = isPositiveFinite(envParsed) ? envParsed : 15000;
-    this.defaultTimeout = isPositiveFinite(options?.timeout) ? options!.timeout! : envTimeout;
-    this.defaultMemoryLimit = isPositiveFinite(options?.memoryLimit) ? options!.memoryLimit! : 128;
+    const { timeout, memoryLimit } = options ?? {};
+    this.defaultTimeout = isPositiveFinite(timeout) ? timeout : envTimeout;
+    this.defaultMemoryLimit = isPositiveFinite(memoryLimit) ? memoryLimit : 128;
   }
 
   /**
