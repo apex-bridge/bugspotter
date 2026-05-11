@@ -89,4 +89,63 @@ describe('SecurePluginExecutor — constructor timeout config', () => {
     const executor = new SecurePluginExecutor({ timeout: 3000 });
     expect((executor as any).defaultTimeout).toBe(3000);
   });
+
+  // Same NaN-class bug, different input source — caller passes invalid options
+  // through the typed API. `options.timeout ?? envTimeout` doesn't catch NaN
+  // because NaN isn't nullish.
+  it('falls back to env/default when options.timeout is NaN', () => {
+    const executor = new SecurePluginExecutor({ timeout: NaN });
+    expect((executor as any).defaultTimeout).toBe(DEFAULT_TIMEOUT);
+  });
+
+  it('falls back to env/default when options.timeout is zero', () => {
+    const executor = new SecurePluginExecutor({ timeout: 0 });
+    expect((executor as any).defaultTimeout).toBe(DEFAULT_TIMEOUT);
+  });
+
+  it('falls back to env/default when options.timeout is negative', () => {
+    const executor = new SecurePluginExecutor({ timeout: -1 });
+    expect((executor as any).defaultTimeout).toBe(DEFAULT_TIMEOUT);
+  });
+
+  it('falls back to env/default when options.timeout is Infinity', () => {
+    const executor = new SecurePluginExecutor({ timeout: Infinity });
+    expect((executor as any).defaultTimeout).toBe(DEFAULT_TIMEOUT);
+  });
+});
+
+describe('SecurePluginExecutor — constructor memoryLimit config', () => {
+  const DEFAULT_MEMORY = 128;
+
+  it('uses default 128 MB when no options', () => {
+    const executor = new SecurePluginExecutor();
+    expect((executor as any).defaultMemoryLimit).toBe(DEFAULT_MEMORY);
+  });
+
+  it('honours a valid options.memoryLimit', () => {
+    const executor = new SecurePluginExecutor({ memoryLimit: 64 });
+    expect((executor as any).defaultMemoryLimit).toBe(64);
+  });
+
+  // Same NaN-class bug as timeout — `options.memoryLimit ?? 128` doesn't catch
+  // NaN, and isolated-vm's behaviour with `memoryLimit: NaN` is unspecified.
+  it('falls back to 128 MB when options.memoryLimit is NaN', () => {
+    const executor = new SecurePluginExecutor({ memoryLimit: NaN });
+    expect((executor as any).defaultMemoryLimit).toBe(DEFAULT_MEMORY);
+  });
+
+  it('falls back to 128 MB when options.memoryLimit is zero', () => {
+    const executor = new SecurePluginExecutor({ memoryLimit: 0 });
+    expect((executor as any).defaultMemoryLimit).toBe(DEFAULT_MEMORY);
+  });
+
+  it('falls back to 128 MB when options.memoryLimit is negative', () => {
+    const executor = new SecurePluginExecutor({ memoryLimit: -1 });
+    expect((executor as any).defaultMemoryLimit).toBe(DEFAULT_MEMORY);
+  });
+
+  it('falls back to 128 MB when options.memoryLimit is Infinity', () => {
+    const executor = new SecurePluginExecutor({ memoryLimit: Infinity });
+    expect((executor as any).defaultMemoryLimit).toBe(DEFAULT_MEMORY);
+  });
 });

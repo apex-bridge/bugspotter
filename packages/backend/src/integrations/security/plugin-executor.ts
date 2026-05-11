@@ -13,6 +13,10 @@ import { ERROR_CODES } from '../plugin-utils/errors.js';
 
 const logger = getLogger();
 
+function isPositiveFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 /**
  * Script to disable unsafe global APIs in isolated-vm context
  * Prevents plugins from bypassing RPC bridge security controls
@@ -74,14 +78,15 @@ export class SecurePluginExecutor {
 
   constructor(options?: ExecutionOptions) {
     this.analyzer = new CodeSecurityAnalyzer();
-    // Default 15 s (allows 10 s HTTP timeout + overhead). Reject NaN, ≤ 0, and
-    // non-finite values from a misconfigured env var — a non-numeric string
-    // like "15s" would otherwise produce NaN and silently disable the
-    // wall-clock kill that bounds plugin execution.
+    // Validate every numeric source — env var AND constructor options. NaN, ≤ 0,
+    // and non-finite values must all fall back to the safe defaults; otherwise a
+    // misconfigured env var ("15s" → NaN) or a typed-any caller passing
+    // `options.timeout = NaN` would silently disable the wall-clock kill /
+    // memory cap that bound plugin execution.
     const envParsed = Number(process.env.PLUGIN_EXECUTION_TIMEOUT_MS);
-    const envTimeout = Number.isFinite(envParsed) && envParsed > 0 ? envParsed : 15000;
-    this.defaultTimeout = options?.timeout ?? envTimeout;
-    this.defaultMemoryLimit = options?.memoryLimit ?? 128; // 128 MB
+    const envTimeout = isPositiveFinite(envParsed) ? envParsed : 15000;
+    this.defaultTimeout = isPositiveFinite(options?.timeout) ? options!.timeout! : envTimeout;
+    this.defaultMemoryLimit = isPositiveFinite(options?.memoryLimit) ? options!.memoryLimit! : 128;
   }
 
   /**
