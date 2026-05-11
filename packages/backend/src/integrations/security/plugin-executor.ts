@@ -13,6 +13,20 @@ import { ERROR_CODES } from '../plugin-utils/errors.js';
 
 const logger = getLogger();
 
+// 15 s allows 10 s HTTP timeout (Layer 3) + 5 s overhead. Picked after a 5 s
+// default killed plugins mid-flight on slow tracker APIs.
+const DEFAULT_TIMEOUT_MS = 15000;
+// isolated-vm's lower bound is 8 MB; 128 MB is comfortable for plugin code
+// without giving any single plugin enough headroom to displace the host.
+const DEFAULT_MEMORY_LIMIT_MB = 128;
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  // Timeouts (ms) and memory limits (MB) are integer-domain config values —
+  // accepting fractional inputs like `1.5` is almost always a typo. Reject
+  // anything that isn't a positive safe integer; fall back to the default.
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
 /**
  * Script to disable unsafe global APIs in isolated-vm context
  * Prevents plugins from bypassing RPC bridge security controls
@@ -74,11 +88,18 @@ export class SecurePluginExecutor {
 
   constructor(options?: ExecutionOptions) {
     this.analyzer = new CodeSecurityAnalyzer();
-    const envTimeout = process.env.PLUGIN_EXECUTION_TIMEOUT_MS
-      ? parseInt(process.env.PLUGIN_EXECUTION_TIMEOUT_MS, 10)
-      : 15000; // Default 15 seconds (allows 10s HTTP timeout + overhead)
-    this.defaultTimeout = options?.timeout ?? envTimeout;
-    this.defaultMemoryLimit = options?.memoryLimit ?? 128; // 128 MB
+    // Validate every numeric source — env var AND constructor options. NaN, ≤ 0,
+    // and non-finite values must all fall back to the safe defaults; otherwise a
+    // misconfigured env var ("15s" → NaN) or a typed-any caller passing
+    // `options.timeout = NaN` would silently disable the wall-clock kill /
+    // memory cap that bound plugin execution.
+    const envParsed = Number(process.env.PLUGIN_EXECUTION_TIMEOUT_MS);
+    const envTimeout = isPositiveSafeInteger(envParsed) ? envParsed : DEFAULT_TIMEOUT_MS;
+    const { timeout, memoryLimit } = options ?? {};
+    this.defaultTimeout = isPositiveSafeInteger(timeout) ? timeout : envTimeout;
+    this.defaultMemoryLimit = isPositiveSafeInteger(memoryLimit)
+      ? memoryLimit
+      : DEFAULT_MEMORY_LIMIT_MB;
   }
 
   /**
