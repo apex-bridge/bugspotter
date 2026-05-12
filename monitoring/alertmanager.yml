@@ -29,10 +29,15 @@ receivers:
         # parse_mode is HTML, so any <, >, & in alertname/severity/summary/
         # description would break Telegram's strict HTML parser and the
         # message would be dropped. The `| html` pipe escapes them.
+        # Summary/description come from the rule's annotations and are
+        # identical across grouped alerts, so render them once from the
+        # first alert and add a count if there are more, rather than
+        # repeating the same block per instance.
         message: |-
           {{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname | html }}</b>
           Severity: {{ .CommonLabels.severity | html }}
-          {{ range .Alerts }}
+          {{ with index .Alerts 0 }}
           {{ .Annotations.summary | html }}
           {{ .Annotations.description | html }}
           {{ end }}
+          {{ if gt (len .Alerts) 1 }}({{ len .Alerts }} occurrences){{ end }}

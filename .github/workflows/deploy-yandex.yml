@@ -426,7 +426,7 @@ jobs:
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring/
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            'set -a && . /opt/bugspotter/monitoring/telegram.env && set +a && chmod 600 /opt/bugspotter/monitoring/telegram_token && sed -i "s|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: $TELEGRAM_ALERT_CHAT_ID|" /opt/bugspotter/monitoring/alertmanager.yml && rm -f /opt/bugspotter/monitoring/telegram.env && (cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true)'
+            'set -a && . /opt/bugspotter/monitoring/telegram.env && set +a && chmod 600 /opt/bugspotter/monitoring/telegram_token && am=/opt/bugspotter/monitoring/alertmanager.yml && tmp=$(mktemp) && sed "s|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: $TELEGRAM_ALERT_CHAT_ID|" "$am" > "$tmp" && cat "$tmp" > "$am" && rm -f "$tmp" && rm -f /opt/bugspotter/monitoring/telegram.env && (cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true)'
 
           scp -i ~/.ssh/deploy_key scripts/seed-demo-data.sh scripts/reset-demo-data.sh \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/scripts/
