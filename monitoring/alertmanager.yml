@@ -6,27 +6,38 @@ route:
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
-  receiver: default
+  receiver: telegram
   routes:
     - match:
         severity: critical
-      receiver: default
+      receiver: telegram
       repeat_interval: 1h
 
 receivers:
-  - name: default
-    # To enable Telegram alerts, replace the 'default' receiver above with:
-    #
-    # - name: default
-    #   telegram_configs:
-    #     - bot_token: '<your-bot-token>'
-    #       chat_id: <your-chat-id>
-    #       parse_mode: HTML
-    #       send_resolved: true
-    #       message: |-
-    #         {{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname }}</b>
-    #         Severity: {{ .CommonLabels.severity }}
-    #         {{ range .Alerts }}
-    #         {{ .Annotations.summary }}
-    #         {{ .Annotations.description }}
-    #         {{ end }}
+  # bot_token comes from /etc/alertmanager/telegram_token (mounted file
+  # populated by the deploy workflow from the TELEGRAM_BOT_TOKEN secret).
+  # chat_id is substituted at deploy time from TELEGRAM_ALERT_CHAT_ID
+  # — the marker comment below is matched by sed; do not edit it.
+  # For local dev: replace both with your own values, or skip the
+  # `monitoring` compose profile if you don't need Telegram delivery.
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/telegram_token
+        chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__
+        parse_mode: HTML
+        send_resolved: true
+        # parse_mode is HTML, so any <, >, & in alertname/severity/summary/
+        # description would break Telegram's strict HTML parser and the
+        # message would be dropped. The `| html` pipe escapes them.
+        # Summary/description come from the rule's annotations and are
+        # identical across grouped alerts, so render them once from the
+        # first alert and add a count if there are more, rather than
+        # repeating the same block per instance.
+        # {{ with }} and {{ end }} are kept inline with content so they
+        # don't introduce stray blank lines in the Telegram output.
+        message: |-
+          {{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname | html }}</b>
+          Severity: {{ .CommonLabels.severity | html }}{{ if .Alerts }}{{ with index .Alerts 0 }}
+          {{ .Annotations.summary | html }}
+          {{ .Annotations.description | html }}{{ end }}{{ end }}{{ if gt (len .Alerts) 1 }}
+          ({{ len .Alerts }} occurrences){{ end }}
