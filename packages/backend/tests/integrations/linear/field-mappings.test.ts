@@ -93,7 +93,7 @@ describe('applyFieldMappings', () => {
     expect(input.priority).toBeUndefined();
   });
 
-  it('passes stateId and dueDate through unchanged', () => {
+  it('passes stateId and well-formed dueDate through', () => {
     const input = base();
     applyFieldMappings(input, {
       stateId: 'state-uuid',
@@ -105,5 +105,20 @@ describe('applyFieldMappings', () => {
     expect(input.dueDate).toBe('2026-12-31');
     expect(input.estimate).toBe(5);
     expect(input.projectId).toBe('linear-project-uuid');
+  });
+
+  it('skips malformed dueDate so a stale rule does not fail issueCreate', () => {
+    const cases = ['not-a-date', '2026/12/31', '2026-13-40', ''];
+    for (const v of cases) {
+      const input = base();
+      applyFieldMappings(input, { dueDate: v });
+      expect(input.dueDate, `dueDate "${v}"`).toBeUndefined();
+    }
+  });
+
+  it('dedupes labelIds when defaults and rule-mapping labels overlap', () => {
+    const input: LinearIssueInput = { ...base(), labelIds: ['a', 'b'] };
+    applyFieldMappings(input, { labels: ['b', 'c', 'b'] });
+    expect(input.labelIds).toEqual(['a', 'b', 'c']);
   });
 });

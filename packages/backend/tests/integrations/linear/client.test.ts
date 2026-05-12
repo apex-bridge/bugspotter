@@ -19,6 +19,12 @@ describe('LinearClient constructor', () => {
     // No public accessor; we just verify it doesn't throw with whitespace.
     expect(() => new LinearClient('  lin_api_xxx  ')).not.toThrow();
   });
+
+  it('rejects API keys containing CRLF (header injection guard)', () => {
+    expect(() => new LinearClient('lin_api_xxx\r\nX-Injected: y')).toThrow(/control/i);
+    expect(() => new LinearClient('lin_api_xxx\n')).toThrow(/control/i);
+    expect(() => new LinearClient('lin_api_xxx\0')).toThrow(/control/i);
+  });
 });
 
 describe('parseRetryAfter', () => {

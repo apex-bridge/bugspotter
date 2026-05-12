@@ -405,7 +405,10 @@ export class LinearIntegrationService implements IntegrationService {
       defaultLabels: Array.isArray(raw.defaultLabels)
         ? raw.defaultLabels.filter((l): l is string => typeof l === 'string')
         : undefined,
-      enabled: raw.enabled ?? true,
+      // Strict boolean check — `raw.enabled ?? true` would let a
+      // stringly-typed `"false"` pass through as truthy, silently
+      // re-enabling an integration the caller explicitly disabled.
+      enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
       templateConfig: raw.templateConfig,
     };
   }

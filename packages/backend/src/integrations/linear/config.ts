@@ -107,8 +107,18 @@ export class LinearConfigManager {
    * self-hosted instance can seed a default Linear integration without
    * UI configuration. Optional — most users will configure via the admin
    * panel and ignore this path.
+   *
+   * Refuses to return env config in SaaS mode: env vars are shared
+   * infrastructure-level secrets, and a project without explicit DB
+   * config falling back to them would silently leak credentials across
+   * tenants. In SaaS, every project must configure Linear explicitly or
+   * not at all.
    */
   static fromEnvironment(): LinearConfig | null {
+    if (process.env.DEPLOYMENT_MODE === 'saas') {
+      return null;
+    }
+
     const apiKey = process.env.LINEAR_API_KEY;
     const teamId = process.env.LINEAR_TEAM_ID;
     const teamKey = process.env.LINEAR_TEAM_KEY;
@@ -352,14 +362,12 @@ export class LinearConfigManager {
       const client = new LinearClient(config.apiKey);
       const viewer = await client.viewer();
 
-      // Verify the team is reachable for this key. We don't run a separate
-      // `team(id)` query if `teams` already includes it — Linear's `viewer`
-      // doesn't carry team membership, so a dedicated `teams` call is the
-      // cheapest reliable check.
-      const teams = await client.teams();
-      const teamExists = teams.some((t) => t.id === config.teamId);
+      // Direct `team(id)` lookup instead of paging through `teams` —
+      // orgs with more than one page of teams (~50) would otherwise
+      // see a valid teamId rejected as not found.
+      const team = await client.getTeam(config.teamId);
 
-      if (!teamExists) {
+      if (!team) {
         return {
           valid: false,
           error: `Team "${config.teamKey}" not found or you don't have access`,
@@ -371,9 +379,11 @@ export class LinearConfigManager {
         };
       }
 
+      // `viewer.email` deliberately omitted from log payload — PII
+      // retention in server logs without a real use case. Caller still
+      // gets it in the returned `details` if needed.
       logger.info('Linear configuration validated', {
         teamKey: config.teamKey,
-        viewerEmail: viewer.email,
         organization: viewer.organization?.name,
       });
 

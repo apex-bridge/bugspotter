@@ -17,7 +17,16 @@ vi.mock('../../../src/integrations/linear/client.js', () => ({
       email: 'viewer@example.com',
       organization: { id: 'org-1', name: 'Test Org', urlKey: 'test' },
     }),
-    teams: vi.fn().mockResolvedValue([{ id: 'team-uuid', key: 'ENG', name: 'Engineering' }]),
+    // `getTeam` returns the team only for the canonical id used in tests;
+    // anything else resolves to null (matches Linear's behaviour for
+    // unknown / inaccessible team ids).
+    getTeam: vi
+      .fn()
+      .mockImplementation((teamId: string) =>
+        Promise.resolve(
+          teamId === 'team-uuid' ? { id: 'team-uuid', key: 'ENG', name: 'Engineering' } : null
+        )
+      ),
   })),
 }));
 

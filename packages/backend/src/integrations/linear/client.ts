@@ -19,6 +19,7 @@ import { pinHostnameToIp } from '../security/hardened-http.js';
 import {
   LINEAR_API_HOST,
   LINEAR_API_URL,
+  LINEAR_WEB_HOST,
   type LinearIssueInput,
   type LinearIssue,
   type LinearTeam,
@@ -50,6 +51,12 @@ const PROJECTS_PAGE_SIZE = 50;
  */
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 500;
+/**
+ * Upper bound on a single retry sleep. A pathological `Retry-After` from
+ * the server (minutes, hours) would otherwise pin the worker indefinitely
+ * — we'd rather give up and let the outbox retry policy take over.
+ */
+const MAX_RETRY_DELAY_MS = 30_000;
 
 interface GraphQLResponse<T> {
   data?: T;
@@ -89,6 +96,13 @@ export class LinearClient {
     if (!apiKey || apiKey.trim().length === 0) {
       throw new Error('Linear API key is required');
     }
+    // Reject CRLF / NUL on the raw value, not on the trimmed one — node
+    // may also reject these at request time, but catching them at
+    // construction time gives a clearer error and rules out any chance
+    // of header injection via the Authorization line.
+    if (/[\r\n\0]/.test(apiKey)) {
+      throw new Error('Linear API key contains illegal control characters');
+    }
     this.apiKey = apiKey.trim();
   }
 
@@ -106,16 +120,10 @@ export class LinearClient {
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const { data, statusCode } = await this.executeRequest<T>(query, variables);
-
-        // Successful response with parsed data — return.
-        if (data) {
-          return data;
-        }
-
-        // Defensive: executeRequest should have thrown if no data and no
-        // recoverable status. If we land here, treat as terminal.
-        throw new Error(`Linear API returned no data (status ${statusCode})`);
+        // executeRequest throws if `parsed.data` is undefined, so a
+        // returned value always carries usable data — no extra guard.
+        const { data } = await this.executeRequest<T>(query, variables);
+        return data;
       } catch (error) {
         lastError = error as Error;
         const retryAfter = (error as Error & { retryAfterMs?: number }).retryAfterMs;
@@ -125,11 +133,16 @@ export class LinearClient {
           throw error;
         }
 
-        const delay = retryAfter ?? RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        // Cap server-supplied delay so a hostile/buggy Retry-After can't
+        // stall the worker. The outbox layer will retry later on its own
+        // schedule if we give up here.
+        const requested = retryAfter ?? RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        const delay = Math.min(requested, MAX_RETRY_DELAY_MS);
         logger.warn('Linear API transient error, retrying', {
           attempt: attempt + 1,
           maxRetries: MAX_RETRIES,
           delayMs: delay,
+          requestedDelayMs: requested,
           error: (error as Error).message,
         });
         await sleep(delay);
@@ -304,6 +317,22 @@ export class LinearClient {
   }
 
   /**
+   * Fetch a single team by id. Returns `null` when the team isn't visible
+   * to this API key (Linear returns `team: null` for non-existent or
+   * inaccessible ids — no separate 404).
+   *
+   * Used by `LinearConfigManager.validate` instead of `teams()` so the
+   * check doesn't break for orgs with more than one page (~50) of teams.
+   */
+  async getTeam(teamId: string): Promise<LinearTeam | null> {
+    const gql = `query GetTeam($teamId: String!) {
+      team(id: $teamId) { id key name }
+    }`;
+    const result = await this.graphql<{ team: LinearTeam | null }>(gql, { teamId });
+    return result.team;
+  }
+
+  /**
    * List Linear Projects within a team. Used for the optional second-step
    * picker in the wizard (Team → Project → save).
    */
@@ -445,6 +474,20 @@ export class LinearClient {
     body: Buffer | NodeJS.ReadableStream,
     contentType: string
   ): Promise<void> {
+    // The presigned URL comes from a successful `fileUpload` response, so
+    // it's already trusted in principle — but a misconfigured Linear
+    // response or an MITM during an incident could downgrade us. Reject
+    // anything that isn't HTTPS at the call site.
+    let parsedUploadUrl: URL;
+    try {
+      parsedUploadUrl = new URL(upload.uploadUrl);
+    } catch {
+      throw new Error('Linear asset uploadUrl is not a valid URL');
+    }
+    if (parsedUploadUrl.protocol !== 'https:') {
+      throw new Error(`Linear asset uploadUrl must use https, got ${parsedUploadUrl.protocol}`);
+    }
+
     const headers: Record<string, string> = { 'Content-Type': contentType };
     for (const { key, value } of upload.headers) {
       headers[key] = value;
@@ -455,17 +498,22 @@ export class LinearClient {
     // Cast: the global `RequestInit['body']` type doesn't include Node
     // streams in lib.dom.d.ts, but undici (Node's fetch implementation)
     // accepts them at runtime.
+    //
+    // Timeout: this is the only outbound fetch that doesn't go through
+    // `httpsRequest` (which has `req.setTimeout`). A stalled presigned
+    // PUT would otherwise hang issue creation indefinitely.
     const init: RequestInit & { duplex?: 'half' } = {
       method: 'PUT',
       headers,
       body: body as unknown as RequestInit['body'],
       redirect: 'error',
+      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     };
     if (!Buffer.isBuffer(body)) {
       init.duplex = 'half';
     }
 
-    const response = await fetch(upload.uploadUrl, init);
+    const response = await fetch(parsedUploadUrl, init);
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(`Linear asset upload failed: HTTP ${response.status} ${text.slice(0, 200)}`);
@@ -499,7 +547,7 @@ export class LinearClient {
    * Used only as a safety net — `issueCreate` already gives us `url`.
    */
   static getIssueUrl(orgUrlKey: string, identifier: string): string {
-    return `${'https://linear.app'}/${orgUrlKey}/issue/${identifier}`;
+    return `${LINEAR_WEB_HOST}/${orgUrlKey}/issue/${identifier}`;
   }
 }
 
