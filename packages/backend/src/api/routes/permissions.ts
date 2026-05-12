@@ -7,9 +7,14 @@
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseClient } from '../../db/client.js';
 import type { ProjectRole } from '../../types/project-roles.js';
-import { isProjectRole, hasPermissionLevel } from '../../types/project-roles.js';
+import {
+  isProjectRole,
+  hasPermissionLevel,
+  pickHigherProjectRole,
+} from '../../types/project-roles.js';
 import { requireUser, isPlatformAdmin } from '../middleware/auth.js';
 import { sendSuccess } from '../utils/response.js';
+import { lookupInheritedProjectRole } from '../utils/resource.js';
 import { ROLE_LEVEL, ORG_MEMBER_ROLE } from '../../db/types.js';
 import type { OrgMemberRole } from '../../db/types.js';
 
@@ -121,11 +126,24 @@ export function permissionRoutes(fastify: FastifyInstance, db: DatabaseClient) {
           // System admins get full project permissions without membership
           result.project = computeProjectPermissions('owner', true);
         } else {
-          const role = await db.projects.getUserRole(projectId, user.id);
-          if (role && isProjectRole(role)) {
-            result.project = computeProjectPermissions(role, false);
+          // Effective project role = max(explicit project_members row,
+          // role inherited from org membership via ORG_TO_PROJECT_ROLE).
+          // This matches what `requireProjectAccess` enforces at the
+          // route level: an org-owner who isn't an explicit project
+          // member still has `admin`-equivalent access on every project
+          // in their org. Returning only the explicit role here caused
+          // the UI to render disabled buttons for actions the API would
+          // have actually allowed.
+          const [explicitRole, inheritedRole] = await Promise.all([
+            db.projects.getUserRole(projectId, user.id),
+            lookupInheritedProjectRole(projectId, user.id, db),
+          ]);
+          const explicit = isProjectRole(explicitRole) ? explicitRole : null;
+          const effectiveRole = pickHigherProjectRole(explicit, inheritedRole);
+          if (effectiveRole) {
+            result.project = computeProjectPermissions(effectiveRole, false);
           }
-          // If no role, project field is omitted (user has no access)
+          // If neither role resolves, project field is omitted (user has no access)
         }
       }
 

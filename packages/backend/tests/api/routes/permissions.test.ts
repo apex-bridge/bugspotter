@@ -15,17 +15,40 @@ vi.mock('../../../src/api/middleware/auth.js', () => ({
 }));
 
 // Mock project-roles
-vi.mock('../../../src/types/project-roles.js', () => ({
-  isProjectRole: vi.fn((role: string) => ['owner', 'admin', 'member', 'viewer'].includes(role)),
-  hasPermissionLevel: vi.fn((userRole: string, requiredRole: string) => {
-    const hierarchy: Record<string, number> = {
-      owner: 4,
-      admin: 3,
-      member: 2,
-      viewer: 1,
-    };
-    return (hierarchy[userRole] || 0) >= (hierarchy[requiredRole] || 0);
-  }),
+vi.mock('../../../src/types/project-roles.js', () => {
+  const hierarchy: Record<string, number> = {
+    owner: 4,
+    admin: 3,
+    member: 2,
+    viewer: 1,
+  };
+  return {
+    isProjectRole: vi.fn((role: string) => ['owner', 'admin', 'member', 'viewer'].includes(role)),
+    hasPermissionLevel: vi.fn((userRole: string, requiredRole: string) => {
+      return (hierarchy[userRole] || 0) >= (hierarchy[requiredRole] || 0);
+    }),
+    pickHigherProjectRole: vi.fn(
+      (explicit: string | null | undefined, inherited: string | null | undefined) => {
+        if (!explicit && !inherited) {
+          return null;
+        }
+        if (!explicit) {
+          return inherited;
+        }
+        if (!inherited) {
+          return explicit;
+        }
+        return (hierarchy[explicit] || 0) >= (hierarchy[inherited] || 0) ? explicit : inherited;
+      }
+    ),
+  };
+});
+
+// Mock the inherited-role helper so the permissions route can be tested
+// in isolation without standing up the org-membership lookup chain.
+// Default returns null (no inheritance); individual tests override per-case.
+vi.mock('../../../src/api/utils/resource.js', () => ({
+  lookupInheritedProjectRole: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock db types
@@ -36,6 +59,7 @@ vi.mock('../../../src/db/types.js', () => ({
 
 // Import after mocks
 import { permissionRoutes } from '../../../src/api/routes/permissions.js';
+import { lookupInheritedProjectRole } from '../../../src/api/utils/resource.js';
 import type { FastifyInstance } from 'fastify';
 
 // ============================================================================
@@ -83,6 +107,12 @@ describe('GET /api/v1/me/permissions', () => {
     fastify = createMockFastify();
     permissionRoutes(fastify as any, db);
     handler = fastify._getHandler('/api/v1/me/permissions');
+    // Reset the inherited-role mock between tests — default behaviour
+    // is "no inheritance" (null), matching the pre-existing test
+    // assumptions. Tests that exercise the org-inheritance path
+    // override per-case via mockResolvedValueOnce.
+    vi.mocked(lookupInheritedProjectRole).mockReset();
+    vi.mocked(lookupInheritedProjectRole).mockResolvedValue(null);
   });
 
   // ============================================================================
@@ -392,8 +422,12 @@ describe('GET /api/v1/me/permissions', () => {
   // ============================================================================
 
   describe('combined project and org queries', () => {
-    it('should return both project and org permissions when both IDs provided', async () => {
-      db.projects.getUserRole.mockResolvedValue('member');
+    it('returns both project and org permissions when both IDs provided (explicit-only project role)', async () => {
+      db.projects.getUserRole.mockResolvedValue('admin');
+      // Pretend the user is NOT an org member here, so the inheritance
+      // path doesn't kick in and project.role reflects only the explicit
+      // project_members row.
+      vi.mocked(lookupInheritedProjectRole).mockResolvedValue(null);
       db.organizationMembers.checkOrganizationAccess.mockResolvedValue({
         organization: { id: 'org-1' },
         membership: { role: 'owner', user_id: 'user-1', organization_id: 'org-1' },
@@ -411,8 +445,119 @@ describe('GET /api/v1/me/permissions', () => {
       expect(responseData.system).toBeDefined();
       expect(responseData.project).toBeDefined();
       expect(responseData.organization).toBeDefined();
-      expect(responseData.project.role).toBe('member');
+      expect(responseData.project.role).toBe('admin');
       expect(responseData.organization.role).toBe('owner');
+    });
+  });
+
+  // ============================================================================
+  // EFFECTIVE PROJECT ROLE (org → project inheritance)
+  // ============================================================================
+  //
+  // The route enforcement layer (`requireProjectAccess` →
+  // `pickHigherProjectRole`) has always granted org-owners admin-equivalent
+  // access on projects in their org. Until this fix, the permissions
+  // endpoint returned only the explicit project_members role, so the UI
+  // rendered disabled buttons for actions the API would actually allow.
+  // These tests pin the corrected behaviour: project.role reflects the
+  // effective role (max of explicit + org-inherited), matching what
+  // enforcement would honour.
+  describe('effective project role (org-inheritance)', () => {
+    it('org-owner with no explicit project membership gets admin-equivalent perms', async () => {
+      db.projects.getUserRole.mockResolvedValue(null);
+      // ORG_TO_PROJECT_ROLE['owner'] === 'admin'
+      vi.mocked(lookupInheritedProjectRole).mockResolvedValue('admin');
+
+      const request = {
+        authUser: { id: 'user-1', role: 'user' },
+        query: { projectId: 'project-1' },
+      };
+      const reply = createMockReply();
+
+      await handler(request, reply);
+
+      const responseData = reply.send.mock.calls[0][0].data;
+      expect(responseData.project).toBeDefined();
+      expect(responseData.project.role).toBe('admin');
+      expect(responseData.project.canManageIntegrations).toBe(true);
+      expect(responseData.project.canEditProject).toBe(true);
+      expect(responseData.project.canManageMembers).toBe(true);
+      // Org-owner inherits to project-admin, not project-owner — so
+      // canDeleteProject (which requires explicit 'owner') stays false.
+      expect(responseData.project.canDeleteProject).toBe(false);
+    });
+
+    it('org-owner with explicit viewer membership still gets admin (inherited wins)', async () => {
+      // This is the exact scenario behind the original bug report:
+      // demo-login@bugspotter.io has org.role='owner' AND
+      // project.role='viewer', and previously the API said
+      // canManageIntegrations=false (UI disabled Add Integration).
+      db.projects.getUserRole.mockResolvedValue('viewer');
+      vi.mocked(lookupInheritedProjectRole).mockResolvedValue('admin');
+
+      const request = {
+        authUser: { id: 'user-1', role: 'user' },
+        query: { projectId: 'project-1' },
+      };
+      const reply = createMockReply();
+
+      await handler(request, reply);
+
+      const responseData = reply.send.mock.calls[0][0].data;
+      expect(responseData.project.role).toBe('admin');
+      expect(responseData.project.canManageIntegrations).toBe(true);
+    });
+
+    it('explicit owner beats inherited admin (explicit wins when higher)', async () => {
+      // The opposite case — a project owner who is also a regular org
+      // member shouldn't be downgraded by the inheritance path.
+      db.projects.getUserRole.mockResolvedValue('owner');
+      vi.mocked(lookupInheritedProjectRole).mockResolvedValue('viewer');
+
+      const request = {
+        authUser: { id: 'user-1', role: 'user' },
+        query: { projectId: 'project-1' },
+      };
+      const reply = createMockReply();
+
+      await handler(request, reply);
+
+      const responseData = reply.send.mock.calls[0][0].data;
+      expect(responseData.project.role).toBe('owner');
+      expect(responseData.project.canDeleteProject).toBe(true);
+    });
+
+    it('no explicit + no inherited role → project field omitted', async () => {
+      db.projects.getUserRole.mockResolvedValue(null);
+      vi.mocked(lookupInheritedProjectRole).mockResolvedValue(null);
+
+      const request = {
+        authUser: { id: 'user-1', role: 'user' },
+        query: { projectId: 'project-1' },
+      };
+      const reply = createMockReply();
+
+      await handler(request, reply);
+
+      const responseData = reply.send.mock.calls[0][0].data;
+      expect(responseData.project).toBeUndefined();
+    });
+
+    it('system admin path skips both lookups (regression guard)', async () => {
+      // The system-admin branch returns synthetic 'owner' permissions
+      // without hitting the DB. It must NOT call either lookup —
+      // otherwise platform-admin requests would do unnecessary work
+      // and surface confusing race conditions on missing-org projects.
+      const request = {
+        authUser: { id: 'admin-1', role: 'admin' },
+        query: { projectId: 'project-1' },
+      };
+      const reply = createMockReply();
+
+      await handler(request, reply);
+
+      expect(db.projects.getUserRole).not.toHaveBeenCalled();
+      expect(vi.mocked(lookupInheritedProjectRole)).not.toHaveBeenCalled();
     });
   });
 });
