@@ -417,6 +417,12 @@ jobs:
           # deploy host. Alertmanager reads bot_token via bot_token_file;
           # chat_id must be inline so we sed it in. SIGHUP hot-reloads if
           # alertmanager is already running.
+          # Validate both secrets are non-empty at the workflow level so an
+          # unset / accidentally-cleared secret fails the deploy immediately
+          # rather than shipping an empty bot_token (silent auth failure) or
+          # empty chat_id (caught downstream, but better to fail earlier).
+          [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] || { echo 'ERROR: TELEGRAM_BOT_TOKEN secret is empty/unset' >&2; exit 1; }
+          [ -n "${{ secrets.TELEGRAM_ALERT_CHAT_ID }}" ] || { echo 'ERROR: TELEGRAM_ALERT_CHAT_ID secret is empty/unset' >&2; exit 1; }
           tmpdir=$(mktemp -d)
           trap 'rm -rf "$tmpdir"' EXIT
           printf '%s\n' "${{ secrets.TELEGRAM_BOT_TOKEN }}" > "$tmpdir/telegram_token"
@@ -445,7 +451,11 @@ jobs:
           # Install bot token: sudo tee writes as root (so it can replace a
           # file currently owned by 65534), preserving inode; chown then
           # hands ownership to alertmanager's uid so it can actually read.
-          sudo tee /opt/bugspotter/monitoring/telegram_token < /tmp/telegram_token > /dev/null
+          # `umask 077` inside the sudo subshell ensures a newly-created file
+          # lands at mode 600 directly — without it, there's a brief world-
+          # readable window between tee creating the file at root's default
+          # umask (mode 644) and the subsequent chmod 600.
+          sudo sh -c 'umask 077 && tee /opt/bugspotter/monitoring/telegram_token > /dev/null' < /tmp/telegram_token
           sudo chmod 600 /opt/bugspotter/monitoring/telegram_token
           sudo chown 65534:65534 /opt/bugspotter/monitoring/telegram_token
 
