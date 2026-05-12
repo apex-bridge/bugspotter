@@ -126,9 +126,10 @@ services:
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       # bot_token is read from this file; populated by the deploy workflow
-      # from TELEGRAM_BOT_TOKEN. Local dev: create the file with your own
-      # token, or leave it absent and Telegram delivery silently fails
-      # (alertmanager itself still starts).
+      # from TELEGRAM_BOT_TOKEN. The file MUST exist (even if empty) before
+      # the monitoring profile starts — Docker creates a directory at the
+      # bind-mount source path otherwise, and alertmanager fails with "is a
+      # directory". `touch monitoring/telegram_token` is enough for local dev.
       - ./monitoring/telegram_token:/etc/alertmanager/telegram_token:ro
       - alertmanager_data:/alertmanager
     networks:

@@ -410,18 +410,23 @@ jobs:
           scp -r -i ~/.ssh/deploy_key monitoring/. \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring
 
-          # Telegram alert delivery: write bot token to a mounted file
-          # (read by Alertmanager via bot_token_file) and substitute the
-          # chat_id placeholder in alertmanager.yml (must be inline int).
-          # SIGHUP triggers Alertmanager hot-reload if it's already running.
-          echo "${{ secrets.TELEGRAM_BOT_TOKEN }}" > /tmp/telegram_token
-          chmod 600 /tmp/telegram_token
-          scp -i ~/.ssh/deploy_key /tmp/telegram_token \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring/telegram_token
-          rm -f /tmp/telegram_token
+          # Telegram alert delivery: stage both secrets in a private temp
+          # dir (mode 700), scp them to prod, and have the remote shell read
+          # chat_id from the env file. Keeping the secret out of the ssh
+          # command line avoids exposure in `ps`/`/proc/*/cmdline` on the
+          # deploy host. Alertmanager reads bot_token via bot_token_file;
+          # chat_id must be inline so we sed it in. SIGHUP hot-reloads if
+          # alertmanager is already running.
+          tmpdir=$(mktemp -d)
+          trap 'rm -rf "$tmpdir"' EXIT
+          printf '%s\n' "${{ secrets.TELEGRAM_BOT_TOKEN }}" > "$tmpdir/telegram_token"
+          printf 'TELEGRAM_ALERT_CHAT_ID=%s\n' "${{ secrets.TELEGRAM_ALERT_CHAT_ID }}" > "$tmpdir/telegram.env"
+          chmod 600 "$tmpdir/telegram_token" "$tmpdir/telegram.env"
+          scp -i ~/.ssh/deploy_key "$tmpdir/telegram_token" "$tmpdir/telegram.env" \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring/
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            "chmod 600 /opt/bugspotter/monitoring/telegram_token && sed -i 's|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}|' /opt/bugspotter/monitoring/alertmanager.yml && (cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true)"
+            'set -a && . /opt/bugspotter/monitoring/telegram.env && set +a && chmod 600 /opt/bugspotter/monitoring/telegram_token && sed -i "s|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: $TELEGRAM_ALERT_CHAT_ID|" /opt/bugspotter/monitoring/alertmanager.yml && rm -f /opt/bugspotter/monitoring/telegram.env && (cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true)'
 
           scp -i ~/.ssh/deploy_key scripts/seed-demo-data.sh scripts/reset-demo-data.sh \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/scripts/

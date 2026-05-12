@@ -26,10 +26,13 @@ receivers:
         chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__
         parse_mode: HTML
         send_resolved: true
+        # parse_mode is HTML, so any <, >, & in alertname/severity/summary/
+        # description would break Telegram's strict HTML parser and the
+        # message would be dropped. The `| html` pipe escapes them.
         message: |-
-          {{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname }}</b>
-          Severity: {{ .CommonLabels.severity }}
+          {{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname | html }}</b>
+          Severity: {{ .CommonLabels.severity | html }}
           {{ range .Alerts }}
-          {{ .Annotations.summary }}
-          {{ .Annotations.description }}
+          {{ .Annotations.summary | html }}
+          {{ .Annotations.description | html }}
           {{ end }}
