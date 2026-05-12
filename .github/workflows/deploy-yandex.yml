@@ -409,6 +409,20 @@ jobs:
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker-compose.monitoring.yml
           scp -r -i ~/.ssh/deploy_key monitoring/. \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring
+
+          # Telegram alert delivery: write bot token to a mounted file
+          # (read by Alertmanager via bot_token_file) and substitute the
+          # chat_id placeholder in alertmanager.yml (must be inline int).
+          # SIGHUP triggers Alertmanager hot-reload if it's already running.
+          echo "${{ secrets.TELEGRAM_BOT_TOKEN }}" > /tmp/telegram_token
+          chmod 600 /tmp/telegram_token
+          scp -i ~/.ssh/deploy_key /tmp/telegram_token \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring/telegram_token
+          rm -f /tmp/telegram_token
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "chmod 600 /opt/bugspotter/monitoring/telegram_token && sed -i 's|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}|' /opt/bugspotter/monitoring/alertmanager.yml && (cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true)"
+
           scp -i ~/.ssh/deploy_key scripts/seed-demo-data.sh scripts/reset-demo-data.sh \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/scripts/
 
