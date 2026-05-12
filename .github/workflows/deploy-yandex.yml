@@ -422,11 +422,33 @@ jobs:
           printf '%s\n' "${{ secrets.TELEGRAM_BOT_TOKEN }}" > "$tmpdir/telegram_token"
           printf 'TELEGRAM_ALERT_CHAT_ID=%s\n' "${{ secrets.TELEGRAM_ALERT_CHAT_ID }}" > "$tmpdir/telegram.env"
           chmod 600 "$tmpdir/telegram_token" "$tmpdir/telegram.env"
-          scp -i ~/.ssh/deploy_key "$tmpdir/telegram_token" "$tmpdir/telegram.env" \
+          # -p preserves the local 600 mode on the remote, so there's no
+          # world-readable window between scp landing and remote chmod.
+          scp -p -i ~/.ssh/deploy_key "$tmpdir/telegram_token" "$tmpdir/telegram.env" \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring/
+          # Remote script via stdin heredoc: validates the chat_id is set
+          # and that the marker actually got replaced (otherwise alertmanager
+          # would silently keep sending to chat_id 0 or hold invalid YAML).
+          # Inode-preserving rewrite of alertmanager.yml so the running
+          # container's bind-mount stays attached to the same file.
           ssh -i ~/.ssh/deploy_key \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            'set -a && . /opt/bugspotter/monitoring/telegram.env && set +a && chmod 600 /opt/bugspotter/monitoring/telegram_token && am=/opt/bugspotter/monitoring/alertmanager.yml && tmp=$(mktemp) && sed "s|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: $TELEGRAM_ALERT_CHAT_ID|" "$am" > "$tmp" && cat "$tmp" > "$am" && rm -f "$tmp" && rm -f /opt/bugspotter/monitoring/telegram.env && (cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true)'
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} bash -s <<'REMOTE_EOF'
+          set -euo pipefail
+          set -a; . /opt/bugspotter/monitoring/telegram.env; set +a
+          : "${TELEGRAM_ALERT_CHAT_ID:?TELEGRAM_ALERT_CHAT_ID empty in telegram.env}"
+          chmod 600 /opt/bugspotter/monitoring/telegram_token
+          am=/opt/bugspotter/monitoring/alertmanager.yml
+          tmp=$(mktemp)
+          sed "s|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: ${TELEGRAM_ALERT_CHAT_ID}|" "$am" > "$tmp"
+          if grep -q '__DEPLOY_SUBSTITUTES_CHAT_ID__' "$tmp"; then
+            echo 'ERROR: chat_id placeholder not replaced — marker drifted in alertmanager.yml' >&2
+            rm -f "$tmp"
+            exit 1
+          fi
+          cat "$tmp" > "$am"
+          rm -f "$tmp" /opt/bugspotter/monitoring/telegram.env
+          cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true
+          REMOTE_EOF
 
           scp -i ~/.ssh/deploy_key scripts/seed-demo-data.sh scripts/reset-demo-data.sh \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/scripts/

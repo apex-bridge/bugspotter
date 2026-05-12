@@ -33,11 +33,11 @@ receivers:
         # identical across grouped alerts, so render them once from the
         # first alert and add a count if there are more, rather than
         # repeating the same block per instance.
+        # {{ with }} and {{ end }} are kept inline with content so they
+        # don't introduce stray blank lines in the Telegram output.
         message: |-
           {{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname | html }}</b>
-          Severity: {{ .CommonLabels.severity | html }}
-          {{ with index .Alerts 0 }}
+          Severity: {{ .CommonLabels.severity | html }}{{ with index .Alerts 0 }}
           {{ .Annotations.summary | html }}
-          {{ .Annotations.description | html }}
-          {{ end }}
-          {{ if gt (len .Alerts) 1 }}({{ len .Alerts }} occurrences){{ end }}
+          {{ .Annotations.description | html }}{{ end }}{{ if gt (len .Alerts) 1 }}
+          ({{ len .Alerts }} occurrences){{ end }}
