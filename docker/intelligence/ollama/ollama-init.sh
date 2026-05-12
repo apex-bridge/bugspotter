@@ -36,7 +36,7 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
 fi
 
 # Pull the model if not already present
-MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
+MODEL="${OLLAMA_MODEL:-llama3.2:3b}"
 echo "Checking if model $MODEL exists..."
 
 if ! ollama show "$MODEL" > /dev/null 2>&1; then
