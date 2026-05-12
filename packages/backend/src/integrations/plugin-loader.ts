@@ -5,6 +5,7 @@
 
 import type { PluginRegistry } from './plugin-registry.js';
 import { jiraPlugin } from './jira/plugin.js';
+import { linearPlugin } from './linear/plugin.js';
 import { getLogger } from '../logger.js';
 
 const logger = getLogger();
@@ -16,6 +17,7 @@ const logger = getLogger();
 export async function loadIntegrationPlugins(registry: PluginRegistry): Promise<void> {
   const plugins = [
     jiraPlugin,
+    linearPlugin,
     // Add more plugins here as they are implemented
   ];
 

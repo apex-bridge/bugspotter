@@ -60,6 +60,12 @@ export default defineConfig({
       'tests/integrations/jira/service-list-projects.test.ts',
       'tests/integrations/jira/template-renderer.test.ts',
       'tests/integrations/jira/formatters/base-formatter.test.ts',
+      // Linear plugin tests (pure unit, no database, no real HTTP)
+      'tests/integrations/linear/plugin.test.ts',
+      'tests/integrations/linear/mapper.test.ts',
+      'tests/integrations/linear/client.test.ts',
+      'tests/integrations/linear/field-mappings.test.ts',
+      'tests/integrations/linear/config.test.ts',
       // Intelligence tests (pure unit, mocked dependencies)
       'tests/api/utils/mitigation-trigger.test.ts',
       'tests/api/utils/resolution-sync-trigger.test.ts',
