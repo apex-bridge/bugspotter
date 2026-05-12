@@ -25,6 +25,7 @@ import {
 import projectIntegrationService from '../services/project-integration-service';
 import { useProjectPermissions } from '../hooks/use-project-permissions';
 import { handleApiError } from '../lib/api-client';
+import { LinearProjectFields } from '../integrations/linear';
 
 interface TemplateConfig {
   includeConsoleLogs?: boolean;
@@ -256,6 +257,28 @@ export default function ProjectIntegrationConfigPage() {
             aria-live="polite"
           ></div>
         </div>
+      ) : platform === 'linear' ? (
+        // TODO(platform-configurator): When a 3rd plugin lands or this
+        // page is meaningfully edited, replace this branch with a
+        // registry lookup `getConfigurator(platform).ProjectFields`.
+        // The Linear module already exports a component matching the
+        // future shape. See auto-memory note
+        // `project_admin_ui_platform_configurator`.
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('integrationConfig.configuration')}</CardTitle>
+            <CardDescription>{t('linearConfig.configDescription')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <LinearProjectFields
+              config={config}
+              credentials={credentials}
+              savedCredentialHints={savedCredentialHints}
+              onConfigChange={updateConfig}
+              onCredentialChange={updateCredentials}
+            />
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid gap-6 md:grid-cols-2">
           {/* Configuration Section */}

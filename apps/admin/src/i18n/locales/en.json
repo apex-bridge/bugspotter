@@ -572,6 +572,26 @@
       "templateVariablesMetadata": "Custom: {{metadata.field_name}} (supports 2 levels of nesting)"
     }
   },
+  "linearConfig": {
+    "configDescription": "Linear API key and team selection. Credentials are encrypted before storage.",
+    "apiKey": "Linear API Key",
+    "apiKeyPlaceholder": "lin_api_xxxxxxxxxxxxxxxxxxxx",
+    "apiKeyHelp": "Personal API key from Linear → Settings → API. Keep it secret.",
+    "team": "Team",
+    "teamKey": "Team Key",
+    "teamKeyPlaceholder": "ENG",
+    "teamKeyHelp": "Short identifier shown in issue URLs (e.g. \"ENG\" in ENG-123).",
+    "teamId": "Team ID",
+    "teamIdPlaceholder": "a1b2c3d4-...",
+    "teamIdHelp": "Linear UUID for the team. Use the team picker to fill both fields automatically.",
+    "searchTeamsPlaceholder": "Type to filter by key or name…",
+    "loadingTeams": "Loading teams…",
+    "noTeamsFound": "No teams found. Verify your API key.",
+    "selectTeam": "Select a team",
+    "selectedTeam": "Selected team",
+    "teamPickerAwaitingApiKey": "Enter your Linear API key above to load teams.",
+    "failedToLoadTeams": "Failed to load Linear teams"
+  },
   "integrationRules": {
     "title": "Integration Rules",
     "missingPlatformOrProjectId": "Missing platform or project ID",

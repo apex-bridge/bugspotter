@@ -7,6 +7,7 @@ import { ProjectStep } from '../../components/integrations/project-step';
 import { SyncRulesStep } from '../../components/integrations/sync-rules-step';
 import { FieldMapperFactory } from '../../components/integrations/field-mappers';
 import { CustomPluginConfigStep } from '../../components/integrations/custom-plugin-config-step';
+import { LinearWizard } from '../../integrations/linear';
 
 /**
  * Universal integration configuration page
@@ -91,6 +92,27 @@ const IntegrationConfigPage: React.FC = () => {
           localConfig={localConfig}
           setLocalConfig={setLocalConfig}
           onBack={() => navigate('/integrations')}
+          onSave={save}
+        />
+      </div>
+    );
+  }
+
+  // TODO(platform-configurator): When a 3rd built-in plugin lands or
+  // this page is meaningfully edited, replace this baseType branch with
+  // a registry lookup `getConfigurator(baseType).Wizard`. The Linear
+  // module already exports a wizard that matches the future shape.
+  // See auto-memory note `project_admin_ui_platform_configurator`.
+  if (baseType === 'linear') {
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <h1 className="text-2xl font-semibold mb-4">
+          {t('integrationConfig.configureIntegration', { name: integrationName })}
+        </h1>
+        <LinearWizard
+          localConfig={localConfig}
+          setLocalConfig={setLocalConfig}
+          onTestConnection={() => testConnection(baseType, { silent: true })}
           onSave={save}
         />
       </div>
