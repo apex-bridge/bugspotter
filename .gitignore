@@ -62,6 +62,11 @@ sa-key*.json
 # Generated files
 packages/sdk/src/version.ts
 
+# Alertmanager Telegram bot token — written by deploy workflow from
+# TELEGRAM_BOT_TOKEN secret; never commit. Local dev: create this file
+# manually with your own bot token if you want Telegram delivery.
+monitoring/telegram_token
+
 # Claude AI settings
 .claude/settings.local.json
 

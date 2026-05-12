@@ -409,6 +409,75 @@ jobs:
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker-compose.monitoring.yml
           scp -r -i ~/.ssh/deploy_key monitoring/. \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring
+
+          # Telegram alert delivery: stage both secrets in a private temp
+          # dir (mode 700), scp them to prod, and have the remote shell read
+          # chat_id from the env file. Keeping the secret out of the ssh
+          # command line avoids exposure in `ps`/`/proc/*/cmdline` on the
+          # deploy host. Alertmanager reads bot_token via bot_token_file;
+          # chat_id must be inline so we sed it in. SIGHUP hot-reloads if
+          # alertmanager is already running.
+          # Validate both secrets are non-empty at the workflow level so an
+          # unset / accidentally-cleared secret fails the deploy immediately
+          # rather than shipping an empty bot_token (silent auth failure) or
+          # empty chat_id (caught downstream, but better to fail earlier).
+          [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] || { echo 'ERROR: TELEGRAM_BOT_TOKEN secret is empty/unset' >&2; exit 1; }
+          [ -n "${{ secrets.TELEGRAM_ALERT_CHAT_ID }}" ] || { echo 'ERROR: TELEGRAM_ALERT_CHAT_ID secret is empty/unset' >&2; exit 1; }
+          tmpdir=$(mktemp -d)
+          trap 'rm -rf "$tmpdir"' EXIT
+          printf '%s\n' "${{ secrets.TELEGRAM_BOT_TOKEN }}" > "$tmpdir/telegram_token"
+          printf 'TELEGRAM_ALERT_CHAT_ID=%s\n' "${{ secrets.TELEGRAM_ALERT_CHAT_ID }}" > "$tmpdir/telegram.env"
+          chmod 600 "$tmpdir/telegram_token" "$tmpdir/telegram.env"
+          # Stage secrets in /tmp (always writable by the deploy user) so
+          # subsequent deploys aren't blocked by the final on-disk telegram_token
+          # being owned by uid 65534 (alertmanager's `nobody`). -p preserves
+          # the local 600 mode on the wire so /tmp file isn't world-readable.
+          scp -p -i ~/.ssh/deploy_key "$tmpdir/telegram_token" "$tmpdir/telegram.env" \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/
+          # Remote script via stdin heredoc:
+          #   - validate chat_id is set
+          #   - sudo tee bot token to final path (preserves inode for the
+          #     running container's bind mount) + chown to 65534:65534 so
+          #     alertmanager (running as `nobody`) can actually read it
+          #   - inode-preserving rewrite of alertmanager.yml with marker-drift
+          #     guard so a missing/empty chat_id or drifted marker fails the
+          #     deploy instead of silently shipping invalid YAML or chat_id 0
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} bash -s <<'REMOTE_EOF'
+          set -euo pipefail
+          # Install cleanup before anything that can `set -e` out (env-file
+          # source, chat_id validation, sudo/sed failure, marker-drift exit).
+          # Otherwise an early exit would leave the plaintext bot token sitting
+          # in /tmp/telegram_token (mode 600 owned by the deploy user) until
+          # the next successful deploy or a reboot.
+          trap 'rm -f /tmp/telegram_token /tmp/telegram.env' EXIT
+          set -a; . /tmp/telegram.env; set +a
+          : "${TELEGRAM_ALERT_CHAT_ID:?TELEGRAM_ALERT_CHAT_ID empty in telegram.env}"
+
+          # Install bot token: sudo tee writes as root (so it can replace a
+          # file currently owned by 65534), preserving inode; chown then
+          # hands ownership to alertmanager's uid so it can actually read.
+          # `umask 077` inside the sudo subshell ensures a newly-created file
+          # lands at mode 600 directly — without it, there's a brief world-
+          # readable window between tee creating the file at root's default
+          # umask (mode 644) and the subsequent chmod 600.
+          sudo sh -c 'umask 077 && tee /opt/bugspotter/monitoring/telegram_token > /dev/null' < /tmp/telegram_token
+          sudo chmod 600 /opt/bugspotter/monitoring/telegram_token
+          sudo chown 65534:65534 /opt/bugspotter/monitoring/telegram_token
+
+          am=/opt/bugspotter/monitoring/alertmanager.yml
+          tmp=$(mktemp)
+          sed "s|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: ${TELEGRAM_ALERT_CHAT_ID}|" "$am" > "$tmp"
+          if grep -q '__DEPLOY_SUBSTITUTES_CHAT_ID__' "$tmp"; then
+            echo 'ERROR: chat_id placeholder not replaced — marker drifted in alertmanager.yml' >&2
+            rm -f "$tmp"
+            exit 1
+          fi
+          cat "$tmp" > "$am"
+          rm -f "$tmp"
+          cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true
+          REMOTE_EOF
+
           scp -i ~/.ssh/deploy_key scripts/seed-demo-data.sh scripts/reset-demo-data.sh \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/scripts/
 
