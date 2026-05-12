@@ -104,7 +104,10 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
       // anchors in pages/integrations/integration-config.tsx and
       // pages/project-integration-config.tsx.
       if (baseType === 'linear') {
-        setLocalConfig(defaultLinearConfig as unknown as T);
+        // Spread to avoid sharing the const reference — a downstream
+        // in-place mutation (none today, but cheap insurance) could
+        // otherwise pollute the shared module-level default.
+        setLocalConfig({ ...defaultLinearConfig } as unknown as T);
       } else {
         // Default Jira config structure for any other built-in integration.
         setLocalConfig({

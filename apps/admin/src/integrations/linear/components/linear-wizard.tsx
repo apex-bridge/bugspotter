@@ -59,11 +59,21 @@ export function LinearWizard({
 
   const handleTest = async () => {
     setTest({ state: 'testing' });
-    const result = await onTestConnection();
-    if (result.ok) {
-      setTest({ state: 'success' });
-    } else {
-      setTest({ state: 'error', message: result.error });
+    try {
+      const result = await onTestConnection();
+      if (result.ok) {
+        setTest({ state: 'success' });
+      } else {
+        setTest({ state: 'error', message: result.error });
+      }
+    } catch (error) {
+      // `useIntegrationConfig.testConnection` currently swallows
+      // exceptions and returns `{ ok: false, error }`, so this branch
+      // is defensive — but a future refactor of the hook could lose
+      // that catch and we'd otherwise leave the wizard stuck in
+      // `testing` with the Test Connection button permanently disabled.
+      const message = error instanceof Error ? error.message : String(error);
+      setTest({ state: 'error', message });
     }
   };
 
@@ -87,7 +97,13 @@ export function LinearWizard({
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-1">{t('linearConfig.team')}</label>
+        {/* htmlFor targets the search input rendered inside the picker
+            (id="linear-team-search"). When the picker is in its
+            awaiting-credentials state, that input doesn't exist yet —
+            the htmlFor is inert in that case, which is fine. */}
+        <label htmlFor="linear-team-search" className="block text-sm font-medium mb-1">
+          {t('linearConfig.team')}
+        </label>
         <LinearTeamPicker
           config={config}
           onSelect={({ id, key }) => {
