@@ -862,7 +862,7 @@ services:
     container_name: bugspotter-ollama
     restart: unless-stopped
     environment:
-      OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.2:3b}
       # Keep model loaded permanently — prevents eviction after idle timeout.
       # Without this, Ollama unloads the model after 5 minutes of inactivity,
       # and reloading requires enough free host memory (not container memory),
@@ -886,8 +886,9 @@ services:
     deploy:
       resources:
         limits:
-          # llama3.1:8b requires ~4.8 GB. Set to 10G to leave headroom for
-          # Ollama overhead, model loading, and concurrent requests.
+          # llama3.2:3b (default) uses ~2.5 GB; llama3.1:8b would need
+          # ~4.8 GB. 10G keeps headroom so operators can swap to larger
+          # models without OOM, plus Ollama overhead and concurrent requests.
           memory: 10G
           # 3 of the VM's 4 cores. 2 cores capped generation at <8 tok/s
           # which pushed mitigation requests past the worker timeout.
@@ -927,7 +928,7 @@ services:
       # LLM
       LLM_PROVIDER: ${INTELLIGENCE_LLM_PROVIDER:-ollama}
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_MODEL: ${INTELLIGENCE_OLLAMA_MODEL:-llama3.2:3b}
       # MUST be STRICTLY LESS than the worker's INTELLIGENCE_TIMEOUT_MS
       # (in seconds vs ms). If this is longer, the worker times out
       # while we're still waiting on Ollama → the worker drops the
