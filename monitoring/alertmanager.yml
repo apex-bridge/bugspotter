@@ -41,4 +41,3 @@ receivers:
           {{ .Annotations.summary | html }}
           {{ .Annotations.description | html }}{{ end }}{{ end }}{{ if gt (len .Alerts) 1 }}
           ({{ len .Alerts }} occurrences){{ end }}
-          <a href="{{ .ExternalURL | html }}">View in Alertmanager</a>

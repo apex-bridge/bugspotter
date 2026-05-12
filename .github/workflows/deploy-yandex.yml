@@ -445,6 +445,12 @@ jobs:
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} bash -s <<'REMOTE_EOF'
           set -euo pipefail
+          # Install cleanup before anything that can `set -e` out (env-file
+          # source, chat_id validation, sudo/sed failure, marker-drift exit).
+          # Otherwise an early exit would leave the plaintext bot token sitting
+          # in /tmp/telegram_token (mode 600 owned by the deploy user) until
+          # the next successful deploy or a reboot.
+          trap 'rm -f /tmp/telegram_token /tmp/telegram.env' EXIT
           set -a; . /tmp/telegram.env; set +a
           : "${TELEGRAM_ALERT_CHAT_ID:?TELEGRAM_ALERT_CHAT_ID empty in telegram.env}"
 
@@ -468,7 +474,7 @@ jobs:
             exit 1
           fi
           cat "$tmp" > "$am"
-          rm -f "$tmp" /tmp/telegram_token /tmp/telegram.env
+          rm -f "$tmp"
           cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true
           REMOTE_EOF
 
