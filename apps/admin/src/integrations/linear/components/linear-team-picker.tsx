@@ -27,6 +27,22 @@ interface LinearTeamPickerProps {
   onSelect: (team: { id: string; key: string }) => void;
 }
 
+/**
+ * Non-cryptographic FNV-1a 32-bit hash. Used to derive a stable cache
+ * marker from an apiKey without putting the raw token in the queryKey
+ * (devtools / cache persistence concern). Two distinct keys always
+ * produce distinct hex strings for our purposes — collision risk on
+ * 32 bits is irrelevant at the per-component cache scale.
+ */
+function hashApiKey(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
 export function LinearTeamPicker({ config, onSelect }: LinearTeamPickerProps) {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
@@ -34,14 +50,17 @@ export function LinearTeamPicker({ config, onSelect }: LinearTeamPickerProps) {
 
   const apiKey = config.apiKey?.trim() ?? '';
 
+  // Hashed apiKey in the cache key — distinguishes between different
+  // tokens (e.g. user fixing a typo) so a stale cached teams list for
+  // the previous key isn't served to the new key, while keeping the
+  // raw token out of react-query's in-memory cache and devtools.
+  // Empty string when there's no key so the query doesn't run.
+  const apiKeyHash = apiKey.length > 0 ? hashApiKey(apiKey) : '';
+
   // Only fire the request when we have an apiKey — the backend
   // rejects a config without one with 400, no point making the call.
-  // Don't put apiKey in the queryKey: react-query persists keys in
-  // its in-memory cache. Keep the key on a stable non-secret marker
-  // (presence of an apiKey, not the value itself) so creds-swap
-  // forces a refetch without leaking the token.
   const teamsQuery = useQuery({
-    queryKey: ['linear-teams', apiKey.length > 0],
+    queryKey: ['linear-teams', apiKeyHash],
     queryFn: async () => {
       return projectIntegrationService.searchProjects(
         'linear',

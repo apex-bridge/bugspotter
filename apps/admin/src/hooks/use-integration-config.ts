@@ -54,6 +54,16 @@ interface UseIntegrationConfigReturn<T> {
  * Type parameter T should be Record<string, unknown> for broad compatibility
  * Built-in Jira integrations can cast to JiraConfig when needed
  */
+/**
+ * Strip the per-instance suffix from a multi-instance integration `type`
+ * to get the platform identifier the platform-configurator dispatch
+ * needs (e.g. `jira_e2e_12345` → `jira`). Repeated in two callbacks
+ * inside the hook, so derive once at the top.
+ */
+function getBaseType(type: string): string {
+  return type.includes('_') ? type.split('_')[0] : type;
+}
+
 export function useIntegrationConfig<T = Record<string, unknown>>({
   type,
   onSaveSuccess,
@@ -62,6 +72,7 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
   const { t } = useTranslation();
   const [localConfig, setLocalConfig] = useState<T>({} as T);
   const [description, setDescription] = useState<string>('');
+  const baseType = getBaseType(type);
 
   // Fetch integration config
   const {
@@ -92,7 +103,6 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
       // note `project_admin_ui_platform_configurator` and the parallel
       // anchors in pages/integrations/integration-config.tsx and
       // pages/project-integration-config.tsx.
-      const baseType = type.includes('_') ? type.split('_')[0] : type;
       if (baseType === 'linear') {
         setLocalConfig(defaultLinearConfig as unknown as T);
       } else {
@@ -111,7 +121,7 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
     if (integration?.description) {
       setDescription(integration.description);
     }
-  }, [config, integration?.description, integration?.is_custom, type]);
+  }, [config, integration?.description, integration?.is_custom, baseType]);
 
   // Update mutation
   const updateMutation = useMutation({
@@ -149,7 +159,6 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
     // touches this dispatch again, replace this branch with a registry
     // lookup `getConfigurator(baseType).validate(localConfig)`. See
     // auto-memory note `project_admin_ui_platform_configurator`.
-    const baseType = type.includes('_') ? type.split('_')[0] : type;
     if (baseType === 'linear') {
       if (!isLinearConfig(localConfig)) {
         return 'Invalid Linear configuration structure.';
@@ -165,7 +174,7 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
     // Now we can safely access JiraConfig properties and perform strict validation
     const jiraConfig = localConfig;
     return validateJiraConfig(jiraConfig);
-  }, [localConfig, integration, type]);
+  }, [localConfig, integration, baseType]);
 
   // Save configuration and description
   const save = useCallback(async () => {

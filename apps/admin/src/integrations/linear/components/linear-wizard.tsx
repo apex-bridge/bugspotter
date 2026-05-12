@@ -92,6 +92,11 @@ export function LinearWizard({
           config={config}
           onSelect={({ id, key }) => {
             setLocalConfig((prev) => ({ ...prev, teamId: id, teamKey: key }));
+            // Reset connection-test state — a green "Connection
+            // successful" badge from a previous test would otherwise
+            // remain visible across team changes and mislead the user.
+            // Mirrors what `updateField` does for apiKey edits.
+            setTest((prev) => (prev.state === 'idle' ? prev : { state: 'idle' }));
           }}
         />
       </div>
@@ -138,7 +143,12 @@ export function LinearWizard({
         <button
           type="button"
           onClick={onSave}
-          disabled={isSaving || !config.apiKey?.trim() || !config.teamId?.trim()}
+          // teamKey is required by `validateLinearConfig`; the picker
+          // sets it atomically with teamId but devtools edits or stale
+          // state can desync them, so gate save on both.
+          disabled={
+            isSaving || !config.apiKey?.trim() || !config.teamId?.trim() || !config.teamKey?.trim()
+          }
           className="px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-50"
           data-testid="linear-save"
         >
