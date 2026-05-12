@@ -422,21 +422,33 @@ jobs:
           printf '%s\n' "${{ secrets.TELEGRAM_BOT_TOKEN }}" > "$tmpdir/telegram_token"
           printf 'TELEGRAM_ALERT_CHAT_ID=%s\n' "${{ secrets.TELEGRAM_ALERT_CHAT_ID }}" > "$tmpdir/telegram.env"
           chmod 600 "$tmpdir/telegram_token" "$tmpdir/telegram.env"
-          # -p preserves the local 600 mode on the remote, so there's no
-          # world-readable window between scp landing and remote chmod.
+          # Stage secrets in /tmp (always writable by the deploy user) so
+          # subsequent deploys aren't blocked by the final on-disk telegram_token
+          # being owned by uid 65534 (alertmanager's `nobody`). -p preserves
+          # the local 600 mode on the wire so /tmp file isn't world-readable.
           scp -p -i ~/.ssh/deploy_key "$tmpdir/telegram_token" "$tmpdir/telegram.env" \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring/
-          # Remote script via stdin heredoc: validates the chat_id is set
-          # and that the marker actually got replaced (otherwise alertmanager
-          # would silently keep sending to chat_id 0 or hold invalid YAML).
-          # Inode-preserving rewrite of alertmanager.yml so the running
-          # container's bind-mount stays attached to the same file.
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/
+          # Remote script via stdin heredoc:
+          #   - validate chat_id is set
+          #   - sudo tee bot token to final path (preserves inode for the
+          #     running container's bind mount) + chown to 65534:65534 so
+          #     alertmanager (running as `nobody`) can actually read it
+          #   - inode-preserving rewrite of alertmanager.yml with marker-drift
+          #     guard so a missing/empty chat_id or drifted marker fails the
+          #     deploy instead of silently shipping invalid YAML or chat_id 0
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} bash -s <<'REMOTE_EOF'
           set -euo pipefail
-          set -a; . /opt/bugspotter/monitoring/telegram.env; set +a
+          set -a; . /tmp/telegram.env; set +a
           : "${TELEGRAM_ALERT_CHAT_ID:?TELEGRAM_ALERT_CHAT_ID empty in telegram.env}"
-          chmod 600 /opt/bugspotter/monitoring/telegram_token
+
+          # Install bot token: sudo tee writes as root (so it can replace a
+          # file currently owned by 65534), preserving inode; chown then
+          # hands ownership to alertmanager's uid so it can actually read.
+          sudo tee /opt/bugspotter/monitoring/telegram_token < /tmp/telegram_token > /dev/null
+          sudo chmod 600 /opt/bugspotter/monitoring/telegram_token
+          sudo chown 65534:65534 /opt/bugspotter/monitoring/telegram_token
+
           am=/opt/bugspotter/monitoring/alertmanager.yml
           tmp=$(mktemp)
           sed "s|chat_id: 0  # __DEPLOY_SUBSTITUTES_CHAT_ID__|chat_id: ${TELEGRAM_ALERT_CHAT_ID}|" "$am" > "$tmp"
@@ -446,7 +458,7 @@ jobs:
             exit 1
           fi
           cat "$tmp" > "$am"
-          rm -f "$tmp" /opt/bugspotter/monitoring/telegram.env
+          rm -f "$tmp" /tmp/telegram_token /tmp/telegram.env
           cd /opt/bugspotter && docker compose exec -T alertmanager kill -HUP 1 2>/dev/null || true
           REMOTE_EOF
 
