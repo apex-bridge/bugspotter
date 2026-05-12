@@ -572,6 +572,26 @@
       "templateVariablesMetadata": "Пользовательские: {{metadata.field_name}} (поддерживает 2 уровня вложенности)"
     }
   },
+  "linearConfig": {
+    "configDescription": "API-ключ Linear и выбор команды. Учётные данные шифруются перед сохранением.",
+    "apiKey": "API-ключ Linear",
+    "apiKeyPlaceholder": "lin_api_xxxxxxxxxxxxxxxxxxxx",
+    "apiKeyHelp": "Персональный API-ключ из Linear → Settings → API. Храните в секрете.",
+    "team": "Команда",
+    "teamKey": "Ключ команды",
+    "teamKeyPlaceholder": "ENG",
+    "teamKeyHelp": "Короткий идентификатор, виден в URL задач (например, \"ENG\" в ENG-123).",
+    "teamId": "ID команды",
+    "teamIdPlaceholder": "a1b2c3d4-...",
+    "teamIdHelp": "UUID команды в Linear. Используйте подбор команды, чтобы заполнить оба поля автоматически.",
+    "searchTeamsPlaceholder": "Введите для фильтрации по ключу или названию…",
+    "loadingTeams": "Загрузка команд…",
+    "noTeamsFound": "Команды не найдены. Проверьте API-ключ.",
+    "selectTeam": "Выберите команду",
+    "selectedTeam": "Выбранная команда",
+    "teamPickerAwaitingApiKey": "Введите API-ключ Linear выше, чтобы загрузить команды.",
+    "failedToLoadTeams": "Не удалось загрузить команды Linear"
+  },
   "integrationRules": {
     "title": "Правила интеграции",
     "missingPlatformOrProjectId": "Отсутствует платформа или идентификатор проекта",

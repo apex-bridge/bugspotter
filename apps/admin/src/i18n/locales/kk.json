@@ -572,6 +572,26 @@
       "templateVariablesMetadata": "Арнайы: {{metadata.field_name}} (2 деңгей салу қолдайды)"
     }
   },
+  "linearConfig": {
+    "configDescription": "Linear API кілті және команданы таңдау. Деректер сақтаудан бұрын шифрленеді.",
+    "apiKey": "Linear API кілті",
+    "apiKeyPlaceholder": "lin_api_xxxxxxxxxxxxxxxxxxxx",
+    "apiKeyHelp": "Linear → Settings → API ішіндегі жеке API кілті. Құпия сақтаңыз.",
+    "team": "Команда",
+    "teamKey": "Команда кілті",
+    "teamKeyPlaceholder": "ENG",
+    "teamKeyHelp": "Тапсырма URL-ында көрсетілетін қысқа идентификатор (мысалы, ENG-123 ішіндегі \"ENG\").",
+    "teamId": "Команда ID",
+    "teamIdPlaceholder": "a1b2c3d4-...",
+    "teamIdHelp": "Linear командасының UUID. Екі өрісті де автоматты толтыру үшін команда таңдауышын пайдаланыңыз.",
+    "searchTeamsPlaceholder": "Кілт немесе атау бойынша сүзгілеу үшін теріңіз…",
+    "loadingTeams": "Командалар жүктелуде…",
+    "noTeamsFound": "Командалар табылмады. API кілтін тексеріңіз.",
+    "selectTeam": "Команда таңдаңыз",
+    "selectedTeam": "Таңдалған команда",
+    "teamPickerAwaitingApiKey": "Командаларды жүктеу үшін жоғарыда Linear API кілтін енгізіңіз.",
+    "failedToLoadTeams": "Linear командалары жүктелмеді"
+  },
   "integrationRules": {
     "title": "Интеграция ережелері",
     "missingPlatformOrProjectId": "Платформа немесе жоба идентификаторы жоқ",

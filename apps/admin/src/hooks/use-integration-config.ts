@@ -6,6 +6,7 @@ import integrationService from '../services/integration-service';
 import { handleApiError, getApiErrorStatus } from '../lib/api-client';
 import { isValidIntegration, type IntegrationResponse } from '../types/integration';
 import { isJiraConfig, validateJiraConfig } from '../utils/type-guards';
+import { defaultLinearConfig, isLinearConfig, validateLinearConfig } from '../integrations/linear';
 
 interface UseIntegrationConfigOptions {
   type: string;
@@ -85,21 +86,32 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
     if (config && Object.keys(config).length > 0) {
       setLocalConfig(config);
     } else if (integration && !integration.is_custom) {
-      // For built-in integrations with no config yet, set default Jira config structure
-      setLocalConfig({
-        instanceUrl: '',
-        projectKey: '',
-        authentication: {
-          type: 'basic',
-          email: '',
-          apiToken: '',
-        },
-      } as T);
+      // TODO(platform-configurator): When a 3rd plugin lands or admin UI
+      // touches this dispatch again, replace this branch with a registry
+      // lookup `getConfigurator(baseType).defaultConfig`. See auto-memory
+      // note `project_admin_ui_platform_configurator` and the parallel
+      // anchors in pages/integrations/integration-config.tsx and
+      // pages/project-integration-config.tsx.
+      const baseType = type.includes('_') ? type.split('_')[0] : type;
+      if (baseType === 'linear') {
+        setLocalConfig(defaultLinearConfig as unknown as T);
+      } else {
+        // Default Jira config structure for any other built-in integration.
+        setLocalConfig({
+          instanceUrl: '',
+          projectKey: '',
+          authentication: {
+            type: 'basic',
+            email: '',
+            apiToken: '',
+          },
+        } as T);
+      }
     }
     if (integration?.description) {
       setDescription(integration.description);
     }
-  }, [config, integration?.description, integration?.is_custom]);
+  }, [config, integration?.description, integration?.is_custom, type]);
 
   // Update mutation
   const updateMutation = useMutation({
@@ -133,6 +145,18 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
       return null;
     }
 
+    // TODO(platform-configurator): When a 3rd plugin lands or admin UI
+    // touches this dispatch again, replace this branch with a registry
+    // lookup `getConfigurator(baseType).validate(localConfig)`. See
+    // auto-memory note `project_admin_ui_platform_configurator`.
+    const baseType = type.includes('_') ? type.split('_')[0] : type;
+    if (baseType === 'linear') {
+      if (!isLinearConfig(localConfig)) {
+        return 'Invalid Linear configuration structure.';
+      }
+      return validateLinearConfig(localConfig);
+    }
+
     // For built-in Jira integrations, validate structure first with type guard
     if (!isJiraConfig(localConfig)) {
       return 'Invalid configuration structure. Please ensure all required fields are present.';
@@ -141,7 +165,7 @@ export function useIntegrationConfig<T = Record<string, unknown>>({
     // Now we can safely access JiraConfig properties and perform strict validation
     const jiraConfig = localConfig;
     return validateJiraConfig(jiraConfig);
-  }, [localConfig, integration]);
+  }, [localConfig, integration, type]);
 
   // Save configuration and description
   const save = useCallback(async () => {
