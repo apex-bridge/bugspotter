@@ -443,8 +443,10 @@
       <div class="buggy-hero">
         <h1>Experience Real-World Bugs</h1>
         <p>
-          This fake e-commerce page has intentionally planted bugs. Trigger them and watch
-          BugSpotter capture everything automatically &mdash; then check the
+          This fake e-commerce page has intentionally planted bugs. Trigger one, then click the
+          floating <strong>Report an Issue</strong> button (bottom-right) to submit it with
+          everything BugSpotter captured &mdash; screenshot, replay, console, network. Then check
+          the
           <a
             id="hero-admin-link"
             href="https://app.kz.bugspotter.io/login"
@@ -463,10 +465,17 @@
         <ol>
           <li>Click a <strong>"Trigger Bug"</strong> button below to simulate a real-world bug</li>
           <li>
-            BugSpotter SDK <strong>automatically captures</strong> the error, console logs, network
-            requests, and session replay
+            BugSpotter SDK <strong>continuously captures</strong> console logs, network requests,
+            and the last 30 seconds of session replay &mdash; ready in the buffer
           </li>
-          <li>A bug report is submitted to the BugSpotter API</li>
+          <li>
+            Click the floating <strong>"Report an Issue"</strong> button (bottom-right corner)
+            &mdash; this is what end users do in your app
+          </li>
+          <li>
+            Add a quick title/description in the widget modal and submit. Everything that was
+            captured ships with it
+          </li>
           <li>
             Open the <strong>Admin Panel</strong> to see the full report with screenshot, replay,
             and logs
@@ -954,11 +963,6 @@
           console.error('[BuggyApp] BugSpotter SDK init failed:', err);
         });
 
-      // Helper: get SDK instance (awaits init if still in progress)
-      async function getSDK() {
-        return await bugSpotterReady;
-      }
-
       // ========================================================================
       // Toast notifications
       // ========================================================================
@@ -979,38 +983,69 @@
         }, duration);
       }
 
-      function bugCapturedToast(title) {
-        const frag = document.createDocumentFragment();
-        const strong = document.createElement('strong');
-        strong.textContent = 'Bug captured!';
-        frag.appendChild(strong);
-        frag.appendChild(document.createElement('br'));
-        frag.appendChild(document.createTextNode(title));
-        const href = getAdminHref();
-        if (href) {
-          const link = document.createElement('a');
-          link.href = href;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.textContent = ' View in Admin Panel \u2192';
-          frag.appendChild(link);
-        }
-        showToast(frag, 'success', 8000);
+      // ========================================================================
+      // Pulse the BugSpotter floating launcher to draw the user's eye
+      //
+      // The SDK's `FloatingButton` mounts a <button> with
+      // `data-bugspotter-exclude="true"` and `aria-label="Report an Issue"`.
+      // We query both as belt-and-braces in case one is renamed upstream.
+      // Web Animations API is used (instead of CSS classes) because the
+      // SDK applies inline styles + a mouseenter/leave transform handler
+      // \u2014 a class-based animation would be silently overridden when the
+      // user hovers mid-pulse.
+      // ========================================================================
+      function pulseWidget() {
+        // Match the attribute by name only, not name+value: the SDK
+        // sets `data-bugspotter-exclude="true"` today, but boolean
+        // dataset usage (`<button data-bugspotter-exclude>`) is also
+        // valid HTML and a future SDK rewrite might switch to it.
+        const launcher =
+          document.querySelector('button[data-bugspotter-exclude]') ||
+          document.querySelector('button[aria-label="Report an Issue"]');
+        if (!launcher) return;
+        if (typeof launcher.animate !== 'function') return;
+        launcher.animate(
+          [
+            {
+              transform: 'scale(1)',
+              boxShadow:
+                '0 4px 6px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06), 0 0 0 0 rgba(37, 99, 235, 0.65)',
+            },
+            {
+              transform: 'scale(1.15)',
+              boxShadow:
+                '0 4px 6px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06), 0 0 0 22px rgba(37, 99, 235, 0)',
+            },
+            {
+              transform: 'scale(1)',
+              boxShadow:
+                '0 4px 6px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06), 0 0 0 0 rgba(37, 99, 235, 0)',
+            },
+          ],
+          { duration: 900, iterations: 3, easing: 'ease-out' }
+        );
       }
 
       // ========================================================================
-      // Submit bug report helper
+      // Bug-triggered cue
+      //
+      // Replaces the old programmatic-submit flow. Shows the error toast
+      // with a clear call-to-action and pulses the widget launcher so the
+      // visitor's eye lands on it. The SDK has already been buffering
+      // console / network / replay continuously, so when the user clicks
+      // the widget the captured context is ready \u2014 no extra work needed.
       // ========================================================================
-      async function submitReport(title, description, report) {
-        try {
-          var sdk = await getSDK();
-          await sdk.submit({ title, description, report });
-          console.log('[BuggyApp] Report submitted:', title);
-          bugCapturedToast(title);
-        } catch (err) {
-          console.error('[BuggyApp] Failed to submit report:', err);
-          showToast('Failed to submit report: ' + (err.message || String(err)), 'error');
-        }
+      function bugTriggered(message) {
+        const frag = document.createDocumentFragment();
+        frag.appendChild(document.createTextNode(message));
+        const cta = document.createElement('div');
+        cta.style.marginTop = '4px';
+        cta.style.fontSize = '0.85em';
+        cta.style.opacity = '0.85';
+        cta.textContent = '\u2192 Click "Report an Issue" (bottom-right) to send it';
+        frag.appendChild(cta);
+        showToast(frag, 'error', 8000);
+        pulseWidget();
       }
 
       // ========================================================================
@@ -1041,16 +1076,7 @@
             });
           } catch (error) {
             console.error('[Checkout] Payment crashed for jane@example.com:', error.message);
-            showToast('Payment failed: ' + error.message, 'error');
-
-            // Capture and submit
-            var sdk = await getSDK();
-            const report = await sdk.capture();
-            await submitReport(
-              'Checkout payment crash: ' + error.message,
-              'The checkout form crashed when processing payment. TypeError thrown because paymentProcessor is undefined. User was on the checkout page with a filled form.',
-              report
-            );
+            bugTriggered('Payment failed: ' + error.message);
           }
         }, 500);
       }
@@ -1073,15 +1099,7 @@
           }
         } catch (error) {
           console.error('[Products] API request failed:', error.message);
-          showToast('Product load failed: ' + error.message, 'error');
-
-          var sdk = await getSDK();
-          const report = await sdk.capture();
-          await submitReport(
-            'Product API failure: ' + error.message,
-            'The /products endpoint returned an error when loading the product list. This blocks the entire product page from rendering. The user sees no products.',
-            report
-          );
+          bugTriggered('Product load failed: ' + error.message);
         }
       }
 
@@ -1111,15 +1129,7 @@
           const elapsed = Math.round(performance.now() - start);
           console.warn('[Orders] Slow page load: ' + elapsed + 'ms (threshold: 1000ms)');
           overlay.remove();
-          showToast('Orders loaded in ' + (elapsed / 1000).toFixed(1) + 's (very slow!)', 'error');
-
-          var sdk = await getSDK();
-          const report = await sdk.capture();
-          await submitReport(
-            'Slow page load: Orders took ' + (elapsed / 1000).toFixed(1) + 's',
-            'The Orders page took over 4 seconds to load. Performance threshold is 1000ms. Users experience a blocking spinner during this time, leading to poor UX and potential abandonment.',
-            report
-          );
+          bugTriggered('Orders loaded in ' + (elapsed / 1000).toFixed(1) + 's (very slow!)');
         }, 4000);
       }
 
@@ -1149,15 +1159,7 @@
           console.log(formatted);
         } catch (error) {
           console.error('[Form] Validation crash:', error.message);
-          showToast('Form error: ' + error.message, 'error');
-
-          var sdk = await getSDK();
-          const report = await sdk.capture();
-          await submitReport(
-            'Form validation crash: ' + error.message,
-            'Submitting the checkout form with empty fields causes an unhandled TypeError. The code assumes the name field always has a first and last name separated by a space, but crashes when it is empty.',
-            report
-          );
+          bugTriggered('Form error: ' + error.message);
         }
       }
 
@@ -1185,15 +1187,7 @@
           notFound.textContent = 'Image not found';
           imgDiv.appendChild(notFound);
 
-          showToast('Product image failed to load (404)', 'error');
-
-          var sdk = await getSDK();
-          const report = await sdk.capture();
-          await submitReport(
-            'Broken product image: 404 on headphones.png',
-            'The product image for "Noise Cancelling Headphones" returns a 404 error. The broken image is visible in the page and the session replay. This degrades the shopping experience.',
-            report
-          );
+          bugTriggered('Product image failed to load (404)');
         };
         imgDiv.appendChild(img);
       }
@@ -1209,14 +1203,7 @@
           JSON.parse(malformed);
         } catch (error) {
           console.error('[API] JSON parse failed:', error.message);
-          showToast('JSON parse error: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'JSON parse crash: ' + error.message,
-            'The /api/user/preferences endpoint returned malformed JSON. The app crashes when trying to parse the response body. This breaks the settings page entirely.',
-            report
-          );
+          bugTriggered('JSON parse error: ' + error.message);
         }
       }
 
@@ -1233,14 +1220,7 @@
           renderComponent(0);
         } catch (error) {
           console.error('[Render] Stack overflow:', error.message);
-          showToast('Stack overflow: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Stack overflow in component render',
-            'A recursive component update triggers infinite re-rendering. The call stack exceeds the maximum size, crashing the page. Likely caused by a state update inside a render cycle.',
-            report
-          );
+          bugTriggered('Stack overflow: ' + error.message);
         }
       }
 
@@ -1255,14 +1235,7 @@
           el.textContent = 'John Doe';
         } catch (error) {
           console.error('[Profile] DOM reference error:', error.message);
-          showToast('DOM error: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Null DOM reference: ' + error.message,
-            'The profile page tries to update #user-avatar-container which does not exist in the DOM. The element is conditionally rendered and missing when the user has no avatar set.',
-            report
-          );
+          bugTriggered('DOM error: ' + error.message);
         }
       }
 
@@ -1279,14 +1252,7 @@
           var formatted = lastItem.toString().toUpperCase();
         } catch (error) {
           console.error('[List] Array access error:', error.message);
-          showToast('Array error: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Array index out of bounds: ' + error.message,
-            'Off-by-one error when accessing the last element of the item list. Code uses items[items.length] instead of items[items.length - 1], resulting in undefined access.',
-            report
-          );
+          bugTriggered('Array error: ' + error.message);
         }
       }
 
@@ -1303,14 +1269,7 @@
           var iso = date.toISOString();
         } catch (error) {
           console.error('[DatePicker] Date format error:', error.message);
-          showToast('Date error: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Invalid date crash: ' + error.message,
-            'The date picker accepts free-text input without validation. Entering "2024-13-45" creates an Invalid Date object, and calling toISOString() throws a RangeError.',
-            report
-          );
+          bugTriggered('Date error: ' + error.message);
         }
       }
 
@@ -1328,14 +1287,7 @@
           });
         } catch (error) {
           console.error('[API] CORS error:', error.message);
-          showToast('CORS blocked: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'CORS error: cross-origin request blocked',
-            'Fetch to external API blocked by browser CORS policy. The server responded but did not include Access-Control-Allow-Origin headers, so the browser rejected the response.',
-            report
-          );
+          bugTriggered('CORS blocked: ' + error.message);
         }
       }
 
@@ -1357,14 +1309,7 @@
         } catch (error) {
           clearTimeout(timeoutId);
           console.error('[API] Request failed:', error.name + ': ' + error.message);
-          showToast('Request failed: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Network request failed: ' + error.name,
-            'The API call to a remote endpoint failed. On most networks this is an AbortController timeout after 2 seconds; on some it may fail immediately with a network error. Either way the user action is blocked.',
-            report
-          );
+          bugTriggered('Request failed: ' + error.message);
         }
       }
 
@@ -1382,14 +1327,7 @@
           }
         } catch (error) {
           console.error('[Auth] Authentication failed:', error.message);
-          showToast('Auth error: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            '401 Unauthorized: authentication failed',
-            'Request to protected endpoint returned 401. The bearer token has expired or is invalid. User is unable to access their data until they re-authenticate.',
-            report
-          );
+          bugTriggered('Auth error: ' + error.message);
         }
       }
 
@@ -1442,18 +1380,7 @@
           }
         } catch (error) {
           console.error('[API] Rate limit test:', error.message);
-          showToast('Rate limit test: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Rapid request stress test: ' + results.length + ' requests fired',
-            'Fired ' +
-              results.length +
-              ' rapid API requests to test rate limiting behavior. Response statuses: ' +
-              results.join(', ') +
-              '. The network logs capture the full burst pattern.',
-            report
-          );
+          bugTriggered('Rate limit test: ' + error.message);
         }
       }
 
@@ -1476,14 +1403,7 @@
           });
         } catch (error) {
           console.error('[WebSocket] Error:', error.message);
-          showToast('WebSocket failed: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'WebSocket connection failed',
-            'The app failed to establish a WebSocket connection to the notification service at wss://invalid-ws-host.example.com. Real-time updates are unavailable. Users will not receive live notifications.',
-            report
-          );
+          bugTriggered('WebSocket failed: ' + error.message);
         }
       }
 
@@ -1505,16 +1425,7 @@
         var elapsed = Math.round(performance.now() - start);
         console.error('[Performance] Main thread blocked for ' + elapsed + 'ms');
         console.warn('[Performance] Long task detected: ' + elapsed + 'ms (threshold: 50ms)');
-        showToast('UI was frozen for ' + (elapsed / 1000).toFixed(1) + 's', 'error');
-        var sdk = await getSDK();
-        var report = await sdk.capture();
-        await submitReport(
-          'Main thread blocked for ' + (elapsed / 1000).toFixed(1) + 's',
-          'A synchronous computation blocked the main thread for ' +
-            elapsed +
-            'ms. The UI was completely frozen during this time. Users cannot interact with the page, scroll, or click anything.',
-          report
-        );
+        bugTriggered('UI was frozen for ' + (elapsed / 1000).toFixed(1) + 's');
       }
 
       // ========================================================================
@@ -1542,14 +1453,7 @@
         }
         console.error('[Gallery] Inserted 5000 DOM nodes in ' + elapsed + 'ms');
         console.warn('[Performance] Forced reflow detected — consider virtualization');
-        showToast('5000 nodes inserted in ' + elapsed + 'ms', 'error');
-        var sdk = await getSDK();
-        var report = await sdk.capture();
-        await submitReport(
-          'DOM explosion: 5000 nodes inserted in ' + elapsed + 'ms',
-          'The gallery component renders all items without virtualization, inserting 5000 DOM nodes synchronously. This causes layout thrashing, forced reflows, and noticeable jank.',
-          report
-        );
+        bugTriggered('5000 nodes inserted in ' + elapsed + 'ms');
         setTimeout(function () {
           container.remove();
         }, 5000);
@@ -1582,21 +1486,13 @@
               Math.round(imageData.data.length / 1024 / 1024) +
               'MB'
           );
-          showToast(
-            'Heavy canvas: ' + Math.round(imageData.data.length / 1024 / 1024) + 'MB allocated',
-            'error'
+          bugTriggered(
+            'Heavy canvas: ' + Math.round(imageData.data.length / 1024 / 1024) + 'MB allocated'
           );
         } catch (error) {
           console.error('[Upload] Canvas operation failed:', error.message);
-          showToast('Canvas error: ' + error.message, 'error');
+          bugTriggered('Canvas error: ' + error.message);
         }
-        var sdk = await getSDK();
-        var report = await sdk.capture();
-        await submitReport(
-          'Memory-heavy canvas: 8000x8000 image processing',
-          'The image upload handler creates an oversized canvas (8000x8000 = 256MB raw pixel data) without checking dimensions first. This can crash tabs on low-memory devices.',
-          report
-        );
       }
 
       // ========================================================================
@@ -1612,14 +1508,7 @@
           localStorage.setItem('bugspotter_demo_cache', bigData);
         } catch (error) {
           console.error('[Cache] Storage quota exceeded:', error.message);
-          showToast('Storage error: ' + error.message, 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'localStorage quota exceeded: ' + error.name,
-            'Attempting to save a large cache entry to localStorage throws QuotaExceededError. The app does not handle storage limits gracefully, causing the save to fail silently and losing user data.',
-            report
-          );
+          bugTriggered('Storage error: ' + error.message);
         } finally {
           localStorage.removeItem('bugspotter_demo_cache');
         }
@@ -1639,16 +1528,7 @@
         console.error(
           '[State] Stale closure: handler sees ' + staleValue + ' but actual value is ' + counter
         );
-        showToast('Stale state: expected ' + counter + ', got ' + staleValue, 'error');
-        var sdk = await getSDK();
-        var report = await sdk.capture();
-        await submitReport(
-          'Stale closure: handler shows 0 instead of ' + counter,
-          'An event handler captured a stale reference to the counter state. After 5 rapid updates, the handler still shows 0 instead of the current value ' +
-            counter +
-            '. This is a classic React useEffect/useCallback closure bug.',
-          report
-        );
+        bugTriggered('Stale state: expected ' + counter + ', got ' + staleValue);
       }
 
       // ========================================================================
@@ -1667,14 +1547,7 @@
           '[UI] Z-index conflict: dropdown (z-index:50) renders behind nav (z-index:100)'
         );
         console.error('[UI] Dropdown menu is not visible — covered by sticky header');
-        showToast('Dropdown hidden behind navigation bar', 'error');
-        var sdk = await getSDK();
-        var report = await sdk.capture();
-        await submitReport(
-          'Z-index bug: dropdown menu hidden behind header',
-          'The account dropdown menu has z-index:50 but the sticky navigation has z-index:100. The dropdown renders behind the nav bar and is completely inaccessible. Users cannot access account settings or logout.',
-          report
-        );
+        bugTriggered('Dropdown hidden behind navigation bar');
         setTimeout(function () {
           dropdown.remove();
         }, 5000);
@@ -1697,14 +1570,7 @@
             '[UI] Content layout shift detected — banner injected without reserved space'
           );
           console.error('[UI] CLS score exceeded threshold: elements shifted by ~120px');
-          showToast('Layout shift: content pushed down by 120px', 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Layout shift: late-loading banner pushes content down',
-            'A promotional banner loads 1.5 seconds after page render and injects itself below the nav without reserved space. All page content shifts down by ~120px. This is a poor CLS score and frustrating for users who are mid-scroll.',
-            report
-          );
+          bugTriggered('Layout shift: content pushed down by 120px');
           setTimeout(function () {
             banner.remove();
           }, 8000);
@@ -1714,22 +1580,15 @@
       // ========================================================================
       // Bug 24: Unhandled promise rejection
       // ========================================================================
-      async function triggerUnhandledPromise() {
+      function triggerUnhandledPromise() {
         console.log('[Async] Starting background sync...');
         console.warn('[Async] About to trigger unhandled promise rejection');
-        var handler = async function (event) {
+        var handler = function (event) {
           console.error(
             '[Async] Unhandled promise rejection:',
             event.reason?.message || event.reason
           );
-          showToast('Unhandled rejection: ' + (event.reason?.message || event.reason), 'error');
-          var sdk = await getSDK();
-          var report = await sdk.capture();
-          await submitReport(
-            'Unhandled promise rejection: ' + (event.reason?.message || event.reason),
-            'A background synchronization promise rejected without a catch handler. The error is silently swallowed unless the global unhandledrejection event is monitored. Data may be lost or stale.',
-            report
-          );
+          bugTriggered('Unhandled rejection: ' + (event.reason?.message || event.reason));
           window.removeEventListener('unhandledrejection', handler);
         };
         window.addEventListener('unhandledrejection', handler);
@@ -1750,14 +1609,7 @@
         console.error('[Performance] Added 100 scroll event listeners without cleanup');
         console.warn('[Performance] Memory leak: listener count growing on every component mount');
         console.warn('[Performance] Expected: 1 scroll listener, Actual: 100+');
-        showToast('100 scroll listeners leaked!', 'error');
-        var sdk = await getSDK();
-        var report = await sdk.capture();
-        await submitReport(
-          'Event listener leak: 100 scroll handlers registered',
-          'Each component mount adds a new scroll listener without removing the previous one. After multiple navigations, 100+ duplicate listeners accumulate, causing noticeable scroll jank and memory growth.',
-          report
-        );
+        bugTriggered('100 scroll listeners leaked!');
         listeners.forEach(function (fn) {
           window.removeEventListener('scroll', fn);
         });
@@ -1780,17 +1632,7 @@
           if (clicks >= 6 && !reported) {
             reported = true;
             console.warn('[UX] Rage clicks detected: ' + clicks + ' clicks on unresponsive button');
-            showToast('Rage clicks detected! (' + clicks + ' clicks)', 'error');
-
-            var sdk = await getSDK();
-            const report = await sdk.capture();
-            await submitReport(
-              'Rage clicks detected: user clicked "Submit Order" ' + clicks + ' times',
-              'The "Submit Order" button appears to do nothing, causing the user to click it ' +
-                clicks +
-                ' times in frustration. This is a strong signal of a UX issue. The session replay captures the rage click pattern.',
-              report
-            );
+            bugTriggered('Rage clicks detected! (' + clicks + ' clicks)');
 
             // Reset after a delay
             setTimeout(() => {
