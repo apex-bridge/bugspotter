@@ -25,6 +25,8 @@ export const API_ENDPOINTS = {
     me: () => `${API_VERSION}/auth/me`,
     verifyEmail: () => `${API_VERSION}/auth/verify-email`,
     resendVerification: () => `${API_VERSION}/auth/resend-verification`,
+    forgotPassword: () => `${API_VERSION}/auth/forgot-password`,
+    resetPassword: () => `${API_VERSION}/auth/reset-password`,
   },
 
   // Deployment config
@@ -243,6 +245,10 @@ export const API_ENDPOINTS = {
     magicLoginStatus: (id: string) => `${API_VERSION}/admin/organizations/${id}/magic-login-status`,
     setMagicLoginStatus: (id: string) =>
       `${API_VERSION}/admin/organizations/${id}/magic-login-status`,
+    passwordResetStatus: (id: string) =>
+      `${API_VERSION}/admin/organizations/${id}/password-reset-status`,
+    setPasswordResetStatus: (id: string) =>
+      `${API_VERSION}/admin/organizations/${id}/password-reset-status`,
     generateMagicToken: (id: string) => `${API_VERSION}/admin/organizations/${id}/magic-token`,
     pendingHardDelete: () => `${API_VERSION}/admin/organizations/pending-hard-delete`,
     hardDelete: (id: string) => `${API_VERSION}/admin/organizations/${id}/hard-delete`,

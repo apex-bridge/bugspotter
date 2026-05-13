@@ -102,6 +102,12 @@ export default function OrganizationDetailPage() {
     enabled: !!id && activeTab === 'overview',
   });
 
+  const { data: passwordResetStatus } = useQuery({
+    queryKey: ['organization-password-reset', id],
+    queryFn: () => organizationService.getPasswordResetStatus(id!),
+    enabled: !!id && activeTab === 'overview',
+  });
+
   const { data: members } = useQuery({
     queryKey: ['organization-members', id],
     queryFn: () => organizationService.getMembers(id!),
@@ -262,6 +268,16 @@ export default function OrganizationDetailPage() {
     },
     onError: (error) =>
       toast.error(handleApiError(error) || t('organizations.magicLoginUpdateFailed')),
+  });
+
+  const togglePasswordResetMutation = useMutation({
+    mutationFn: (enabled: boolean) => organizationService.setPasswordResetStatus(id!, enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organization-password-reset', id] });
+      toast.success(t('organizations.passwordResetUpdated'));
+    },
+    onError: (error) =>
+      toast.error(handleApiError(error) || t('organizations.passwordResetUpdateFailed')),
   });
 
   const generateMagicTokenMutation = useMutation({
@@ -446,6 +462,39 @@ export default function OrganizationDetailPage() {
                       {magicLoginStatus.allowed
                         ? t('organizations.magicLoginAllowed')
                         : t('organizations.magicLoginDisabled')}
+                    </span>
+                  </dd>
+                </div>
+              )}
+              {passwordResetStatus && (
+                <div>
+                  <dt className="text-xs text-gray-400">{t('organizations.passwordReset')}</dt>
+                  <dd className="text-sm font-medium flex items-center gap-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={passwordResetStatus.allowed}
+                      aria-label={t('organizations.passwordReset')}
+                      disabled={togglePasswordResetMutation.isPending}
+                      onClick={() =>
+                        togglePasswordResetMutation.mutate(!passwordResetStatus.allowed)
+                      }
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50 ${
+                        passwordResetStatus.allowed ? 'bg-green-500' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                          passwordResetStatus.allowed ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                    <span
+                      className={passwordResetStatus.allowed ? 'text-green-600' : 'text-gray-400'}
+                    >
+                      {passwordResetStatus.allowed
+                        ? t('organizations.passwordResetAllowed')
+                        : t('organizations.passwordResetDisabled')}
                     </span>
                   </dd>
                 </div>

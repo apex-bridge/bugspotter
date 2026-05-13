@@ -49,10 +49,11 @@ export const authService = {
   getRegistrationStatus: async (): Promise<{
     allowed: boolean;
     requireInvitation: boolean;
+    passwordResetEnabled: boolean;
   }> => {
     const response = await api.get<{
       success: boolean;
-      data: { allowed: boolean; requireInvitation: boolean };
+      data: { allowed: boolean; requireInvitation: boolean; passwordResetEnabled: boolean };
     }>(API_ENDPOINTS.auth.registrationStatus());
     return response.data.data;
   },
@@ -99,6 +100,33 @@ export const authService = {
     await api.post<{ success: boolean; data: { message: string } }>(
       API_ENDPOINTS.auth.resendVerification(),
       {}
+    );
+  },
+
+  /**
+   * Request a password reset email. Always resolves with a generic
+   * message regardless of whether the email matches a real account —
+   * the backend swallows the existence signal for anti-enumeration.
+   * Callers MUST show the same UI for any 200 (don't branch on the
+   * `message` text).
+   */
+  requestPasswordReset: async (email: string, locale?: 'en' | 'ru' | 'kk'): Promise<void> => {
+    await api.post<{ success: boolean; data: { message: string } }>(
+      API_ENDPOINTS.auth.forgotPassword(),
+      { email, ...(locale ? { locale } : {}) }
+    );
+  },
+
+  /**
+   * Consume a reset token (from the email link) and set a new
+   * password. Throws on 400 (invalid/expired token) — callers should
+   * surface that as a terminal failure prompting the user to request
+   * a fresh link.
+   */
+  resetPassword: async (token: string, newPassword: string): Promise<void> => {
+    await api.post<{ success: boolean; data: { message: string } }>(
+      API_ENDPOINTS.auth.resetPassword(),
+      { token, new_password: newPassword }
     );
   },
 };
