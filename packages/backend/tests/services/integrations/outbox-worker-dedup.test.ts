@@ -154,6 +154,28 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
     );
   });
 
+  it('fails fast when the bug report no longer exists', async () => {
+    const entry = buildEntry({ dedup_grace_until: null, status: 'pending' });
+    (db.ticketOutbox.findById as Mock)
+      .mockResolvedValueOnce(entry)
+      .mockResolvedValueOnce({ ...entry, status: 'processing' });
+    (db.bugReports.findById as Mock).mockResolvedValueOnce(null);
+    (db.ticketOutbox.markFailed as Mock).mockResolvedValueOnce({ ...entry, status: 'failed' });
+
+    await expect(processor.process(buildJob('outbox-1') as never)).rejects.toThrow(
+      /Bug report not found/
+    );
+
+    // Hard-fail flows through the catch → markFailed (not markSkipped), and
+    // no external ticket is created.
+    expect(db.ticketOutbox.markSkipped).not.toHaveBeenCalled();
+    expect(createFromBugReport).not.toHaveBeenCalled();
+    expect(db.ticketOutbox.markFailed).toHaveBeenCalledWith(
+      'outbox-1',
+      expect.stringMatching(/Bug report not found/)
+    );
+  });
+
   it('files immediately when dedup_grace_until is NULL (legacy behavior)', async () => {
     const entry = buildEntry({ dedup_grace_until: null, status: 'pending' });
     (db.ticketOutbox.findById as Mock)

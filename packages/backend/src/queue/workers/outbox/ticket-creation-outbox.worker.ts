@@ -122,7 +122,13 @@ export class TicketCreationOutboxProcessor {
       // and Jira/Linear clients don't expose addComment/closeIssue methods yet, so
       // we can only avoid the new ticket, not cross-link to the canonical one.
       const bugReport = await this.db.bugReports.findById(entry.bug_report_id);
-      if (bugReport?.duplicate_of) {
+      if (!bugReport) {
+        // Match createExternalTicket's contract — surface the missing bug as a hard
+        // failure so the outbox retry path takes over (vs. silently falling through
+        // and triggering a second findById inside createExternalTicket).
+        throw new Error(`Bug report not found: ${entry.bug_report_id}`);
+      }
+      if (bugReport.duplicate_of) {
         logger.info('Skipping external ticket creation — bug flagged as duplicate', {
           outboxEntryId,
           bugReportId: entry.bug_report_id,
@@ -191,7 +197,7 @@ export class TicketCreationOutboxProcessor {
    */
   private async createExternalTicket(
     entry: TicketCreationOutboxEntry,
-    preloadedBugReport?: BugReport | null
+    preloadedBugReport?: BugReport
   ): Promise<{ externalId: string; externalUrl: string }> {
     const { platform, integration_id, project_id, bug_report_id, rule_id } = entry;
 
