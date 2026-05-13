@@ -444,8 +444,9 @@
         <h1>Experience Real-World Bugs</h1>
         <p>
           This fake e-commerce page has intentionally planted bugs. Trigger one, then click the
-          floating <strong>Report a bug</strong> button to submit it with everything BugSpotter
-          captured &mdash; screenshot, replay, console, network. Then check the
+          floating <strong>Report an Issue</strong> button (bottom-right) to submit it with
+          everything BugSpotter captured &mdash; screenshot, replay, console, network. Then check
+          the
           <a
             id="hero-admin-link"
             href="https://app.kz.bugspotter.io/login"
@@ -468,8 +469,8 @@
             and the last 30 seconds of session replay &mdash; ready in the buffer
           </li>
           <li>
-            Click the floating <strong>"Report a bug"</strong> button (bottom-right corner) &mdash;
-            this is what end users do in your app
+            Click the floating <strong>"Report an Issue"</strong> button (bottom-right corner)
+            &mdash; this is what end users do in your app
           </li>
           <li>
             Add a quick title/description in the widget modal and submit. Everything that was
@@ -994,8 +995,12 @@
       // user hovers mid-pulse.
       // ========================================================================
       function pulseWidget() {
+        // Match the attribute by name only, not name+value: the SDK
+        // sets `data-bugspotter-exclude="true"` today, but boolean
+        // dataset usage (`<button data-bugspotter-exclude>`) is also
+        // valid HTML and a future SDK rewrite might switch to it.
         const launcher =
-          document.querySelector('button[data-bugspotter-exclude="true"]') ||
+          document.querySelector('button[data-bugspotter-exclude]') ||
           document.querySelector('button[aria-label="Report an Issue"]');
         if (!launcher) return;
         if (typeof launcher.animate !== 'function') return;
@@ -1037,7 +1042,7 @@
         cta.style.marginTop = '4px';
         cta.style.fontSize = '0.85em';
         cta.style.opacity = '0.85';
-        cta.textContent = '\u2192 Click "Report a bug" (bottom-right) to send it';
+        cta.textContent = '\u2192 Click "Report an Issue" (bottom-right) to send it';
         frag.appendChild(cta);
         showToast(frag, 'error', 8000);
         pulseWidget();
@@ -1575,7 +1580,7 @@
       // ========================================================================
       // Bug 24: Unhandled promise rejection
       // ========================================================================
-      async function triggerUnhandledPromise() {
+      function triggerUnhandledPromise() {
         console.log('[Async] Starting background sync...');
         console.warn('[Async] About to trigger unhandled promise rejection');
         var handler = function (event) {
