@@ -23,6 +23,7 @@ import { Queue } from 'bullmq';
 import type { IJobHandle } from '@bugspotter/message-broker';
 import { getLogger } from '../../../logger.js';
 import type { DatabaseClient } from '../../../db/client.js';
+import type { BugReport } from '../../../db/types.js';
 import type { PluginRegistry } from '../../../integrations/plugin-registry.js';
 import type { TicketCreationOutboxEntry } from '../../../db/repositories/ticket-creation-outbox.repository.js';
 
@@ -58,26 +59,21 @@ export class TicketCreationOutboxProcessor {
     });
 
     try {
-      // Step 1: Mark entry as processing (prevents duplicate processing)
-      await this.db.ticketOutbox.markProcessing(outboxEntryId);
-
-      // Step 2: Fetch outbox entry
-      const entry = await this.db.ticketOutbox.findById(outboxEntryId);
-
+      // Step 1: Atomically claim the entry via UPDATE ... RETURNING *. A null
+      // result means another worker beat us to it (or the entry hit a terminal
+      // state); either way we exit cleanly.
+      //
+      // Note on pre-file dedup grace: the grace window is enforced at row-creation
+      // time by setting `scheduled_at = dedup_grace_until` (see AutoTicketService),
+      // so the poller naturally waits before the worker ever runs. We deliberately
+      // do NOT re-defer here: BullMQ deduplicates `queue.add()` against retained
+      // completed jobs with the same `jobId`, so a worker-side defer that ends in
+      // `return` would silently drop the next poll's re-enqueue. The grace is
+      // best-effort; the duplicate_of check below is the actual suppression.
+      const entry = await this.db.ticketOutbox.markProcessing(outboxEntryId);
       if (!entry) {
-        logger.error('Outbox entry not found in database', {
-          outboxEntryId,
-          jobId: job.id,
-        });
-        throw new Error(`Outbox entry not found: ${outboxEntryId}`);
-      }
-
-      if (entry.status !== 'processing') {
-        logger.warn('Outbox entry already processed or failed', {
-          outboxEntryId,
-          status: entry.status,
-        });
-        return; // Already handled by another worker
+        logger.warn('Outbox entry already processed or failed', { outboxEntryId });
+        return;
       }
 
       logger.debug('Fetched outbox entry details', {
@@ -89,9 +85,39 @@ export class TicketCreationOutboxProcessor {
         scheduledAt: entry.scheduled_at,
       });
 
-      // Step 3: Create ticket on external platform
+      // Step 2.5: Pre-file dedup gate. If the async intelligence pipeline has flagged
+      // this bug as a duplicate of another (duplicate_of != null), don't create a
+      // redundant external ticket — mark the outbox row 'skipped' instead. This is a
+      // pure suppression: bug_reports.duplicate_of is set elsewhere (dedup-service),
+      // and Jira/Linear clients don't expose addComment/closeIssue methods yet, so
+      // we can only avoid the new ticket, not cross-link to the canonical one.
+      const bugReport = await this.db.bugReports.findById(entry.bug_report_id);
+      if (!bugReport) {
+        // The bug was hard-deleted (CASCADE would normally clean the outbox row
+        // too, but races and soft-delete shadows can leave us here). Throwing
+        // would just burn retries against a permanently missing row, so move
+        // the entry to the terminal 'skipped' state instead.
+        logger.warn('Skipping external ticket creation — bug report not found', {
+          outboxEntryId,
+          bugReportId: entry.bug_report_id,
+        });
+        await this.db.ticketOutbox.markSkipped(outboxEntryId, 'bug_report_not_found');
+        return;
+      }
+      if (bugReport.duplicate_of) {
+        logger.info('Skipping external ticket creation — bug flagged as duplicate', {
+          outboxEntryId,
+          bugReportId: entry.bug_report_id,
+          duplicateOf: bugReport.duplicate_of,
+        });
+        await this.db.ticketOutbox.markSkipped(outboxEntryId, 'duplicate_of_set');
+        return;
+      }
+
+      // Step 3: Create ticket on external platform. Pass the already-fetched bugReport
+      // to avoid a second findById round-trip inside createExternalTicket.
       // Note: Integration service handles database updates (tickets table + bug_reports table)
-      const ticketResult = await this.createExternalTicket(entry);
+      const ticketResult = await this.createExternalTicket(entry, bugReport);
 
       // Step 4: Mark outbox entry as completed
       await this.db.ticketOutbox.markCompleted(outboxEntryId, {
@@ -140,10 +166,14 @@ export class TicketCreationOutboxProcessor {
   }
 
   /**
-   * Create ticket on external platform using plugin registry
+   * Create ticket on external platform using plugin registry.
+   *
+   * Optionally accepts a pre-fetched bug report to avoid an extra DB round-trip
+   * when the caller has already loaded it (e.g. the dedup gate above).
    */
   private async createExternalTicket(
-    entry: TicketCreationOutboxEntry
+    entry: TicketCreationOutboxEntry,
+    preloadedBugReport?: BugReport
   ): Promise<{ externalId: string; externalUrl: string }> {
     const { platform, integration_id, project_id, bug_report_id, rule_id } = entry;
 
@@ -177,8 +207,8 @@ export class TicketCreationOutboxProcessor {
       outboxEntryId: entry.id,
     });
 
-    // Fetch bug report (needed for full context)
-    const bugReport = await this.db.bugReports.findById(bug_report_id);
+    // Fetch bug report (needed for full context), unless the caller already loaded it.
+    const bugReport = preloadedBugReport ?? (await this.db.bugReports.findById(bug_report_id));
     if (!bugReport) {
       throw new Error(`Bug report not found: ${bug_report_id}`);
     }

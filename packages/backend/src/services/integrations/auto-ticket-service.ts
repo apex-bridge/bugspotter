@@ -26,6 +26,7 @@
 import { getLogger } from '../../logger.js';
 import type { DatabaseClient } from '../../db/client.js';
 import type { BugReport } from '../../db/types.js';
+import { getOrgIntelligenceSettings } from '../intelligence/tenant-config.js';
 import { RuleEvaluator } from './rule-evaluator.js';
 import { ThrottleChecker } from './throttle-checker.js';
 
@@ -146,6 +147,13 @@ export class AutoTicketService {
         priority: rule.priority,
       });
 
+      // Resolve per-org pre-file dedup grace window. When > 0, the outbox worker
+      // defers filing until this timestamp, then re-checks duplicate_of so the
+      // async intelligence pipeline can suppress redundant tickets. NULL =
+      // legacy immediate-file behavior. Failures (missing org, DB error) fall
+      // back to legacy behavior — never block ticket creation.
+      const graceUntil = await this.resolveDedupGraceUntil(bugReport);
+
       // Step 2: Create outbox entry in database transaction (TRANSACTIONAL OUTBOX PATTERN)
       // This ensures atomicity - if DB transaction fails, no external ticket is created
       // Background worker will process the outbox entry asynchronously
@@ -166,8 +174,14 @@ export class AutoTicketService {
           title: bugReport.title,
           description: bugReport.description,
         },
-        scheduled_at: new Date(), // Process immediately
+        // When a grace window is set, schedule the row to fire at the end of the
+        // window so the poller naturally waits — saves one worker cycle that
+        // would otherwise just call deferUntil. The worker still re-checks
+        // dedup_grace_until as a safety net (e.g. on retry, or if org settings
+        // were tightened after the row was enqueued).
+        scheduled_at: graceUntil ?? new Date(),
         max_retries: 3, // 3 retries with exponential backoff
+        dedup_grace_until: graceUntil,
       });
 
       logger.info('Automatic ticket creation queued (outbox)', {
@@ -199,6 +213,28 @@ export class AutoTicketService {
         success: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    }
+  }
+
+  private async resolveDedupGraceUntil(bugReport: BugReport): Promise<Date | null> {
+    if (!bugReport.organization_id) {
+      // Self-hosted / org-less projects: skip pre-file dedup.
+      return null;
+    }
+    try {
+      const settings = await getOrgIntelligenceSettings(this.db, bugReport.organization_id);
+      const graceMs = settings.intelligence_pre_file_dedup_grace_ms;
+      if (graceMs <= 0) {
+        return null;
+      }
+      return new Date(Date.now() + graceMs);
+    } catch (error) {
+      logger.warn('Failed to resolve dedup grace; falling back to immediate filing', {
+        bugReportId: bugReport.id,
+        organizationId: bugReport.organization_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     }
   }
 }
