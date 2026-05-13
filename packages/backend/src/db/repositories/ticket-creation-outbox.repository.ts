@@ -199,33 +199,6 @@ export class TicketCreationOutboxRepository extends BaseRepository {
   }
 
   /**
-   * Push scheduled_at into the future without changing status or retry_count.
-   *
-   * Used by the worker to honor a pre-file dedup grace window: when the entry
-   * is dequeued before dedup_grace_until, we reset scheduled_at so the poller
-   * re-picks it up after the grace window closes. Status and retry_count are
-   * left alone, so this does not consume a retry attempt.
-   *
-   * Accepts both 'pending' and 'failed' so a retry that fires within the
-   * grace window is also deferred (relevant when the window is long and the
-   * first attempt failed quickly). Bounded to those two statuses to avoid
-   * clobbering entries another worker has already claimed via markProcessing
-   * or that have reached a terminal state.
-   */
-  async deferUntil(id: string, until: Date): Promise<boolean> {
-    const query = `
-      UPDATE ticket_creation_outbox
-      SET scheduled_at = $2,
-          updated_at = NOW()
-      WHERE id = $1
-        AND status IN ('pending', 'failed')
-    `;
-
-    const result = await this.pool.query(query, [id, until]);
-    return (result.rowCount ?? 0) > 0;
-  }
-
-  /**
    * Mark entry as 'skipped' — terminal state for entries the worker
    * intentionally did not file (e.g. bug turned out to be a duplicate).
    * Idempotent: only transitions from 'processing'.

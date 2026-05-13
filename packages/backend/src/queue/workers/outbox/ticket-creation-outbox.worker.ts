@@ -59,39 +59,17 @@ export class TicketCreationOutboxProcessor {
     });
 
     try {
-      // Step 0: If the entry has a pre-file dedup grace window that hasn't elapsed yet,
-      // push scheduled_at forward and exit cleanly. The poller will re-enqueue the
-      // entry after the grace window closes. Done BEFORE markProcessing so we don't
-      // burn a retry attempt on an entry that simply isn't due yet. The check covers
-      // both 'pending' and 'failed' (retry) statuses so a long grace window also
-      // catches retries triggered by an early failure.
-      const pre = await this.db.ticketOutbox.findById(outboxEntryId);
-      if (!pre) {
-        logger.error('Outbox entry not found in database', { outboxEntryId, jobId: job.id });
-        throw new Error(`Outbox entry not found: ${outboxEntryId}`);
-      }
-      if (pre.dedup_grace_until && new Date() < pre.dedup_grace_until) {
-        const deferred = await this.db.ticketOutbox.deferUntil(
-          outboxEntryId,
-          pre.dedup_grace_until
-        );
-        if (deferred) {
-          logger.debug('Outbox entry deferred for pre-file dedup grace', {
-            outboxEntryId,
-            graceUntil: pre.dedup_grace_until,
-            status: pre.status,
-          });
-          return;
-        }
-        // Race: another worker claimed the entry between our findById and
-        // deferUntil — fall through to the normal claim path so its state wins.
-      }
-
       // Step 1: Atomically claim the entry via UPDATE ... RETURNING *. A null
       // result means another worker beat us to it (or the entry hit a terminal
-      // state); either way we exit cleanly. Folding claim + fetch into one
-      // round-trip avoids the prior pattern of markProcessing followed by a
-      // defensive findById to read post-claim state.
+      // state); either way we exit cleanly.
+      //
+      // Note on pre-file dedup grace: the grace window is enforced at row-creation
+      // time by setting `scheduled_at = dedup_grace_until` (see AutoTicketService),
+      // so the poller naturally waits before the worker ever runs. We deliberately
+      // do NOT re-defer here: BullMQ deduplicates `queue.add()` against retained
+      // completed jobs with the same `jobId`, so a worker-side defer that ends in
+      // `return` would silently drop the next poll's re-enqueue. The grace is
+      // best-effort; the duplicate_of check below is the actual suppression.
       const entry = await this.db.ticketOutbox.markProcessing(outboxEntryId);
       if (!entry) {
         logger.warn('Outbox entry already processed or failed', { outboxEntryId });
@@ -115,10 +93,16 @@ export class TicketCreationOutboxProcessor {
       // we can only avoid the new ticket, not cross-link to the canonical one.
       const bugReport = await this.db.bugReports.findById(entry.bug_report_id);
       if (!bugReport) {
-        // Match createExternalTicket's contract — surface the missing bug as a hard
-        // failure so the outbox retry path takes over (vs. silently falling through
-        // and triggering a second findById inside createExternalTicket).
-        throw new Error(`Bug report not found: ${entry.bug_report_id}`);
+        // The bug was hard-deleted (CASCADE would normally clean the outbox row
+        // too, but races and soft-delete shadows can leave us here). Throwing
+        // would just burn retries against a permanently missing row, so move
+        // the entry to the terminal 'skipped' state instead.
+        logger.warn('Skipping external ticket creation — bug report not found', {
+          outboxEntryId,
+          bugReportId: entry.bug_report_id,
+        });
+        await this.db.ticketOutbox.markSkipped(outboxEntryId, 'bug_report_not_found');
+        return;
       }
       if (bugReport.duplicate_of) {
         logger.info('Skipping external ticket creation — bug flagged as duplicate', {
