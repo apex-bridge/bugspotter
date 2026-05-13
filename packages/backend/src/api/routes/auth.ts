@@ -12,7 +12,18 @@ import {
   refreshTokenSchema,
   magicLoginSchema,
   registrationStatusSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 } from '../schemas/auth-schema.js';
+import {
+  issuePasswordResetToken,
+  consumePasswordResetToken,
+  PASSWORD_RESET_TTL_SECONDS,
+} from '../../services/auth/password-reset-token.js';
+import {
+  PasswordResetEmailService,
+  type EmailLocale,
+} from '../../services/auth/password-reset-email.service.js';
 import { AppError } from '../middleware/error.js';
 import { config } from '../../config.js';
 import { InvitationService } from '../../saas/services/invitation.service.js';
@@ -503,6 +514,198 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
   );
 
   /**
+   * POST /api/v1/auth/forgot-password
+   *
+   * Public — accepts an email and emails a reset link if the account
+   * exists. ALWAYS returns 200 with a generic message regardless of
+   * whether the email matched a user, whether SMTP is configured, or
+   * whether delivery succeeded. This blocks user-enumeration via
+   * response shape / timing.
+   *
+   * Token state lives in Redis (1h TTL, see `password-reset-token.ts`)
+   * — no DB migration. Per-IP burst cap matches signup/verify-email
+   * to make brute-force probing impractical even with a stolen email
+   * list.
+   */
+  const passwordResetEmailService = new PasswordResetEmailService();
+
+  /**
+   * Resolve whether the password-reset flow is enabled for the tenant
+   * the request landed on. Mirrors the `magic_login_enabled` pattern:
+   *   - Per-org JSONB flag, **default false** (opt-in).
+   *   - Single-tenant selfhosted: settings live on the lone org row.
+   *   - Hub domain (no `request.organizationId`): always disabled —
+   *     there is no org to authorize the feature against.
+   * Read on every call rather than cached so an admin toggling the
+   * flag takes effect immediately, no restart.
+   */
+  async function isPasswordResetEnabledForRequest(organizationId?: string): Promise<boolean> {
+    if (!organizationId) {
+      return false;
+    }
+    const org = await db.organizations.findById(organizationId);
+    return org?.settings?.password_reset_enabled === true;
+  }
+
+  fastify.post<{ Body: { email: string; locale?: EmailLocale } }>(
+    '/api/v1/auth/forgot-password',
+    {
+      schema: forgotPasswordSchema,
+      config: {
+        public: true,
+        rateLimit: { max: 5, timeWindow: '1 minute' },
+      },
+    },
+    async (request, reply) => {
+      const { email, locale } = request.body;
+      const genericResponse = {
+        message: 'If an account with that email exists, a password reset link has been sent.',
+      };
+
+      // Per-org gate. We return 403 (not the generic 200) when the
+      // feature is off so callers — including the admin UI — can
+      // surface a clear "this is disabled for your org" error rather
+      // than the user staring at a fake-success screen and never
+      // getting an email. Whether a given org has the feature on is
+      // not credential-sensitive information.
+      if (!(await isPasswordResetEnabledForRequest(request.organizationId))) {
+        throw new AppError(
+          'Password reset is not enabled for this organization',
+          403,
+          'PasswordResetDisabled'
+        );
+      }
+
+      // Defer ALL user-existence-dependent work to a detached promise
+      // so response latency is identical whether the email matched a
+      // user or not — closes the timing side-channel for account
+      // enumeration. Errors are caught locally and logged; nothing can
+      // escape into the response.
+      const organizationId = request.organizationId;
+      void (async () => {
+        try {
+          const user = await db.users.findByEmail(email);
+          if (!user || !user.password_hash) {
+            return;
+          }
+          // Cross-tenant gate. Without this, an org with the feature
+          // enabled could be used as a relay to email a reset link to
+          // any user platform-wide — including users whose own org
+          // explicitly disabled the feature. Platform admins are
+          // exempt (they may not be a regular member of the org they
+          // happen to be operating against).
+          if (!organizationId) {
+            // Gate above already guarantees this, but keep the
+            // type-narrow + defensive return so the token can never
+            // be issued without an org binding.
+            return;
+          }
+          if (!isPlatformAdmin(user)) {
+            const membership = await db.organizationMembers.findMembership(organizationId, user.id);
+            if (!membership) {
+              return;
+            }
+          }
+          const token = await issuePasswordResetToken(user.id, organizationId);
+          const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_SECONDS * 1000);
+          await passwordResetEmailService.sendPasswordResetEmail({
+            recipientEmail: user.email,
+            token,
+            expiresAt,
+            locale,
+          });
+        } catch (error) {
+          request.log.error(
+            { err: error instanceof Error ? error.message : String(error) },
+            'password reset email send failed'
+          );
+        }
+      })();
+
+      return sendSuccess(reply, genericResponse);
+    }
+  );
+
+  /**
+   * POST /api/v1/auth/reset-password
+   *
+   * Public — consumes a reset token issued by `forgot-password`,
+   * updates the user's password_hash, and clears any active login
+   * lockouts (a forgotten password is the most common cause of
+   * triggering the lockout in the first place — leaving it in place
+   * would lock the user out of their freshly-reset account).
+   *
+   * TODO: session invalidation. We currently don't kill existing
+   * access tokens (max 24h TTL) or refresh cookies after a reset.
+   * Add a `password_changed_at` column to `application.users` and a
+   * check in the JWT verify middleware that rejects tokens whose
+   * `iat` predates that timestamp. Out of scope for this PR — see
+   * the PR description.
+   */
+  fastify.post<{ Body: { token: string; new_password: string } }>(
+    '/api/v1/auth/reset-password',
+    {
+      schema: resetPasswordSchema,
+      config: {
+        public: true,
+        rateLimit: { max: 5, timeWindow: '1 minute' },
+      },
+    },
+    async (request, reply) => {
+      const { token, new_password } = request.body;
+
+      // Single error shape for every failure mode (bad token, dead
+      // user, flag flipped off, membership revoked). The endpoint
+      // must not leak which precondition failed — that would tell
+      // the caller something about server-side state they don't
+      // already know.
+      const invalidToken = () =>
+        new AppError('This reset link is invalid or has expired', 400, 'InvalidResetToken');
+
+      const payload = await consumePasswordResetToken(token);
+      if (!payload) {
+        throw invalidToken();
+      }
+
+      const user = await db.users.findById(payload.userId);
+      if (!user) {
+        throw invalidToken();
+      }
+
+      // Re-check the tenant binding at redemption time. The token
+      // pins the org it was minted under; if an admin has since
+      // flipped `password_reset_enabled` off on that org, or if the
+      // user has been removed from it, the token stops working —
+      // closes the gap where per-org gating only ran at issuance.
+      // Platform admins are exempt from the membership check (they
+      // may not have an explicit row in any one org).
+      const org = await db.organizations.findById(payload.organizationId);
+      if (!org || org.settings?.password_reset_enabled !== true) {
+        throw invalidToken();
+      }
+      if (!isPlatformAdmin(user)) {
+        const membership = await db.organizationMembers.findMembership(
+          payload.organizationId,
+          user.id
+        );
+        if (!membership) {
+          throw invalidToken();
+        }
+      }
+
+      const password_hash = await bcrypt.hash(new_password, PASSWORD.SALT_ROUNDS);
+      await db.users.update(user.id, { password_hash } as Partial<User>);
+
+      // Unlock the account so the user can log in with the new
+      // password immediately if a forgotten-password storm triggered
+      // the lockout.
+      await clearFailedAttempts(user.email);
+
+      return sendSuccess(reply, { message: 'Password has been reset' });
+    }
+  );
+
+  /**
    * POST /api/v1/auth/logout
    * Logout user and clear refresh token cookie
    */
@@ -529,10 +732,11 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       schema: registrationStatusSchema,
       config: { public: true },
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       return sendSuccess(reply, {
         allowed: config.auth.allowRegistration,
         requireInvitation: config.auth.requireInvitationToRegister,
+        passwordResetEnabled: await isPasswordResetEnabledForRequest(request.organizationId),
       });
     }
   );

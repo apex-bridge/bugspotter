@@ -457,6 +457,60 @@ export function adminOrganizationRoutes(fastify: FastifyInstance, db: DatabaseCl
   );
 
   /**
+   * GET /api/v1/admin/organizations/:id/password-reset-status
+   * Whether password reset is enabled for the given organization.
+   * Stored as `password_reset_enabled` in the org JSONB settings
+   * column — same shape as magic-login-status, default false (opt-in).
+   */
+  fastify.get<{ Params: { id: string } }>(
+    '/api/v1/admin/organizations/:id/password-reset-status',
+    {
+      schema: orgIdParamSchema,
+      preHandler: [requirePlatformAdmin()],
+    },
+    async (request, reply) => {
+      const org = await db.organizations.findById(request.params.id);
+      if (!org) {
+        throw new AppError('Organization not found', 404, 'NotFound');
+      }
+      return sendSuccess(reply, { allowed: org.settings?.password_reset_enabled === true });
+    }
+  );
+
+  /**
+   * PATCH /api/v1/admin/organizations/:id/password-reset-status
+   * Enable or disable password reset for a specific organization.
+   */
+  fastify.patch<{ Params: { id: string }; Body: { enabled: boolean } }>(
+    '/api/v1/admin/organizations/:id/password-reset-status',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', format: 'uuid' } },
+        },
+        body: {
+          type: 'object',
+          required: ['enabled'],
+          properties: { enabled: { type: 'boolean' } },
+          additionalProperties: false,
+        },
+      },
+      preHandler: [requirePlatformAdmin()],
+    },
+    async (request, reply) => {
+      const org = await db.organizations.updateSettings(request.params.id, {
+        password_reset_enabled: request.body.enabled,
+      });
+      if (!org) {
+        throw new AppError('Organization not found', 404, 'NotFound');
+      }
+      return sendSuccess(reply, { allowed: org.settings?.password_reset_enabled === true });
+    }
+  );
+
+  /**
    * POST /api/v1/admin/organizations/:id/magic-token
    * Generate a magic login token for a user in an organization.
    * Requires magic login to be enabled for the organization.

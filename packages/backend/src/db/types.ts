@@ -704,6 +704,7 @@ export type DataResidencyRegion =
 
 export interface OrganizationSettings {
   magic_login_enabled?: boolean;
+  password_reset_enabled?: boolean;
   // Intelligence settings (R3: Multi-Tenant Keys)
   intelligence_enabled?: boolean;
   intelligence_api_key?: string | null; // encrypted blob via CredentialEncryption

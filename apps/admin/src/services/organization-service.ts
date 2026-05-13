@@ -336,6 +336,26 @@ export const organizationService = {
     return response.data.data;
   },
 
+  /** Admin: Check if password reset is enabled for an organization */
+  getPasswordResetStatus: async (orgId: string): Promise<{ allowed: boolean }> => {
+    const response = await api.get<{ success: boolean; data: { allowed: boolean } }>(
+      API_ENDPOINTS.adminOrganizations.passwordResetStatus(orgId)
+    );
+    return response.data.data;
+  },
+
+  /** Admin: Enable or disable password reset for an organization */
+  setPasswordResetStatus: async (
+    orgId: string,
+    enabled: boolean
+  ): Promise<{ allowed: boolean }> => {
+    const response = await api.patch<{ success: boolean; data: { allowed: boolean } }>(
+      API_ENDPOINTS.adminOrganizations.setPasswordResetStatus(orgId),
+      { enabled }
+    );
+    return response.data.data;
+  },
+
   /** Admin: Generate a magic login token for a user in an organization */
   generateMagicToken: async (
     orgId: string,

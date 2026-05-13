@@ -14,6 +14,8 @@ import LoginPage from './pages/login';
 import RegisterPage from './pages/register';
 import OnboardingPage from './pages/onboarding';
 import VerifyEmailPage from './pages/verify-email';
+import ForgotPasswordPage from './pages/forgot-password';
+import ResetPasswordPage from './pages/reset-password';
 import SetupWizard from './pages/setup';
 import DashboardLayout from './components/dashboard-layout';
 import DashboardPage from './pages/dashboard';
@@ -88,6 +90,16 @@ function App() {
                   fresh tabs from email links.
                 */}
                 <Route path="/verify-email" element={<VerifyEmailPage />} />
+                {/*
+                  Password-reset flow — both routes are public. The
+                  `?token=` on `/reset-password` IS the auth, mirroring
+                  the verify-email pattern. `/forgot-password` is the
+                  email-entry step that issues the token; we keep it
+                  outside ProtectedRoute so a locked-out user can
+                  reach it without an existing session.
+                */}
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/setup" element={<SetupWizard />} />
                 <Route path="/invitations/accept" element={<AcceptInvitationPage />} />
                 <Route

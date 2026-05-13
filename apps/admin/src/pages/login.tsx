@@ -31,6 +31,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [registrationAllowed, setRegistrationAllowed] = useState(false);
+  const [passwordResetEnabled, setPasswordResetEnabled] = useState(false);
   const [accessRevoked, setAccessRevoked] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -84,9 +85,11 @@ export default function LoginPage() {
         // Show "Sign up" link only when registration is allowed AND
         // either open registration or an invite_token is present
         setRegistrationAllowed(status.allowed && (!status.requireInvitation || !!inviteToken));
+        setPasswordResetEnabled(status.passwordResetEnabled);
       },
       (error) => {
-        // Non-critical — sign-up link stays hidden as a safe default
+        // Non-critical — sign-up and forgot-password links both stay
+        // hidden as a safe default if the status probe fails.
         if (import.meta.env.DEV) {
           console.warn('Failed to check registration status:', error);
         }
@@ -171,6 +174,13 @@ export default function LoginPage() {
           <LogIn className="w-4 h-4 mr-2" aria-hidden="true" />
           {isLoading ? t('auth.loggingIn') : t('auth.loginButton')}
         </Button>
+        {passwordResetEnabled && (
+          <div className="text-right">
+            <Link to="/forgot-password" className="text-sm text-blue-600 hover:underline">
+              {t('auth.forgotPassword')}
+            </Link>
+          </div>
+        )}
       </form>
       {registrationAllowed && (
         <p className="mt-4 text-center text-sm text-gray-600">
