@@ -594,16 +594,19 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
           // explicitly disabled the feature. Platform admins are
           // exempt (they may not be a regular member of the org they
           // happen to be operating against).
+          if (!organizationId) {
+            // Gate above already guarantees this, but keep the
+            // type-narrow + defensive return so the token can never
+            // be issued without an org binding.
+            return;
+          }
           if (!isPlatformAdmin(user)) {
-            if (!organizationId) {
-              return;
-            }
             const membership = await db.organizationMembers.findMembership(organizationId, user.id);
             if (!membership) {
               return;
             }
           }
-          const token = await issuePasswordResetToken(user.id);
+          const token = await issuePasswordResetToken(user.id, organizationId);
           const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_SECONDS * 1000);
           await passwordResetEmailService.sendPasswordResetEmail({
             recipientEmail: user.email,
@@ -651,17 +654,43 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
     async (request, reply) => {
       const { token, new_password } = request.body;
 
-      const userId = await consumePasswordResetToken(token);
-      if (!userId) {
-        throw new AppError('This reset link is invalid or has expired', 400, 'InvalidResetToken');
+      // Single error shape for every failure mode (bad token, dead
+      // user, flag flipped off, membership revoked). The endpoint
+      // must not leak which precondition failed — that would tell
+      // the caller something about server-side state they don't
+      // already know.
+      const invalidToken = () =>
+        new AppError('This reset link is invalid or has expired', 400, 'InvalidResetToken');
+
+      const payload = await consumePasswordResetToken(token);
+      if (!payload) {
+        throw invalidToken();
       }
 
-      const user = await db.users.findById(userId);
+      const user = await db.users.findById(payload.userId);
       if (!user) {
-        // Token was valid at issue time but the user has since been
-        // deleted. Same shape as bad-token to avoid leaking which
-        // case was hit.
-        throw new AppError('This reset link is invalid or has expired', 400, 'InvalidResetToken');
+        throw invalidToken();
+      }
+
+      // Re-check the tenant binding at redemption time. The token
+      // pins the org it was minted under; if an admin has since
+      // flipped `password_reset_enabled` off on that org, or if the
+      // user has been removed from it, the token stops working —
+      // closes the gap where per-org gating only ran at issuance.
+      // Platform admins are exempt from the membership check (they
+      // may not have an explicit row in any one org).
+      const org = await db.organizations.findById(payload.organizationId);
+      if (!org || org.settings?.password_reset_enabled !== true) {
+        throw invalidToken();
+      }
+      if (!isPlatformAdmin(user)) {
+        const membership = await db.organizationMembers.findMembership(
+          payload.organizationId,
+          user.id
+        );
+        if (!membership) {
+          throw invalidToken();
+        }
       }
 
       const password_hash = await bcrypt.hash(new_password, PASSWORD.SALT_ROUNDS);

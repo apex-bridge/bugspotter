@@ -11,6 +11,11 @@
  *   If the Redis snapshot leaks, captured keys aren't directly usable.
  * - One-shot: `consumePasswordResetToken` deletes the key atomically
  *   via GETDEL; a replayed token returns null on the second attempt.
+ * - Token value pins `{userId, organizationId}` so the reset handler
+ *   can re-check the org's `password_reset_enabled` flag and the
+ *   user's membership at redemption time. Without that pin, a token
+ *   minted from an enabled tenant could outlive a flag flip or be
+ *   redeemed regardless of which tenant context the request lands on.
  * - TTL: 1 hour.
  */
 
@@ -24,6 +29,11 @@ export const PASSWORD_RESET_TTL_SECONDS = 60 * 60;
 
 const REDIS_KEY_PREFIX = 'password_reset:';
 
+export interface PasswordResetTokenPayload {
+  userId: string;
+  organizationId: string;
+}
+
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -32,25 +42,53 @@ function getTokenKey(token: string): string {
   return `${REDIS_KEY_PREFIX}${hashToken(token)}`;
 }
 
+function decodePayload(raw: string | null): PasswordResetTokenPayload | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as { userId?: unknown }).userId === 'string' &&
+      typeof (parsed as { organizationId?: unknown }).organizationId === 'string'
+    ) {
+      return parsed as PasswordResetTokenPayload;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Issue a fresh reset token bound to the given user. Returns the
- * plaintext token — the caller is responsible for delivering it via
- * email (never logged, never returned in HTTP responses).
+ * Issue a fresh reset token bound to the given user + organization.
+ * Returns the plaintext token — the caller is responsible for
+ * delivering it via email (never logged, never returned in HTTP
+ * responses).
  */
-export async function issuePasswordResetToken(userId: string): Promise<string> {
+export async function issuePasswordResetToken(
+  userId: string,
+  organizationId: string
+): Promise<string> {
   const token = crypto.randomBytes(32).toString('base64url');
   const pool = getConnectionPool();
   const redis = await pool.getMainConnection();
-  await redis.setex(getTokenKey(token), PASSWORD_RESET_TTL_SECONDS, userId);
+  const value = JSON.stringify({ userId, organizationId } satisfies PasswordResetTokenPayload);
+  await redis.setex(getTokenKey(token), PASSWORD_RESET_TTL_SECONDS, value);
   return token;
 }
 
 /**
- * Consume a reset token. Returns the bound userId on success, null
- * if the token is unknown, expired, or already used. Atomic via
- * GETDEL — a concurrent second consume sees null.
+ * Consume a reset token. Returns the bound `{userId, organizationId}`
+ * on success, null if the token is unknown, expired, malformed, or
+ * already used. Atomic via GETDEL — a concurrent second consume sees
+ * null.
  */
-export async function consumePasswordResetToken(token: string): Promise<string | null> {
+export async function consumePasswordResetToken(
+  token: string
+): Promise<PasswordResetTokenPayload | null> {
   try {
     const pool = getConnectionPool();
     const redis = await pool.getMainConnection();
@@ -59,7 +97,7 @@ export async function consumePasswordResetToken(token: string): Promise<string |
     // eval — a plain GET+DEL pipeline isn't safe under concurrency
     // (two consumers can both read before either DELs, breaking the
     // one-shot invariant that backs replay protection).
-    const userId =
+    const raw =
       typeof (redis as { getdel?: unknown }).getdel === 'function'
         ? await (redis as { getdel: (key: string) => Promise<string | null> }).getdel(
             getTokenKey(token)
@@ -69,7 +107,7 @@ export async function consumePasswordResetToken(token: string): Promise<string |
             1,
             getTokenKey(token)
           )) as string | null);
-    return userId;
+    return decodePayload(raw);
   } catch (error) {
     logger.error('Failed to consume password reset token', {
       error: error instanceof Error ? error.message : String(error),

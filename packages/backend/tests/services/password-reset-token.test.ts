@@ -1,13 +1,18 @@
 /**
  * Password Reset Token Service Tests
  *
- * Covers the four invariants we care about:
- *   1. Issue stores the (hashed) token in Redis with the configured TTL.
- *   2. Consume returns the bound userId on first call.
+ * Covers the invariants we care about:
+ *   1. Issue stores the SHA-256-hashed key (never the raw token) in
+ *      Redis with the configured TTL.
+ *   2. Consume returns the bound `{userId, organizationId}` on first
+ *      call.
  *   3. Consume returns null on the second call (one-shot).
- *   4. Consume returns null when Redis throws (fail-closed).
+ *   4. Consume returns null when Redis throws (fail-closed) or the
+ *      stored payload is malformed.
+ *   5. Atomic Lua fallback path works when `getdel` is unavailable.
  */
 
+import crypto from 'node:crypto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   issuePasswordResetToken,
@@ -74,50 +79,69 @@ describe('Password Reset Token Service', () => {
   });
 
   describe('issuePasswordResetToken', () => {
-    it('stores the token in Redis with the configured TTL', async () => {
-      const token = await issuePasswordResetToken('user-1');
+    it('stores the token under its SHA-256 hash, with TTL and {userId, organizationId}', async () => {
+      const token = await issuePasswordResetToken('user-1', 'org-1');
 
       expect(token).toBeTruthy();
       // base64url of 32 bytes is at least 32 chars long
       expect(token.length).toBeGreaterThanOrEqual(32);
       expect(mockRedis.setex).toHaveBeenCalledTimes(1);
-      const [, ttl, value] = mockRedis.setex.mock.calls[0]!;
+      const [key, ttl, value] = mockRedis.setex.mock.calls[0]!;
+      // Security invariant: the raw token MUST NOT appear as the
+      // Redis key (or anywhere in the stored value). Only its
+      // SHA-256 digest does. A Redis snapshot leak then doesn't
+      // hand attackers usable reset tokens.
+      const expectedHash = crypto.createHash('sha256').update(token).digest('hex');
+      expect(key).toBe(`password_reset:${expectedHash}`);
+      expect(key).not.toContain(token);
+      expect(value).not.toContain(token);
       expect(ttl).toBe(PASSWORD_RESET_TTL_SECONDS);
-      expect(value).toBe('user-1');
+      expect(JSON.parse(value as string)).toEqual({ userId: 'user-1', organizationId: 'org-1' });
     });
 
     it('produces a different token on each call', async () => {
-      const a = await issuePasswordResetToken('user-1');
-      const b = await issuePasswordResetToken('user-1');
+      const a = await issuePasswordResetToken('user-1', 'org-1');
+      const b = await issuePasswordResetToken('user-1', 'org-1');
       expect(a).not.toBe(b);
     });
   });
 
   describe('consumePasswordResetToken', () => {
-    it('returns the bound userId on first consume', async () => {
-      const token = await issuePasswordResetToken('user-42');
-      const userId = await consumePasswordResetToken(token);
-      expect(userId).toBe('user-42');
+    it('returns the bound payload on first consume', async () => {
+      const token = await issuePasswordResetToken('user-42', 'org-42');
+      const payload = await consumePasswordResetToken(token);
+      expect(payload).toEqual({ userId: 'user-42', organizationId: 'org-42' });
     });
 
     it('returns null on a replayed consume (one-shot)', async () => {
-      const token = await issuePasswordResetToken('user-42');
+      const token = await issuePasswordResetToken('user-42', 'org-42');
       const first = await consumePasswordResetToken(token);
       const second = await consumePasswordResetToken(token);
-      expect(first).toBe('user-42');
+      expect(first).toEqual({ userId: 'user-42', organizationId: 'org-42' });
       expect(second).toBeNull();
     });
 
     it('returns null for an unknown / expired token', async () => {
       // Token wasn't issued at all — Redis has no key.
-      const userId = await consumePasswordResetToken('definitely-not-a-real-token');
-      expect(userId).toBeNull();
+      const payload = await consumePasswordResetToken('definitely-not-a-real-token');
+      expect(payload).toBeNull();
     });
 
     it('returns null when Redis throws (fail-closed)', async () => {
       mockRedis.getdel!.mockRejectedValueOnce(new Error('redis unavailable'));
-      const userId = await consumePasswordResetToken('any-token');
-      expect(userId).toBeNull();
+      const payload = await consumePasswordResetToken('any-token');
+      expect(payload).toBeNull();
+    });
+
+    it('returns null when stored value is malformed JSON', async () => {
+      // Hand-craft a key with non-JSON value to simulate a legacy /
+      // corrupted record. The handler must not crash and must not
+      // accept an unparseable payload.
+      const token = 'malformed-token';
+      const hash = crypto.createHash('sha256').update(token).digest('hex');
+      store.set(`password_reset:${hash}`, '{not valid json');
+      const payload = await consumePasswordResetToken(token);
+      expect(payload).toBeNull();
     });
   });
 
@@ -136,18 +160,18 @@ describe('Password Reset Token Service', () => {
       mockRedis.getdel = originalGetdel;
     });
 
-    it('returns the bound userId via Lua eval', async () => {
-      const token = await issuePasswordResetToken('user-99');
-      const userId = await consumePasswordResetToken(token);
-      expect(userId).toBe('user-99');
+    it('returns the bound payload via Lua eval', async () => {
+      const token = await issuePasswordResetToken('user-99', 'org-99');
+      const payload = await consumePasswordResetToken(token);
+      expect(payload).toEqual({ userId: 'user-99', organizationId: 'org-99' });
       expect(mockRedis.eval).toHaveBeenCalledTimes(1);
     });
 
     it('one-shot: second consume via Lua sees null', async () => {
-      const token = await issuePasswordResetToken('user-99');
+      const token = await issuePasswordResetToken('user-99', 'org-99');
       const first = await consumePasswordResetToken(token);
       const second = await consumePasswordResetToken(token);
-      expect(first).toBe('user-99');
+      expect(first).toEqual({ userId: 'user-99', organizationId: 'org-99' });
       expect(second).toBeNull();
     });
   });
