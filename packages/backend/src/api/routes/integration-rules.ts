@@ -8,7 +8,7 @@ import type { DatabaseClient } from '../../db/client.js';
 import { sendSuccess, sendCreated } from '../utils/response.js';
 import { checkProjectAccess, findOrThrow } from '../utils/resource.js';
 import { AppError } from '../middleware/error.js';
-import { requireAuth, requirePermission, requireProjectRole } from '../middleware/auth.js';
+import { requireAuth, requireProjectRole } from '../middleware/auth.js';
 import { requireProjectAccess } from '../middleware/project-access.js';
 import { getLogger } from '../../logger.js';
 import { getCacheService } from '../../cache/index.js';
@@ -153,16 +153,21 @@ export async function registerIntegrationRuleRoutes(
   /**
    * List all rules for an integration
    * GET /api/v1/integrations/:platform/:projectId/rules
+   *
+   * Access gate: project membership at any role (viewer+). Integration
+   * rules are project-scoped resources — listing them should not require
+   * system-level read permission, because system role and project role
+   * are independent dimensions. A project viewer can already see the
+   * integration card on the project page; hiding its rules behind a
+   * separate system-role check creates confusing 403s for org-owners
+   * who happen to have system role 'viewer' (e.g. SaaS tenants where
+   * platform admin = BugSpotter staff, not customer).
    */
   server.get<{ Params: { platform: string; projectId: string } }>(
     '/api/v1/integrations/:platform/:projectId/rules',
     {
       schema: listIntegrationRulesSchema,
-      preHandler: [
-        requireAuth,
-        requirePermission(db, 'integration_rules', 'read'),
-        requireProjectAccess(db, { paramName: 'projectId' }),
-      ],
+      preHandler: [requireAuth, requireProjectAccess(db, { paramName: 'projectId' })],
     },
     async (request, reply) => {
       const { platform, projectId } = request.params;
@@ -193,6 +198,16 @@ export async function registerIntegrationRuleRoutes(
   /**
    * Create a new integration rule
    * POST /api/v1/integrations/:platform/:projectId/rules
+   *
+   * Access gate: project-admin (via `requireProjectRole('admin')`).
+   * `requireProjectRole` resolves the effective role through
+   * `lookupInheritedProjectRole` + `pickHigherProjectRole`, so org-owners
+   * inherit admin and pass even when their explicit project_members row
+   * is 'viewer' or absent. The previous `requirePermission(...,
+   * 'integration_rules', 'create')` system-level check was redundant on a
+   * project-scoped resource and actively wrong for SaaS deployments
+   * where customer org-owners hold system role 'viewer' (platform admin
+   * is a BugSpotter-staff role, not a customer-tenant concept).
    */
   server.post<{ Params: { platform: string; projectId: string }; Body: CreateRuleBody }>(
     '/api/v1/integrations/:platform/:projectId/rules',
@@ -200,7 +215,6 @@ export async function registerIntegrationRuleRoutes(
       schema: createIntegrationRuleSchema,
       preHandler: [
         requireAuth,
-        requirePermission(db, 'integration_rules', 'create'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],
@@ -269,6 +283,9 @@ export async function registerIntegrationRuleRoutes(
   /**
    * Update an integration rule
    * PATCH /api/v1/integrations/:platform/:projectId/rules/:ruleId
+   *
+   * Access gate: project-admin via effective role (same rationale as
+   * POST /rules above — no redundant system-level check).
    */
   server.patch<{
     Params: { platform: string; projectId: string; ruleId: string };
@@ -279,7 +296,6 @@ export async function registerIntegrationRuleRoutes(
       schema: updateIntegrationRuleSchema,
       preHandler: [
         requireAuth,
-        requirePermission(db, 'integration_rules', 'update'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],
@@ -317,6 +333,13 @@ export async function registerIntegrationRuleRoutes(
   /**
    * Delete an integration rule
    * DELETE /api/v1/integrations/:platform/:projectId/rules/:ruleId
+   *
+   * Access gate: project-admin via effective role. Previously, the
+   * system-level `requirePermission(..., 'delete')` blocked all
+   * non-platform-admins outright because the permissions seed grants
+   * `delete` only to system role 'admin'. That left project-admins
+   * unable to delete rules in their own project — wrong for a
+   * project-scoped resource.
    */
   server.delete<{ Params: { platform: string; projectId: string; ruleId: string } }>(
     '/api/v1/integrations/:platform/:projectId/rules/:ruleId',
@@ -324,7 +347,6 @@ export async function registerIntegrationRuleRoutes(
       schema: deleteIntegrationRuleSchema,
       preHandler: [
         requireAuth,
-        requirePermission(db, 'integration_rules', 'delete'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],
@@ -374,7 +396,6 @@ export async function registerIntegrationRuleRoutes(
       schema: copyIntegrationRuleSchema,
       preHandler: [
         requireAuth,
-        requirePermission(db, 'integration_rules', 'create'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         // Source project requires `member` role minimum (closes
         // GH-96: cross-tenant exfiltration). Without this, a user
