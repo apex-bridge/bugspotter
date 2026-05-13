@@ -71,18 +71,17 @@ describe('Integration Rules Permissions - E2E', () => {
     testProject = await createTestProject(db, { created_by: adminUser.id });
     cleanup.trackProject(testProject.id);
 
-    // Add regular user as project admin. The create / update routes use
-    // `requireProjectRole('admin')` (integration-rules.ts:203, 269), so
-    // `member` would 403. The COPY route enforces admin on the TARGET
-    // project only (inline `checkProjectAccess` in the handler at
-    // integration-rules.ts:370-380); its preHandler (line 361) uses
-    // `requireProjectAccess` with no minProjectRole, so the SOURCE
-    // project just needs membership. We grant admin on the source anyway
-    // for symmetry. Platform role stays `user`, so these tests still
-    // verify that a non-platform-admin can do these ops when their
-    // project role is sufficient. DELETE is excluded — see the rename
-    // in the DELETE describe-block (platform `user` lacks
-    // `integration_rules:delete` in the permissions seed).
+    // Add regular user as project admin. The create / update / delete
+    // routes use `requireProjectRole('admin')` (effective role
+    // composed with org-inheritance — `pickHigherProjectRole`). The
+    // COPY route enforces admin on the TARGET project only (inline
+    // `checkProjectAccess` in the handler at ~integration-rules.ts:
+    // 405-418); its preHandler uses `requireProjectRole('member')`,
+    // so the SOURCE project just needs membership. We grant admin on
+    // the source anyway for symmetry. Platform role stays `user`, so
+    // these tests verify a non-platform-admin can do these ops when
+    // their project role is sufficient — including DELETE, after the
+    // system-level `requirePermission(..., 'delete')` was removed.
     await db.projectMembers.addMember(testProject.id, regularUser.id, 'admin');
 
     // Add viewer user as member
@@ -289,18 +288,18 @@ describe('Integration Rules Permissions - E2E', () => {
         },
       });
 
+      // After dropping the redundant system-level `requirePermission` on
+      // project-scoped routes, viewers are denied by the project-role
+      // gate (`requireProjectRole('admin')`) instead. Outcome unchanged
+      // (still 403); error message reflects the new binding constraint.
       expect(response.statusCode).toBe(403);
-      expect(JSON.parse(response.body).message).toContain(
-        'Insufficient permissions to create integration_rules'
-      );
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
 
     // Coverage: a project `member` (not `admin`) is denied at the
-    // `requireProjectRole('admin')` gate, NOT at requirePermission.
-    // Without this test, a regression that relaxes the project-role
-    // requirement back to 'member' (or removes the guard entirely)
-    // would only be caught for the platform-permission gate via the
-    // viewer/outsider tests above. Distinguished by the error message.
+    // `requireProjectRole('admin')` gate. This is now the only deny
+    // path for non-admins on a project they belong to — the previous
+    // `requirePermission` system-level check has been removed.
     it('should deny project member (with create permission) from creating rules', async () => {
       const { jwt: memberJwt } = await loginAsProjectRole(testProject.id, 'member');
 
@@ -317,8 +316,7 @@ describe('Integration Rules Permissions - E2E', () => {
       });
 
       expect(response.statusCode).toBe(403);
-      // Platform `user` HAS `integration_rules:create`, so requirePermission
-      // passes — the denial comes from `requireProjectRole('admin')`.
+      // Denial comes from `requireProjectRole('admin')`.
       expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
 
@@ -392,16 +390,16 @@ describe('Integration Rules Permissions - E2E', () => {
         },
       });
 
+      // After dropping system-level `requirePermission` on PATCH,
+      // viewer denial routes through `requireProjectRole('admin')`.
       expect(response.statusCode).toBe(403);
-      expect(JSON.parse(response.body).message).toContain(
-        'Insufficient permissions to update integration_rules'
-      );
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
 
-    // Locks in the project-role gate on PATCH (integration-rules.ts:269).
-    // Without this, the gate could be relaxed back to `member` and only
-    // viewer/outsider tests would still pass — both stop at the
-    // platform-permission check before reaching `requireProjectRole`.
+    // Locks in the project-role gate on PATCH. Project member is the
+    // only non-admin path that reaches this gate (viewer would be
+    // denied here too now that the system-level gate is gone, but the
+    // outcome is identical so the member test is the canonical guard).
     it('should deny project member (with update permission) from updating rules', async () => {
       const { jwt: memberJwt } = await loginAsProjectRole(testProject.id, 'member');
 
@@ -413,8 +411,7 @@ describe('Integration Rules Permissions - E2E', () => {
       });
 
       expect(response.statusCode).toBe(403);
-      // Platform `user` HAS `integration_rules:update`, so requirePermission
-      // passes — denial comes from `requireProjectRole('admin')`.
+      // Denial comes from `requireProjectRole('admin')`.
       expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
 
@@ -434,11 +431,10 @@ describe('Integration Rules Permissions - E2E', () => {
   });
 
   describe('DELETE - Delete Rule (DELETE /api/v1/integrations/:platform/:projectId/rules/:ruleId)', () => {
-    // The permissions seed (db/migrations/001_initial_schema.sql) gives
-    // platform role `user` create/read/update on integration_rules but
-    // explicitly NOT delete — delete is admin-only at the system level.
-    // So this case can only verify the platform-admin path; project-admin
-    // alone is insufficient. Renamed accordingly.
+    // With the system-level `requirePermission(..., 'delete')` gate
+    // removed (PR backend/drop-redundant-system-perm-on-project-scoped-routes),
+    // delete is now gated solely by `requireProjectRole('admin')` —
+    // project-admin is sufficient regardless of platform role.
     it('should allow platform admin to delete rules for their project', async () => {
       // Create a rule to delete
       const createResponse = await server.inject({
@@ -484,39 +480,50 @@ describe('Integration Rules Permissions - E2E', () => {
         headers: { authorization: `Bearer ${viewerUserJwt}` },
       });
 
+      // Viewer denial now comes from `requireProjectRole('admin')` —
+      // the only gate, since the system-level check was removed.
       expect(response.statusCode).toBe(403);
-      expect(JSON.parse(response.body).message).toContain(
-        'Insufficient permissions to delete integration_rules'
-      );
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
 
-    // Verifies the platform-permission gate is the binding constraint:
-    // a project admin (platform `user` role) is denied because the
-    // permissions seed grants `user` only create/read/update on
-    // integration_rules — not :delete (migrations/001:565-572). This
-    // pins the platform/project boundary so a future relaxation of
-    // the platform gate can't slip through covered only by the viewer
-    // case (which fails for an unrelated reason — viewer also lacks
-    // :read on integration_rules at the platform level... actually,
-    // viewer DOES have :read but not anything else; the failure path
-    // is the same `requirePermission` gate).
-    it('should deny project admin (platform user) from deleting rules', async () => {
+    // Behavior flip: previously a project-admin with platform role
+    // `user` got 403 here because the permissions seed didn't grant
+    // `user` the `integration_rules:delete` action. That was the bug —
+    // delete on a project-scoped resource shouldn't be gated by a
+    // system-level permission. Now project-admin alone is sufficient.
+    it('should allow project admin (platform user) to delete rules', async () => {
       const { jwt: projectAdminJwt } = await loginAsProjectRole(testProject.id, 'admin');
+
+      // Create a fresh rule to delete so we don't churn the shared
+      // `ruleId` used by other tests in this suite.
+      const createResp = await server.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/jira/${testProject.id}/rules`,
+        headers: { authorization: `Bearer ${projectAdminJwt}` },
+        payload: {
+          name: 'Rule created by project-admin for delete-test',
+          enabled: true,
+          filters: [{ field: 'os', operator: 'equals', value: 'linux' }],
+          auto_create: false,
+        },
+      });
+      expect(createResp.statusCode).toBe(201);
+      const targetRuleId = JSON.parse(createResp.body).data.id;
 
       const response = await server.inject({
         method: 'DELETE',
-        url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}`,
+        url: `/api/v1/integrations/jira/${testProject.id}/rules/${targetRuleId}`,
         headers: { authorization: `Bearer ${projectAdminJwt}` },
       });
 
-      expect(response.statusCode).toBe(403);
-      // Platform `user` lacks `integration_rules:delete`, so requirePermission
-      // denies BEFORE requireProjectAccess/requireProjectRole runs — same
-      // path as the viewer/outsider deny tests above. Project-admin role
-      // doesn't compensate for the missing platform permission.
-      expect(JSON.parse(response.body).message).toContain(
-        'Insufficient permissions to delete integration_rules'
-      );
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.body).message).toContain('deleted successfully');
+
+      // Verify deletion in DB
+      const deleted = await db.query('SELECT id FROM integration_rules WHERE id = $1', [
+        targetRuleId,
+      ]);
+      expect(deleted.rows).toHaveLength(0);
     });
 
     it('should deny outsider from deleting rules', async () => {
@@ -526,31 +533,21 @@ describe('Integration Rules Permissions - E2E', () => {
         headers: { authorization: `Bearer ${outsiderJwt}` },
       });
 
-      // Outsider has platform role `user`, which doesn't carry
-      // `integration_rules:delete` in the permissions table. They're denied
-      // by `requirePermission` BEFORE `requireProjectAccess` runs — same
-      // 403 path as the viewer test above. The previous "Access denied"
-      // assertion expected a `requireProjectAccess` rejection, but middleware
-      // ordering means that path is unreachable for any platform role
-      // lacking the system permission. Either denial is correct; pin to
-      // the current actual message.
+      // Without the system-level gate, outsider denial now comes from
+      // `requireProjectAccess` (no project membership), which throws
+      // "Access denied". This is the more accurate error path for an
+      // outsider: the issue is project access, not system permission.
       expect(response.statusCode).toBe(403);
-      expect(JSON.parse(response.body).message).toContain(
-        'Insufficient permissions to delete integration_rules'
-      );
+      expect(JSON.parse(response.body).message).toContain('Access denied');
     });
 
-    // Verifies the platform-admin bypass on `requireProjectRole('admin')`.
-    // claude flagged on PR-94 that under the current permissions seed the
-    // `requireProjectRole('admin')` guard at integration-rules.ts:313 is
-    // never the binding constraint on DELETE — only platform admins reach
-    // it (everyone else is stopped earlier by `requirePermission`), and
-    // platform admins bypass it via `isPlatformAdmin()` in `checkProjectAccess`
-    // and `requireProjectRole`. If a future migration grants `:delete` to a
-    // non-platform-admin role, the project-role gate suddenly becomes
-    // load-bearing without warning. This positive test pins the bypass:
-    // a platform admin who is NOT a project admin (or member) can still
-    // delete, proving the bypass is wired correctly.
+    // Pins the platform-admin bypass on `requireProjectAccess` +
+    // `requireProjectRole('admin')`: a platform admin who is NOT a
+    // project member can still delete. After the system-level
+    // `requirePermission(..., 'delete')` was removed (this PR), the
+    // project-role gate is the only remaining check besides project
+    // access — both short-circuit on `isPlatformAdmin`, so platform
+    // admins reach the handler regardless of project membership.
     it('should allow platform admin (not a project member) to delete rules', async () => {
       // Create a rule to delete — a fresh one so we don't churn the
       // shared `ruleId` used by other tests in the suite.
@@ -669,7 +666,7 @@ describe('Integration Rules Permissions - E2E', () => {
       await db.query('DELETE FROM integration_rules WHERE id = $1', [responseBody.data.rule.id]);
     });
 
-    it('should deny viewer from copying rules (requires create permission)', async () => {
+    it('should deny viewer from copying rules', async () => {
       const response = await server.inject({
         method: 'POST',
         url: `/api/v1/integrations/jira/${testProject.id}/rules/${ruleId}/copy`,
@@ -679,10 +676,11 @@ describe('Integration Rules Permissions - E2E', () => {
         },
       });
 
+      // Viewer has explicit project.role='viewer' on testProject. The
+      // copy route's preHandler requires `member`+ on source — viewer
+      // fails there with the project-role error.
       expect(response.statusCode).toBe(403);
-      expect(JSON.parse(response.body).message).toContain(
-        'Insufficient permissions to create integration_rules'
-      );
+      expect(JSON.parse(response.body).message).toContain('Insufficient project permissions');
     });
 
     it('should deny outsider from copying rules', async () => {
