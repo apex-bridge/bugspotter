@@ -226,10 +226,11 @@ export const registrationStatusSchema = {
         success: { type: 'boolean', enum: [true] },
         data: {
           type: 'object',
-          required: ['allowed', 'requireInvitation'],
+          required: ['allowed', 'requireInvitation', 'passwordResetEnabled'],
           properties: {
             allowed: { type: 'boolean' },
             requireInvitation: { type: 'boolean' },
+            passwordResetEnabled: { type: 'boolean' },
           },
         },
         timestamp: { type: 'string', format: 'date-time' },
@@ -261,6 +262,66 @@ export const verifyEmailSchema = {
           required: ['email_verified'],
           properties: {
             email_verified: { type: 'boolean', enum: [true] },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+} as const;
+
+export const forgotPasswordSchema = {
+  body: {
+    type: 'object',
+    required: ['email'],
+    properties: {
+      email: { type: 'string', format: 'email', maxLength: 254 },
+      locale: { type: 'string', enum: ['en', 'ru', 'kk'] },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: 'object',
+      required: ['success', 'data', 'timestamp'],
+      properties: {
+        success: { type: 'boolean', enum: [true] },
+        data: {
+          type: 'object',
+          required: ['message'],
+          properties: {
+            message: { type: 'string' },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+} as const;
+
+// 32 bytes random → base64url ~43 chars. Same envelope as
+// `verifyEmailSchema`, leave headroom for a future length tweak.
+export const resetPasswordSchema = {
+  body: {
+    type: 'object',
+    required: ['token', 'new_password'],
+    properties: {
+      token: { type: 'string', minLength: 32, maxLength: 128 },
+      new_password: { type: 'string', minLength: 8, maxLength: 128 },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: 'object',
+      required: ['success', 'data', 'timestamp'],
+      properties: {
+        success: { type: 'boolean', enum: [true] },
+        data: {
+          type: 'object',
+          required: ['message'],
+          properties: {
+            message: { type: 'string' },
           },
         },
         timestamp: { type: 'string', format: 'date-time' },

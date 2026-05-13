@@ -178,7 +178,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         location.pathname === '/login' ||
         location.pathname === '/register' ||
         location.pathname === '/setup' ||
-        location.pathname === '/onboarding';
+        location.pathname === '/onboarding' ||
+        location.pathname === '/forgot-password' ||
+        location.pathname === '/reset-password';
 
       if (isPublicRoute) {
         setIsLoading(false);
