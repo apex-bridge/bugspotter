@@ -84,7 +84,8 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
       ticketOutbox: {
         findById: vi.fn(),
         deferUntil: vi.fn().mockResolvedValue(true),
-        markProcessing: vi.fn().mockResolvedValue(undefined),
+        // markProcessing now returns the claimed row (or null if not claimed).
+        markProcessing: vi.fn(),
         markSkipped: vi.fn().mockResolvedValue(undefined),
         markCompleted: vi.fn().mockResolvedValue(undefined),
         markFailed: vi.fn(),
@@ -114,11 +115,11 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
 
   it('skips ticket creation when the bug is already flagged as a duplicate', async () => {
     const entry = buildEntry({ dedup_grace_until: null, status: 'pending' });
-    // Pre-grace findById + post-markProcessing findById both return the same entry,
-    // but the second call reflects the post-claim status.
-    (db.ticketOutbox.findById as Mock)
-      .mockResolvedValueOnce(entry)
-      .mockResolvedValueOnce({ ...entry, status: 'processing' });
+    (db.ticketOutbox.findById as Mock).mockResolvedValueOnce(entry);
+    (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce({
+      ...entry,
+      status: 'processing',
+    });
     (db.bugReports.findById as Mock).mockResolvedValueOnce({
       id: 'bug-1',
       duplicate_of: 'bug-canonical',
@@ -136,10 +137,11 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
   it('files the ticket normally when grace has elapsed and the bug is not a duplicate', async () => {
     const grace = new Date(Date.now() - 1000); // already expired
     const entry = buildEntry({ dedup_grace_until: grace, status: 'pending' });
-    (db.ticketOutbox.findById as Mock)
-      .mockResolvedValueOnce(entry)
-      .mockResolvedValueOnce({ ...entry, status: 'processing' });
-    // bugReports.findById is called twice: dedup gate + inside createExternalTicket.
+    (db.ticketOutbox.findById as Mock).mockResolvedValueOnce(entry);
+    (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce({
+      ...entry,
+      status: 'processing',
+    });
     (db.bugReports.findById as Mock).mockResolvedValue({ id: 'bug-1', duplicate_of: null });
 
     await processor.process(buildJob('outbox-1') as never);
@@ -156,9 +158,11 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
 
   it('fails fast when the bug report no longer exists', async () => {
     const entry = buildEntry({ dedup_grace_until: null, status: 'pending' });
-    (db.ticketOutbox.findById as Mock)
-      .mockResolvedValueOnce(entry)
-      .mockResolvedValueOnce({ ...entry, status: 'processing' });
+    (db.ticketOutbox.findById as Mock).mockResolvedValueOnce(entry);
+    (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce({
+      ...entry,
+      status: 'processing',
+    });
     (db.bugReports.findById as Mock).mockResolvedValueOnce(null);
     (db.ticketOutbox.markFailed as Mock).mockResolvedValueOnce({ ...entry, status: 'failed' });
 
@@ -178,9 +182,11 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
 
   it('files immediately when dedup_grace_until is NULL (legacy behavior)', async () => {
     const entry = buildEntry({ dedup_grace_until: null, status: 'pending' });
-    (db.ticketOutbox.findById as Mock)
-      .mockResolvedValueOnce(entry)
-      .mockResolvedValueOnce({ ...entry, status: 'processing' });
+    (db.ticketOutbox.findById as Mock).mockResolvedValueOnce(entry);
+    (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce({
+      ...entry,
+      status: 'processing',
+    });
     (db.bugReports.findById as Mock).mockResolvedValue({ id: 'bug-1', duplicate_of: null });
 
     await processor.process(buildJob('outbox-1') as never);
@@ -188,5 +194,37 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
     expect(db.ticketOutbox.deferUntil).not.toHaveBeenCalled();
     expect(createFromBugReport).toHaveBeenCalledTimes(1);
     expect(db.ticketOutbox.markCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('exits cleanly when another worker has already claimed the entry', async () => {
+    // pre-check still loads the entry; markProcessing returns null because
+    // a peer worker has already transitioned it out of pending/failed.
+    const entry = buildEntry({ dedup_grace_until: null, status: 'pending' });
+    (db.ticketOutbox.findById as Mock).mockResolvedValueOnce(entry);
+    (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce(null);
+
+    await processor.process(buildJob('outbox-1') as never);
+
+    expect(db.bugReports.findById).not.toHaveBeenCalled();
+    expect(createFromBugReport).not.toHaveBeenCalled();
+    expect(db.ticketOutbox.markCompleted).not.toHaveBeenCalled();
+    expect(db.ticketOutbox.markSkipped).not.toHaveBeenCalled();
+  });
+
+  it('defers a failed retry that fires inside an unexpired grace window', async () => {
+    const graceUntil = new Date(Date.now() + 30_000);
+    const entry = buildEntry({
+      dedup_grace_until: graceUntil,
+      status: 'failed',
+      retry_count: 1,
+    });
+    (db.ticketOutbox.findById as Mock).mockResolvedValueOnce(entry);
+
+    await processor.process(buildJob('outbox-1') as never);
+
+    // Grace window still applies even though the entry is on a retry path.
+    expect(db.ticketOutbox.deferUntil).toHaveBeenCalledWith('outbox-1', graceUntil);
+    expect(db.ticketOutbox.markProcessing).not.toHaveBeenCalled();
+    expect(createFromBugReport).not.toHaveBeenCalled();
   });
 });

@@ -169,24 +169,33 @@ export class TicketCreationOutboxRepository extends BaseRepository {
   }
 
   /**
-   * Mark entry as processing (prevents duplicate processing)
+   * Atomically claim an outbox entry by transitioning it to 'processing'.
+   *
+   * Returns the claimed row when this caller successfully transitioned the
+   * entry (so the worker can read its state without a second `findById`),
+   * or `null` when the entry was already claimed/processed by another worker
+   * or moved to a terminal state.
    */
-  async markProcessing(id: string): Promise<void> {
+  async markProcessing(id: string): Promise<TicketCreationOutboxEntry | null> {
     const query = `
       UPDATE ticket_creation_outbox
       SET status = 'processing',
           updated_at = NOW()
       WHERE id = $1
         AND status IN ('pending', 'failed')
+      RETURNING *
     `;
 
-    const result = await this.pool.query(query, [id]);
+    const result = await this.pool.query<TicketCreationOutboxEntry>(query, [id]);
 
     if (result.rowCount === 0) {
       logger.warn('Failed to mark outbox entry as processing (already processed or not found)', {
         id,
       });
+      return null;
     }
+
+    return this.parseOutboxEntry(result.rows[0]);
   }
 
   /**
@@ -194,11 +203,14 @@ export class TicketCreationOutboxRepository extends BaseRepository {
    *
    * Used by the worker to honor a pre-file dedup grace window: when the entry
    * is dequeued before dedup_grace_until, we reset scheduled_at so the poller
-   * re-picks it up after the grace window closes. The entry stays in 'pending'
-   * (not 'failed'), so this does not consume a retry attempt.
+   * re-picks it up after the grace window closes. Status and retry_count are
+   * left alone, so this does not consume a retry attempt.
    *
-   * Bounded by status='pending' to avoid clobbering entries another worker
-   * has already claimed via markProcessing.
+   * Accepts both 'pending' and 'failed' so a retry that fires within the
+   * grace window is also deferred (relevant when the window is long and the
+   * first attempt failed quickly). Bounded to those two statuses to avoid
+   * clobbering entries another worker has already claimed via markProcessing
+   * or that have reached a terminal state.
    */
   async deferUntil(id: string, until: Date): Promise<boolean> {
     const query = `
@@ -206,7 +218,7 @@ export class TicketCreationOutboxRepository extends BaseRepository {
       SET scheduled_at = $2,
           updated_at = NOW()
       WHERE id = $1
-        AND status = 'pending'
+        AND status IN ('pending', 'failed')
     `;
 
     const result = await this.pool.query(query, [id, until]);

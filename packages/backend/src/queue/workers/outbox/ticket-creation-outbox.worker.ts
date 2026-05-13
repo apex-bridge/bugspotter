@@ -62,13 +62,15 @@ export class TicketCreationOutboxProcessor {
       // Step 0: If the entry has a pre-file dedup grace window that hasn't elapsed yet,
       // push scheduled_at forward and exit cleanly. The poller will re-enqueue the
       // entry after the grace window closes. Done BEFORE markProcessing so we don't
-      // burn a retry attempt on an entry that simply isn't due yet.
+      // burn a retry attempt on an entry that simply isn't due yet. The check covers
+      // both 'pending' and 'failed' (retry) statuses so a long grace window also
+      // catches retries triggered by an early failure.
       const pre = await this.db.ticketOutbox.findById(outboxEntryId);
       if (!pre) {
         logger.error('Outbox entry not found in database', { outboxEntryId, jobId: job.id });
         throw new Error(`Outbox entry not found: ${outboxEntryId}`);
       }
-      if (pre.dedup_grace_until && new Date() < pre.dedup_grace_until && pre.status === 'pending') {
+      if (pre.dedup_grace_until && new Date() < pre.dedup_grace_until) {
         const deferred = await this.db.ticketOutbox.deferUntil(
           outboxEntryId,
           pre.dedup_grace_until
@@ -77,33 +79,23 @@ export class TicketCreationOutboxProcessor {
           logger.debug('Outbox entry deferred for pre-file dedup grace', {
             outboxEntryId,
             graceUntil: pre.dedup_grace_until,
+            status: pre.status,
           });
           return;
         }
-        // Race: status changed between findById and deferUntil — fall through to
-        // the normal processing path so the other observer's state wins.
+        // Race: another worker claimed the entry between our findById and
+        // deferUntil — fall through to the normal claim path so its state wins.
       }
 
-      // Step 1: Mark entry as processing (prevents duplicate processing)
-      await this.db.ticketOutbox.markProcessing(outboxEntryId);
-
-      // Step 2: Fetch outbox entry
-      const entry = await this.db.ticketOutbox.findById(outboxEntryId);
-
+      // Step 1: Atomically claim the entry via UPDATE ... RETURNING *. A null
+      // result means another worker beat us to it (or the entry hit a terminal
+      // state); either way we exit cleanly. Folding claim + fetch into one
+      // round-trip avoids the prior pattern of markProcessing followed by a
+      // defensive findById to read post-claim state.
+      const entry = await this.db.ticketOutbox.markProcessing(outboxEntryId);
       if (!entry) {
-        logger.error('Outbox entry not found in database', {
-          outboxEntryId,
-          jobId: job.id,
-        });
-        throw new Error(`Outbox entry not found: ${outboxEntryId}`);
-      }
-
-      if (entry.status !== 'processing') {
-        logger.warn('Outbox entry already processed or failed', {
-          outboxEntryId,
-          status: entry.status,
-        });
-        return; // Already handled by another worker
+        logger.warn('Outbox entry already processed or failed', { outboxEntryId });
+        return;
       }
 
       logger.debug('Fetched outbox entry details', {
