@@ -302,6 +302,7 @@ describe('IntelligenceKeyProvisioning', () => {
         intelligence_dedup_action: 'flag' as const,
         intelligence_api_key_provisioned_at: '2026-01-01T00:00:00Z',
         intelligence_api_key_provisioned_by: 'user-1',
+        intelligence_pre_file_dedup_grace_ms: 0,
       };
 
       const status = await provisioning.getKeyStatus('org-1', preloaded);

@@ -77,6 +77,7 @@ describe('triggerBugMitigation', () => {
       intelligence_dedup_action: 'flag',
       intelligence_api_key_provisioned_at: null,
       intelligence_api_key_provisioned_by: null,
+      intelligence_pre_file_dedup_grace_ms: 0,
     });
   });
 
@@ -168,6 +169,7 @@ describe('triggerBugMitigation', () => {
       intelligence_dedup_action: 'flag',
       intelligence_api_key_provisioned_at: null,
       intelligence_api_key_provisioned_by: null,
+      intelligence_pre_file_dedup_grace_ms: 0,
     });
 
     const db = createMockDb();
@@ -191,6 +193,7 @@ describe('triggerBugMitigation', () => {
       intelligence_dedup_action: 'flag',
       intelligence_api_key_provisioned_at: null,
       intelligence_api_key_provisioned_by: null,
+      intelligence_pre_file_dedup_grace_ms: 0,
     });
 
     const db = createMockDb();
@@ -213,6 +216,7 @@ describe('triggerBugMitigation', () => {
       intelligence_dedup_action: 'flag',
       intelligence_api_key_provisioned_at: null,
       intelligence_api_key_provisioned_by: null,
+      intelligence_pre_file_dedup_grace_ms: 0,
     });
 
     const db = createMockDb();

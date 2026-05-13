@@ -330,4 +330,95 @@ describe('AutoTicketService', () => {
       expect(result.error).toBe('Database connection lost');
     });
   });
+
+  describe('pre-file dedup grace window', () => {
+    const mockRule = {
+      id: 'rule-1',
+      project_id: 'project-456',
+      integration_id: 'integration-789',
+      name: 'Auto Create Critical',
+      enabled: true,
+      priority: 100,
+      auto_create: true,
+      filters: [{ field: 'priority', operator: 'equals', value: 'critical' }],
+      throttle: null,
+      field_mappings: null,
+      description_template: null,
+      attachment_config: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    beforeEach(() => {
+      (mockDb.integrationRules.findAutoCreateRules as Mock).mockResolvedValue([mockRule]);
+      (mockDb.tickets.countByRuleSince as Mock).mockResolvedValue(0);
+    });
+
+    it('passes dedup_grace_until=null when bug has no organization_id', async () => {
+      // No organization_id on the bug => self-hosted/orgless flow => skip pre-file dedup.
+      mockBugReport.organization_id = null;
+
+      await service.tryCreateTicket(mockBugReport, 'project-456', 'integration-789', 'jira');
+
+      expect(mockDb.ticketOutbox.create).toHaveBeenCalledWith(
+        expect.objectContaining({ dedup_grace_until: null })
+      );
+    });
+
+    it('passes dedup_grace_until=null when org has grace_ms = 0 (feature off)', async () => {
+      mockBugReport.organization_id = 'org-1';
+      (mockDb as any).organizations = {
+        findById: vi.fn().mockResolvedValue({
+          id: 'org-1',
+          settings: { intelligence_pre_file_dedup_grace_ms: 0 },
+        }),
+      };
+
+      await service.tryCreateTicket(mockBugReport, 'project-456', 'integration-789', 'jira');
+
+      expect(mockDb.ticketOutbox.create).toHaveBeenCalledWith(
+        expect.objectContaining({ dedup_grace_until: null })
+      );
+    });
+
+    it('passes a future dedup_grace_until when org has grace_ms > 0', async () => {
+      mockBugReport.organization_id = 'org-1';
+      (mockDb as any).organizations = {
+        findById: vi.fn().mockResolvedValue({
+          id: 'org-1',
+          settings: { intelligence_pre_file_dedup_grace_ms: 30_000 },
+        }),
+      };
+      const before = Date.now();
+
+      await service.tryCreateTicket(mockBugReport, 'project-456', 'integration-789', 'jira');
+
+      const call = (mockDb.ticketOutbox.create as Mock).mock.calls[0][0];
+      expect(call.dedup_grace_until).toBeInstanceOf(Date);
+      const graceMs = call.dedup_grace_until.getTime() - before;
+      // Allow up to 1s of jitter for test scheduling.
+      expect(graceMs).toBeGreaterThanOrEqual(29_500);
+      expect(graceMs).toBeLessThanOrEqual(30_500);
+    });
+
+    it('falls back to dedup_grace_until=null when settings lookup throws', async () => {
+      mockBugReport.organization_id = 'org-1';
+      (mockDb as any).organizations = {
+        findById: vi.fn().mockRejectedValue(new Error('DB down')),
+      };
+
+      const result = await service.tryCreateTicket(
+        mockBugReport,
+        'project-456',
+        'integration-789',
+        'jira'
+      );
+
+      // Failure to read settings must not block ticket creation.
+      expect(result.success).toBe(true);
+      expect(mockDb.ticketOutbox.create).toHaveBeenCalledWith(
+        expect.objectContaining({ dedup_grace_until: null })
+      );
+    });
+  });
 });

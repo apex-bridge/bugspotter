@@ -92,6 +92,37 @@ describe('resolveOrgIntelligenceSettings', () => {
     expect(result.intelligence_similarity_threshold).toBe(0.75);
     expect(result.intelligence_dedup_action).toBe('flag');
   });
+
+  describe('intelligence_pre_file_dedup_grace_ms', () => {
+    it('defaults to 0 (feature off)', () => {
+      expect(resolveOrgIntelligenceSettings({}).intelligence_pre_file_dedup_grace_ms).toBe(0);
+    });
+
+    it('accepts positive integers', () => {
+      const result = resolveOrgIntelligenceSettings({
+        intelligence_pre_file_dedup_grace_ms: 30_000,
+      });
+      expect(result.intelligence_pre_file_dedup_grace_ms).toBe(30_000);
+    });
+
+    it('clamps negative or NaN values to 0', () => {
+      expect(
+        resolveOrgIntelligenceSettings({ intelligence_pre_file_dedup_grace_ms: -1 })
+          .intelligence_pre_file_dedup_grace_ms
+      ).toBe(0);
+      expect(
+        resolveOrgIntelligenceSettings({ intelligence_pre_file_dedup_grace_ms: NaN as never })
+          .intelligence_pre_file_dedup_grace_ms
+      ).toBe(0);
+    });
+
+    it('clamps absurdly large values to the 5-minute ceiling', () => {
+      const result = resolveOrgIntelligenceSettings({
+        intelligence_pre_file_dedup_grace_ms: 60 * 60 * 1000, // 1h
+      });
+      expect(result.intelligence_pre_file_dedup_grace_ms).toBe(5 * 60 * 1000);
+    });
+  });
 });
 
 // ============================================================================

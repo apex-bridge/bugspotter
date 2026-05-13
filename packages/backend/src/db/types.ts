@@ -713,6 +713,10 @@ export interface OrganizationSettings {
   intelligence_similarity_threshold?: number | null;
   intelligence_dedup_enabled?: boolean;
   intelligence_dedup_action?: 'flag' | 'auto_close' | null;
+  // Pre-file dedup grace window (ms). 0 / unset = file immediately (legacy behavior).
+  // When > 0, the ticket outbox worker defers external filing until the grace window
+  // elapses, then re-checks bug_reports.duplicate_of to suppress redundant tickets.
+  intelligence_pre_file_dedup_grace_ms?: number | null;
   intelligence_self_service_enabled?: boolean;
   intelligence_api_key_provisioned_at?: string | null;
   intelligence_api_key_provisioned_by?: string | null;

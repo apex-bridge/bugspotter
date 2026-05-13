@@ -850,11 +850,14 @@ describe('Ticket Creation Outbox System', () => {
         },
       });
 
-      // Delete bug report
+      // Delete the bug report — FK ON DELETE CASCADE drops the outbox row too.
       await db.query('DELETE FROM bug_reports WHERE id = $1', [testBugReportId]);
 
-      // Processing should fail gracefully - outbox entry deleted by cascade
-      await expect(processor.process(createJob(outboxEntry.id))).rejects.toThrow();
+      // Worker should exit cleanly: markProcessing returns null (row gone),
+      // no throw, no external API call. Throwing here would just burn a retry
+      // against a row that no longer exists.
+      await expect(processor.process(createJob(outboxEntry.id))).resolves.toBeUndefined();
+      expect(mockService.createFromBugReport).not.toHaveBeenCalled();
 
       const updated = await db.ticketOutbox.findById(outboxEntry.id);
       // Entry should be null due to cascade delete from bug_reports
@@ -915,7 +918,10 @@ describe('Ticket Creation Outbox System', () => {
     it('should handle processing non-existent outbox entry', async () => {
       const fakeId = '00000000-0000-0000-0000-000000000000';
 
-      await expect(processor.process(createJob(fakeId))).rejects.toThrow();
+      // markProcessing's UPDATE matches no rows → returns null → worker exits
+      // cleanly without making external API calls. No throw, no retry burn.
+      await expect(processor.process(createJob(fakeId))).resolves.toBeUndefined();
+      expect(mockService.createFromBugReport).not.toHaveBeenCalled();
     });
 
     it('should detect and mark invalid platforms during polling - production fix', async () => {

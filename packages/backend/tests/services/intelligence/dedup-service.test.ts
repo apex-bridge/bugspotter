@@ -128,6 +128,7 @@ describe('IntelligenceDedupService', () => {
         intelligence_self_service_enabled: true,
         intelligence_api_key_provisioned_at: null,
         intelligence_api_key_provisioned_by: null,
+        intelligence_pre_file_dedup_grace_ms: 0,
       });
 
       const db = createMockDb(1);
@@ -209,6 +210,7 @@ describe('IntelligenceDedupService', () => {
         intelligence_self_service_enabled: true,
         intelligence_api_key_provisioned_at: null,
         intelligence_api_key_provisioned_by: null,
+        intelligence_pre_file_dedup_grace_ms: 0,
       });
 
       const db = createMockDb(1);
@@ -290,6 +292,7 @@ describe('IntelligenceDedupService', () => {
         intelligence_self_service_enabled: true,
         intelligence_api_key_provisioned_at: null,
         intelligence_api_key_provisioned_by: null,
+        intelligence_pre_file_dedup_grace_ms: 0,
       });
 
       const db = createMockDb(1);
