@@ -174,7 +174,12 @@ export class AutoTicketService {
           title: bugReport.title,
           description: bugReport.description,
         },
-        scheduled_at: new Date(), // Process immediately
+        // When a grace window is set, schedule the row to fire at the end of the
+        // window so the poller naturally waits — saves one worker cycle that
+        // would otherwise just call deferUntil. The worker still re-checks
+        // dedup_grace_until as a safety net (e.g. on retry, or if org settings
+        // were tightened after the row was enqueued).
+        scheduled_at: graceUntil ?? new Date(),
         max_retries: 3, // 3 retries with exponential backoff
         dedup_grace_until: graceUntil,
       });

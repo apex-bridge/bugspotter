@@ -23,6 +23,7 @@ import { Queue } from 'bullmq';
 import type { IJobHandle } from '@bugspotter/message-broker';
 import { getLogger } from '../../../logger.js';
 import type { DatabaseClient } from '../../../db/client.js';
+import type { BugReport } from '../../../db/types.js';
 import type { PluginRegistry } from '../../../integrations/plugin-registry.js';
 import type { TicketCreationOutboxEntry } from '../../../db/repositories/ticket-creation-outbox.repository.js';
 
@@ -131,9 +132,10 @@ export class TicketCreationOutboxProcessor {
         return;
       }
 
-      // Step 3: Create ticket on external platform
+      // Step 3: Create ticket on external platform. Pass the already-fetched bugReport
+      // to avoid a second findById round-trip inside createExternalTicket.
       // Note: Integration service handles database updates (tickets table + bug_reports table)
-      const ticketResult = await this.createExternalTicket(entry);
+      const ticketResult = await this.createExternalTicket(entry, bugReport);
 
       // Step 4: Mark outbox entry as completed
       await this.db.ticketOutbox.markCompleted(outboxEntryId, {
@@ -182,10 +184,14 @@ export class TicketCreationOutboxProcessor {
   }
 
   /**
-   * Create ticket on external platform using plugin registry
+   * Create ticket on external platform using plugin registry.
+   *
+   * Optionally accepts a pre-fetched bug report to avoid an extra DB round-trip
+   * when the caller has already loaded it (e.g. the dedup gate above).
    */
   private async createExternalTicket(
-    entry: TicketCreationOutboxEntry
+    entry: TicketCreationOutboxEntry,
+    preloadedBugReport?: BugReport | null
   ): Promise<{ externalId: string; externalUrl: string }> {
     const { platform, integration_id, project_id, bug_report_id, rule_id } = entry;
 
@@ -219,8 +225,8 @@ export class TicketCreationOutboxProcessor {
       outboxEntryId: entry.id,
     });
 
-    // Fetch bug report (needed for full context)
-    const bugReport = await this.db.bugReports.findById(bug_report_id);
+    // Fetch bug report (needed for full context), unless the caller already loaded it.
+    const bugReport = preloadedBugReport ?? (await this.db.bugReports.findById(bug_report_id));
     if (!bugReport) {
       throw new Error(`Bug report not found: ${bug_report_id}`);
     }

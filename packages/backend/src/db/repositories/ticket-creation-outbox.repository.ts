@@ -374,6 +374,7 @@ export class TicketCreationOutboxRepository extends BaseRepository {
     completed: number;
     failed: number;
     dead_letter: number;
+    skipped: number;
     avg_retry_count: number;
   }> {
     const query = `
@@ -383,6 +384,7 @@ export class TicketCreationOutboxRepository extends BaseRepository {
         COUNT(*) FILTER (WHERE status = 'completed') as completed,
         COUNT(*) FILTER (WHERE status = 'failed') as failed,
         COUNT(*) FILTER (WHERE status = 'dead_letter') as dead_letter,
+        COUNT(*) FILTER (WHERE status = 'skipped') as skipped,
         COALESCE(AVG(retry_count) FILTER (WHERE status IN ('failed', 'dead_letter')), 0) as avg_retry_count
       FROM ticket_creation_outbox
     `;
@@ -394,6 +396,7 @@ export class TicketCreationOutboxRepository extends BaseRepository {
       completed: parseInt(result.rows[0].completed, 10),
       failed: parseInt(result.rows[0].failed, 10),
       dead_letter: parseInt(result.rows[0].dead_letter, 10),
+      skipped: parseInt(result.rows[0].skipped, 10),
       avg_retry_count: parseFloat(result.rows[0].avg_retry_count),
     };
   }
