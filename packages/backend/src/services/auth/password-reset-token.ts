@@ -54,22 +54,21 @@ export async function consumePasswordResetToken(token: string): Promise<string |
   try {
     const pool = getConnectionPool();
     const redis = await pool.getMainConnection();
-    // ioredis exposes GETDEL as `getdel`. Falls back to a GET+DEL
-    // pipeline if the Redis server is < 6.2 (unlikely in this stack,
-    // but keeps the suite green against older mocks).
+    // ioredis exposes GETDEL as `getdel`. On older Redis (< 6.2)
+    // where the command isn't available, fall back to an atomic Lua
+    // eval — a plain GET+DEL pipeline isn't safe under concurrency
+    // (two consumers can both read before either DELs, breaking the
+    // one-shot invariant that backs replay protection).
     const userId =
       typeof (redis as { getdel?: unknown }).getdel === 'function'
         ? await (redis as { getdel: (key: string) => Promise<string | null> }).getdel(
             getTokenKey(token)
           )
-        : await (async () => {
-            const key = getTokenKey(token);
-            const value = await redis.get(key);
-            if (value !== null) {
-              await redis.del(key);
-            }
-            return value;
-          })();
+        : ((await redis.eval(
+            "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+            1,
+            getTokenKey(token)
+          )) as string | null);
     return userId;
   } catch (error) {
     logger.error('Failed to consume password reset token', {

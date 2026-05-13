@@ -85,6 +85,7 @@
     "accessRevokedTitle": "Қол жеткізу қайтарылды",
     "accessRevokedMessage": "Бұл аккаунттың енді ешқандай ұйымға қолжетімдігі жоқ. Бұл қате деп ойласаңыз, қолдау қызметіне хабарласыңыз.",
     "emailAddress": "Email мекенжайы",
+    "emailPlaceholder": "admin@example.com",
     "password": "Құпия сөз",
     "loginButton": "Кіру",
     "loggingIn": "Кіру...",

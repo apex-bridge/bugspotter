@@ -85,6 +85,7 @@
     "accessRevokedTitle": "Access revoked",
     "accessRevokedMessage": "This account no longer has access to any organization. Contact support if you believe this is an error.",
     "emailAddress": "Email Address",
+    "emailPlaceholder": "admin@example.com",
     "password": "Password",
     "loginButton": "Login",
     "loggingIn": "Logging in...",

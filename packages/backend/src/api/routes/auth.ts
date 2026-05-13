@@ -576,12 +576,33 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         );
       }
 
-      const user = await db.users.findByEmail(email);
-      // Fire-and-forget the email so timing doesn't leak existence.
-      // We still await the token issue + send so an outright Redis or
-      // SMTP failure surfaces in logs — but the response is uniform.
-      if (user && user.password_hash) {
+      // Defer ALL user-existence-dependent work to a detached promise
+      // so response latency is identical whether the email matched a
+      // user or not — closes the timing side-channel for account
+      // enumeration. Errors are caught locally and logged; nothing can
+      // escape into the response.
+      const organizationId = request.organizationId;
+      void (async () => {
         try {
+          const user = await db.users.findByEmail(email);
+          if (!user || !user.password_hash) {
+            return;
+          }
+          // Cross-tenant gate. Without this, an org with the feature
+          // enabled could be used as a relay to email a reset link to
+          // any user platform-wide — including users whose own org
+          // explicitly disabled the feature. Platform admins are
+          // exempt (they may not be a regular member of the org they
+          // happen to be operating against).
+          if (!isPlatformAdmin(user)) {
+            if (!organizationId) {
+              return;
+            }
+            const membership = await db.organizationMembers.findMembership(organizationId, user.id);
+            if (!membership) {
+              return;
+            }
+          }
           const token = await issuePasswordResetToken(user.id);
           const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_SECONDS * 1000);
           await passwordResetEmailService.sendPasswordResetEmail({
@@ -591,13 +612,12 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
             locale,
           });
         } catch (error) {
-          // Swallow — never throw past anti-enumeration boundary.
           request.log.error(
             { err: error instanceof Error ? error.message : String(error) },
             'password reset email send failed'
           );
         }
-      }
+      })();
 
       return sendSuccess(reply, genericResponse);
     }

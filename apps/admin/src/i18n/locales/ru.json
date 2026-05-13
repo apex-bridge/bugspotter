@@ -85,6 +85,7 @@
     "accessRevokedTitle": "Доступ отозван",
     "accessRevokedMessage": "У этого аккаунта больше нет доступа ни к одной организации. Свяжитесь с поддержкой, если считаете, что это ошибка.",
     "emailAddress": "Адрес электронной почты",
+    "emailPlaceholder": "admin@example.com",
     "password": "Пароль",
     "loginButton": "Войти",
     "loggingIn": "Вход...",

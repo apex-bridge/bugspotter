@@ -130,7 +130,13 @@ export class PasswordResetEmailService {
 
     const resetUrl = `${frontendUrl}/reset-password?token=${encodeURIComponent(params.token)}`;
     const fromAddress = process.env.EMAIL_FROM_ADDRESS ?? 'noreply@bugspotter.io';
-    const minutesUntilExpiry = Math.round((params.expiresAt.getTime() - Date.now()) / 60_000);
+    // Ceil — never tell the user "expires in 0 minutes" when there
+    // is still real time on the clock (under 30 seconds would round
+    // down to zero, but the link is still usable).
+    const minutesUntilExpiry = Math.max(
+      1,
+      Math.ceil((params.expiresAt.getTime() - Date.now()) / 60_000)
+    );
 
     const html = this.buildHtml(strings, resetUrl, minutesUntilExpiry, locale);
     const text = this.buildPlainText(strings, resetUrl, minutesUntilExpiry);
