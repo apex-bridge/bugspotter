@@ -30,7 +30,13 @@ abstract class BaseRepository {
 // TYPES
 // ============================================================================
 
-export type OutboxStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'dead_letter';
+export type OutboxStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'dead_letter'
+  | 'skipped';
 
 export interface TicketCreationOutboxEntry {
   id: string;
@@ -52,6 +58,8 @@ export interface TicketCreationOutboxEntry {
   updated_at: Date;
   processed_at: Date | null;
   idempotency_key: string;
+  dedup_grace_until: Date | null;
+  skipped_reason: string | null;
 }
 
 export interface CreateOutboxEntryData {
@@ -63,6 +71,7 @@ export interface CreateOutboxEntryData {
   payload: Record<string, unknown>;
   scheduled_at?: Date;
   max_retries?: number;
+  dedup_grace_until?: Date | null;
 }
 
 export interface OutboxProcessingResult {
@@ -96,8 +105,9 @@ export class TicketCreationOutboxRepository extends BaseRepository {
         payload,
         scheduled_at,
         max_retries,
-        idempotency_key
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        idempotency_key,
+        dedup_grace_until
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `;
 
@@ -111,6 +121,7 @@ export class TicketCreationOutboxRepository extends BaseRepository {
       data.scheduled_at || new Date(),
       data.max_retries || 3,
       idempotencyKey,
+      data.dedup_grace_until ?? null,
     ];
 
     const result = await this.pool.query<TicketCreationOutboxEntry>(query, values);
@@ -176,6 +187,56 @@ export class TicketCreationOutboxRepository extends BaseRepository {
         id,
       });
     }
+  }
+
+  /**
+   * Push scheduled_at into the future without changing status or retry_count.
+   *
+   * Used by the worker to honor a pre-file dedup grace window: when the entry
+   * is dequeued before dedup_grace_until, we reset scheduled_at so the poller
+   * re-picks it up after the grace window closes. The entry stays in 'pending'
+   * (not 'failed'), so this does not consume a retry attempt.
+   *
+   * Bounded by status='pending' to avoid clobbering entries another worker
+   * has already claimed via markProcessing.
+   */
+  async deferUntil(id: string, until: Date): Promise<boolean> {
+    const query = `
+      UPDATE ticket_creation_outbox
+      SET scheduled_at = $2,
+          updated_at = NOW()
+      WHERE id = $1
+        AND status = 'pending'
+    `;
+
+    const result = await this.pool.query(query, [id, until]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Mark entry as 'skipped' — terminal state for entries the worker
+   * intentionally did not file (e.g. bug turned out to be a duplicate).
+   * Idempotent: only transitions from 'processing'.
+   */
+  async markSkipped(id: string, reason: string): Promise<void> {
+    const query = `
+      UPDATE ticket_creation_outbox
+      SET status = 'skipped',
+          skipped_reason = $2,
+          processed_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+        AND status = 'processing'
+    `;
+
+    const result = await this.pool.query(query, [id, reason]);
+
+    if (result.rowCount === 0) {
+      logger.warn('Failed to mark outbox entry as skipped (not in processing state)', { id });
+      return;
+    }
+
+    logger.info('Outbox entry marked as skipped', { id, reason });
   }
 
   /**
@@ -351,6 +412,10 @@ export class TicketCreationOutboxRepository extends BaseRepository {
       created_at: new Date(row.created_at as string | number | Date),
       updated_at: new Date(row.updated_at as string | number | Date),
       processed_at: row.processed_at ? new Date(row.processed_at as string | number | Date) : null,
+      dedup_grace_until: row.dedup_grace_until
+        ? new Date(row.dedup_grace_until as string | number | Date)
+        : null,
+      skipped_reason: row.skipped_reason ?? null,
     };
   }
 }

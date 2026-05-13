@@ -58,6 +58,31 @@ export class TicketCreationOutboxProcessor {
     });
 
     try {
+      // Step 0: If the entry has a pre-file dedup grace window that hasn't elapsed yet,
+      // push scheduled_at forward and exit cleanly. The poller will re-enqueue the
+      // entry after the grace window closes. Done BEFORE markProcessing so we don't
+      // burn a retry attempt on an entry that simply isn't due yet.
+      const pre = await this.db.ticketOutbox.findById(outboxEntryId);
+      if (!pre) {
+        logger.error('Outbox entry not found in database', { outboxEntryId, jobId: job.id });
+        throw new Error(`Outbox entry not found: ${outboxEntryId}`);
+      }
+      if (pre.dedup_grace_until && new Date() < pre.dedup_grace_until && pre.status === 'pending') {
+        const deferred = await this.db.ticketOutbox.deferUntil(
+          outboxEntryId,
+          pre.dedup_grace_until
+        );
+        if (deferred) {
+          logger.debug('Outbox entry deferred for pre-file dedup grace', {
+            outboxEntryId,
+            graceUntil: pre.dedup_grace_until,
+          });
+          return;
+        }
+        // Race: status changed between findById and deferUntil — fall through to
+        // the normal processing path so the other observer's state wins.
+      }
+
       // Step 1: Mark entry as processing (prevents duplicate processing)
       await this.db.ticketOutbox.markProcessing(outboxEntryId);
 
@@ -88,6 +113,23 @@ export class TicketCreationOutboxProcessor {
         retryCount: entry.retry_count,
         scheduledAt: entry.scheduled_at,
       });
+
+      // Step 2.5: Pre-file dedup gate. If the async intelligence pipeline has flagged
+      // this bug as a duplicate of another (duplicate_of != null), don't create a
+      // redundant external ticket — mark the outbox row 'skipped' instead. This is a
+      // pure suppression: bug_reports.duplicate_of is set elsewhere (dedup-service),
+      // and Jira/Linear clients don't expose addComment/closeIssue methods yet, so
+      // we can only avoid the new ticket, not cross-link to the canonical one.
+      const bugReport = await this.db.bugReports.findById(entry.bug_report_id);
+      if (bugReport?.duplicate_of) {
+        logger.info('Skipping external ticket creation — bug flagged as duplicate', {
+          outboxEntryId,
+          bugReportId: entry.bug_report_id,
+          duplicateOf: bugReport.duplicate_of,
+        });
+        await this.db.ticketOutbox.markSkipped(outboxEntryId, 'duplicate_of_set');
+        return;
+      }
 
       // Step 3: Create ticket on external platform
       // Note: Integration service handles database updates (tickets table + bug_reports table)

@@ -27,10 +27,30 @@ export interface OrgIntelligenceSettings {
   intelligence_similarity_threshold: number;
   intelligence_dedup_enabled: boolean;
   intelligence_dedup_action: 'flag' | 'auto_close';
+  /**
+   * Grace window (ms) the ticket-outbox worker waits before filing an external
+   * ticket, giving the async intelligence pipeline a chance to populate
+   * `bug_reports.duplicate_of`. 0 = file immediately (legacy behavior).
+   */
+  intelligence_pre_file_dedup_grace_ms: number;
   intelligence_self_service_enabled: boolean;
   intelligence_api_key_provisioned_at: string | null;
   intelligence_api_key_provisioned_by: string | null;
   intelligence_auto_enrich: boolean;
+}
+
+/**
+ * Maximum tolerated grace window for pre-file dedup. Capping at 5 minutes keeps
+ * end-user-visible filing latency bounded even when an admin misconfigures the
+ * setting; values above 300_000 are clamped to this ceiling.
+ */
+const MAX_PRE_FILE_DEDUP_GRACE_MS = 5 * 60 * 1000;
+
+function clampGraceMs(raw: number | null | undefined): number {
+  if (raw == null || typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+    return 0;
+  }
+  return Math.min(Math.floor(raw), MAX_PRE_FILE_DEDUP_GRACE_MS);
 }
 
 export const INTELLIGENCE_SETTINGS_DEFAULTS: OrgIntelligenceSettings = {
@@ -41,6 +61,7 @@ export const INTELLIGENCE_SETTINGS_DEFAULTS: OrgIntelligenceSettings = {
   intelligence_similarity_threshold: 0.75,
   intelligence_dedup_enabled: true,
   intelligence_dedup_action: 'flag',
+  intelligence_pre_file_dedup_grace_ms: 0,
   intelligence_self_service_enabled: true,
   intelligence_api_key_provisioned_at: null,
   intelligence_api_key_provisioned_by: null,
@@ -75,6 +96,9 @@ export function resolveOrgIntelligenceSettings(
     intelligence_dedup_action:
       settings.intelligence_dedup_action ??
       INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_dedup_action,
+    intelligence_pre_file_dedup_grace_ms: clampGraceMs(
+      settings.intelligence_pre_file_dedup_grace_ms
+    ),
     intelligence_self_service_enabled:
       settings.intelligence_self_service_enabled ??
       INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_self_service_enabled,
