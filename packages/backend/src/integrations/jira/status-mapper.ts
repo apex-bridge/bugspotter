@@ -154,12 +154,15 @@ export function pickTransitionForCanonicalStatus(
 
   // For `closed`/`wont_fix`, fall back to any `done`-category transition —
   // some workflows only expose one terminal state and we'd rather use it
-  // than refuse to transition at all. Log a warning so admins can spot
+  // than refuse to transition at all. Use `rankTransitions` here too so
+  // multi-`done` workflows are deterministic across runs (the API doesn't
+  // guarantee transition order). Log a warning so admins can spot
   // misconfigured workflows where this ambiguity matters (e.g. a single
   // `Abandoned` terminal state being used for what should be `closed`).
   if (target === 'closed' || target === 'wont_fix') {
-    const anyDone = transitions.find((t) => t.to?.statusCategory?.key === 'done');
-    if (anyDone) {
+    const allDone = transitions.filter((t) => t.to?.statusCategory?.key === 'done');
+    if (allDone.length > 0) {
+      const anyDone = rankTransitions(allDone, PREFERRED_STATE_NAMES[target])[0];
       logger.warn(
         'Jira transition fallback fired — no name-matched terminal state, using any `done`',
         {

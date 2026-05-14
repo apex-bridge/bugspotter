@@ -173,7 +173,7 @@ export class LinearIntegrationService implements IntegrationService {
       createdAutomatically: metadata?.createdAutomatically,
     });
 
-    const config = await this.loadConfig(integrationId);
+    const config = await this.loadConfig(integrationId, projectId);
     const shareReplayUrl = await this.generateShareTokenIfNeeded(bugReport, config);
 
     const mapper = new LinearBugReportMapper(config, config.templateConfig);
@@ -213,15 +213,16 @@ export class LinearIntegrationService implements IntegrationService {
   }
 
   /**
-   * Load + verify config for the specified integration row.
+   * Load + verify config for the specified (project, integration) pair.
    * Throws `AppError` shapes matching the Jira service so route error
-   * handling stays uniform.
+   * handling stays uniform. The projectId scope rejects foreign
+   * integrationIds — see jira/config.ts for the threat model.
    */
-  private async loadConfig(integrationId: string): Promise<LinearConfig> {
-    const config = await this.configManager.getConfigByIntegrationId(integrationId);
+  private async loadConfig(integrationId: string, projectId: string): Promise<LinearConfig> {
+    const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
     if (!config) {
       throw new AppError(
-        `Linear not configured for integration: ${integrationId}`,
+        `Linear not usable for integration ${integrationId} in project ${projectId}`,
         404,
         'NotFound'
       );

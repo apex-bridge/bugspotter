@@ -391,19 +391,25 @@ export class JiraConfigManager {
   }
 
   /**
-   * Get Jira configuration by integration ID.
+   * Get Jira configuration by integration ID, scoped to a specific project.
    *
-   * Used when a project has multiple Jira integrations and we need to load
-   * a specific one. When `expectedProjectId` is provided, the integration
-   * must belong to that project — mismatches return null and log a warning.
-   * Capability callers (rule engine, future automations) MUST pass
-   * `expectedProjectId` to prevent cross-tenant misuse: the bare-UUID
-   * lookup would otherwise happily load any project's enabled Jira config
-   * if a caller smuggled in a foreign integrationId.
+   * Both arguments are required: the integrationId on its own is a flat
+   * lookup with no tenant filter, which lets a caller smuggle in a
+   * foreign integrationId (via a stale outbox row, a misrouted retry, or
+   * a compromised bug-report event) and silently get back credentials
+   * for another tenant's Jira connection. We always verify that the
+   * loaded row belongs to `expectedProjectId` — mismatches return null
+   * and log a warning. This applies to every call site, both the
+   * capability methods and the legacy `validateAndLoadConfig` /
+   * `createFromBugReport` flow.
+   *
+   * Making the parameter required (rather than optional) is deliberate:
+   * an optional defense-in-depth check would silently drop protection
+   * any time a future caller forgot to pass it.
    */
   async getConfigByIntegrationId(
     integrationId: string,
-    expectedProjectId?: string
+    expectedProjectId: string
   ): Promise<JiraConfig | null> {
     try {
       const integration = await this.integrationRepo.findByIdWithType(integrationId);
@@ -417,7 +423,7 @@ export class JiraConfigManager {
       // by integrationId only, so without this check a caller passing in
       // another tenant's integrationId would silently get back working
       // credentials.
-      if (expectedProjectId && integration.project_id !== expectedProjectId) {
+      if (integration.project_id !== expectedProjectId) {
         logger.warn('Jira integration does not belong to the expected project', {
           integrationId,
           expectedProjectId,

@@ -206,8 +206,11 @@ export class JiraIntegrationService implements IntegrationService {
       hasFieldMappings: !!metadata?.fieldMappings,
     });
 
-    // Validate and load configuration for specific integration
-    const config = await this.validateAndLoadConfig(integrationId);
+    // Validate and load configuration for the specific (project, integration)
+    // pair — the projectId scoping prevents a foreign integrationId
+    // smuggled via a stale outbox row from loading another tenant's
+    // credentials.
+    const config = await this.validateAndLoadConfig(integrationId, projectId);
 
     // Generate share token for replay if applicable
     const shareReplayUrl = await this.generateShareTokenIfNeeded(bugReport, config);
@@ -243,13 +246,25 @@ export class JiraIntegrationService implements IntegrationService {
   }
 
   /**
-   * Validate project has Jira configured and enabled
+   * Validate that the (project, integration) pair has Jira configured
+   * and enabled. The projectId scope rejects foreign integrationIds —
+   * see `getConfigByIntegrationId` for the threat model.
    */
-  private async validateAndLoadConfig(integrationId: string): Promise<JiraConfig> {
-    const config = await this.configManager.getConfigByIntegrationId(integrationId);
+  private async validateAndLoadConfig(
+    integrationId: string,
+    projectId: string
+  ): Promise<JiraConfig> {
+    const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
 
     if (!config) {
-      throw new AppError(`Jira not configured for integration: ${integrationId}`, 404, 'NotFound');
+      // Conflate the failure modes (missing / disabled / wrong project /
+      // wrong platform) into one 404 — the caller doesn't need to know
+      // which, and leaking the difference would expose tenancy facts.
+      throw new AppError(
+        `Jira not usable for integration ${integrationId} in project ${projectId}`,
+        404,
+        'NotFound'
+      );
     }
 
     if (!config.enabled) {
