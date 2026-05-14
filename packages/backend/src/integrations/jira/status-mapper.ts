@@ -16,12 +16,27 @@ const logger = getLogger();
 
 /**
  * Status names that, in category `done`, signal "won't fix / cancelled /
- * duplicate" rather than "resolved". Case-insensitive substring match.
- * Heuristic, deliberately permissive — false positives here mean the
+ * duplicate / abandoned" rather than "resolved". Case-insensitive substring
+ * match. Heuristic, deliberately permissive — false positives here mean the
  * auto-reopen rule won't fire for a ticket we already gave up on, which is
  * the safe direction.
+ *
+ * MUST stay in sync with the wont-fix branch of `PREFERRED_STATE_NAMES`
+ * below — otherwise classification (`jiraIssueToCanonicalStatus`) and
+ * transition selection disagree, and a workflow could be marked `wont_fix`
+ * via `transition(...)` while a follow-up `getStatus(...)` claims it's
+ * `closed`.
  */
-const WONT_FIX_NAME_PATTERNS = ['wont fix', "won't fix", 'cancelled', 'canceled', 'duplicate'];
+const WONT_FIX_NAME_PATTERNS = [
+  "won't fix",
+  'wont fix',
+  "won't do",
+  'wont do',
+  'cancelled',
+  'canceled',
+  'duplicate',
+  'abandoned',
+];
 
 function isWontFixName(statusName: string | undefined): boolean {
   if (!statusName) {

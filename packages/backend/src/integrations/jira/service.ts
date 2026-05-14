@@ -791,7 +791,12 @@ export class JiraIntegrationService implements IntegrationService {
    */
   private async resolveClient(integrationId: string, projectId: string): Promise<JiraClient> {
     const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
-    if (!config) {
+    // `getConfigByIntegrationId` already returns null for disabled rows,
+    // so `!config` covers the disabled case. Keeping the explicit
+    // `!config.enabled` check anyway for symmetry with the legacy
+    // `validateAndLoadConfig` and to make the intent obvious to future
+    // readers.
+    if (!config || !config.enabled) {
       throw new Error(
         `Jira integration ${integrationId} not usable for project ${projectId} ` +
           `(missing, disabled, wrong project, or wrong platform)`

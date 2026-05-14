@@ -69,11 +69,16 @@ export function buildPlainTextADF(body: string): {
   version: 1;
   content: Array<{ type: 'paragraph'; content: AdfInlineNode[] }>;
 } {
+  // Trim before slicing — trailing newlines in the source would become
+  // dangling `hardBreak` nodes in the rendered Jira comment, producing
+  // a visible blank line at the end. Template authors don't always
+  // remember to strip them.
+  const trimmed = body.trim();
   const safeBody =
-    body.length > JIRA_COMMENT_MAX_CHARS
-      ? body.slice(0, JIRA_COMMENT_MAX_CHARS - JIRA_COMMENT_TRUNCATION_SUFFIX.length) +
+    trimmed.length > JIRA_COMMENT_MAX_CHARS
+      ? trimmed.slice(0, JIRA_COMMENT_MAX_CHARS - JIRA_COMMENT_TRUNCATION_SUFFIX.length) +
         JIRA_COMMENT_TRUNCATION_SUFFIX
-      : body;
+      : trimmed;
 
   const lines = safeBody.split(/\r?\n/);
   const paragraphContent: AdfInlineNode[] = [];
@@ -715,7 +720,10 @@ export class JiraClient {
       headers: {},
     });
 
-    return response.transitions ?? [];
+    // Optional chain on `response` itself — the private `request<T>()`
+    // tolerates an empty body (returns null cast to T) and we don't
+    // want a TypeError on the response-shape assumption.
+    return response?.transitions ?? [];
   }
 
   /**

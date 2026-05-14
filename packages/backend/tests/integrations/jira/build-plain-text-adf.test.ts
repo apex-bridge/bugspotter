@@ -66,6 +66,32 @@ describe('buildPlainTextADF', () => {
     expect(last).toEqual({ type: 'text', text: 'b' });
   });
 
+  describe('trimming', () => {
+    it('strips trailing newlines before constructing nodes', () => {
+      // Trailing newlines used to leak through as `hardBreak` nodes,
+      // producing a visible blank line at the end of the Jira comment.
+      const adf = buildPlainTextADF('hello\n\n');
+      expect(adf.content[0].content).toEqual([{ type: 'text', text: 'hello' }]);
+    });
+
+    it('strips leading whitespace too', () => {
+      const adf = buildPlainTextADF('\n\nhello');
+      expect(adf.content[0].content).toEqual([{ type: 'text', text: 'hello' }]);
+    });
+
+    it('preserves internal blank lines as expected', () => {
+      // Internal whitespace is intentional — only leading/trailing is
+      // stripped. `a\n\nb` still becomes text/break/break/text.
+      const adf = buildPlainTextADF('  \na\n\nb\n  ');
+      expect(adf.content[0].content).toEqual([
+        { type: 'text', text: 'a' },
+        { type: 'hardBreak' },
+        { type: 'hardBreak' },
+        { type: 'text', text: 'b' },
+      ]);
+    });
+  });
+
   describe('length cap', () => {
     it('passes through bodies under the cap unchanged', () => {
       const body = 'a'.repeat(JIRA_COMMENT_MAX_CHARS - 10);

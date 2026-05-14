@@ -91,6 +91,22 @@ describe('jiraIssueToCanonicalStatus', () => {
     ).toBe('wont_fix');
   });
 
+  it('classifies "Wont Do" and "Abandoned" as wont_fix (matches transition picker)', () => {
+    // Regression test for the previous gap where the classifier
+    // (WONT_FIX_NAME_PATTERNS) didn't include "Wont Do" / "Abandoned"
+    // but the transition picker preferred them for canonical wont_fix —
+    // `transition('wont_fix')` then `getStatus(...)` would disagree.
+    expect(
+      jiraIssueToCanonicalStatus(makeIssue({ statusName: "Won't Do", categoryKey: 'done' }))
+    ).toBe('wont_fix');
+    expect(
+      jiraIssueToCanonicalStatus(makeIssue({ statusName: 'Wont Do', categoryKey: 'done' }))
+    ).toBe('wont_fix');
+    expect(
+      jiraIssueToCanonicalStatus(makeIssue({ statusName: 'Abandoned', categoryKey: 'done' }))
+    ).toBe('wont_fix');
+  });
+
   it('handles typographic / smart-quote apostrophes in wont_fix detection', () => {
     // Jira admins routinely type the status with a curly apostrophe; the
     // mapper used to mis-classify these as `closed`. Test all three

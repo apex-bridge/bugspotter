@@ -584,7 +584,11 @@ export class LinearIntegrationService implements IntegrationService {
    */
   private async resolveClient(integrationId: string, projectId: string): Promise<LinearClient> {
     const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
-    if (!config) {
+    // `getConfigByIntegrationId` already returns null for disabled rows,
+    // so `!config` covers the disabled case. Keeping the explicit
+    // `!config.enabled` check anyway for symmetry with the legacy
+    // `loadConfig` and to make the intent obvious to future readers.
+    if (!config || !config.enabled) {
       throw new Error(
         `Linear integration ${integrationId} not usable for project ${projectId} ` +
           `(missing, disabled, wrong project, or wrong platform)`
