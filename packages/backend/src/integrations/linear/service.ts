@@ -596,23 +596,29 @@ export class LinearIntegrationService implements IntegrationService {
   /**
    * Append a comment to an existing Linear issue.
    *
-   * `target.externalId` is the Linear issue UUID (the value stored as
-   * `external_ticket_id` after `createFromBugReport`). The human-readable
-   * identifier "ENG-123" is not accepted by the GraphQL API.
+   * `target.externalId` is the human-readable Linear identifier (e.g.
+   * "ENG-123") — that's what `createFromBugReport` stores. Linear's
+   * mutations (`commentCreate`, `issueUpdate`) need the issue UUID, so
+   * we resolve via `client.getIssue(...)` first; the `issue(id: String!)`
+   * query accepts either the UUID or the identifier and returns the
+   * full row with both. One extra GraphQL hop per call — acceptable for
+   * the rule-engine cadence.
    */
   async addComment(target: CapabilityTarget, body: string): Promise<void> {
     const client = await this.resolveClient(target.integrationId, target.projectId);
-    await client.commentCreate(target.externalId, body);
+    const issue = await client.getIssue(target.externalId);
+    await client.commentCreate(issue.id, body);
   }
 
   /**
    * Move a Linear issue to the canonical status `targetStatus`.
    *
-   * Three GraphQL calls: fetch the issue to discover its team, list the
-   * team's workflow states, pick one whose `type` maps to `targetStatus`,
-   * and `issueUpdate` to that state's UUID. We do not cache
-   * `getTeamStates` — state customization is rare and caching adds a
-   * per-tenant invalidation problem we don't need yet.
+   * Three GraphQL calls: fetch the issue (resolves identifier → UUID
+   * and discovers the team), list the team's workflow states, pick one
+   * whose `type` maps to `targetStatus`, and `issueUpdate` to that
+   * state's UUID. We do not cache `getTeamStates` — state customization
+   * is rare and caching adds a per-tenant invalidation problem we don't
+   * need yet.
    *
    * Throws when no state of the right type exists (heavily customized
    * workflow without e.g. a `started` state); caller is expected to
@@ -630,9 +636,12 @@ export class LinearIntegrationService implements IntegrationService {
       );
     }
 
-    await client.issueUpdateState(target.externalId, picked.id);
+    // `issueUpdateState` needs the UUID (`issue.id`), NOT the
+    // human-readable identifier we received in `target.externalId`.
+    await client.issueUpdateState(issue.id, picked.id);
     logger.info('Linear issue transitioned via capability', {
-      issueId: target.externalId,
+      issueId: issue.id,
+      identifier: issue.identifier,
       target: targetStatus,
       stateId: picked.id,
       stateName: picked.name,
@@ -642,6 +651,11 @@ export class LinearIntegrationService implements IntegrationService {
 
   /**
    * Read the canonical status of an existing Linear issue.
+   *
+   * The `issue(id)` GraphQL query accepts either the UUID or the
+   * human-readable identifier as the `id` argument, so we can pass
+   * `target.externalId` through directly — no separate UUID resolution
+   * needed for a status read.
    */
   async getStatus(target: CapabilityTarget): Promise<CanonicalStatus> {
     const client = await this.resolveClient(target.integrationId, target.projectId);

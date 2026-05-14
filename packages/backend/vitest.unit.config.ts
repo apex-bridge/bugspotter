@@ -70,6 +70,7 @@ export default defineConfig({
       'tests/integrations/linear/field-mappings.test.ts',
       'tests/integrations/linear/config.test.ts',
       'tests/integrations/linear/status-mapper.test.ts',
+      'tests/integrations/linear/service-capability.test.ts',
       // Intelligence tests (pure unit, mocked dependencies)
       'tests/api/utils/mitigation-trigger.test.ts',
       'tests/api/utils/resolution-sync-trigger.test.ts',

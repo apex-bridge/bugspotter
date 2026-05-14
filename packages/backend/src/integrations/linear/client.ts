@@ -494,9 +494,11 @@ export class LinearClient {
   /**
    * Append a comment to an existing Linear issue.
    *
-   * @param issueId Linear issue UUID (not the human-readable identifier
-   *                like "ENG-123"). The capability layer always passes the
-   *                stored `external_ticket_id`, which is the UUID.
+   * @param issueId Linear issue UUID. The mutation rejects the
+   *                human-readable identifier ("ENG-123"); resolve via
+   *                `getIssue(identifier)` first if you only have the
+   *                identifier (which is what `external_ticket_id` stores
+   *                after `createFromBugReport`).
    * @param body    Markdown-formatted body. Linear supports markdown in
    *                comments natively, so no ADF translation needed.
    */

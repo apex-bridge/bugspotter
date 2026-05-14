@@ -257,5 +257,23 @@ describe('pickTransitionForCanonicalStatus', () => {
       ];
       expect(pickTransitionForCanonicalStatus(obscure, 'closed')?.to.name).toBe('Mystery A');
     });
+
+    it("does NOT fall back to a closed-style transition when target is 'wont_fix'", () => {
+      // Threat: workflow only exposes "Done" / "Resolved" (i.e. canonical
+      // `closed`). A rule asking for `wont_fix` must not silently succeed
+      // with a `closed`-named transition — that would tell the rule
+      // engine the intent landed when in fact the ticket is in `closed`.
+      // Returning null lets the caller decide whether to degrade or skip.
+      const onlyClosed = [
+        makeTransition({ id: '31', name: 'Done', toName: 'Done', toCategoryKey: 'done' }),
+        makeTransition({
+          id: '32',
+          name: 'Resolve',
+          toName: 'Resolved',
+          toCategoryKey: 'done',
+        }),
+      ];
+      expect(pickTransitionForCanonicalStatus(onlyClosed, 'wont_fix')).toBeNull();
+    });
   });
 });

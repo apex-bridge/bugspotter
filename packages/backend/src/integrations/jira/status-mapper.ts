@@ -152,14 +152,20 @@ export function pickTransitionForCanonicalStatus(
     return rankTransitions(inCategory, PREFERRED_STATE_NAMES[target])[0];
   }
 
-  // For `closed`/`wont_fix`, fall back to any `done`-category transition —
-  // some workflows only expose one terminal state and we'd rather use it
-  // than refuse to transition at all. Use `rankTransitions` here too so
-  // multi-`done` workflows are deterministic across runs (the API doesn't
-  // guarantee transition order). Log a warning so admins can spot
-  // misconfigured workflows where this ambiguity matters (e.g. a single
-  // `Abandoned` terminal state being used for what should be `closed`).
-  if (target === 'closed' || target === 'wont_fix') {
+  // For `closed` only, fall back to any `done`-category transition —
+  // some workflows only expose one terminal state ("Done" / "Resolved"
+  // / "Abandoned") and refusing the transition would be more disruptive
+  // than picking something reasonable. Sorted via `rankTransitions` so
+  // the choice is deterministic across API responses.
+  //
+  // We deliberately do NOT fall back for `wont_fix`: silently picking a
+  // `closed`-style state (whose name doesn't match the wont-fix
+  // patterns) would tell the rule engine "transition succeeded to
+  // wont_fix" while the ticket is actually in `closed`. The caller —
+  // typically the rule engine — must be allowed to decide whether to
+  // degrade (e.g. fall back to `closed`) or skip the action. Returning
+  // null surfaces that decision.
+  if (target === 'closed') {
     const allDone = transitions.filter((t) => t.to?.statusCategory?.key === 'done');
     if (allDone.length > 0) {
       const anyDone = rankTransitions(allDone, PREFERRED_STATE_NAMES[target])[0];
