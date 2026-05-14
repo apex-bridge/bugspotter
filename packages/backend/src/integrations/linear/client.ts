@@ -29,6 +29,8 @@ import {
   type LinearAttachment,
   type LinearFileUpload,
   type LinearGraphQLError,
+  type LinearIssueDetail,
+  type LinearWorkflowState,
 } from './types.js';
 
 const logger = getLogger();
@@ -477,6 +479,124 @@ export class LinearClient {
    */
   static getIssueUrl(orgUrlKey: string, identifier: string): string {
     return `${LINEAR_WEB_HOST}/${orgUrlKey}/issue/${identifier}`;
+  }
+
+  // ==========================================================================
+  // Capability methods (TicketIntegrationCapabilities)
+  // ==========================================================================
+  //
+  // Three operations the dedup rule engine needs against an existing Linear
+  // issue: add a comment, transition to a canonical status, and read the
+  // current status. State resolution (canonical → Linear state UUID) is done
+  // in the service layer via `getTeamStates` + ./status-mapper.ts so this
+  // class stays a pure GraphQL wrapper.
+
+  /**
+   * Append a comment to an existing Linear issue.
+   *
+   * @param issueId Linear issue UUID (not the human-readable identifier
+   *                like "ENG-123"). The capability layer always passes the
+   *                stored `external_ticket_id`, which is the UUID.
+   * @param body    Markdown-formatted body. Linear supports markdown in
+   *                comments natively, so no ADF translation needed.
+   */
+  async commentCreate(issueId: string, body: string): Promise<void> {
+    if (!issueId) {
+      throw new Error('commentCreate: issueId is required');
+    }
+    if (!body || body.trim().length === 0) {
+      throw new Error('commentCreate: body cannot be empty');
+    }
+
+    const gql = `mutation CommentCreate($input: CommentCreateInput!) {
+      commentCreate(input: $input) {
+        success
+      }
+    }`;
+    const result = await this.graphql<{ commentCreate: { success: boolean } }>(gql, {
+      input: { issueId, body },
+    });
+    if (!result.commentCreate.success) {
+      throw new Error('Linear commentCreate returned success=false');
+    }
+  }
+
+  /**
+   * Fetch an issue's current state and its team id.
+   *
+   * Used by the capability layer to (a) read canonical status and (b)
+   * resolve a target canonical status to a specific state UUID via the
+   * team's available states.
+   */
+  async getIssue(issueId: string): Promise<LinearIssueDetail> {
+    if (!issueId) {
+      throw new Error('getIssue: issueId is required');
+    }
+    const gql = `query Issue($id: String!) {
+      issue(id: $id) {
+        id
+        identifier
+        state { id name type }
+        team { id name }
+      }
+    }`;
+    const result = await this.graphql<{ issue: LinearIssueDetail | null }>(gql, { id: issueId });
+    if (!result.issue) {
+      throw new Error(`Linear issue not found: ${issueId}`);
+    }
+    return result.issue;
+  }
+
+  /**
+   * List all workflow states defined for a Linear team.
+   *
+   * Each state has a `type` ∈ {triage, backlog, unstarted, started,
+   * completed, canceled} — the capability layer maps these to canonical
+   * statuses. Callers may cache results per-team (states change rarely).
+   */
+  async getTeamStates(teamId: string): Promise<LinearWorkflowState[]> {
+    if (!teamId) {
+      throw new Error('getTeamStates: teamId is required');
+    }
+    const gql = `query TeamStates($id: String!) {
+      team(id: $id) {
+        states { nodes { id name type position } }
+      }
+    }`;
+    const result = await this.graphql<{
+      team: { states: { nodes: LinearWorkflowState[] } } | null;
+    }>(gql, { id: teamId });
+    if (!result.team) {
+      throw new Error(`Linear team not found: ${teamId}`);
+    }
+    return result.team.states.nodes;
+  }
+
+  /**
+   * Move an existing issue to a different workflow state.
+   *
+   * The `stateId` must come from the issue's team's available states (see
+   * `getTeamStates`). Linear silently rejects state IDs from other teams.
+   */
+  async issueUpdateState(issueId: string, stateId: string): Promise<void> {
+    if (!issueId) {
+      throw new Error('issueUpdateState: issueId is required');
+    }
+    if (!stateId) {
+      throw new Error('issueUpdateState: stateId is required');
+    }
+    const gql = `mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) {
+        success
+      }
+    }`;
+    const result = await this.graphql<{ issueUpdate: { success: boolean } }>(gql, {
+      id: issueId,
+      input: { stateId },
+    });
+    if (!result.issueUpdate.success) {
+      throw new Error('Linear issueUpdate returned success=false');
+    }
   }
 }
 

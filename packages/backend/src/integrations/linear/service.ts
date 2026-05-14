@@ -35,6 +35,8 @@ import { generateShareToken } from '../../utils/token-generator.js';
 import { LinearConfigManager } from './config.js';
 import { LinearClient } from './client.js';
 import { LinearBugReportMapper } from './mapper.js';
+import { linearStateTypeToCanonical, pickStateForCanonicalStatus } from './status-mapper.js';
+import type { CanonicalStatus } from '../capabilities.js';
 import type {
   LinearConfig,
   LinearAttachment,
@@ -559,6 +561,84 @@ export class LinearIntegrationService implements IntegrationService {
 
   async setEnabled(projectId: string, enabled: boolean): Promise<void> {
     await this.configManager.setEnabled(projectId, enabled);
+  }
+
+  // ==========================================================================
+  // Capability methods (TicketIntegrationCapabilities)
+  // ==========================================================================
+  //
+  // Used by the dedup rule engine to act on an already-created Linear issue.
+  // Each loads the project's stored config, builds a one-shot LinearClient,
+  // and delegates the GraphQL work. Canonical-status mapping lives in
+  // ./status-mapper.ts so it's unit-testable without the network.
+
+  /**
+   * Append a comment to an existing Linear issue.
+   *
+   * `externalId` is the Linear issue UUID (the value stored as
+   * `external_ticket_id` after `createFromBugReport`). The human-readable
+   * identifier "ENG-123" is not accepted by the GraphQL API.
+   */
+  async addComment(externalId: string, body: string, projectId: string): Promise<void> {
+    const config = await this.configManager.getConfig(projectId);
+    if (!config) {
+      throw new Error(`No Linear config for project ${projectId}`);
+    }
+    const client = new LinearClient(config.apiKey);
+    await client.commentCreate(externalId, body);
+  }
+
+  /**
+   * Move a Linear issue to the canonical status `target`.
+   *
+   * Three GraphQL calls: fetch the issue to discover its team, list the
+   * team's workflow states, pick one whose `type` maps to `target`, and
+   * `issueUpdate` to that state's UUID. We do not cache `getTeamStates`
+   * — state customization is rare and caching adds a per-tenant
+   * invalidation problem we don't need yet.
+   *
+   * Throws when no state of the right type exists (heavily customized
+   * workflow without e.g. a `started` state); caller is expected to catch
+   * and skip the rule action.
+   */
+  async transition(externalId: string, target: CanonicalStatus, projectId: string): Promise<void> {
+    const config = await this.configManager.getConfig(projectId);
+    if (!config) {
+      throw new Error(`No Linear config for project ${projectId}`);
+    }
+    const client = new LinearClient(config.apiKey);
+
+    const issue = await client.getIssue(externalId);
+    const states = await client.getTeamStates(issue.team.id);
+    const picked = pickStateForCanonicalStatus(states, target);
+    if (!picked) {
+      throw new Error(
+        `No Linear state for canonical status '${target}' in team ${issue.team.name} (${issue.team.id})`
+      );
+    }
+
+    await client.issueUpdateState(externalId, picked.id);
+    logger.info('Linear issue transitioned via capability', {
+      issueId: externalId,
+      target,
+      stateId: picked.id,
+      stateName: picked.name,
+      stateType: picked.type,
+    });
+  }
+
+  /**
+   * Read the canonical status of an existing Linear issue.
+   */
+  async getStatus(externalId: string, projectId: string): Promise<CanonicalStatus> {
+    const config = await this.configManager.getConfig(projectId);
+    if (!config) {
+      throw new Error(`No Linear config for project ${projectId}`);
+    }
+    const client = new LinearClient(config.apiKey);
+
+    const issue = await client.getIssue(externalId);
+    return linearStateTypeToCanonical(issue.state.type);
   }
 }
 

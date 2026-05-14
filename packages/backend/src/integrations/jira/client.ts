@@ -19,6 +19,7 @@ import type {
   JiraUser,
   JiraProject,
   JiraProjectSearchResponse,
+  JiraTransition,
 } from './types.js';
 
 const logger = getLogger();
@@ -35,6 +36,9 @@ const JIRA_ENDPOINTS = {
   GET_MYSELF: `${JIRA_API_BASE}/myself`,
   SEARCH_USERS: `${JIRA_API_BASE}/user/search`,
   SEARCH_PROJECTS: `${JIRA_API_BASE}/project/search`,
+  ADD_COMMENT: (issueKey: string) => `${JIRA_API_BASE}/issue/${issueKey}/comment`,
+  GET_TRANSITIONS: (issueKey: string) => `${JIRA_API_BASE}/issue/${issueKey}/transitions`,
+  POST_TRANSITION: (issueKey: string) => `${JIRA_API_BASE}/issue/${issueKey}/transitions`,
 } as const;
 
 /**
@@ -585,5 +589,100 @@ export class JiraClient {
    */
   getIssueUrl(issueKey: string): string {
     return `${this.host}/browse/${issueKey}`;
+  }
+
+  // ==========================================================================
+  // Capability methods (TicketIntegrationCapabilities)
+  // ==========================================================================
+  //
+  // These three methods implement the optional capability interface used by
+  // the dedup rule engine. Each returns the minimum shape needed by the
+  // higher-level service / mapper — status mapping to the canonical enum
+  // happens in jira-status-mapper.ts so unit-tests can exercise it
+  // independently of HTTP.
+
+  /**
+   * Append a comment to an existing Jira issue.
+   *
+   * Body is sent as Atlassian Document Format (ADF) plain-text — markdown
+   * isn't supported by the v3 API. Multiline strings become a single ADF
+   * paragraph; this keeps the implementation simple and matches what most
+   * rule-engine action bodies need (one short status line, not an article).
+   */
+  async addComment(issueKey: string, body: string): Promise<void> {
+    if (!issueKey) {
+      throw new Error('addComment: issueKey is required');
+    }
+    if (!body || body.trim().length === 0) {
+      throw new Error('addComment: body cannot be empty');
+    }
+
+    const adfBody = {
+      body: {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: body }],
+          },
+        ],
+      },
+    };
+
+    logger.info('Adding Jira comment', { issueKey, bodyLength: body.length });
+
+    await this.request<unknown>({
+      method: 'POST',
+      path: JIRA_ENDPOINTS.ADD_COMMENT(issueKey),
+      headers: {},
+      body: JSON.stringify(adfBody),
+    });
+  }
+
+  /**
+   * List the transitions currently available to an issue.
+   *
+   * Jira's workflow is per-project and per-current-state, so the set of
+   * available transitions varies. The rule engine calls this first, then
+   * picks one whose target `statusCategory` matches the canonical status it
+   * wants to reach, then calls `transitionIssue` with the chosen id.
+   */
+  async getTransitions(issueKey: string): Promise<JiraTransition[]> {
+    if (!issueKey) {
+      throw new Error('getTransitions: issueKey is required');
+    }
+
+    const response = await this.request<{ transitions?: JiraTransition[] }>({
+      method: 'GET',
+      path: JIRA_ENDPOINTS.GET_TRANSITIONS(issueKey),
+      headers: {},
+    });
+
+    return response.transitions ?? [];
+  }
+
+  /**
+   * Execute a transition by id, moving the issue to a new status.
+   *
+   * The id must come from a recent `getTransitions(issueKey)` call — Jira
+   * may reject ids that aren't currently available from the issue's state.
+   */
+  async transitionIssue(issueKey: string, transitionId: string): Promise<void> {
+    if (!issueKey) {
+      throw new Error('transitionIssue: issueKey is required');
+    }
+    if (!transitionId) {
+      throw new Error('transitionIssue: transitionId is required');
+    }
+
+    logger.info('Transitioning Jira issue', { issueKey, transitionId });
+
+    await this.request<unknown>({
+      method: 'POST',
+      path: JIRA_ENDPOINTS.POST_TRANSITION(issueKey),
+      headers: {},
+      body: JSON.stringify({ transition: { id: transitionId } }),
+    });
   }
 }

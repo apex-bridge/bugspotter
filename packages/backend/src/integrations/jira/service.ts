@@ -17,6 +17,8 @@ import { generateShareToken } from '../../utils/token-generator.js';
 import { JiraConfigManager } from './config.js';
 import { JiraClient } from './client.js';
 import { JiraBugReportMapper } from './mapper.js';
+import { jiraIssueToCanonicalStatus, pickTransitionForCanonicalStatus } from './status-mapper.js';
+import type { CanonicalStatus } from '../capabilities.js';
 import type { JiraIntegrationResult, JiraConfig, JiraAttachment } from './types.js';
 import { SHARE_TOKEN_EXPIRATION_HOURS } from './types.js';
 
@@ -745,5 +747,77 @@ export class JiraIntegrationService implements IntegrationService {
    */
   getAllowedAvatarDomains(config: Record<string, unknown>): string[] {
     return buildJiraAllowedAvatarDomains(config);
+  }
+
+  // ==========================================================================
+  // Capability methods (TicketIntegrationCapabilities)
+  // ==========================================================================
+  //
+  // These implement the platform-neutral capability interface consumed by
+  // the dedup rule engine. Each loads the project's stored Jira config,
+  // builds a one-shot JiraClient, and delegates the HTTP work. They are
+  // small wrappers — the canonical-status mapping lives in
+  // ./status-mapper.ts so it can be unit-tested without HTTP.
+
+  /**
+   * Append a comment to an existing Jira issue.
+   *
+   * Throws when no Jira config is found for the project — the caller (rule
+   * engine) is responsible for treating that as "skip this action and log".
+   */
+  async addComment(externalId: string, body: string, projectId: string): Promise<void> {
+    const config = await this.configManager.getConfig(projectId);
+    if (!config) {
+      throw new Error(`No Jira config for project ${projectId}`);
+    }
+    const client = new JiraClient(config);
+    await client.addComment(externalId, body);
+  }
+
+  /**
+   * Transition a Jira issue to the canonical status `target`.
+   *
+   * Two API calls: list the issue's currently-available transitions, then
+   * pick one whose target state's category matches `target` (see
+   * `pickTransitionForCanonicalStatus`). Throws when no transition lands in
+   * the right category — the issue's workflow simply doesn't allow it from
+   * its current state. Caller logs and degrades.
+   */
+  async transition(externalId: string, target: CanonicalStatus, projectId: string): Promise<void> {
+    const config = await this.configManager.getConfig(projectId);
+    if (!config) {
+      throw new Error(`No Jira config for project ${projectId}`);
+    }
+    const client = new JiraClient(config);
+
+    const transitions = await client.getTransitions(externalId);
+    const picked = pickTransitionForCanonicalStatus(transitions, target);
+    if (!picked) {
+      throw new Error(
+        `No Jira transition leads to canonical status '${target}' from issue ${externalId}'s current state`
+      );
+    }
+
+    await client.transitionIssue(externalId, picked.id);
+    logger.info('Jira issue transitioned via capability', {
+      issueKey: externalId,
+      target,
+      transitionId: picked.id,
+      transitionName: picked.name,
+    });
+  }
+
+  /**
+   * Read the canonical status of an existing Jira issue.
+   */
+  async getStatus(externalId: string, projectId: string): Promise<CanonicalStatus> {
+    const config = await this.configManager.getConfig(projectId);
+    if (!config) {
+      throw new Error(`No Jira config for project ${projectId}`);
+    }
+    const client = new JiraClient(config);
+
+    const issue = await client.getIssue(externalId);
+    return jiraIssueToCanonicalStatus(issue);
   }
 }
