@@ -66,16 +66,65 @@ export function jiraIssueToCanonicalStatus(issue: JiraIssue): CanonicalStatus {
 }
 
 /**
+ * Per-canonical preference list of common Jira state names. Used to
+ * pick deterministically when more than one workflow transition lands
+ * in the right category (e.g. both "Done" and "Resolved" available for
+ * canonical `closed`). Case-insensitive exact match wins; falls through
+ * to alphabetical order within the category if no name matches.
+ *
+ * Order matters — earlier entries are preferred. The lists cover the
+ * most common Atlassian / Jira-Cloud defaults plus a handful of
+ * community renames.
+ */
+const PREFERRED_STATE_NAMES: Record<CanonicalStatus, readonly string[]> = {
+  open: ['to do', 'open', 'backlog', 'reopened', 'new'],
+  in_progress: ['in progress', 'in development', 'in review', 'doing', 'working'],
+  closed: ['done', 'resolved', 'closed', 'fixed', 'complete'],
+  wont_fix: ["won't fix", "won't do", 'cancelled', 'canceled', 'duplicate', 'abandoned'],
+} as const;
+
+/**
+ * Sort a set of category-matched transitions deterministically.
+ *
+ * Two-stage ordering:
+ *   1. Transitions whose target-state name is in the preferred list rank
+ *      first, in the order of the preferred list itself (preferred-name
+ *      "Done" before "Resolved" before "Closed", etc).
+ *   2. Remaining transitions rank by `to.name` alphabetically — purely
+ *      to remove the API-order non-determinism flagged by reviewers.
+ */
+function rankTransitions(
+  transitions: JiraTransition[],
+  preferences: readonly string[]
+): JiraTransition[] {
+  return [...transitions].sort((a, b) => {
+    const ai = preferences.indexOf((a.to?.name ?? '').toLowerCase());
+    const bi = preferences.indexOf((b.to?.name ?? '').toLowerCase());
+    if (ai !== -1 && bi !== -1) {
+      return ai - bi; // both preferred — earlier preference wins
+    }
+    if (ai !== -1) {
+      return -1; // a is preferred, b is not
+    }
+    if (bi !== -1) {
+      return 1; // b is preferred, a is not
+    }
+    // neither preferred — alphabetical for determinism
+    return (a.to?.name ?? '').localeCompare(b.to?.name ?? '');
+  });
+}
+
+/**
  * Pick the best Jira transition that lands the issue in `target`.
  *
- * "Best" = the transition whose target state's `statusCategory.key` matches
- * the canonical mapping. When more than one matches, prefer transitions
- * whose target name matches `wont_fix` heuristics when target is `wont_fix`,
- * otherwise return the first match. Returns null when no transition lands
- * in the right category.
+ * "Best" = the transition whose target state's `statusCategory.key`
+ * matches the canonical mapping, with name-based preference and
+ * alphabetical-fallback ordering so the choice is deterministic across
+ * runs (the Jira API doesn't guarantee transition order, and earlier
+ * reviewers flagged the non-determinism).
  *
- * Caller is expected to handle the null case — usually by logging a warning
- * and skipping the rule action.
+ * Returns null when no transition lands in the right category. Caller
+ * handles the null case — usually by logging and skipping the action.
  */
 export function pickTransitionForCanonicalStatus(
   transitions: JiraTransition[],
@@ -85,7 +134,7 @@ export function pickTransitionForCanonicalStatus(
     return null;
   }
 
-  const matches = transitions.filter((t) => {
+  const inCategory = transitions.filter((t) => {
     const targetCategory = t.to?.statusCategory?.key;
     switch (target) {
       case 'open':
@@ -99,8 +148,8 @@ export function pickTransitionForCanonicalStatus(
     }
   });
 
-  if (matches.length > 0) {
-    return matches[0];
+  if (inCategory.length > 0) {
+    return rankTransitions(inCategory, PREFERRED_STATE_NAMES[target])[0];
   }
 
   // For `closed`/`wont_fix`, fall back to any `done`-category transition —

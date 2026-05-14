@@ -207,4 +207,55 @@ describe('pickTransitionForCanonicalStatus', () => {
     ];
     expect(pickTransitionForCanonicalStatus(onlyNew, 'in_progress')).toBeNull();
   });
+
+  describe('deterministic preference ordering', () => {
+    it('prefers "Done" over "Resolved" over "Fixed" for canonical closed', () => {
+      // All three sit in `done` category and are non-wont-fix. Without
+      // a preference list the picker was non-deterministic — first one
+      // Jira's API returned won.
+      const multiDone = [
+        makeTransition({ id: 'f', name: 'Mark Fixed', toName: 'Fixed', toCategoryKey: 'done' }),
+        makeTransition({
+          id: 'r',
+          name: 'Mark Resolved',
+          toName: 'Resolved',
+          toCategoryKey: 'done',
+        }),
+        makeTransition({ id: 'd', name: 'Mark Done', toName: 'Done', toCategoryKey: 'done' }),
+      ];
+      // Same input shuffled — output is stable.
+      const picked1 = pickTransitionForCanonicalStatus(multiDone, 'closed');
+      const picked2 = pickTransitionForCanonicalStatus([...multiDone].reverse(), 'closed');
+      expect(picked1?.to.name).toBe('Done');
+      expect(picked2?.to.name).toBe('Done');
+    });
+
+    it('prefers "In Progress" over "Doing" for canonical in_progress', () => {
+      const ip = [
+        makeTransition({
+          id: 'd',
+          name: 'Doing',
+          toName: 'Doing',
+          toCategoryKey: 'indeterminate',
+        }),
+        makeTransition({
+          id: 'i',
+          name: 'In Progress',
+          toName: 'In Progress',
+          toCategoryKey: 'indeterminate',
+        }),
+      ];
+      expect(pickTransitionForCanonicalStatus(ip, 'in_progress')?.to.name).toBe('In Progress');
+    });
+
+    it('falls through to alphabetical when no preferred name matches', () => {
+      // Both states are in the right category, neither is in the
+      // preferences list. Alphabetical "Mystery A" wins.
+      const obscure = [
+        makeTransition({ id: 'z', name: 'Z', toName: 'Mystery Z', toCategoryKey: 'done' }),
+        makeTransition({ id: 'a', name: 'A', toName: 'Mystery A', toCategoryKey: 'done' }),
+      ];
+      expect(pickTransitionForCanonicalStatus(obscure, 'closed')?.to.name).toBe('Mystery A');
+    });
+  });
 });

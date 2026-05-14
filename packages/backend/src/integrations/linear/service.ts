@@ -36,7 +36,7 @@ import { LinearConfigManager } from './config.js';
 import { LinearClient } from './client.js';
 import { LinearBugReportMapper } from './mapper.js';
 import { linearStateTypeToCanonical, pickStateForCanonicalStatus } from './status-mapper.js';
-import type { CanonicalStatus } from '../capabilities.js';
+import type { CanonicalStatus, CapabilityTarget } from '../capabilities.js';
 import type {
   LinearConfig,
   LinearAttachment,
@@ -573,18 +573,20 @@ export class LinearIntegrationService implements IntegrationService {
   // ./status-mapper.ts so it's unit-testable without the network.
 
   /**
-   * Resolve the LinearClient for an integration.
+   * Resolve the LinearClient for a (project, integration) pair.
    *
-   * Uses `getConfigByIntegrationId` (not `getConfig(projectId)`) so we
-   * (a) target the specific integration when a project has multiple
-   * Linear connections and (b) reject disabled integrations — the
-   * config-manager already returns null for both.
+   * Cross-tenant guard: `getConfigByIntegrationId(integrationId,
+   * projectId)` returns null when the integration belongs to a different
+   * project, preventing a foreign integrationId smuggled by a stale
+   * outbox row or compromised event from working under another tenant's
+   * credentials. See jira/service.ts for the full rationale.
    */
-  private async resolveClient(integrationId: string): Promise<LinearClient> {
-    const config = await this.configManager.getConfigByIntegrationId(integrationId);
+  private async resolveClient(integrationId: string, projectId: string): Promise<LinearClient> {
+    const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
     if (!config) {
       throw new Error(
-        `No enabled Linear integration ${integrationId} (missing, disabled, or wrong platform)`
+        `Linear integration ${integrationId} not usable for project ${projectId} ` +
+          `(missing, disabled, wrong project, or wrong platform)`
       );
     }
     return new LinearClient(config.apiKey);
@@ -593,48 +595,44 @@ export class LinearIntegrationService implements IntegrationService {
   /**
    * Append a comment to an existing Linear issue.
    *
-   * `externalId` is the Linear issue UUID (the value stored as
+   * `target.externalId` is the Linear issue UUID (the value stored as
    * `external_ticket_id` after `createFromBugReport`). The human-readable
    * identifier "ENG-123" is not accepted by the GraphQL API.
    */
-  async addComment(externalId: string, body: string, integrationId: string): Promise<void> {
-    const client = await this.resolveClient(integrationId);
-    await client.commentCreate(externalId, body);
+  async addComment(target: CapabilityTarget, body: string): Promise<void> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
+    await client.commentCreate(target.externalId, body);
   }
 
   /**
-   * Move a Linear issue to the canonical status `target`.
+   * Move a Linear issue to the canonical status `targetStatus`.
    *
    * Three GraphQL calls: fetch the issue to discover its team, list the
-   * team's workflow states, pick one whose `type` maps to `target`, and
-   * `issueUpdate` to that state's UUID. We do not cache `getTeamStates`
-   * — state customization is rare and caching adds a per-tenant
-   * invalidation problem we don't need yet.
+   * team's workflow states, pick one whose `type` maps to `targetStatus`,
+   * and `issueUpdate` to that state's UUID. We do not cache
+   * `getTeamStates` — state customization is rare and caching adds a
+   * per-tenant invalidation problem we don't need yet.
    *
    * Throws when no state of the right type exists (heavily customized
-   * workflow without e.g. a `started` state); caller is expected to catch
-   * and skip the rule action.
+   * workflow without e.g. a `started` state); caller is expected to
+   * catch and skip the rule action.
    */
-  async transition(
-    externalId: string,
-    target: CanonicalStatus,
-    integrationId: string
-  ): Promise<void> {
-    const client = await this.resolveClient(integrationId);
+  async transition(target: CapabilityTarget, targetStatus: CanonicalStatus): Promise<void> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
 
-    const issue = await client.getIssue(externalId);
+    const issue = await client.getIssue(target.externalId);
     const states = await client.getTeamStates(issue.team.id);
-    const picked = pickStateForCanonicalStatus(states, target);
+    const picked = pickStateForCanonicalStatus(states, targetStatus);
     if (!picked) {
       throw new Error(
-        `No Linear state for canonical status '${target}' in team ${issue.team.name} (${issue.team.id})`
+        `No Linear state for canonical status '${targetStatus}' in team ${issue.team.name} (${issue.team.id})`
       );
     }
 
-    await client.issueUpdateState(externalId, picked.id);
+    await client.issueUpdateState(target.externalId, picked.id);
     logger.info('Linear issue transitioned via capability', {
-      issueId: externalId,
-      target,
+      issueId: target.externalId,
+      target: targetStatus,
       stateId: picked.id,
       stateName: picked.name,
       stateType: picked.type,
@@ -644,9 +642,9 @@ export class LinearIntegrationService implements IntegrationService {
   /**
    * Read the canonical status of an existing Linear issue.
    */
-  async getStatus(externalId: string, integrationId: string): Promise<CanonicalStatus> {
-    const client = await this.resolveClient(integrationId);
-    const issue = await client.getIssue(externalId);
+  async getStatus(target: CapabilityTarget): Promise<CanonicalStatus> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
+    const issue = await client.getIssue(target.externalId);
     return linearStateTypeToCanonical(issue.state.type);
   }
 }

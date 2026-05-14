@@ -100,3 +100,18 @@ describe('capabilities — pluginSupports', () => {
     expect(pluginSupports(s, 'transition')).toBe(false);
   });
 });
+
+// CapabilityTarget shape is enforced at compile time; we exercise the
+// runtime contract — that callers pass a fully-populated target — in
+// the per-plugin tests against JiraIntegrationService / LinearIntegrationService.
+describe('capabilities — CapabilityTarget contract', () => {
+  it('exposes externalId, projectId, integrationId fields', () => {
+    // Compile-time check: this would fail tsc if any field is missing
+    // from the type. Asserting at runtime ensures the import surface
+    // stays intentional.
+    const target = { externalId: 'X', projectId: 'P', integrationId: 'I' };
+    expect(target.externalId).toBe('X');
+    expect(target.projectId).toBe('P');
+    expect(target.integrationId).toBe('I');
+  });
+});

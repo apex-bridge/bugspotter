@@ -80,40 +80,52 @@ export function isTerminalStatus(status: CanonicalStatus): boolean {
  * from `createFromBugReport`) and `projectId` (BugSpotter project) so the
  * plugin can resolve credentials and per-project config.
  */
+/**
+ * Tenant/project scoping for every capability call.
+ *
+ * Both `projectId` and `integrationId` are required and verified against
+ * each other — `projectId` alone is ambiguous when a project has
+ * multiple integrations of the same platform, and `integrationId` alone
+ * leaks across tenants (a bare-UUID lookup will happily load any
+ * project's enabled config if a caller smuggles in a foreign
+ * integrationId via a stale outbox row, misrouted retry, or a
+ * compromised bug-report event).
+ *
+ * Plugins MUST reject calls where `integrationId` does not belong to
+ * `projectId`. The DB lookup is parameterised on both.
+ */
+export interface CapabilityTarget {
+  externalId: string;
+  projectId: string;
+  integrationId: string;
+}
+
 export interface TicketIntegrationCapabilities extends IntegrationService {
   /**
    * Append a comment to an existing ticket.
    *
-   * @param externalId    Platform identifier (Jira key e.g. "PROJ-100", or
-   *                      Linear issue UUID).
-   * @param body          Comment body. Plugins may render markdown /
-   *                      templates into platform-specific markup.
-   * @param integrationId BugSpotter `project_integrations.id` — used to
-   *                      resolve credentials. We key on the integration row
-   *                      rather than the project so a project with multiple
-   *                      configured integrations of the same platform can
-   *                      target the right one. Plugins must reject
-   *                      disabled integrations (`getConfigByIntegrationId`
-   *                      already filters them).
+   * @param target  External ticket id plus project / integration scoping.
+   * @param body    Comment body. Plugins may render markdown / templates
+   *                into platform-specific markup.
    */
-  addComment?(externalId: string, body: string, integrationId: string): Promise<void>;
+  addComment?(target: CapabilityTarget, body: string): Promise<void>;
 
   /**
    * Move an existing ticket to a canonical status.
    *
-   * Plugins resolve `target` to a platform-specific transition / state.
-   * If the target status is unreachable from the current state (Jira
-   * workflow restriction, missing transition), the plugin throws — the
-   * rule engine is responsible for catching and degrading gracefully.
+   * Plugins resolve `targetStatus` to a platform-specific transition /
+   * state. If the target status is unreachable from the current state
+   * (Jira workflow restriction, missing transition), the plugin throws —
+   * the rule engine catches and degrades gracefully.
    */
-  transition?(externalId: string, target: CanonicalStatus, integrationId: string): Promise<void>;
+  transition?(target: CapabilityTarget, targetStatus: CanonicalStatus): Promise<void>;
 
   /**
    * Read the current canonical status of an existing ticket.
    *
    * Used by the auto-reopen rule to detect regressions on closed tickets.
    */
-  getStatus?(externalId: string, integrationId: string): Promise<CanonicalStatus>;
+  getStatus?(target: CapabilityTarget): Promise<CanonicalStatus>;
 }
 
 // ============================================================================

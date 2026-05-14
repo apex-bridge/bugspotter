@@ -18,7 +18,7 @@ import { JiraConfigManager } from './config.js';
 import { JiraClient } from './client.js';
 import { JiraBugReportMapper } from './mapper.js';
 import { jiraIssueToCanonicalStatus, pickTransitionForCanonicalStatus } from './status-mapper.js';
-import type { CanonicalStatus } from '../capabilities.js';
+import type { CanonicalStatus, CapabilityTarget } from '../capabilities.js';
 import type { JiraIntegrationResult, JiraConfig, JiraAttachment } from './types.js';
 import { SHARE_TOKEN_EXPIRATION_HOURS } from './types.js';
 
@@ -760,18 +760,26 @@ export class JiraIntegrationService implements IntegrationService {
   // ./status-mapper.ts so it can be unit-tested without HTTP.
 
   /**
-   * Resolve the JiraClient for an integration.
+   * Resolve the JiraClient for a (project, integration) pair.
    *
-   * Uses `getConfigByIntegrationId` (not `getConfig(projectId)`) so we
-   * (a) target the specific integration when a project has multiple Jira
-   * connections and (b) reject disabled integrations — the config-manager
-   * already returns null for both `enabled: false` and not-found.
+   * Loads the config via `getConfigByIntegrationId(integrationId,
+   * projectId)` which rejects three failure modes in one call:
+   *  - integration does not exist
+   *  - integration is disabled
+   *  - integration belongs to a different project (cross-tenant guard)
+   *
+   * The cross-tenant guard matters because the bare integrationId lookup
+   * does a flat `WHERE id = $1` — without the projectId check, a caller
+   * passing a foreign integrationId (smuggled via a stale outbox row or
+   * an attacker-influenced bug event) would get back working credentials
+   * for that tenant.
    */
-  private async resolveClient(integrationId: string): Promise<JiraClient> {
-    const config = await this.configManager.getConfigByIntegrationId(integrationId);
+  private async resolveClient(integrationId: string, projectId: string): Promise<JiraClient> {
+    const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
     if (!config) {
       throw new Error(
-        `No enabled Jira integration ${integrationId} (missing, disabled, or wrong platform)`
+        `Jira integration ${integrationId} not usable for project ${projectId} ` +
+          `(missing, disabled, wrong project, or wrong platform)`
       );
     }
     return new JiraClient(config);
@@ -780,42 +788,38 @@ export class JiraIntegrationService implements IntegrationService {
   /**
    * Append a comment to an existing Jira issue.
    *
-   * Throws when the integration is missing or disabled — the caller (rule
-   * engine) is responsible for treating that as "skip this action and log".
+   * Throws when the integration is missing, disabled, or does not belong
+   * to `target.projectId`. The rule engine catches and degrades.
    */
-  async addComment(externalId: string, body: string, integrationId: string): Promise<void> {
-    const client = await this.resolveClient(integrationId);
-    await client.addComment(externalId, body);
+  async addComment(target: CapabilityTarget, body: string): Promise<void> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
+    await client.addComment(target.externalId, body);
   }
 
   /**
-   * Transition a Jira issue to the canonical status `target`.
+   * Transition a Jira issue to the canonical status `targetStatus`.
    *
    * Two API calls: list the issue's currently-available transitions, then
-   * pick one whose target state's category matches `target` (see
-   * `pickTransitionForCanonicalStatus`). Throws when no transition lands in
-   * the right category — the issue's workflow simply doesn't allow it from
-   * its current state. Caller logs and degrades.
+   * pick one whose target state's category matches `targetStatus` (see
+   * `pickTransitionForCanonicalStatus`). Throws when no transition lands
+   * in the right category — the issue's workflow simply doesn't allow
+   * it from its current state. Caller logs and degrades.
    */
-  async transition(
-    externalId: string,
-    target: CanonicalStatus,
-    integrationId: string
-  ): Promise<void> {
-    const client = await this.resolveClient(integrationId);
+  async transition(target: CapabilityTarget, targetStatus: CanonicalStatus): Promise<void> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
 
-    const transitions = await client.getTransitions(externalId);
-    const picked = pickTransitionForCanonicalStatus(transitions, target);
+    const transitions = await client.getTransitions(target.externalId);
+    const picked = pickTransitionForCanonicalStatus(transitions, targetStatus);
     if (!picked) {
       throw new Error(
-        `No Jira transition leads to canonical status '${target}' from issue ${externalId}'s current state`
+        `No Jira transition leads to canonical status '${targetStatus}' from issue ${target.externalId}'s current state`
       );
     }
 
-    await client.transitionIssue(externalId, picked.id);
+    await client.transitionIssue(target.externalId, picked.id);
     logger.info('Jira issue transitioned via capability', {
-      issueKey: externalId,
-      target,
+      issueKey: target.externalId,
+      target: targetStatus,
       transitionId: picked.id,
       transitionName: picked.name,
     });
@@ -824,9 +828,9 @@ export class JiraIntegrationService implements IntegrationService {
   /**
    * Read the canonical status of an existing Jira issue.
    */
-  async getStatus(externalId: string, integrationId: string): Promise<CanonicalStatus> {
-    const client = await this.resolveClient(integrationId);
-    const issue = await client.getIssue(externalId);
+  async getStatus(target: CapabilityTarget): Promise<CanonicalStatus> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
+    const issue = await client.getIssue(target.externalId);
     return jiraIssueToCanonicalStatus(issue);
   }
 }

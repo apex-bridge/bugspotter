@@ -288,13 +288,31 @@ export class LinearConfigManager {
   /**
    * Load config by specific integration row id — required when a project
    * has multiple integrations and the caller wants to disambiguate.
-   * Mirrors `JiraConfigManager.getConfigByIntegrationId`.
+   *
+   * Capability callers MUST pass `expectedProjectId`: the bare-UUID lookup
+   * would otherwise happily load any project's enabled Linear config if
+   * a caller smuggled in a foreign integrationId. The check matches
+   * `JiraConfigManager.getConfigByIntegrationId`.
    */
-  async getConfigByIntegrationId(integrationId: string): Promise<LinearConfig | null> {
+  async getConfigByIntegrationId(
+    integrationId: string,
+    expectedProjectId?: string
+  ): Promise<LinearConfig | null> {
     try {
       const integration = await this.integrationRepo.findByIdWithType(integrationId);
       if (!integration || !integration.enabled) {
         logger.debug('No enabled Linear integration found', { integrationId });
+        return null;
+      }
+
+      // Defense-in-depth: reject cross-project access (see jira/config.ts
+      // for the rationale).
+      if (expectedProjectId && integration.project_id !== expectedProjectId) {
+        logger.warn('Linear integration does not belong to the expected project', {
+          integrationId,
+          expectedProjectId,
+          actualProjectId: integration.project_id,
+        });
         return null;
       }
 

@@ -391,15 +391,38 @@ export class JiraConfigManager {
   }
 
   /**
-   * Get Jira configuration by integration ID
-   * Used when project has multiple Jira integrations to get specific one
+   * Get Jira configuration by integration ID.
+   *
+   * Used when a project has multiple Jira integrations and we need to load
+   * a specific one. When `expectedProjectId` is provided, the integration
+   * must belong to that project — mismatches return null and log a warning.
+   * Capability callers (rule engine, future automations) MUST pass
+   * `expectedProjectId` to prevent cross-tenant misuse: the bare-UUID
+   * lookup would otherwise happily load any project's enabled Jira config
+   * if a caller smuggled in a foreign integrationId.
    */
-  async getConfigByIntegrationId(integrationId: string): Promise<JiraConfig | null> {
+  async getConfigByIntegrationId(
+    integrationId: string,
+    expectedProjectId?: string
+  ): Promise<JiraConfig | null> {
     try {
       const integration = await this.integrationRepo.findByIdWithType(integrationId);
 
       if (!integration || !integration.enabled) {
         logger.debug('No enabled Jira integration found', { integrationId });
+        return null;
+      }
+
+      // Defense-in-depth: reject cross-project access. The lookup above is
+      // by integrationId only, so without this check a caller passing in
+      // another tenant's integrationId would silently get back working
+      // credentials.
+      if (expectedProjectId && integration.project_id !== expectedProjectId) {
+        logger.warn('Jira integration does not belong to the expected project', {
+          integrationId,
+          expectedProjectId,
+          actualProjectId: integration.project_id,
+        });
         return null;
       }
 

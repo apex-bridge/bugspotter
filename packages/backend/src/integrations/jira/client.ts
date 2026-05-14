@@ -54,10 +54,20 @@ export const JIRA_COMMENT_TRUNCATION_SUFFIX = '\n… [truncated]';
  *
  * Exported so unit tests can exercise it without HTTP.
  */
+/**
+ * The two node types we emit inside a paragraph. Constraining to a
+ * literal union prevents accidentally constructing an invalid ADF tree
+ * (e.g. `{ type: 'image' }`) — TypeScript will reject anything else at
+ * compile time.
+ */
+type AdfTextNode = { type: 'text'; text: string };
+type AdfHardBreakNode = { type: 'hardBreak' };
+type AdfInlineNode = AdfTextNode | AdfHardBreakNode;
+
 export function buildPlainTextADF(body: string): {
   type: 'doc';
   version: 1;
-  content: Array<{ type: 'paragraph'; content: Array<{ type: string; text?: string }> }>;
+  content: Array<{ type: 'paragraph'; content: AdfInlineNode[] }>;
 } {
   const safeBody =
     body.length > JIRA_COMMENT_MAX_CHARS
@@ -66,7 +76,7 @@ export function buildPlainTextADF(body: string): {
       : body;
 
   const lines = safeBody.split(/\r?\n/);
-  const paragraphContent: Array<{ type: string; text?: string }> = [];
+  const paragraphContent: AdfInlineNode[] = [];
   lines.forEach((line, idx) => {
     if (line.length > 0) {
       paragraphContent.push({ type: 'text', text: line });
