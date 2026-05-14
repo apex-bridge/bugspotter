@@ -1689,6 +1689,19 @@
       "selfServiceEnabled": "Self-Service Resolution",
       "selfServiceEnabledDescription": "Allow end users to check their issue against known resolutions before submitting"
     },
+    "nlPlayground": {
+      "title": "Dedup rule playground (experimental)",
+      "description": "Describe a dedup automation in plain English and see how the AI structures it. No save yet — this is a focus-group preview.",
+      "inputLabel": "Describe the rule",
+      "placeholder": "e.g. when a closed bug gets three hits in a day, reopen it",
+      "minHint": "min 5 characters",
+      "tryLabel": "Try",
+      "parseButton": "Parse",
+      "parsing": "Parsing…",
+      "errorsLabel": "Couldn't parse",
+      "clarificationsLabel": "The AI needs more info",
+      "emptyResponse": "The model returned nothing actionable."
+    },
     "duplicate": {
       "badge": "Duplicate",
       "of": "Duplicate of",

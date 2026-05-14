@@ -24,6 +24,7 @@ import type {
   BugDetailResponse,
   HealthResponse,
 } from './types.js';
+import type { ParseNLRuleRequest, ParseNLRuleResponse } from './dedup-rule.types.js';
 
 const logger = getLogger();
 
@@ -161,6 +162,17 @@ export class IntelligenceClient {
    */
   async ask(request: AskRequest): Promise<AskResponse> {
     return this.request<AskResponse>('POST', '/api/v1/ask', request);
+  }
+
+  /**
+   * Parse a natural-language dedup-rule description into a structured rule.
+   *
+   * Returned `draft` may be null when the LLM couldn't produce a valid rule —
+   * callers should inspect `errors` and `clarifications` to surface feedback
+   * to the admin UI. `raw_llm_output` is intended for debugging only.
+   */
+  async parseNLRule(request: ParseNLRuleRequest): Promise<ParseNLRuleResponse> {
+    return this.request<ParseNLRuleResponse>('POST', '/api/v1/rules/parse-nl', request);
   }
 
   // ==========================================================================

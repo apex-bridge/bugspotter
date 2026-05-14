@@ -291,6 +291,8 @@ export const API_ENDPOINTS = {
     generateKey: (orgId: string) =>
       `${API_VERSION}/organizations/${orgId}/intelligence/key/generate`,
     revokeKey: (orgId: string) => `${API_VERSION}/organizations/${orgId}/intelligence/key`,
+    parseNLRule: (orgId: string) =>
+      `${API_VERSION}/organizations/${orgId}/intelligence/rules/parse-nl`,
     enrichment: (bugId: string) => `${API_VERSION}/intelligence/bugs/${bugId}/enrichment`,
     feedback: `${API_VERSION}/intelligence/feedback`,
     bugFeedback: (bugId: string) => `${API_VERSION}/intelligence/bugs/${bugId}/feedback`,

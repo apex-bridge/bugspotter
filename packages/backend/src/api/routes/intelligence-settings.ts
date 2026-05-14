@@ -254,4 +254,66 @@ export function intelligenceSettingsRoutes(fastify: FastifyInstance, db: Databas
       return sendNoContent(reply);
     }
   );
+
+  // POST /api/v1/organizations/:id/intelligence/rules/parse-nl
+  //
+  // Convert a natural-language description of a dedup rule into a structured
+  // DedupRule via the intelligence service's LLM. Used by the admin UI to let
+  // operators describe automations in plain words and get a reviewable draft.
+  //
+  // Auth: org-admin only — rules are organization-scoped configuration.
+  // Returns 503 when intelligence isn't provisioned for this org.
+  fastify.post<{
+    Params: { id: string };
+    Body: {
+      nl: string;
+      available_integrations?: string[];
+      available_slack_channels?: string[];
+      available_email_templates?: string[];
+    };
+  }>(
+    '/api/v1/organizations/:id/intelligence/rules/parse-nl',
+    {
+      preHandler: adminPreHandler,
+      schema: {
+        params: orgIdParams,
+        body: {
+          type: 'object',
+          required: ['nl'],
+          properties: {
+            nl: { type: 'string', minLength: 5, maxLength: 2000 },
+            available_integrations: { type: 'array', items: { type: 'string' } },
+            available_slack_channels: { type: 'array', items: { type: 'string' } },
+            available_email_templates: { type: 'array', items: { type: 'string' } },
+          },
+          additionalProperties: false,
+        },
+        response: settingsResponse,
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const client = await clientFactory.getClientForOrg(id);
+      if (!client) {
+        return reply.status(503).send({
+          success: false,
+          error: {
+            code: 'IntelligenceUnavailable',
+            message:
+              'Intelligence is not enabled or API key is not provisioned for this organization',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const result = await client.parseNLRule({
+        nl: request.body.nl,
+        available_integrations: request.body.available_integrations,
+        available_slack_channels: request.body.available_slack_channels,
+        available_email_templates: request.body.available_email_templates,
+      });
+
+      return sendSuccess(reply, result);
+    }
+  );
 }

@@ -20,6 +20,7 @@ import type {
   SearchInput,
   SearchResponse,
 } from '../types/intelligence';
+import type { ParseNLRuleInput, ParseNLRuleResult } from '../types/dedup-rule';
 
 export const intelligenceService = {
   // Lightweight feature-flag read — readable by any org member,
@@ -59,6 +60,11 @@ export const intelligenceService = {
 
   revokeKey: async (orgId: string): Promise<void> => {
     await api.delete(API_ENDPOINTS.intelligence.revokeKey(orgId));
+  },
+
+  parseNLRule: async (orgId: string, input: ParseNLRuleInput): Promise<ParseNLRuleResult> => {
+    const response = await api.post(API_ENDPOINTS.intelligence.parseNLRule(orgId), input);
+    return response.data.data;
   },
 
   getEnrichment: async (bugId: string): Promise<IntelligenceEnrichment | null> => {

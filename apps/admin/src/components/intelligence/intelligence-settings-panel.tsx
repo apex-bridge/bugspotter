@@ -18,6 +18,7 @@ import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Input } from '../ui/input';
 import { DeflectionStatsCard } from './deflection-stats-card';
+import { DedupRuleNLPlayground } from './dedup-rule-nl-playground';
 import type {
   IntelligenceSettings,
   ProvisionKeyResult,
@@ -444,6 +445,9 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
           </div>
         </div>
       </SettingsSection>
+
+      {/* Dedup Rule NL Playground (focus-group POC) */}
+      <DedupRuleNLPlayground orgId={orgId} />
 
       {/* Deflection Stats */}
       <DeflectionStatsCard orgId={orgId} />
