@@ -62,6 +62,7 @@ export default defineConfig({
       'tests/integrations/jira/template-renderer.test.ts',
       'tests/integrations/jira/formatters/base-formatter.test.ts',
       'tests/integrations/jira/status-mapper.test.ts',
+      'tests/integrations/jira/build-plain-text-adf.test.ts',
       // Linear plugin tests (pure unit, no database, no real HTTP)
       'tests/integrations/linear/plugin.test.ts',
       'tests/integrations/linear/mapper.test.ts',

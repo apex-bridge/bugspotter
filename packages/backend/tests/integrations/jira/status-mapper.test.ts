@@ -91,6 +91,21 @@ describe('jiraIssueToCanonicalStatus', () => {
     ).toBe('wont_fix');
   });
 
+  it('handles typographic / smart-quote apostrophes in wont_fix detection', () => {
+    // Jira admins routinely type the status with a curly apostrophe; the
+    // mapper used to mis-classify these as `closed`. Test all three
+    // common apostrophe variants — U+2018, U+2019, U+02BC.
+    expect(
+      jiraIssueToCanonicalStatus(makeIssue({ statusName: 'Won’t Fix', categoryKey: 'done' }))
+    ).toBe('wont_fix');
+    expect(
+      jiraIssueToCanonicalStatus(makeIssue({ statusName: 'Won‘t Fix', categoryKey: 'done' }))
+    ).toBe('wont_fix');
+    expect(
+      jiraIssueToCanonicalStatus(makeIssue({ statusName: 'Wonʼt Fix', categoryKey: 'done' }))
+    ).toBe('wont_fix');
+  });
+
   it('falls back to open when statusCategory is missing', () => {
     expect(jiraIssueToCanonicalStatus(makeIssue({ statusName: 'Anything' }))).toBe('open');
   });

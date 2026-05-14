@@ -84,13 +84,19 @@ export interface TicketIntegrationCapabilities extends IntegrationService {
   /**
    * Append a comment to an existing ticket.
    *
-   * @param externalId Platform identifier (Jira key e.g. "PROJ-100", or
-   *                   Linear issue UUID).
-   * @param body       Comment body. Plugins may render markdown/templates
-   *                   into platform-specific markup.
-   * @param projectId  BugSpotter project id — used to resolve credentials.
+   * @param externalId    Platform identifier (Jira key e.g. "PROJ-100", or
+   *                      Linear issue UUID).
+   * @param body          Comment body. Plugins may render markdown /
+   *                      templates into platform-specific markup.
+   * @param integrationId BugSpotter `project_integrations.id` — used to
+   *                      resolve credentials. We key on the integration row
+   *                      rather than the project so a project with multiple
+   *                      configured integrations of the same platform can
+   *                      target the right one. Plugins must reject
+   *                      disabled integrations (`getConfigByIntegrationId`
+   *                      already filters them).
    */
-  addComment?(externalId: string, body: string, projectId: string): Promise<void>;
+  addComment?(externalId: string, body: string, integrationId: string): Promise<void>;
 
   /**
    * Move an existing ticket to a canonical status.
@@ -100,14 +106,14 @@ export interface TicketIntegrationCapabilities extends IntegrationService {
    * workflow restriction, missing transition), the plugin throws — the
    * rule engine is responsible for catching and degrading gracefully.
    */
-  transition?(externalId: string, target: CanonicalStatus, projectId: string): Promise<void>;
+  transition?(externalId: string, target: CanonicalStatus, integrationId: string): Promise<void>;
 
   /**
    * Read the current canonical status of an existing ticket.
    *
    * Used by the auto-reopen rule to detect regressions on closed tickets.
    */
-  getStatus?(externalId: string, projectId: string): Promise<CanonicalStatus>;
+  getStatus?(externalId: string, integrationId: string): Promise<CanonicalStatus>;
 }
 
 // ============================================================================

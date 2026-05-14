@@ -27,6 +27,38 @@ const logger = getLogger();
 /**
  * Jira API endpoints
  */
+/**
+ * Build a minimal ADF document representing a single paragraph of plain text.
+ *
+ * ADF's `text` nodes ignore literal `\n`; the renderer collapses them to
+ * spaces, so multi-line bodies arrive looking like one big run-on line.
+ * We split on newlines and insert `hardBreak` nodes between fragments —
+ * blank source lines become an extra `hardBreak`.
+ *
+ * Exported so unit tests can exercise it without HTTP.
+ */
+export function buildPlainTextADF(body: string): {
+  type: 'doc';
+  version: 1;
+  content: Array<{ type: 'paragraph'; content: Array<{ type: string; text?: string }> }>;
+} {
+  const lines = body.split(/\r?\n/);
+  const paragraphContent: Array<{ type: string; text?: string }> = [];
+  lines.forEach((line, idx) => {
+    if (line.length > 0) {
+      paragraphContent.push({ type: 'text', text: line });
+    }
+    if (idx < lines.length - 1) {
+      paragraphContent.push({ type: 'hardBreak' });
+    }
+  });
+  return {
+    type: 'doc',
+    version: 1,
+    content: [{ type: 'paragraph', content: paragraphContent }],
+  };
+}
+
 const JIRA_API_BASE = '/rest/api/3';
 const JIRA_ENDPOINTS = {
   CREATE_ISSUE: `${JIRA_API_BASE}/issue`,
@@ -604,10 +636,12 @@ export class JiraClient {
   /**
    * Append a comment to an existing Jira issue.
    *
-   * Body is sent as Atlassian Document Format (ADF) plain-text — markdown
-   * isn't supported by the v3 API. Multiline strings become a single ADF
-   * paragraph; this keeps the implementation simple and matches what most
-   * rule-engine action bodies need (one short status line, not an article).
+   * Body is sent as Atlassian Document Format (ADF). The v3 API doesn't
+   * render markdown and ignores literal `\n` inside a `text` node, so we
+   * split on newlines and emit a `hardBreak` between fragments. Blank
+   * lines become an extra `hardBreak` rather than a paragraph break —
+   * the rule-engine bodies we expect to send here are short status
+   * lines, not articles.
    */
   async addComment(issueKey: string, body: string): Promise<void> {
     if (!issueKey) {
@@ -617,18 +651,7 @@ export class JiraClient {
       throw new Error('addComment: body cannot be empty');
     }
 
-    const adfBody = {
-      body: {
-        type: 'doc',
-        version: 1,
-        content: [
-          {
-            type: 'paragraph',
-            content: [{ type: 'text', text: body }],
-          },
-        ],
-      },
-    };
+    const adfBody = { body: buildPlainTextADF(body) };
 
     logger.info('Adding Jira comment', { issueKey, bodyLength: body.length });
 

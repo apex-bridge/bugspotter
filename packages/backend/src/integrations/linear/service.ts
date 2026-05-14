@@ -573,18 +573,32 @@ export class LinearIntegrationService implements IntegrationService {
   // ./status-mapper.ts so it's unit-testable without the network.
 
   /**
+   * Resolve the LinearClient for an integration.
+   *
+   * Uses `getConfigByIntegrationId` (not `getConfig(projectId)`) so we
+   * (a) target the specific integration when a project has multiple
+   * Linear connections and (b) reject disabled integrations — the
+   * config-manager already returns null for both.
+   */
+  private async resolveClient(integrationId: string): Promise<LinearClient> {
+    const config = await this.configManager.getConfigByIntegrationId(integrationId);
+    if (!config) {
+      throw new Error(
+        `No enabled Linear integration ${integrationId} (missing, disabled, or wrong platform)`
+      );
+    }
+    return new LinearClient(config.apiKey);
+  }
+
+  /**
    * Append a comment to an existing Linear issue.
    *
    * `externalId` is the Linear issue UUID (the value stored as
    * `external_ticket_id` after `createFromBugReport`). The human-readable
    * identifier "ENG-123" is not accepted by the GraphQL API.
    */
-  async addComment(externalId: string, body: string, projectId: string): Promise<void> {
-    const config = await this.configManager.getConfig(projectId);
-    if (!config) {
-      throw new Error(`No Linear config for project ${projectId}`);
-    }
-    const client = new LinearClient(config.apiKey);
+  async addComment(externalId: string, body: string, integrationId: string): Promise<void> {
+    const client = await this.resolveClient(integrationId);
     await client.commentCreate(externalId, body);
   }
 
@@ -601,12 +615,12 @@ export class LinearIntegrationService implements IntegrationService {
    * workflow without e.g. a `started` state); caller is expected to catch
    * and skip the rule action.
    */
-  async transition(externalId: string, target: CanonicalStatus, projectId: string): Promise<void> {
-    const config = await this.configManager.getConfig(projectId);
-    if (!config) {
-      throw new Error(`No Linear config for project ${projectId}`);
-    }
-    const client = new LinearClient(config.apiKey);
+  async transition(
+    externalId: string,
+    target: CanonicalStatus,
+    integrationId: string
+  ): Promise<void> {
+    const client = await this.resolveClient(integrationId);
 
     const issue = await client.getIssue(externalId);
     const states = await client.getTeamStates(issue.team.id);
@@ -630,13 +644,8 @@ export class LinearIntegrationService implements IntegrationService {
   /**
    * Read the canonical status of an existing Linear issue.
    */
-  async getStatus(externalId: string, projectId: string): Promise<CanonicalStatus> {
-    const config = await this.configManager.getConfig(projectId);
-    if (!config) {
-      throw new Error(`No Linear config for project ${projectId}`);
-    }
-    const client = new LinearClient(config.apiKey);
-
+  async getStatus(externalId: string, integrationId: string): Promise<CanonicalStatus> {
+    const client = await this.resolveClient(integrationId);
     const issue = await client.getIssue(externalId);
     return linearStateTypeToCanonical(issue.state.type);
   }

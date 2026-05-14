@@ -24,7 +24,16 @@ function isWontFixName(statusName: string | undefined): boolean {
   if (!statusName) {
     return false;
   }
-  const lowered = statusName.toLowerCase();
+  // Normalize curly / typographic apostrophes (U+2018, U+2019, U+02BC
+  // modifier-letter-apostrophe) into the ASCII apostrophe before
+  // matching — Jira admins routinely type "Won't Fix" with a smart
+  // quote when they rename the status, and our patterns are written
+  // with ASCII. Without this, smart-quote variants fall through into
+  // `closed` and the auto-reopen rule mis-fires.
+  // Use explicit Unicode escapes (file may be saved by editors with
+  // varying encodings, especially on Windows). U+2018 LEFT, U+2019
+  // RIGHT, U+02BC MODIFIER-LETTER-APOSTROPHE.
+  const lowered = statusName.toLowerCase().replace(/[‘’ʼ]/g, "'");
   return WONT_FIX_NAME_PATTERNS.some((pattern) => lowered.includes(pattern));
 }
 

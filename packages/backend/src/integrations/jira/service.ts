@@ -760,17 +760,31 @@ export class JiraIntegrationService implements IntegrationService {
   // ./status-mapper.ts so it can be unit-tested without HTTP.
 
   /**
+   * Resolve the JiraClient for an integration.
+   *
+   * Uses `getConfigByIntegrationId` (not `getConfig(projectId)`) so we
+   * (a) target the specific integration when a project has multiple Jira
+   * connections and (b) reject disabled integrations — the config-manager
+   * already returns null for both `enabled: false` and not-found.
+   */
+  private async resolveClient(integrationId: string): Promise<JiraClient> {
+    const config = await this.configManager.getConfigByIntegrationId(integrationId);
+    if (!config) {
+      throw new Error(
+        `No enabled Jira integration ${integrationId} (missing, disabled, or wrong platform)`
+      );
+    }
+    return new JiraClient(config);
+  }
+
+  /**
    * Append a comment to an existing Jira issue.
    *
-   * Throws when no Jira config is found for the project — the caller (rule
+   * Throws when the integration is missing or disabled — the caller (rule
    * engine) is responsible for treating that as "skip this action and log".
    */
-  async addComment(externalId: string, body: string, projectId: string): Promise<void> {
-    const config = await this.configManager.getConfig(projectId);
-    if (!config) {
-      throw new Error(`No Jira config for project ${projectId}`);
-    }
-    const client = new JiraClient(config);
+  async addComment(externalId: string, body: string, integrationId: string): Promise<void> {
+    const client = await this.resolveClient(integrationId);
     await client.addComment(externalId, body);
   }
 
@@ -783,12 +797,12 @@ export class JiraIntegrationService implements IntegrationService {
    * the right category — the issue's workflow simply doesn't allow it from
    * its current state. Caller logs and degrades.
    */
-  async transition(externalId: string, target: CanonicalStatus, projectId: string): Promise<void> {
-    const config = await this.configManager.getConfig(projectId);
-    if (!config) {
-      throw new Error(`No Jira config for project ${projectId}`);
-    }
-    const client = new JiraClient(config);
+  async transition(
+    externalId: string,
+    target: CanonicalStatus,
+    integrationId: string
+  ): Promise<void> {
+    const client = await this.resolveClient(integrationId);
 
     const transitions = await client.getTransitions(externalId);
     const picked = pickTransitionForCanonicalStatus(transitions, target);
@@ -810,13 +824,8 @@ export class JiraIntegrationService implements IntegrationService {
   /**
    * Read the canonical status of an existing Jira issue.
    */
-  async getStatus(externalId: string, projectId: string): Promise<CanonicalStatus> {
-    const config = await this.configManager.getConfig(projectId);
-    if (!config) {
-      throw new Error(`No Jira config for project ${projectId}`);
-    }
-    const client = new JiraClient(config);
-
+  async getStatus(externalId: string, integrationId: string): Promise<CanonicalStatus> {
+    const client = await this.resolveClient(integrationId);
     const issue = await client.getIssue(externalId);
     return jiraIssueToCanonicalStatus(issue);
   }
