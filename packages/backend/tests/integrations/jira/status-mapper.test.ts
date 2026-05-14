@@ -11,7 +11,7 @@
  * No HTTP — pure functions over typed fixtures.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   jiraIssueToCanonicalStatus,
   pickTransitionForCanonicalStatus,
@@ -174,6 +174,31 @@ describe('pickTransitionForCanonicalStatus', () => {
       }),
     ];
     expect(pickTransitionForCanonicalStatus(onlyWontFix, 'closed')?.id).toBe('41');
+  });
+
+  it('logs a warning when the closed/wont_fix fallback fires', async () => {
+    // The fallback is intentional but worth observing — admins should
+    // see it in logs to spot misconfigured workflows (e.g. a single
+    // `Abandoned` terminal state being conflated with `closed`).
+    const { getLogger } = await import('../../../src/logger.js');
+    const warnSpy = vi.spyOn(getLogger(), 'warn').mockImplementation(() => undefined);
+
+    const onlyWontFix = [
+      makeTransition({
+        id: '41',
+        name: "Won't Do",
+        toName: 'Cancelled',
+        toCategoryKey: 'done',
+      }),
+    ];
+    pickTransitionForCanonicalStatus(onlyWontFix, 'closed');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('fallback fired'),
+      expect.objectContaining({ target: 'closed', fallbackTransitionId: '41' })
+    );
+
+    warnSpy.mockRestore();
   });
 
   it('returns null when no transition lands in the target category', () => {

@@ -28,12 +28,29 @@ const logger = getLogger();
  * Jira API endpoints
  */
 /**
+ * Soft cap on the raw character length of a comment body, applied before
+ * ADF construction. Jira's hard limit on a comment is ~32 KB of serialized
+ * payload; capping the source text at 16 KB leaves comfortable headroom
+ * for the ADF envelope while staying well above any realistic rule-engine
+ * comment (typically <500 chars).
+ */
+export const JIRA_COMMENT_MAX_CHARS = 16_000;
+
+/** Marker appended to truncated comment bodies so the reader knows. */
+export const JIRA_COMMENT_TRUNCATION_SUFFIX = '\n… [truncated]';
+
+/**
  * Build a minimal ADF document representing a single paragraph of plain text.
  *
  * ADF's `text` nodes ignore literal `\n`; the renderer collapses them to
  * spaces, so multi-line bodies arrive looking like one big run-on line.
  * We split on newlines and insert `hardBreak` nodes between fragments —
  * blank source lines become an extra `hardBreak`.
+ *
+ * Bodies longer than `JIRA_COMMENT_MAX_CHARS` are truncated with a marker
+ * suffix so they fit inside Jira's comment-size limit and don't blow up
+ * the ADF tree. Truncation happens on raw text, before splitting into
+ * lines, so the marker is always preserved.
  *
  * Exported so unit tests can exercise it without HTTP.
  */
@@ -42,7 +59,13 @@ export function buildPlainTextADF(body: string): {
   version: 1;
   content: Array<{ type: 'paragraph'; content: Array<{ type: string; text?: string }> }>;
 } {
-  const lines = body.split(/\r?\n/);
+  const safeBody =
+    body.length > JIRA_COMMENT_MAX_CHARS
+      ? body.slice(0, JIRA_COMMENT_MAX_CHARS - JIRA_COMMENT_TRUNCATION_SUFFIX.length) +
+        JIRA_COMMENT_TRUNCATION_SUFFIX
+      : body;
+
+  const lines = safeBody.split(/\r?\n/);
   const paragraphContent: Array<{ type: string; text?: string }> = [];
   lines.forEach((line, idx) => {
     if (line.length > 0) {

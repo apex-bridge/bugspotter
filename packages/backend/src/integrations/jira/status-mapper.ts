@@ -10,6 +10,9 @@
 
 import type { JiraIssue, JiraTransition } from './types.js';
 import type { CanonicalStatus } from '../capabilities.js';
+import { getLogger } from '../../logger.js';
+
+const logger = getLogger();
 
 /**
  * Status names that, in category `done`, signal "won't fix / cancelled /
@@ -102,10 +105,27 @@ export function pickTransitionForCanonicalStatus(
 
   // For `closed`/`wont_fix`, fall back to any `done`-category transition —
   // some workflows only expose one terminal state and we'd rather use it
-  // than refuse to transition at all.
+  // than refuse to transition at all. Log a warning so admins can spot
+  // misconfigured workflows where this ambiguity matters (e.g. a single
+  // `Abandoned` terminal state being used for what should be `closed`).
   if (target === 'closed' || target === 'wont_fix') {
     const anyDone = transitions.find((t) => t.to?.statusCategory?.key === 'done');
     if (anyDone) {
+      logger.warn(
+        'Jira transition fallback fired — no name-matched terminal state, using any `done`',
+        {
+          target,
+          fallbackTransitionId: anyDone.id,
+          fallbackTransitionName: anyDone.name,
+          fallbackToName: anyDone.to?.name,
+          availableTransitions: transitions.map((t) => ({
+            id: t.id,
+            name: t.name,
+            toName: t.to?.name,
+            toCategory: t.to?.statusCategory?.key,
+          })),
+        }
+      );
       return anyDone;
     }
   }

@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildPlainTextADF } from '../../../src/integrations/jira/client.js';
+import {
+  buildPlainTextADF,
+  JIRA_COMMENT_MAX_CHARS,
+  JIRA_COMMENT_TRUNCATION_SUFFIX,
+} from '../../../src/integrations/jira/client.js';
 
 describe('buildPlainTextADF', () => {
   it('wraps a single-line body as one text node, no hardBreak', () => {
@@ -60,5 +64,31 @@ describe('buildPlainTextADF', () => {
     const multi = buildPlainTextADF('a\nb');
     const last = multi.content[0].content[multi.content[0].content.length - 1];
     expect(last).toEqual({ type: 'text', text: 'b' });
+  });
+
+  describe('length cap', () => {
+    it('passes through bodies under the cap unchanged', () => {
+      const body = 'a'.repeat(JIRA_COMMENT_MAX_CHARS - 10);
+      const adf = buildPlainTextADF(body);
+      // Single text node, no truncation marker
+      expect(adf.content[0].content).toHaveLength(1);
+      expect(adf.content[0].content[0]).toEqual({ type: 'text', text: body });
+    });
+
+    it('truncates bodies over the cap and appends a marker', () => {
+      const body = 'x'.repeat(JIRA_COMMENT_MAX_CHARS + 1_000);
+      const adf = buildPlainTextADF(body);
+
+      // Flatten back to the rendered text — the truncation marker
+      // contains a newline, so we expect text/hardBreak/text.
+      const nodes = adf.content[0].content;
+      const lastText = nodes.filter((n) => n.type === 'text').pop();
+      expect(lastText?.text).toBe(JIRA_COMMENT_TRUNCATION_SUFFIX.trimStart());
+
+      // Combined "raw" content length stays at the cap (suffix replaces
+      // the equivalent number of trailing chars of input).
+      const reconstructed = nodes.map((n) => (n.type === 'text' ? n.text : '\n')).join('');
+      expect(reconstructed.length).toBeLessThanOrEqual(JIRA_COMMENT_MAX_CHARS);
+    });
   });
 });
