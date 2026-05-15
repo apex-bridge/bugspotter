@@ -164,4 +164,116 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
     expect(db.ticketOutbox.markCompleted).not.toHaveBeenCalled();
     expect(db.ticketOutbox.markSkipped).not.toHaveBeenCalled();
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Rule executor hook (outbox_about_to_skip trigger)
+  //
+  // The hook fires the rule engine on the dedup-suppression branch.
+  // These tests pass an injected stub executor (4th constructor arg)
+  // so we exercise the worker's contract with the engine without
+  // building the real DedupRuleExecutor or its plugin-registry deps.
+  // The earlier dedup-gate test happened to pass even though the
+  // executor was unreachable (the stub `db` lacks `getPool()`, so
+  // the lazy build threw and was swallowed); these tests close that
+  // coverage gap.
+  // ──────────────────────────────────────────────────────────────────
+
+  describe('outbox_about_to_skip rule trigger', () => {
+    it('fires the rule executor after markSkipped, with the dedup-suppressed bug', async () => {
+      const fire = vi
+        .fn()
+        .mockResolvedValue([
+          {
+            ruleId: 'rule-x',
+            fired: true,
+            skipReason: null,
+            actionsDispatched: 1,
+            actionsSkipped: 0,
+          },
+        ]);
+      const ruleExecutor = { fire } as never;
+      const processorWithExec = new TicketCreationOutboxProcessor(
+        db,
+        registry,
+        undefined,
+        ruleExecutor
+      );
+
+      const entry = buildEntry();
+      (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce({
+        ...entry,
+        status: 'processing',
+      });
+      const bug = { id: 'bug-1', project_id: 'project-1', duplicate_of: 'bug-canonical' };
+      (db.bugReports.findById as Mock).mockResolvedValueOnce(bug);
+
+      await processorWithExec.process(buildJob('outbox-1') as never);
+
+      // Order matters: markSkipped FIRST (terminal state), then fire.
+      // Reversing would mean a markSkipped failure causes BullMQ to
+      // retry and re-fire — actions replay.
+      const markSkippedOrder = (db.ticketOutbox.markSkipped as Mock).mock.invocationCallOrder[0];
+      const fireOrder = fire.mock.invocationCallOrder[0];
+      expect(markSkippedOrder).toBeLessThan(fireOrder);
+
+      expect(fire).toHaveBeenCalledWith('outbox_about_to_skip', bug);
+      expect(db.ticketOutbox.markSkipped).toHaveBeenCalledWith('outbox-1', 'duplicate_of_set');
+    });
+
+    it('still markSkipped runs to completion when the executor throws', async () => {
+      // The executor's contract is "no error propagates", but
+      // defensively the worker also wraps the call. Even if the
+      // executor escapes its own guards, the outbox row must still
+      // land in terminal state.
+      const fire = vi.fn().mockRejectedValue(new Error('executor went sideways'));
+      const ruleExecutor = { fire } as never;
+      const processorWithExec = new TicketCreationOutboxProcessor(
+        db,
+        registry,
+        undefined,
+        ruleExecutor
+      );
+
+      (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce({
+        ...buildEntry(),
+        status: 'processing',
+      });
+      (db.bugReports.findById as Mock).mockResolvedValueOnce({
+        id: 'bug-1',
+        duplicate_of: 'bug-canonical',
+      });
+
+      await expect(
+        processorWithExec.process(buildJob('outbox-1') as never)
+      ).resolves.toBeUndefined();
+
+      expect(db.ticketOutbox.markSkipped).toHaveBeenCalledWith('outbox-1', 'duplicate_of_set');
+      expect(fire).toHaveBeenCalled();
+    });
+
+    it('does not fire the executor on the happy path (no duplicate_of)', async () => {
+      const fire = vi.fn();
+      const ruleExecutor = { fire } as never;
+      const processorWithExec = new TicketCreationOutboxProcessor(
+        db,
+        registry,
+        undefined,
+        ruleExecutor
+      );
+
+      (db.ticketOutbox.markProcessing as Mock).mockResolvedValueOnce({
+        ...buildEntry(),
+        status: 'processing',
+      });
+      (db.bugReports.findById as Mock).mockResolvedValue({
+        id: 'bug-1',
+        duplicate_of: null,
+      });
+
+      await processorWithExec.process(buildJob('outbox-1') as never);
+
+      expect(fire).not.toHaveBeenCalled();
+      expect(createFromBugReport).toHaveBeenCalledTimes(1);
+    });
+  });
 });

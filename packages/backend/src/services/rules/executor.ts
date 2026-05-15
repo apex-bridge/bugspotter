@@ -180,10 +180,14 @@ export class DedupRuleExecutor {
         continue;
       }
 
-      // Rate limit applies per (rule, canonical) pair. When there's no
-      // canonical we fall back to the bug report's own id so the limit
-      // still has a stable key.
-      const limitKey = evalContext.canonical?.id ?? bugReport.id;
+      // Rate limit applies per (rule, canonical) pair. Prefer
+      // `canonical.id`; fall back to `bugReport.duplicate_of` (the same
+      // cluster identifier the dedup pipeline used to set
+      // `duplicate_of`), and only last to `bugReport.id`. Using the
+      // bug's own id as the primary fallback would make every retry /
+      // every new duplicate get a fresh throttle key — disabling the
+      // rate limit exactly when defense-in-depth matters most.
+      const limitKey = evalContext.canonical?.id ?? bugReport.duplicate_of ?? bugReport.id;
       const allowed = await this.rateLimiter.shouldFire(row.id, limitKey, rule);
       if (!allowed) {
         results.push({
