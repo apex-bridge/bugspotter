@@ -31,6 +31,7 @@ export default defineConfig({
       'tests/integrations/rpc-bridge-security.test.ts',
       'tests/integrations/base-integration-helpers.test.ts',
       'tests/integrations/capabilities.test.ts',
+      'tests/integrations/dedup-rule.schema.test.ts',
       'tests/api/auth-responses.test.ts',
       'tests/api/auth-handlers.test.ts',
       'tests/api/trust-proxy.test.ts',
