@@ -20,6 +20,21 @@ import type { ConditionSpec } from '../../integrations/dedup-rule.schema.js';
 import type { RuleEvalContext } from './types.js';
 
 /**
+ * Build the key under which a condition's resolved value lives in
+ * `RuleEvalContext.resolved`. For `hits_in_window` the key includes
+ * the window so two conditions on the same field with different
+ * windows ("1h" vs "24h") get independent values. All other fields
+ * use the raw field name. Exported so the executor uses identical
+ * keying on the resolve side.
+ */
+export function resolutionKey(field: string, window: string | null | undefined): string {
+  if (field === 'hits_in_window') {
+    return `hits_in_window:${window ?? '24h'}`;
+  }
+  return field;
+}
+
+/**
  * Returns true iff every condition is satisfied. Empty conditions
  * array means "no conditions" → always true. Order doesn't matter
  * for AND.
@@ -34,13 +49,19 @@ export function evaluateConditions(context: RuleEvalContext, conditions: Conditi
 }
 
 function evaluateOne(context: RuleEvalContext, condition: ConditionSpec): boolean {
+  // `hits_in_window` is parameterised by the window, so two conditions
+  // on the same field with different windows must NOT collide in the
+  // cache. The executor uses the same composite key when populating
+  // the map; keep these in lockstep.
+  const cacheKey = resolutionKey(condition.field, condition.window);
+
   // Field was never resolved -> bug in the executor. Fail closed (treat
   // as unsatisfied) rather than throw, so one malformed rule can't
   // cascade and break the trigger handler for the other rules.
-  if (!context.resolved.has(condition.field)) {
+  if (!context.resolved.has(cacheKey)) {
     return false;
   }
-  const actual = context.resolved.get(condition.field);
+  const actual = context.resolved.get(cacheKey);
 
   // `null` resolved means "this field is absent in this context"
   // (e.g. `canonical.status` when canonical was hard-deleted). For

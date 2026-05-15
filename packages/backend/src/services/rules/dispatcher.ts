@@ -30,9 +30,17 @@ const logger = getLogger();
  * ticket.* action knows what to address. The minimal lookup the
  * dispatcher needs: (externalId, projectId, integrationId) — see
  * `CapabilityTarget`.
+ *
+ * Takes `expectedProjectId` and is responsible for verifying that the
+ * resolved ticket belongs to it. `bug_reports.id` is a globally-unique
+ * UUID, so a cross-project collision shouldn't happen in normal
+ * operation; the scope check is defense-in-depth against a stale rule
+ * pointing at a bug that was moved/recreated under another project.
+ * Returning `null` on mismatch is the safe behaviour — the dispatcher
+ * skips the action rather than acting on the wrong tenant's ticket.
  */
 export interface CanonicalTicketResolver {
-  resolve(canonicalBugId: string): Promise<CapabilityTarget | null>;
+  resolve(canonicalBugId: string, expectedProjectId: string): Promise<CapabilityTarget | null>;
 }
 
 /**
@@ -151,7 +159,10 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       });
       return null;
     }
-    const target = await this.resolver.resolve(canonicalId);
+    // Scope the resolution to the firing rule's project. The resolver
+    // returns null if the canonical's project doesn't match — a stale
+    // rule must never act on another tenant's ticket.
+    const target = await this.resolver.resolve(canonicalId, context.projectId);
     if (!target) {
       // Canonical exists but has no external ticket on file — likely
       // dedup-suppressed its own outbox row before any ticket was
@@ -170,12 +181,17 @@ export class DefaultActionDispatcher implements ActionDispatcher {
  * Production `CanonicalTicketResolver` backed by the `tickets` table.
  * Picks the most-recent ticket if the canonical has more than one
  * (rare but possible: two integrations file in parallel before the
- * pre-file dedup grace lands).
+ * pre-file dedup grace lands). The `expectedProjectId` is enforced in
+ * the SQL `WHERE` so a cross-project hit returns zero rows rather
+ * than leaking a ticket into the wrong tenant's action.
  */
 export class TicketsTableResolver implements CanonicalTicketResolver {
   constructor(private readonly db: DatabaseClient) {}
 
-  async resolve(canonicalBugId: string): Promise<CapabilityTarget | null> {
+  async resolve(
+    canonicalBugId: string,
+    expectedProjectId: string
+  ): Promise<CapabilityTarget | null> {
     const result = await this.db.getPool().query<{
       external_id: string;
       project_id: string;
@@ -185,10 +201,11 @@ export class TicketsTableResolver implements CanonicalTicketResolver {
        FROM application.tickets t
        JOIN application.bug_reports br ON br.id = t.bug_report_id
        WHERE t.bug_report_id = $1
+         AND br.project_id = $2
          AND t.integration_id IS NOT NULL
        ORDER BY t.created_at DESC
        LIMIT 1`,
-      [canonicalBugId]
+      [canonicalBugId, expectedProjectId]
     );
     const row = result.rows[0];
     if (!row || !row.integration_id) {

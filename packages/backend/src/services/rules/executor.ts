@@ -6,11 +6,16 @@
  * limit, then dispatches each action through the injected
  * `ActionDispatcher`. Returns telemetry for the caller to log.
  *
- * Fire-and-forget at the call site: callers (the dedup service, the
- * outbox worker) invoke `fire(...)` without awaiting on the
- * dispatch — we don't want a slow Jira call to back up the dedup
- * pipeline. Errors inside the executor are caught and logged; nothing
- * propagates back to the trigger handler.
+ * **Error containment, not fire-and-forget.** Callers (the outbox
+ * worker, eventually the dedup service) DO await `fire(...)` — the
+ * trigger handler runs at a point where awaiting is safe (already
+ * inside a BullMQ job, no user request blocked on it). The executor's
+ * job is to make sure nothing it does propagates back: rule load
+ * errors return `[]`, individual action dispatch failures are caught
+ * inside the dispatcher and logged, malformed `rule_json` is reported
+ * as `evaluation_error` and other rules continue. The caller can
+ * safely await without writing its own try/catch (though the outbox
+ * worker wraps one anyway as defense-in-depth).
  *
  * Architectural choices worth flagging:
  *  - The executor talks to `DedupRuleRepository` (rule storage from
@@ -21,12 +26,12 @@
  *  - Rule blobs are validated through `parseDedupRule` (Zod). Validation
  *    errors get logged and the rule is skipped — one malformed rule
  *    must not poison the others on the same trigger.
- *  - Only `duplicate_detected` and `outbox_about_to_skip` are wired in
- *    this PR. Schedule-based and cluster-growing triggers are valid at
- *    the schema level but require a cron worker / aggregator — they
- *    fire from different entry points (a BullMQ job, a counter
- *    flush). The executor's design accommodates them; the wiring lands
- *    in a follow-up.
+ *  - Only `outbox_about_to_skip` is wired in this PR (`duplicate_detected`
+ *    lands with the email handler in PR-C2). Schedule-based and
+ *    cluster-growing triggers are valid at the schema level but require
+ *    a cron worker / aggregator — they fire from different entry points
+ *    (a BullMQ job, a counter flush). The executor's design accommodates
+ *    them; the wiring lands in follow-ups.
  */
 
 import type { DedupRuleRepository } from '../../db/dedup-rule.repository.js';
@@ -34,7 +39,7 @@ import type { BugReport } from '../../db/types.js';
 import type { DedupRule } from '../../integrations/dedup-rule.schema.js';
 import { parseDedupRule } from '../../integrations/dedup-rule.schema.js';
 import { getLogger } from '../../logger.js';
-import { evaluateConditions } from './evaluator.js';
+import { evaluateConditions, resolutionKey } from './evaluator.js';
 import type {
   ActionDispatcher,
   RuleEvalContext,
@@ -232,15 +237,21 @@ export class DedupRuleExecutor {
 
   private async resolveFields(context: RuleEvalContext, rule: DedupRule): Promise<void> {
     for (const cond of rule.conditions) {
-      if (context.resolved.has(cond.field)) {
+      // Composite key for `hits_in_window` (field + window) so a rule
+      // with two conditions on different windows resolves both. All
+      // other fields key on the field name alone. `resolutionKey`
+      // owns the keying logic so the evaluator's lookup stays
+      // consistent.
+      const key = resolutionKey(cond.field, cond.window);
+      if (context.resolved.has(key)) {
         continue;
       }
       switch (cond.field) {
         case 'canonical.status':
-          context.resolved.set('canonical.status', mapStatusToCanonical(context.canonical));
+          context.resolved.set(key, mapStatusToCanonical(context.canonical));
           break;
         case 'canonical.closed_days_ago':
-          context.resolved.set('canonical.closed_days_ago', daysSinceUpdate(context.canonical));
+          context.resolved.set(key, daysSinceUpdate(context.canonical));
           break;
         case 'hits_in_window':
           // `cond.window` is guaranteed non-empty by the schema's
@@ -250,16 +261,16 @@ export class DedupRuleExecutor {
           if (context.canonical) {
             const w = cond.window ?? '24h';
             context.resolved.set(
-              'hits_in_window',
+              key,
               await this.context.countHitsInWindow(context.canonical.id, w)
             );
           } else {
-            context.resolved.set('hits_in_window', null);
+            context.resolved.set(key, null);
           }
           break;
         case 'reporter.customer.tier': {
           const tier = readPath(context.bugReport.metadata, ['user', 'tier']);
-          context.resolved.set('reporter.customer.tier', tier);
+          context.resolved.set(key, tier);
           break;
         }
         case 'severity':
@@ -267,13 +278,13 @@ export class DedupRuleExecutor {
           // same axis from the dedup rule's perspective. Mapping kept
           // simple (1:1) until product introduces a separate severity
           // field.
-          context.resolved.set('severity', context.bugReport.priority);
+          context.resolved.set(key, context.bugReport.priority);
           break;
         default: {
           // Exhaustiveness check on the closed field literal.
           const _exhaustive: never = cond.field;
           void _exhaustive;
-          context.resolved.set(cond.field, null);
+          context.resolved.set(key, null);
         }
       }
     }

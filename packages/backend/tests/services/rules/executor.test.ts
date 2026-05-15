@@ -290,4 +290,58 @@ describe('DedupRuleExecutor.fire', () => {
       expect.any(Object)
     );
   });
+
+  it('resolves hits_in_window separately per window (multi-window cache key)', async () => {
+    // Regression: a rule with two `hits_in_window` conditions on
+    // different windows used to alias on the same cache key (just
+    // `'hits_in_window'`), so the second condition saw the first
+    // condition's count. Now the key is `hits_in_window:<window>`.
+    const multiWindowRule: DedupRuleRow = {
+      ...COMMENT_RULE,
+      id: 'rule-multi-window',
+      rule_json: {
+        name: 'multi-window',
+        when: { type: 'outbox_about_to_skip' },
+        if: [
+          { field: 'hits_in_window', op: 'gte', value: 3, window: '1h' },
+          { field: 'hits_in_window', op: 'gte', value: 10, window: '24h' },
+        ],
+        then: [{ type: 'ticket.add_comment', target: 'canonical', body: 'noisy' }],
+      },
+    };
+    repo.findByProject.mockResolvedValueOnce([multiWindowRule]);
+    (context.countHitsInWindow as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(5) // 1h window -> meets 3
+      .mockResolvedValueOnce(15); // 24h window -> meets 10
+
+    const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+    expect(results[0].fired).toBe(true);
+    expect(context.countHitsInWindow).toHaveBeenCalledTimes(2);
+    expect(context.countHitsInWindow).toHaveBeenNthCalledWith(1, 'bug-canonical', '1h');
+    expect(context.countHitsInWindow).toHaveBeenNthCalledWith(2, 'bug-canonical', '24h');
+  });
+
+  it('fails the rule when one window passes but the other does not', async () => {
+    const multiWindowRule: DedupRuleRow = {
+      ...COMMENT_RULE,
+      id: 'rule-multi-window-fail',
+      rule_json: {
+        name: 'multi-window-fail',
+        when: { type: 'outbox_about_to_skip' },
+        if: [
+          { field: 'hits_in_window', op: 'gte', value: 3, window: '1h' },
+          { field: 'hits_in_window', op: 'gte', value: 10, window: '24h' },
+        ],
+        then: [{ type: 'ticket.add_comment', target: 'canonical', body: 'noisy' }],
+      },
+    };
+    repo.findByProject.mockResolvedValueOnce([multiWindowRule]);
+    (context.countHitsInWindow as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(5) // 1h -> 5 >= 3 OK
+      .mockResolvedValueOnce(2); // 24h -> 2 < 10 FAIL
+
+    const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+    expect(results[0].fired).toBe(false);
+    expect(results[0].skipReason).toBe('conditions_unmet');
+  });
 });

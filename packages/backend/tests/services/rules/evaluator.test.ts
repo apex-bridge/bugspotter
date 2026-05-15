@@ -111,18 +111,21 @@ describe('evaluateConditions', () => {
 
   describe('gte / lte', () => {
     it('gte passes when resolved value meets the threshold', () => {
+      // `hits_in_window` keys on `<field>:<window>` so two conditions
+      // with different windows don't alias — the evaluator's lookup
+      // uses the same composite key.
       const conds: ConditionSpec[] = [
         { field: 'hits_in_window', op: 'gte', value: 3, window: '24h' } as ConditionSpec,
       ];
-      expect(evaluateConditions(makeContext({ hits_in_window: 5 }), conds)).toBe(true);
-      expect(evaluateConditions(makeContext({ hits_in_window: 3 }), conds)).toBe(true);
+      expect(evaluateConditions(makeContext({ 'hits_in_window:24h': 5 }), conds)).toBe(true);
+      expect(evaluateConditions(makeContext({ 'hits_in_window:24h': 3 }), conds)).toBe(true);
     });
 
     it('gte fails when resolved value is below the threshold', () => {
       const conds: ConditionSpec[] = [
         { field: 'hits_in_window', op: 'gte', value: 3, window: '24h' } as ConditionSpec,
       ];
-      expect(evaluateConditions(makeContext({ hits_in_window: 2 }), conds)).toBe(false);
+      expect(evaluateConditions(makeContext({ 'hits_in_window:24h': 2 }), conds)).toBe(false);
     });
 
     it('lte mirrors gte', () => {
@@ -145,7 +148,7 @@ describe('evaluateConditions', () => {
       ];
       // Schema rejects this on parse, but the evaluator should still
       // refuse to compare if a bug let one through.
-      expect(evaluateConditions(makeContext({ hits_in_window: 'lots' }), conds)).toBe(false);
+      expect(evaluateConditions(makeContext({ 'hits_in_window:24h': 'lots' }), conds)).toBe(false);
     });
   });
 
@@ -156,7 +159,10 @@ describe('evaluateConditions', () => {
         { field: 'hits_in_window', op: 'gte', value: 3, window: '24h' } as ConditionSpec,
       ];
       expect(
-        evaluateConditions(makeContext({ 'canonical.status': 'closed', hits_in_window: 5 }), conds)
+        evaluateConditions(
+          makeContext({ 'canonical.status': 'closed', 'hits_in_window:24h': 5 }),
+          conds
+        )
       ).toBe(true);
     });
 
@@ -166,7 +172,25 @@ describe('evaluateConditions', () => {
         { field: 'hits_in_window', op: 'gte', value: 3, window: '24h' } as ConditionSpec,
       ];
       expect(
-        evaluateConditions(makeContext({ 'canonical.status': 'closed', hits_in_window: 1 }), conds)
+        evaluateConditions(
+          makeContext({ 'canonical.status': 'closed', 'hits_in_window:24h': 1 }),
+          conds
+        )
+      ).toBe(false);
+    });
+
+    it('two `hits_in_window` conditions on different windows do not alias', () => {
+      // Regression test for the cache-collision bug fixed alongside.
+      const conds: ConditionSpec[] = [
+        { field: 'hits_in_window', op: 'gte', value: 3, window: '1h' } as ConditionSpec,
+        { field: 'hits_in_window', op: 'gte', value: 10, window: '24h' } as ConditionSpec,
+      ];
+      expect(
+        evaluateConditions(makeContext({ 'hits_in_window:1h': 5, 'hits_in_window:24h': 15 }), conds)
+      ).toBe(true);
+      // The 1h check passes (5 >= 3) but the 24h check fails (2 < 10).
+      expect(
+        evaluateConditions(makeContext({ 'hits_in_window:1h': 5, 'hits_in_window:24h': 2 }), conds)
       ).toBe(false);
     });
   });
