@@ -130,9 +130,12 @@ export const conditionSpecSchema = z
       }
     }
     if (c.op === 'gte' || c.op === 'lte') {
-      // `typeof true === 'number'` is false in JS, but `true > 5`
-      // evaluates — reject explicitly so a smuggled bool doesn't pass.
-      if (typeof c.value !== 'number' || typeof c.value === 'boolean') {
+      // `Number.isFinite` is the right check: rejects non-numbers,
+      // booleans (typeof `true` is `'boolean'`, not `'number'`), and
+      // — crucially — NaN / Infinity which would pass a naive
+      // `typeof === 'number'` test but evaluate to `false` for every
+      // comparison downstream, producing rules that silently never fire.
+      if (!Number.isFinite(c.value)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `op '${c.op}' on field '${c.field}' requires a numeric value`,

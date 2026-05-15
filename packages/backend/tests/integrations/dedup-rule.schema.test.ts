@@ -173,6 +173,23 @@ describe('conditionSpecSchema', () => {
     ).toThrow();
   });
 
+  it.each([NaN, Infinity, -Infinity])(
+    'rejects non-finite number %s for `gte` (passes typeof check, breaks every comparison)',
+    (bad) => {
+      // `NaN >= 3` is always `false`, so a rule with NaN/Infinity would
+      // silently never fire — worst case for a rule engine. Catch at
+      // parse time via Number.isFinite.
+      expect(() =>
+        conditionSpecSchema.parse({
+          field: 'hits_in_window',
+          op: 'gte',
+          value: bad,
+          window: '24h',
+        })
+      ).toThrow();
+    }
+  );
+
   it('requires `window` when field is `hits_in_window`', () => {
     expect(() =>
       conditionSpecSchema.parse({ field: 'hits_in_window', op: 'gte', value: 3 })
