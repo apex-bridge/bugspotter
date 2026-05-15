@@ -19,6 +19,7 @@ import type {
   JiraUser,
   JiraProject,
   JiraProjectSearchResponse,
+  JiraTransition,
 } from './types.js';
 
 const logger = getLogger();
@@ -26,6 +27,76 @@ const logger = getLogger();
 /**
  * Jira API endpoints
  */
+/**
+ * Soft cap on the raw character length of a comment body, applied before
+ * ADF construction. Jira's hard limit on a comment is ~32 KB of serialized
+ * payload; capping the source text at 16 KB leaves comfortable headroom
+ * for the ADF envelope while staying well above any realistic rule-engine
+ * comment (typically <500 chars).
+ */
+export const JIRA_COMMENT_MAX_CHARS = 16_000;
+
+/** Marker appended to truncated comment bodies so the reader knows. */
+export const JIRA_COMMENT_TRUNCATION_SUFFIX = '\n… [truncated]';
+
+/**
+ * Build a minimal ADF document representing a single paragraph of plain text.
+ *
+ * ADF's `text` nodes ignore literal `\n`; the renderer collapses them to
+ * spaces, so multi-line bodies arrive looking like one big run-on line.
+ * We split on newlines and insert `hardBreak` nodes between fragments —
+ * blank source lines become an extra `hardBreak`.
+ *
+ * Bodies longer than `JIRA_COMMENT_MAX_CHARS` are truncated with a marker
+ * suffix so they fit inside Jira's comment-size limit and don't blow up
+ * the ADF tree. Truncation happens on raw text, before splitting into
+ * lines, so the marker is always preserved.
+ *
+ * Exported so unit tests can exercise it without HTTP.
+ */
+/**
+ * The two node types we emit inside a paragraph. Constraining to a
+ * literal union prevents accidentally constructing an invalid ADF tree
+ * (e.g. `{ type: 'image' }`) — TypeScript will reject anything else at
+ * compile time.
+ */
+type AdfTextNode = { type: 'text'; text: string };
+type AdfHardBreakNode = { type: 'hardBreak' };
+type AdfInlineNode = AdfTextNode | AdfHardBreakNode;
+
+export function buildPlainTextADF(body: string): {
+  type: 'doc';
+  version: 1;
+  content: Array<{ type: 'paragraph'; content: AdfInlineNode[] }>;
+} {
+  // Trim before slicing — trailing newlines in the source would become
+  // dangling `hardBreak` nodes in the rendered Jira comment, producing
+  // a visible blank line at the end. Template authors don't always
+  // remember to strip them.
+  const trimmed = body.trim();
+  const safeBody =
+    trimmed.length > JIRA_COMMENT_MAX_CHARS
+      ? trimmed.slice(0, JIRA_COMMENT_MAX_CHARS - JIRA_COMMENT_TRUNCATION_SUFFIX.length) +
+        JIRA_COMMENT_TRUNCATION_SUFFIX
+      : trimmed;
+
+  const lines = safeBody.split(/\r?\n/);
+  const paragraphContent: AdfInlineNode[] = [];
+  lines.forEach((line, idx) => {
+    if (line.length > 0) {
+      paragraphContent.push({ type: 'text', text: line });
+    }
+    if (idx < lines.length - 1) {
+      paragraphContent.push({ type: 'hardBreak' });
+    }
+  });
+  return {
+    type: 'doc',
+    version: 1,
+    content: [{ type: 'paragraph', content: paragraphContent }],
+  };
+}
+
 const JIRA_API_BASE = '/rest/api/3';
 const JIRA_ENDPOINTS = {
   CREATE_ISSUE: `${JIRA_API_BASE}/issue`,
@@ -35,6 +106,9 @@ const JIRA_ENDPOINTS = {
   GET_MYSELF: `${JIRA_API_BASE}/myself`,
   SEARCH_USERS: `${JIRA_API_BASE}/user/search`,
   SEARCH_PROJECTS: `${JIRA_API_BASE}/project/search`,
+  ADD_COMMENT: (issueKey: string) => `${JIRA_API_BASE}/issue/${issueKey}/comment`,
+  GET_TRANSITIONS: (issueKey: string) => `${JIRA_API_BASE}/issue/${issueKey}/transitions`,
+  POST_TRANSITION: (issueKey: string) => `${JIRA_API_BASE}/issue/${issueKey}/transitions`,
 } as const;
 
 /**
@@ -585,5 +659,94 @@ export class JiraClient {
    */
   getIssueUrl(issueKey: string): string {
     return `${this.host}/browse/${issueKey}`;
+  }
+
+  // ==========================================================================
+  // Capability methods (TicketIntegrationCapabilities)
+  // ==========================================================================
+  //
+  // These three methods implement the optional capability interface used by
+  // the dedup rule engine. Each returns the minimum shape needed by the
+  // higher-level service / mapper — status mapping to the canonical enum
+  // happens in jira-status-mapper.ts so unit-tests can exercise it
+  // independently of HTTP.
+
+  /**
+   * Append a comment to an existing Jira issue.
+   *
+   * Body is sent as Atlassian Document Format (ADF). The v3 API doesn't
+   * render markdown and ignores literal `\n` inside a `text` node, so we
+   * split on newlines and emit a `hardBreak` between fragments. Blank
+   * lines become an extra `hardBreak` rather than a paragraph break —
+   * the rule-engine bodies we expect to send here are short status
+   * lines, not articles.
+   */
+  async addComment(issueKey: string, body: string): Promise<void> {
+    if (!issueKey) {
+      throw new Error('addComment: issueKey is required');
+    }
+    if (!body || body.trim().length === 0) {
+      throw new Error('addComment: body cannot be empty');
+    }
+
+    const adfBody = { body: buildPlainTextADF(body) };
+
+    logger.info('Adding Jira comment', { issueKey, bodyLength: body.length });
+
+    await this.request<unknown>({
+      method: 'POST',
+      path: JIRA_ENDPOINTS.ADD_COMMENT(issueKey),
+      headers: {},
+      body: JSON.stringify(adfBody),
+    });
+  }
+
+  /**
+   * List the transitions currently available to an issue.
+   *
+   * Jira's workflow is per-project and per-current-state, so the set of
+   * available transitions varies. The rule engine calls this first, then
+   * picks one whose target `statusCategory` matches the canonical status it
+   * wants to reach, then calls `transitionIssue` with the chosen id.
+   */
+  async getTransitions(issueKey: string): Promise<JiraTransition[]> {
+    if (!issueKey) {
+      throw new Error('getTransitions: issueKey is required');
+    }
+
+    const response = await this.request<{ transitions?: JiraTransition[] }>({
+      method: 'GET',
+      path: JIRA_ENDPOINTS.GET_TRANSITIONS(issueKey),
+      headers: {},
+    });
+
+    // Optional chain on `response` itself — the private `request<T>()`
+    // tolerates an empty body (returns null cast to T) and we don't
+    // want a TypeError on the response-shape assumption.
+    return response?.transitions ?? [];
+  }
+
+  /**
+   * Execute a transition by id, moving the issue to a new status.
+   *
+   * The id must come from a recent `getTransitions(issueKey)` call — Jira
+   * may reject ids that aren't currently available from the issue's state.
+   */
+  async transitionIssue(issueKey: string, transitionId: string): Promise<void> {
+    if (!issueKey) {
+      throw new Error('transitionIssue: issueKey is required');
+    }
+    if (!transitionId) {
+      throw new Error('transitionIssue: transitionId is required');
+    }
+
+    logger.info('Transitioning Jira issue', { issueKey, transitionId });
+
+    await this.request<unknown>({
+      method: 'POST',
+      path: JIRA_ENDPOINTS.POST_TRANSITION(issueKey),
+      headers: {},
+      body: JSON.stringify({ transition: { id: transitionId } }),
+    });
   }
 }

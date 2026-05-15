@@ -434,7 +434,8 @@ describe('JiraConfigManager', () => {
         });
 
         const config = await configManager.getConfigByIntegrationId(
-          '0f3961e5-d429-4271-a057-6aabdde76543'
+          '0f3961e5-d429-4271-a057-6aabdde76543',
+          '4ffb4250-f886-4f1e-af4c-ff9966b48aa6'
         );
 
         expect(config).toBeDefined();
@@ -462,7 +463,7 @@ describe('JiraConfigManager', () => {
           enabled: true,
         });
 
-        const config = await configManager.getConfigByIntegrationId('int-legacy-123');
+        const config = await configManager.getConfigByIntegrationId('int-legacy-123', 'proj-123');
 
         // Should return null because only instanceUrl is supported
         expect(config).toBeNull();
@@ -480,7 +481,7 @@ describe('JiraConfigManager', () => {
           enabled: true,
         });
 
-        const config = await configManager.getConfigByIntegrationId('int-slack-123');
+        const config = await configManager.getConfigByIntegrationId('int-slack-123', 'proj-123');
 
         expect(config).toBeNull();
       });
@@ -495,7 +496,7 @@ describe('JiraConfigManager', () => {
           enabled: false,
         });
 
-        const config = await configManager.getConfigByIntegrationId('int-disabled-123');
+        const config = await configManager.getConfigByIntegrationId('int-disabled-123', 'proj-123');
 
         expect(config).toBeNull();
       });
@@ -517,7 +518,36 @@ describe('JiraConfigManager', () => {
           enabled: true,
         });
 
-        const config = await configManager.getConfigByIntegrationId('int-jira-id');
+        const config = await configManager.getConfigByIntegrationId('int-jira-id', 'proj-123');
+
+        expect(config).toBeNull();
+      });
+
+      it('returns null when the integration belongs to a different project', async () => {
+        // Cross-tenant guard — the lookup is by integrationId alone, so
+        // without this check a caller smuggling a foreign integrationId
+        // would silently get back working credentials. Regression test
+        // for the defense-in-depth that the rule engine relies on.
+        const encryptedCreds = encryptionService.encrypt(
+          JSON.stringify({ email: 'test@bugspotter.com', apiToken: 'secret' })
+        );
+
+        mockRepository.findByIdWithType = vi.fn().mockResolvedValue({
+          project_id: 'real-project-id',
+          integration_id: 'int-jira-id',
+          integration_type: 'jira',
+          config: {
+            projectKey: 'PROJ',
+            instanceUrl: 'https://tenant.atlassian.net',
+          },
+          encrypted_credentials: encryptedCreds,
+          enabled: true,
+        });
+
+        const config = await configManager.getConfigByIntegrationId(
+          'int-jira-id',
+          'foreign-project-id'
+        );
 
         expect(config).toBeNull();
       });

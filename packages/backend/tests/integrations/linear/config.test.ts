@@ -9,8 +9,9 @@
  * credential leak with no signal. Worth a test, even if a small one.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { LinearConfigManager } from '../../../src/integrations/linear/config.js';
+import { getEncryptionService } from '../../../src/utils/encryption.js';
 
 describe('LinearConfigManager.fromEnvironment', () => {
   // Snapshot the env vars we touch so we can restore them after each
@@ -77,5 +78,57 @@ describe('LinearConfigManager.fromEnvironment', () => {
     const config = LinearConfigManager.fromEnvironment();
     expect(config).not.toBeNull();
     expect(config?.apiKey).toBe('lin_api_xxx');
+  });
+});
+
+describe('LinearConfigManager.getConfigByIntegrationId — cross-tenant guard', () => {
+  // Regression test for the defense-in-depth check that the rule
+  // engine + outbox flows rely on. Mirrors the equivalent Jira test —
+  // the threat model is identical (foreign integrationId smuggled via
+  // stale outbox row / misrouted retry).
+
+  let configManager: LinearConfigManager;
+  let mockRepo: { findByIdWithType: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    mockRepo = { findByIdWithType: vi.fn() };
+    configManager = new LinearConfigManager(mockRepo as never);
+  });
+
+  it('returns null when the integration belongs to a different project', async () => {
+    const enc = getEncryptionService().encrypt(JSON.stringify({ apiKey: 'lin_secret' }));
+    mockRepo.findByIdWithType.mockResolvedValue({
+      project_id: 'real-project-id',
+      integration_id: 'int-linear-id',
+      integration_type: 'linear',
+      config: { teamId: 'team-uuid', teamKey: 'ENG' },
+      encrypted_credentials: enc,
+      enabled: true,
+    });
+
+    const result = await configManager.getConfigByIntegrationId(
+      'int-linear-id',
+      'foreign-project-id'
+    );
+
+    expect(result).toBeNull();
+    expect(mockRepo.findByIdWithType).toHaveBeenCalledWith('int-linear-id');
+  });
+
+  it('returns the config when project matches', async () => {
+    const enc = getEncryptionService().encrypt(JSON.stringify({ apiKey: 'lin_secret' }));
+    mockRepo.findByIdWithType.mockResolvedValue({
+      project_id: 'real-project-id',
+      integration_id: 'int-linear-id',
+      integration_type: 'linear',
+      config: { teamId: 'team-uuid', teamKey: 'ENG' },
+      encrypted_credentials: enc,
+      enabled: true,
+    });
+
+    const result = await configManager.getConfigByIntegrationId('int-linear-id', 'real-project-id');
+
+    expect(result).not.toBeNull();
+    expect(result?.apiKey).toBe('lin_secret');
   });
 });

@@ -133,6 +133,41 @@ export interface LinearIssue {
 }
 
 /**
+ * Linear workflow-state type. Returned on `state.type` in GraphQL responses.
+ * The capability layer maps these to BugSpotter's CanonicalStatus enum.
+ */
+export type LinearStateType =
+  | 'triage'
+  | 'backlog'
+  | 'unstarted'
+  | 'started'
+  | 'completed'
+  | 'canceled';
+
+/**
+ * A single workflow state within a Linear team. Listed via
+ * `team(id).states.nodes`. The capability layer uses `type` (not `name`)
+ * for canonical mapping since teams freely rename states.
+ */
+export interface LinearWorkflowState {
+  id: string;
+  name: string;
+  type: LinearStateType;
+  position?: number;
+}
+
+/**
+ * Issue detail returned by the `issue(id)` query — slimmer than the full
+ * Linear `Issue` GraphQL type; only the fields the capability layer needs.
+ */
+export interface LinearIssueDetail {
+  id: string;
+  identifier: string;
+  state: { id: string; name: string; type: LinearStateType };
+  team: { id: string; name: string };
+}
+
+/**
  * Team node from the `teams` query.
  */
 export interface LinearTeam {

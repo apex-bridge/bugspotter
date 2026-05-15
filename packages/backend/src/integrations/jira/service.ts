@@ -17,6 +17,8 @@ import { generateShareToken } from '../../utils/token-generator.js';
 import { JiraConfigManager } from './config.js';
 import { JiraClient } from './client.js';
 import { JiraBugReportMapper } from './mapper.js';
+import { jiraIssueToCanonicalStatus, pickTransitionForCanonicalStatus } from './status-mapper.js';
+import type { CanonicalStatus, CapabilityTarget } from '../capabilities.js';
 import type { JiraIntegrationResult, JiraConfig, JiraAttachment } from './types.js';
 import { SHARE_TOKEN_EXPIRATION_HOURS } from './types.js';
 
@@ -204,8 +206,32 @@ export class JiraIntegrationService implements IntegrationService {
       hasFieldMappings: !!metadata?.fieldMappings,
     });
 
-    // Validate and load configuration for specific integration
-    const config = await this.validateAndLoadConfig(integrationId);
+    // Cross-tenant guard at the bugReport level: a stale outbox row or
+    // attacker-influenced job could pass `bugReport` from project A with
+    // `projectId` from project B. The downstream projectId scope on
+    // `validateAndLoadConfig` would catch credential leakage, but the
+    // payload (description, attachments, share-replay link) would still
+    // come from bugReport A. Reject the mismatch outright before any
+    // attachment fetch or share-token creation happens.
+    if (bugReport.project_id !== projectId) {
+      logger.warn('Rejecting Jira ticket creation: bugReport.project_id mismatch', {
+        bugReportId: bugReport.id,
+        bugReportProjectId: bugReport.project_id,
+        callerProjectId: projectId,
+        integrationId,
+      });
+      throw new AppError(
+        `Jira not usable for integration ${integrationId} in project ${projectId}`,
+        404,
+        'NotFound'
+      );
+    }
+
+    // Validate and load configuration for the specific (project, integration)
+    // pair — the projectId scoping prevents a foreign integrationId
+    // smuggled via a stale outbox row from loading another tenant's
+    // credentials.
+    const config = await this.validateAndLoadConfig(integrationId, projectId);
 
     // Generate share token for replay if applicable
     const shareReplayUrl = await this.generateShareTokenIfNeeded(bugReport, config);
@@ -241,13 +267,25 @@ export class JiraIntegrationService implements IntegrationService {
   }
 
   /**
-   * Validate project has Jira configured and enabled
+   * Validate that the (project, integration) pair has Jira configured
+   * and enabled. The projectId scope rejects foreign integrationIds —
+   * see `getConfigByIntegrationId` for the threat model.
    */
-  private async validateAndLoadConfig(integrationId: string): Promise<JiraConfig> {
-    const config = await this.configManager.getConfigByIntegrationId(integrationId);
+  private async validateAndLoadConfig(
+    integrationId: string,
+    projectId: string
+  ): Promise<JiraConfig> {
+    const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
 
     if (!config) {
-      throw new AppError(`Jira not configured for integration: ${integrationId}`, 404, 'NotFound');
+      // Conflate the failure modes (missing / disabled / wrong project /
+      // wrong platform) into one 404 — the caller doesn't need to know
+      // which, and leaking the difference would expose tenancy facts.
+      throw new AppError(
+        `Jira not usable for integration ${integrationId} in project ${projectId}`,
+        404,
+        'NotFound'
+      );
     }
 
     if (!config.enabled) {
@@ -745,5 +783,89 @@ export class JiraIntegrationService implements IntegrationService {
    */
   getAllowedAvatarDomains(config: Record<string, unknown>): string[] {
     return buildJiraAllowedAvatarDomains(config);
+  }
+
+  // ==========================================================================
+  // Capability methods (TicketIntegrationCapabilities)
+  // ==========================================================================
+  //
+  // These implement the platform-neutral capability interface consumed by
+  // the dedup rule engine. Each loads the project's stored Jira config,
+  // builds a one-shot JiraClient, and delegates the HTTP work. They are
+  // small wrappers — the canonical-status mapping lives in
+  // ./status-mapper.ts so it can be unit-tested without HTTP.
+
+  /**
+   * Resolve the JiraClient for a (project, integration) pair.
+   *
+   * Loads the config via `getConfigByIntegrationId(integrationId,
+   * projectId)` which rejects three failure modes in one call:
+   *  - integration does not exist
+   *  - integration is disabled
+   *  - integration belongs to a different project (cross-tenant guard)
+   *
+   * The cross-tenant guard matters because the bare integrationId lookup
+   * does a flat `WHERE id = $1` — without the projectId check, a caller
+   * passing a foreign integrationId (smuggled via a stale outbox row or
+   * an attacker-influenced bug event) would get back working credentials
+   * for that tenant.
+   */
+  private async resolveClient(integrationId: string, projectId: string): Promise<JiraClient> {
+    // Route through the shared validator so capability calls share the
+    // same scoping / enabled-check semantics as the ticket-creation path
+    // — drift between the two would mean a disabled integration could
+    // serve `addComment` / `transition` / `getStatus` while rejecting
+    // new tickets, which is a confusing state to debug.
+    const config = await this.validateAndLoadConfig(integrationId, projectId);
+    return new JiraClient(config);
+  }
+
+  /**
+   * Append a comment to an existing Jira issue.
+   *
+   * Throws when the integration is missing, disabled, or does not belong
+   * to `target.projectId`. The rule engine catches and degrades.
+   */
+  async addComment(target: CapabilityTarget, body: string): Promise<void> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
+    await client.addComment(target.externalId, body);
+  }
+
+  /**
+   * Transition a Jira issue to the canonical status `targetStatus`.
+   *
+   * Two API calls: list the issue's currently-available transitions, then
+   * pick one whose target state's category matches `targetStatus` (see
+   * `pickTransitionForCanonicalStatus`). Throws when no transition lands
+   * in the right category — the issue's workflow simply doesn't allow
+   * it from its current state. Caller logs and degrades.
+   */
+  async transition(target: CapabilityTarget, targetStatus: CanonicalStatus): Promise<void> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
+
+    const transitions = await client.getTransitions(target.externalId);
+    const picked = pickTransitionForCanonicalStatus(transitions, targetStatus);
+    if (!picked) {
+      throw new Error(
+        `No Jira transition leads to canonical status '${targetStatus}' from issue ${target.externalId}'s current state`
+      );
+    }
+
+    await client.transitionIssue(target.externalId, picked.id);
+    logger.info('Jira issue transitioned via capability', {
+      issueKey: target.externalId,
+      target: targetStatus,
+      transitionId: picked.id,
+      transitionName: picked.name,
+    });
+  }
+
+  /**
+   * Read the canonical status of an existing Jira issue.
+   */
+  async getStatus(target: CapabilityTarget): Promise<CanonicalStatus> {
+    const client = await this.resolveClient(target.integrationId, target.projectId);
+    const issue = await client.getIssue(target.externalId);
+    return jiraIssueToCanonicalStatus(issue);
   }
 }
