@@ -344,4 +344,56 @@ describe('DedupRuleExecutor.fire', () => {
     expect(results[0].fired).toBe(false);
     expect(results[0].skipReason).toBe('conditions_unmet');
   });
+
+  describe('per-rule error isolation', () => {
+    // The executor's documented contract: a single rule throwing
+    // anywhere in the rate-limit / dispatch path must not abort the
+    // remaining rules in the same fire. These regressions catch a
+    // future refactor that drops the inner try/catch.
+
+    it('reports dispatch_error when rateLimiter.shouldFire throws and continues to the next rule', async () => {
+      const otherRule: DedupRuleRow = {
+        ...COMMENT_RULE,
+        id: 'rule-2',
+        rule_json: {
+          ...(COMMENT_RULE.rule_json as object),
+          name: 'B2-copy',
+        },
+      };
+      repo.findByProject.mockResolvedValueOnce([COMMENT_RULE, otherRule]);
+      (rateLimiter.shouldFire as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('throttle table unreachable'))
+        .mockResolvedValueOnce(true);
+
+      const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+      expect(results).toHaveLength(2);
+      const first = results.find((r) => r.ruleId === 'rule-1');
+      const second = results.find((r) => r.ruleId === 'rule-2');
+      expect(first?.fired).toBe(false);
+      expect(first?.skipReason).toBe('dispatch_error');
+      expect(second?.fired).toBe(true);
+    });
+
+    it('reports dispatch_error when an action dispatch throws and continues to the next rule', async () => {
+      const otherRule: DedupRuleRow = {
+        ...COMMENT_RULE,
+        id: 'rule-2',
+        rule_json: {
+          ...(COMMENT_RULE.rule_json as object),
+          name: 'B2-copy',
+        },
+      };
+      repo.findByProject.mockResolvedValueOnce([COMMENT_RULE, otherRule]);
+      // Dispatcher contract is to swallow its own errors and return
+      // false. If a buggy custom dispatcher throws instead, the
+      // executor's outer try/catch must still contain it.
+      dispatchSpy.mockRejectedValueOnce(new Error('dispatch went sideways'));
+
+      const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+      const first = results.find((r) => r.ruleId === 'rule-1');
+      const second = results.find((r) => r.ruleId === 'rule-2');
+      expect(first?.skipReason).toBe('dispatch_error');
+      expect(second?.fired).toBe(true);
+    });
+  });
 });

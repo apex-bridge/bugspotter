@@ -165,6 +165,11 @@ export class TicketCreationOutboxProcessor {
             outboxEntryId,
             bugReportId: entry.bug_report_id,
             error: error instanceof Error ? error.message : String(error),
+            // Stack trace mirrors the surrounding error-log pattern in
+            // this file — the executor wraps its own errors, so a
+            // throw reaching us means a genuine engine bug worth
+            // debugging from the trace.
+            stack: error instanceof Error ? error.stack : undefined,
           });
         }
         return;

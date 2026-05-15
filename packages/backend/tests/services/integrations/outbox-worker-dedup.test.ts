@@ -180,17 +180,15 @@ describe('TicketCreationOutboxProcessor — pre-file dedup gate', () => {
 
   describe('outbox_about_to_skip rule trigger', () => {
     it('fires the rule executor after markSkipped, with the dedup-suppressed bug', async () => {
-      const fire = vi
-        .fn()
-        .mockResolvedValue([
-          {
-            ruleId: 'rule-x',
-            fired: true,
-            skipReason: null,
-            actionsDispatched: 1,
-            actionsSkipped: 0,
-          },
-        ]);
+      const fire = vi.fn().mockResolvedValue([
+        {
+          ruleId: 'rule-x',
+          fired: true,
+          skipReason: null,
+          actionsDispatched: 1,
+          actionsSkipped: 0,
+        },
+      ]);
       const ruleExecutor = { fire } as never;
       const processorWithExec = new TicketCreationOutboxProcessor(
         db,

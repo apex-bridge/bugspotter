@@ -188,29 +188,54 @@ export class DedupRuleExecutor {
       // every new duplicate get a fresh throttle key — disabling the
       // rate limit exactly when defense-in-depth matters most.
       const limitKey = evalContext.canonical?.id ?? bugReport.duplicate_of ?? bugReport.id;
-      const allowed = await this.rateLimiter.shouldFire(row.id, limitKey, rule);
-      if (!allowed) {
+
+      // Wrap the rate-limit + dispatch path in a per-rule try/catch.
+      // The dispatcher already swallows its own action failures, and
+      // ThrottleBackedRateLimiter shouldn't throw — but a custom
+      // implementation (or a DB hiccup the limiter doesn't catch)
+      // would otherwise propagate up and abort every remaining rule
+      // in this fire. The documented error-containment contract says
+      // that must not happen.
+      let dispatched = 0;
+      let skipped = 0;
+      try {
+        const allowed = await this.rateLimiter.shouldFire(row.id, limitKey, rule);
+        if (!allowed) {
+          results.push({
+            ruleId: row.id,
+            fired: false,
+            skipReason: 'rate_limited',
+            actionsDispatched: 0,
+            actionsSkipped: 0,
+          });
+          continue;
+        }
+
+        for (const action of rule.then) {
+          const ok = await this.dispatcher.dispatch(evalContext, action);
+          if (ok) {
+            dispatched += 1;
+          } else {
+            skipped += 1;
+          }
+        }
+        await this.rateLimiter.recordFire(row.id, limitKey, rule);
+      } catch (error) {
+        logger.error('Rule executor: rate-limit/dispatch path crashed for rule', {
+          ruleId: row.id,
+          projectId: bugReport.project_id,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
         results.push({
           ruleId: row.id,
           fired: false,
-          skipReason: 'rate_limited',
-          actionsDispatched: 0,
-          actionsSkipped: 0,
+          skipReason: 'dispatch_error',
+          actionsDispatched: dispatched,
+          actionsSkipped: skipped,
         });
         continue;
       }
-
-      let dispatched = 0;
-      let skipped = 0;
-      for (const action of rule.then) {
-        const ok = await this.dispatcher.dispatch(evalContext, action);
-        if (ok) {
-          dispatched += 1;
-        } else {
-          skipped += 1;
-        }
-      }
-      await this.rateLimiter.recordFire(row.id, limitKey, rule);
 
       results.push({
         ruleId: row.id,

@@ -43,15 +43,24 @@ export function buildCapabilityServiceLookup(
 ): CapabilityServiceLookup {
   return async (
     integrationId: string,
-    _projectId: string
+    projectId: string
   ): Promise<TicketIntegrationCapabilities | null> => {
     try {
+      // Scope the lookup by both project_integrations.id AND
+      // project_id. The id alone is a UUID and globally unique in
+      // practice, but the join lets an integration from project A
+      // resolve under a request scoped to project B if upstream code
+      // ever swaps the ids by mistake. Adding the project_id check
+      // means a cross-project hit returns zero rows -> null -> the
+      // dispatcher skips the action. Same defense-in-depth pattern
+      // used by TicketsTableResolver.
       const result = await db.getPool().query<{ platform: string; enabled: boolean }>(
         `SELECT i.type AS platform, pi.enabled
          FROM application.project_integrations pi
          JOIN application.integrations i ON i.id = pi.integration_id
-         WHERE pi.id = $1`,
-        [integrationId]
+         WHERE pi.id = $1
+           AND pi.project_id = $2`,
+        [integrationId, projectId]
       );
       const row = result.rows[0];
       if (!row || !row.enabled) {
@@ -65,6 +74,7 @@ export function buildCapabilityServiceLookup(
     } catch (error) {
       logger.warn('CapabilityServiceLookup: integration lookup failed', {
         integrationId,
+        projectId,
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
