@@ -173,6 +173,25 @@ export class LinearIntegrationService implements IntegrationService {
       createdAutomatically: metadata?.createdAutomatically,
     });
 
+    // Cross-tenant guard — mirror of the Jira service. A stale outbox
+    // row could pass bugReport from project A with projectId from
+    // project B; downstream scoping would protect credentials but not
+    // the payload (attachments, share-replay link). Reject before any
+    // share-token creation happens.
+    if (bugReport.project_id !== projectId) {
+      logger.warn('Rejecting Linear issue creation: bugReport.project_id mismatch', {
+        bugReportId: bugReport.id,
+        bugReportProjectId: bugReport.project_id,
+        callerProjectId: projectId,
+        integrationId,
+      });
+      throw new AppError(
+        `Linear not usable for integration ${integrationId} in project ${projectId}`,
+        404,
+        'NotFound'
+      );
+    }
+
     const config = await this.loadConfig(integrationId, projectId);
     const shareReplayUrl = await this.generateShareTokenIfNeeded(bugReport, config);
 
@@ -583,17 +602,12 @@ export class LinearIntegrationService implements IntegrationService {
    * credentials. See jira/service.ts for the full rationale.
    */
   private async resolveClient(integrationId: string, projectId: string): Promise<LinearClient> {
-    const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
-    // `getConfigByIntegrationId` already returns null for disabled rows,
-    // so `!config` covers the disabled case. Keeping the explicit
-    // `!config.enabled` check anyway for symmetry with the legacy
-    // `loadConfig` and to make the intent obvious to future readers.
-    if (!config || !config.enabled) {
-      throw new Error(
-        `Linear integration ${integrationId} not usable for project ${projectId} ` +
-          `(missing, disabled, wrong project, or wrong platform)`
-      );
-    }
+    // Route through the shared loader so capability calls share the
+    // same scoping / enabled-check semantics as the ticket-creation path
+    // — drift between the two would mean a disabled integration could
+    // serve `addComment` / `transition` / `getStatus` while rejecting
+    // new tickets, which is a confusing state to debug.
+    const config = await this.loadConfig(integrationId, projectId);
     return new LinearClient(config.apiKey);
   }
 

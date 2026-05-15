@@ -139,4 +139,50 @@ describe('LinearIntegrationService — capability methods', () => {
       expect(mockClientInstance.getIssue).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('disabled / missing integration', () => {
+    // Capability layer must refuse to operate on disabled integrations
+    // — symmetry with the legacy `loadConfig` path — and must do so
+    // BEFORE issuing any GraphQL call.
+
+    it('rejects addComment when configManager returns null (missing/disabled/wrong project)', async () => {
+      (service as unknown as { configManager: { getConfigByIntegrationId: Mock } }).configManager =
+        {
+          getConfigByIntegrationId: vi.fn().mockResolvedValue(null),
+        };
+      await expect(service.addComment(FAKE_TARGET, 'hi')).rejects.toThrow();
+      expect(mockClientInstance.getIssue).not.toHaveBeenCalled();
+      expect(mockClientInstance.commentCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects addComment when configManager returns a disabled config', async () => {
+      (service as unknown as { configManager: { getConfigByIntegrationId: Mock } }).configManager =
+        {
+          getConfigByIntegrationId: vi.fn().mockResolvedValue({ ...FAKE_CONFIG, enabled: false }),
+        };
+      await expect(service.addComment(FAKE_TARGET, 'hi')).rejects.toThrow();
+      expect(mockClientInstance.getIssue).not.toHaveBeenCalled();
+      expect(mockClientInstance.commentCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects transition when configManager returns null', async () => {
+      (service as unknown as { configManager: { getConfigByIntegrationId: Mock } }).configManager =
+        {
+          getConfigByIntegrationId: vi.fn().mockResolvedValue(null),
+        };
+      await expect(service.transition(FAKE_TARGET, 'closed')).rejects.toThrow();
+      expect(mockClientInstance.getIssue).not.toHaveBeenCalled();
+      expect(mockClientInstance.getTeamStates).not.toHaveBeenCalled();
+      expect(mockClientInstance.issueUpdateState).not.toHaveBeenCalled();
+    });
+
+    it('rejects getStatus when configManager returns null', async () => {
+      (service as unknown as { configManager: { getConfigByIntegrationId: Mock } }).configManager =
+        {
+          getConfigByIntegrationId: vi.fn().mockResolvedValue(null),
+        };
+      await expect(service.getStatus(FAKE_TARGET)).rejects.toThrow();
+      expect(mockClientInstance.getIssue).not.toHaveBeenCalled();
+    });
+  });
 });

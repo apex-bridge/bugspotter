@@ -206,6 +206,27 @@ export class JiraIntegrationService implements IntegrationService {
       hasFieldMappings: !!metadata?.fieldMappings,
     });
 
+    // Cross-tenant guard at the bugReport level: a stale outbox row or
+    // attacker-influenced job could pass `bugReport` from project A with
+    // `projectId` from project B. The downstream projectId scope on
+    // `validateAndLoadConfig` would catch credential leakage, but the
+    // payload (description, attachments, share-replay link) would still
+    // come from bugReport A. Reject the mismatch outright before any
+    // attachment fetch or share-token creation happens.
+    if (bugReport.project_id !== projectId) {
+      logger.warn('Rejecting Jira ticket creation: bugReport.project_id mismatch', {
+        bugReportId: bugReport.id,
+        bugReportProjectId: bugReport.project_id,
+        callerProjectId: projectId,
+        integrationId,
+      });
+      throw new AppError(
+        `Jira not usable for integration ${integrationId} in project ${projectId}`,
+        404,
+        'NotFound'
+      );
+    }
+
     // Validate and load configuration for the specific (project, integration)
     // pair — the projectId scoping prevents a foreign integrationId
     // smuggled via a stale outbox row from loading another tenant's
@@ -790,18 +811,12 @@ export class JiraIntegrationService implements IntegrationService {
    * for that tenant.
    */
   private async resolveClient(integrationId: string, projectId: string): Promise<JiraClient> {
-    const config = await this.configManager.getConfigByIntegrationId(integrationId, projectId);
-    // `getConfigByIntegrationId` already returns null for disabled rows,
-    // so `!config` covers the disabled case. Keeping the explicit
-    // `!config.enabled` check anyway for symmetry with the legacy
-    // `validateAndLoadConfig` and to make the intent obvious to future
-    // readers.
-    if (!config || !config.enabled) {
-      throw new Error(
-        `Jira integration ${integrationId} not usable for project ${projectId} ` +
-          `(missing, disabled, wrong project, or wrong platform)`
-      );
-    }
+    // Route through the shared validator so capability calls share the
+    // same scoping / enabled-check semantics as the ticket-creation path
+    // — drift between the two would mean a disabled integration could
+    // serve `addComment` / `transition` / `getStatus` while rejecting
+    // new tickets, which is a confusing state to debug.
+    const config = await this.validateAndLoadConfig(integrationId, projectId);
     return new JiraClient(config);
   }
 
