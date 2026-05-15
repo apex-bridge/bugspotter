@@ -25,6 +25,8 @@ import { getLogger } from '../../../logger.js';
 import type { DatabaseClient } from '../../../db/client.js';
 import type { BugReport } from '../../../db/types.js';
 import type { PluginRegistry } from '../../../integrations/plugin-registry.js';
+import { DedupRuleExecutor } from '../../../services/rules/executor.js';
+import { buildDedupRuleExecutor } from '../../../services/rules/wiring.js';
 import type { TicketCreationOutboxEntry } from '../../../db/repositories/ticket-creation-outbox.repository.js';
 
 const logger = getLogger();
@@ -40,11 +42,24 @@ export interface OutboxProcessorJobData {
  * Worker to process ticket creation outbox entries
  */
 export class TicketCreationOutboxProcessor {
+  // Lazy-built so tests that construct this processor with stub
+  // pluginRegistry / db don't have to also stub the rule engine. The
+  // first outbox_about_to_skip event in any process pays the (cheap)
+  // construction cost; subsequent events reuse the same executor.
+  private ruleExecutor: DedupRuleExecutor | null = null;
+
   constructor(
     private readonly db: DatabaseClient,
     private readonly pluginRegistry: PluginRegistry,
     private readonly queue?: Queue<OutboxProcessorJobData>
   ) {}
+
+  private getRuleExecutor(): DedupRuleExecutor {
+    if (!this.ruleExecutor) {
+      this.ruleExecutor = buildDedupRuleExecutor(this.db, this.pluginRegistry);
+    }
+    return this.ruleExecutor;
+  }
 
   /**
    * Process a single outbox entry (called by Bull queue)
@@ -110,6 +125,33 @@ export class TicketCreationOutboxProcessor {
           bugReportId: entry.bug_report_id,
           duplicateOf: bugReport.duplicate_of,
         });
+        // Fire the outbox_about_to_skip rule trigger BEFORE the
+        // markSkipped call so rules can react to the suppression (e.g.
+        // add a "+1 occurrence" comment to the canonical ticket, or
+        // auto-reopen a closed canonical). Awaiting is safe — the
+        // executor swallows action failures internally and only
+        // returns telemetry, so a slow Jira call cannot fail the
+        // outbox row's terminal state transition.
+        try {
+          const results = await this.getRuleExecutor().fire('outbox_about_to_skip', bugReport);
+          if (results.length > 0) {
+            logger.info('Dedup rules evaluated for outbox_about_to_skip', {
+              outboxEntryId,
+              bugReportId: entry.bug_report_id,
+              fired: results.filter((r) => r.fired).length,
+              total: results.length,
+            });
+          }
+        } catch (error) {
+          // Defensive: the executor wraps its own errors, but if a
+          // bug in the engine itself escapes, log and continue. Outbox
+          // suppression must not be blocked by the rule engine.
+          logger.error('Dedup rule executor crashed for outbox_about_to_skip', {
+            outboxEntryId,
+            bugReportId: entry.bug_report_id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         await this.db.ticketOutbox.markSkipped(outboxEntryId, 'duplicate_of_set');
         return;
       }

@@ -1,0 +1,336 @@
+/**
+ * Dedup-rule executor.
+ *
+ * Loads enabled rules for the firing project, filters by trigger type,
+ * builds an evaluation context, evaluates conditions, checks rate
+ * limit, then dispatches each action through the injected
+ * `ActionDispatcher`. Returns telemetry for the caller to log.
+ *
+ * Fire-and-forget at the call site: callers (the dedup service, the
+ * outbox worker) invoke `fire(...)` without awaiting on the
+ * dispatch — we don't want a slow Jira call to back up the dedup
+ * pipeline. Errors inside the executor are caught and logged; nothing
+ * propagates back to the trigger handler.
+ *
+ * Architectural choices worth flagging:
+ *  - The executor talks to `DedupRuleRepository` (rule storage from
+ *    PR-B) and to the injected `ActionDispatcher` / `RuleRateLimiter`.
+ *    No direct DB access for tickets / integrations / bug reports —
+ *    those go through the dispatcher's `CanonicalTicketResolver` and
+ *    the trigger context.
+ *  - Rule blobs are validated through `parseDedupRule` (Zod). Validation
+ *    errors get logged and the rule is skipped — one malformed rule
+ *    must not poison the others on the same trigger.
+ *  - Only `duplicate_detected` and `outbox_about_to_skip` are wired in
+ *    this PR. Schedule-based and cluster-growing triggers are valid at
+ *    the schema level but require a cron worker / aggregator — they
+ *    fire from different entry points (a BullMQ job, a counter
+ *    flush). The executor's design accommodates them; the wiring lands
+ *    in a follow-up.
+ */
+
+import type { DedupRuleRepository } from '../../db/dedup-rule.repository.js';
+import type { BugReport } from '../../db/types.js';
+import type { DedupRule } from '../../integrations/dedup-rule.schema.js';
+import { parseDedupRule } from '../../integrations/dedup-rule.schema.js';
+import { getLogger } from '../../logger.js';
+import { evaluateConditions } from './evaluator.js';
+import type {
+  ActionDispatcher,
+  RuleEvalContext,
+  RuleFireResult,
+  RuleRateLimiter,
+  TriggerType,
+} from './types.js';
+
+const logger = getLogger();
+
+/**
+ * Resolves contextual data the conditions might reference: the
+ * canonical bug, the count of hits in a window, etc. Kept as an
+ * interface so tests can stub the DB-touching parts.
+ */
+export interface RuleContextProvider {
+  /** Fetch the canonical bug (the one `duplicate_of` points at), or null. */
+  loadCanonical(canonicalBugId: string): Promise<BugReport | null>;
+  /** Count bugs whose `duplicate_of` is `canonicalBugId` within the window. */
+  countHitsInWindow(canonicalBugId: string, window: string): Promise<number>;
+}
+
+export class DedupRuleExecutor {
+  constructor(
+    private readonly repo: DedupRuleRepository,
+    private readonly dispatcher: ActionDispatcher,
+    private readonly rateLimiter: RuleRateLimiter,
+    private readonly context: RuleContextProvider
+  ) {}
+
+  /**
+   * Entry point. Loads enabled rules for `bugReport.project_id`,
+   * filters those whose `when.type` matches `trigger`, and runs each
+   * through the full pipeline. Returns one result per rule it
+   * attempted (skipped rules are included with their reason).
+   */
+  async fire(trigger: TriggerType, bugReport: BugReport): Promise<RuleFireResult[]> {
+    let candidateRules;
+    try {
+      candidateRules = await this.repo.findByProject(bugReport.project_id, false);
+    } catch (error) {
+      logger.error('Rule executor: failed to load rules', {
+        projectId: bugReport.project_id,
+        bugReportId: bugReport.id,
+        trigger,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+    if (candidateRules.length === 0) {
+      return [];
+    }
+
+    const evalContext: RuleEvalContext = {
+      bugReport,
+      canonical: null,
+      projectId: bugReport.project_id,
+      resolved: new Map<string, unknown>(),
+    };
+
+    // Hydrate canonical lazily — only if at least one rule references
+    // `canonical.*` OR `hits_in_window`. Saves a round-trip for rules
+    // that only test on the new bug's fields.
+    let canonicalLoaded = false;
+
+    const results: RuleFireResult[] = [];
+
+    for (const row of candidateRules) {
+      let rule: DedupRule;
+      try {
+        rule = parseDedupRule(row.rule_json);
+      } catch (error) {
+        logger.warn('Rule executor: invalid rule_json, skipping', {
+          ruleId: row.id,
+          projectId: bugReport.project_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        results.push({
+          ruleId: row.id,
+          fired: false,
+          skipReason: 'evaluation_error',
+          actionsDispatched: 0,
+          actionsSkipped: 0,
+        });
+        continue;
+      }
+
+      if (rule.when.type !== trigger) {
+        continue; // Trigger mismatch — not a "fire" attempt, don't record.
+      }
+
+      // Lazy canonical hydration.
+      if (!canonicalLoaded && this.needsCanonical(rule)) {
+        if (bugReport.duplicate_of) {
+          try {
+            evalContext.canonical = await this.context.loadCanonical(bugReport.duplicate_of);
+          } catch (error) {
+            logger.warn('Rule executor: canonical lookup failed', {
+              ruleId: row.id,
+              canonicalId: bugReport.duplicate_of,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            evalContext.canonical = null;
+          }
+        }
+        canonicalLoaded = true;
+      }
+
+      // Resolve the fields this rule's conditions reference. Cache hits
+      // across rules in the same fire so two rules touching
+      // `canonical.status` only resolve once.
+      try {
+        await this.resolveFields(evalContext, rule);
+      } catch (error) {
+        logger.warn('Rule executor: field resolution failed', {
+          ruleId: row.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        results.push({
+          ruleId: row.id,
+          fired: false,
+          skipReason: 'evaluation_error',
+          actionsDispatched: 0,
+          actionsSkipped: 0,
+        });
+        continue;
+      }
+
+      const conditionsMet = evaluateConditions(evalContext, rule.conditions);
+      if (!conditionsMet) {
+        results.push({
+          ruleId: row.id,
+          fired: false,
+          skipReason: 'conditions_unmet',
+          actionsDispatched: 0,
+          actionsSkipped: 0,
+        });
+        continue;
+      }
+
+      // Rate limit applies per (rule, canonical) pair. When there's no
+      // canonical we fall back to the bug report's own id so the limit
+      // still has a stable key.
+      const limitKey = evalContext.canonical?.id ?? bugReport.id;
+      const allowed = await this.rateLimiter.shouldFire(row.id, limitKey, rule);
+      if (!allowed) {
+        results.push({
+          ruleId: row.id,
+          fired: false,
+          skipReason: 'rate_limited',
+          actionsDispatched: 0,
+          actionsSkipped: 0,
+        });
+        continue;
+      }
+
+      let dispatched = 0;
+      let skipped = 0;
+      for (const action of rule.then) {
+        const ok = await this.dispatcher.dispatch(evalContext, action);
+        if (ok) {
+          dispatched += 1;
+        } else {
+          skipped += 1;
+        }
+      }
+      await this.rateLimiter.recordFire(row.id, limitKey, rule);
+
+      results.push({
+        ruleId: row.id,
+        fired: true,
+        skipReason: null,
+        actionsDispatched: dispatched,
+        actionsSkipped: skipped,
+      });
+    }
+
+    return results;
+  }
+
+  private needsCanonical(rule: DedupRule): boolean {
+    for (const cond of rule.conditions) {
+      if (cond.field.startsWith('canonical.') || cond.field === 'hits_in_window') {
+        return true;
+      }
+    }
+    // Ticket actions also need a canonical — see `DefaultActionDispatcher.resolveTarget`.
+    for (const action of rule.then) {
+      if (action.type === 'ticket.add_comment' || action.type === 'ticket.transition') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async resolveFields(context: RuleEvalContext, rule: DedupRule): Promise<void> {
+    for (const cond of rule.conditions) {
+      if (context.resolved.has(cond.field)) {
+        continue;
+      }
+      switch (cond.field) {
+        case 'canonical.status':
+          context.resolved.set('canonical.status', mapStatusToCanonical(context.canonical));
+          break;
+        case 'canonical.closed_days_ago':
+          context.resolved.set('canonical.closed_days_ago', daysSinceUpdate(context.canonical));
+          break;
+        case 'hits_in_window':
+          // `cond.window` is guaranteed non-empty by the schema's
+          // hits_in_window validator, but TypeScript can't see that —
+          // fall back to a 24h window if it's missing rather than
+          // throwing.
+          if (context.canonical) {
+            const w = cond.window ?? '24h';
+            context.resolved.set(
+              'hits_in_window',
+              await this.context.countHitsInWindow(context.canonical.id, w)
+            );
+          } else {
+            context.resolved.set('hits_in_window', null);
+          }
+          break;
+        case 'reporter.customer.tier': {
+          const tier = readPath(context.bugReport.metadata, ['user', 'tier']);
+          context.resolved.set('reporter.customer.tier', tier);
+          break;
+        }
+        case 'severity':
+          // `severity` mirrors `bug_reports.priority` — both express the
+          // same axis from the dedup rule's perspective. Mapping kept
+          // simple (1:1) until product introduces a separate severity
+          // field.
+          context.resolved.set('severity', context.bugReport.priority);
+          break;
+        default: {
+          // Exhaustiveness check on the closed field literal.
+          const _exhaustive: never = cond.field;
+          void _exhaustive;
+          context.resolved.set(cond.field, null);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Map `bug_reports.status` (the BugSpotter internal `BugStatus` —
+ * `'open' | 'in-progress' | 'resolved' | 'closed'`) onto the DedupRule
+ * schema's `CanonicalStatus` (`'open' | 'in_progress' | 'closed' |
+ * 'wont_fix'`).
+ *
+ * The two enums diverge in two places:
+ *   - `'in-progress'` (kebab) vs `'in_progress'` (snake)
+ *   - `'resolved'` collapses into `'closed'` (rule authors think in
+ *     terms of "closed or not"; the dedup engine doesn't care about
+ *     the distinction)
+ * `'wont_fix'` has no source counterpart yet — a rule comparing
+ * `canonical.status in ['wont_fix']` will simply never match until
+ * `BugStatus` gains a corresponding state.
+ */
+function mapStatusToCanonical(canonical: BugReport | null): string | null {
+  if (!canonical) {
+    return null;
+  }
+  switch (canonical.status) {
+    case 'open':
+      return 'open';
+    case 'in-progress':
+      return 'in_progress';
+    case 'resolved':
+    case 'closed':
+      return 'closed';
+    default:
+      return null;
+  }
+}
+
+/** Whole days since the canonical's `updated_at` (proxy for "closed at"). */
+function daysSinceUpdate(canonical: BugReport | null): number | null {
+  if (!canonical) {
+    return null;
+  }
+  const updated =
+    canonical.updated_at instanceof Date ? canonical.updated_at : new Date(canonical.updated_at);
+  const elapsedMs = Date.now() - updated.getTime();
+  return Math.floor(elapsedMs / (1000 * 60 * 60 * 24));
+}
+
+/** Safe traversal of an unknown object by a dotted-path-equivalent array. */
+function readPath(obj: unknown, path: string[]): unknown {
+  let cur: unknown = obj;
+  for (const key of path) {
+    if (cur === null || cur === undefined || typeof cur !== 'object') {
+      return null;
+    }
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return cur ?? null;
+}
