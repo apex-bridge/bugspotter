@@ -17,6 +17,8 @@
 
 import { z } from 'zod';
 
+import { validateSSRFProtection } from './security/ssrf-validator.js';
+
 // `<digits><unit>` duration strings used by trigger / condition / rate_limit
 // windows. Leading [1-9] forbids zero-duration ("0h") windows that would
 // silently make conditions meaningless. Must match `_WINDOW_PATTERN` in
@@ -101,11 +103,18 @@ export const conditionSpecSchema = z
     ) {
       return { ...c, value: [c.value] };
     }
-    // Coerce string-number -> number for gte/lte ("3" -> 3).
+    // Coerce string-number -> number for gte/lte ("3" -> 3). Guard the
+    // empty / whitespace-only case explicitly: `Number("")` is 0 in JS
+    // (not NaN), which would silently treat a blank value as zero —
+    // diverging from the Pydantic model where `int("")` raises. Trim
+    // and require non-empty before delegating to Number().
     if ((c.op === 'gte' || c.op === 'lte') && typeof c.value === 'string') {
-      const n = Number(c.value);
-      if (!Number.isNaN(n)) {
-        return { ...c, value: n };
+      const trimmed = c.value.trim();
+      if (trimmed !== '') {
+        const n = Number(trimmed);
+        if (!Number.isNaN(n)) {
+          return { ...c, value: n };
+        }
       }
     }
     return c;
@@ -186,9 +195,30 @@ const actionSlackSchema = z
     }
   });
 
+// `z.string().url()` only checks syntax. Without an SSRF guard, an admin
+// could persist a rule that makes the executor POST to internal services
+// (127.*, 10.*, 169.254.* cloud metadata, etc). Reject at parse time so
+// bad URLs never make it past write; the executor runs the same check
+// again as defense-in-depth.
 const actionWebhookSchema = z.object({
   type: z.literal('notify.webhook'),
-  url: z.string().url(),
+  url: z
+    .string()
+    .url()
+    .refine(
+      (u) => {
+        try {
+          validateSSRFProtection(u);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      {
+        message:
+          'Webhook URL must be a public HTTPS/HTTP endpoint (no localhost, private, or metadata IPs)',
+      }
+    ),
   payload: z.record(z.unknown()).nullable().optional(),
 });
 

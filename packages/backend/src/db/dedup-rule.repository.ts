@@ -59,28 +59,32 @@ export class DedupRuleRepository extends BaseRepository<
   async findByProject(projectId: string, includeDisabled = false): Promise<DedupRuleRow[]> {
     const query = `
       SELECT id, project_id, name, rule_json, enabled, created_at, updated_at
-      FROM dedup_rules
+      FROM ${this.schema}.${this.tableName}
       WHERE project_id = $1
         ${includeDisabled ? '' : 'AND enabled = true'}
       ORDER BY name ASC
     `;
-    const result = await this.pool.query<DedupRuleRow>(query, [projectId]);
-    return result.rows;
+    const result = await this.getClient().query(query, [projectId]);
+    return this.deserializeMany(result.rows);
   }
 
   /**
    * Look up a rule by (project, name). Used by the admin UI to detect
    * name collisions before INSERT, and by the seed helpers to upsert
    * the B1 / B2 / B3 preset rules without duplicating them on repeat
-   * deploys.
+   * deploys. The `unique_dedup_rule_name_per_project` constraint is the
+   * authoritative guard — this lookup is for nicer error UX, not safety.
    */
   async findByProjectAndName(projectId: string, name: string): Promise<DedupRuleRow | null> {
     const query = `
       SELECT id, project_id, name, rule_json, enabled, created_at, updated_at
-      FROM dedup_rules
+      FROM ${this.schema}.${this.tableName}
       WHERE project_id = $1 AND name = $2
     `;
-    const result = await this.pool.query<DedupRuleRow>(query, [projectId, name]);
-    return result.rows[0] ?? null;
+    const result = await this.getClient().query(query, [projectId, name]);
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return this.deserialize(result.rows[0]);
   }
 }

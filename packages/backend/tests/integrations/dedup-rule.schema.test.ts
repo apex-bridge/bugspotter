@@ -144,6 +144,24 @@ describe('conditionSpecSchema', () => {
     ).toThrow();
   });
 
+  it.each(['', '   ', '\t\n'])(
+    'rejects empty / whitespace-only string for `gte` (Number("") is 0 in JS, not NaN)',
+    (bad) => {
+      // Regression test: `Number("")` evaluates to 0, so an unguarded
+      // coercion would silently treat a blank value as zero — diverging
+      // from the Pydantic model where `int("")` raises a ValueError.
+      // Guard with a trim + non-empty check before delegating to Number().
+      expect(() =>
+        conditionSpecSchema.parse({
+          field: 'hits_in_window',
+          op: 'gte',
+          value: bad,
+          window: '24h',
+        })
+      ).toThrow();
+    }
+  );
+
   it('rejects bool for `gte` (JS coerces `true > 5` silently)', () => {
     expect(() =>
       conditionSpecSchema.parse({
@@ -275,6 +293,27 @@ describe('dedupRuleSchema — actions', () => {
       dedupRuleSchema.parse({
         ...baseRule,
         then: [{ type: 'notify.webhook', url: 'not-a-url' }],
+      })
+    ).toThrow();
+  });
+
+  it.each([
+    'http://127.0.0.1:6379',
+    'http://localhost:3000',
+    'http://10.0.0.1/hook',
+    'http://192.168.1.1/hook',
+    'http://172.16.0.1/hook',
+    'http://169.254.169.254/latest/meta-data/', // AWS metadata
+    'http://[::1]/hook',
+  ])('notify.webhook rejects internal / private host %s (SSRF)', (bad) => {
+    // `z.string().url()` only validates syntax — without the SSRF refine
+    // an admin could persist a rule that makes the executor POST to
+    // internal services. Reject at parse time. The executor re-validates
+    // as defense-in-depth.
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.webhook', url: bad }],
       })
     ).toThrow();
   });
