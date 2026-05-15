@@ -7,12 +7,22 @@
  * DedupRule are per-canonical-bug, mirroring the persona-driven design
  * ("at most one auto-reopen comment per cluster per day").
  *
- * `isThrottled` performs check-and-increment atomically; we surface
- * the inverse via `shouldFire` for caller-side readability and treat
- * `recordFire` as a no-op (the increment already happened inside
- * `shouldFire`). If a rule's actions all fail after `shouldFire` returns
- * true, the slot is still burned for the window — acceptable for the
- * MVP, matches the existing notification-throttle behaviour.
+ * **Concurrency caveat.** `isThrottled` is two statements
+ * (`getWindowCount` then a conditional `incrementWindowCount`), NOT a
+ * single atomic check-and-increment. Concurrent fires for the same
+ * canonical (e.g. several outbox workers processing duplicates of the
+ * same cluster in parallel) can both observe `currentCount < max` and
+ * both increment, exceeding the configured limit. At MVP rule
+ * density / cluster ingest rate this is a theoretical edge; the
+ * tighter fix is a single `INSERT ... ON CONFLICT DO UPDATE WHERE
+ * count < $max RETURNING` statement and lands in a follow-up that
+ * also touches the existing notification callers of this repository.
+ *
+ * `recordFire` is a no-op (the increment already happened inside
+ * `shouldFire`). If a rule's actions all fail after `shouldFire`
+ * returns true, the slot is still burned for the window — acceptable
+ * for the MVP and matches the existing notification-throttle
+ * behaviour.
  */
 
 import type { NotificationThrottleRepository } from '../../db/repositories/notification-throttle.repository.js';

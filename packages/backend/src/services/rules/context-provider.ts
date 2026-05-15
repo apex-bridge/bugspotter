@@ -24,10 +24,17 @@ export class DatabaseRuleContextProvider implements RuleContextProvider {
   async countHitsInWindow(canonicalBugId: string, window: string): Promise<number> {
     const minutes = windowStringToMinutes(window);
     try {
+      // Filter `deleted_at IS NULL` to match how the rest of the
+      // codebase reads `bug_reports` (see bug-report.repository.ts).
+      // Without this, soft-deleted duplicates inflate the count, so a
+      // rule like `hits_in_window >= 10` can fire on a cluster whose
+      // raw rows have been cleaned up — misfiring the loud-bug
+      // suppression / auto-reopen actions.
       const result = await this.db.getPool().query<{ count: string }>(
         `SELECT COUNT(*)::text AS count
          FROM application.bug_reports
          WHERE duplicate_of = $1
+           AND deleted_at IS NULL
            AND created_at >= NOW() - ($2::int * INTERVAL '1 minute')`,
         [canonicalBugId, minutes]
       );
