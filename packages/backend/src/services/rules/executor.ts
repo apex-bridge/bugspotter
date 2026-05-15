@@ -359,7 +359,10 @@ function daysSinceUpdate(canonical: BugReport | null): number | null {
   }
   const updated =
     canonical.updated_at instanceof Date ? canonical.updated_at : new Date(canonical.updated_at);
-  const elapsedMs = Date.now() - updated.getTime();
+  // Clamp to 0 — if the DB clock is slightly ahead of the app clock,
+  // `Date.now() - updated.getTime()` can be negative and would flip
+  // gte/lte comparisons. Treat "future" timestamps as "just now".
+  const elapsedMs = Math.max(0, Date.now() - updated.getTime());
   return Math.floor(elapsedMs / (1000 * 60 * 60 * 24));
 }
 
