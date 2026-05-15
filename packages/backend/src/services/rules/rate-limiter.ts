@@ -1,22 +1,17 @@
 /**
  * Rate-limit adapter for the dedup-rule engine.
  *
- * Routes through the existing `notification_throttle` table /
- * `NotificationThrottleRepository.isThrottled` so we don't introduce a
- * second store. The group key is `<canonicalId>` — rate limits in
- * DedupRule are per-canonical-bug, mirroring the persona-driven design
- * ("at most one auto-reopen comment per cluster per day").
+ * Routes through the existing `notification_throttle` table via
+ * `NotificationThrottleRepository.tryReserveSlot` — a single
+ * `INSERT ... ON CONFLICT DO UPDATE WHERE count < $max RETURNING`
+ * statement that performs the check and the reservation atomically.
+ * Concurrent fires for the same canonical (e.g. several outbox
+ * workers processing duplicates of the same cluster in parallel)
+ * no longer race past the configured `rate_limit.count`.
  *
- * **Concurrency caveat.** `isThrottled` is two statements
- * (`getWindowCount` then a conditional `incrementWindowCount`), NOT a
- * single atomic check-and-increment. Concurrent fires for the same
- * canonical (e.g. several outbox workers processing duplicates of the
- * same cluster in parallel) can both observe `currentCount < max` and
- * both increment, exceeding the configured limit. At MVP rule
- * density / cluster ingest rate this is a theoretical edge; the
- * tighter fix is a single `INSERT ... ON CONFLICT DO UPDATE WHERE
- * count < $max RETURNING` statement and lands in a follow-up that
- * also touches the existing notification callers of this repository.
+ * The group key is `<canonicalId>` — rate limits in DedupRule are
+ * per-canonical-bug, mirroring the persona-driven design ("at most
+ * one auto-reopen comment per cluster per day").
  *
  * `recordFire` is a no-op (the increment already happened inside
  * `shouldFire`). If a rule's actions all fail after `shouldFire`
@@ -61,7 +56,11 @@ export function windowStringToMinutes(window: string): number {
     d: 60 * 24,
     w: 60 * 24 * 7,
   };
-  return Math.max(1, Math.floor(n * (multipliers[unit] ?? 60)));
+  // Round UP, not down: a "61s" window collapses to 1 minute under
+  // Math.floor (less restrictive — slot resets sooner than the rule
+  // author asked for). Math.ceil makes the limiter strictly more
+  // conservative, matching the doc above.
+  return Math.max(1, Math.ceil(n * (multipliers[unit] ?? 60)));
 }
 
 export class ThrottleBackedRateLimiter implements RuleRateLimiter {
@@ -73,13 +72,7 @@ export class ThrottleBackedRateLimiter implements RuleRateLimiter {
       return true;
     }
     const minutes = windowStringToMinutes(rule.rate_limit.window);
-    const throttled = await this.throttle.isThrottled(
-      ruleId,
-      canonicalId,
-      rule.rate_limit.count,
-      minutes
-    );
-    return !throttled;
+    return this.throttle.tryReserveSlot(ruleId, canonicalId, rule.rate_limit.count, minutes);
   }
 
   /**
