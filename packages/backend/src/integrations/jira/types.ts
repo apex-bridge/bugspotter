@@ -133,12 +133,43 @@ export interface JiraIssue {
     description: JiraDescription | string;
     status: {
       name: string;
+      // `statusCategory` is what Jira uses internally to classify a workflow
+      // state regardless of customer-renamed status names. Built-in keys:
+      // 'new' (To Do-ish), 'indeterminate' (In Progress-ish), 'done'
+      // (Done-ish), 'undefined' (unmapped). The capability layer maps these
+      // into our CanonicalStatus enum. Marked optional only because some
+      // older test fixtures don't include it — real responses always do.
+      statusCategory?: {
+        key: 'new' | 'indeterminate' | 'done' | 'undefined' | string;
+        name?: string;
+      };
     };
     priority?: {
       name: string;
     };
     created: string;
     updated: string;
+  };
+}
+
+/**
+ * A single transition available on a Jira issue's current state.
+ *
+ * Returned by `GET /issue/{key}/transitions`. `to` describes the workflow
+ * state the issue lands in after executing this transition. The capability
+ * layer picks a transition whose `to.statusCategory.key` matches the desired
+ * canonical status.
+ */
+export interface JiraTransition {
+  id: string;
+  name: string;
+  to: {
+    id?: string;
+    name: string;
+    statusCategory?: {
+      key: 'new' | 'indeterminate' | 'done' | 'undefined' | string;
+      name?: string;
+    };
   };
 }
 
