@@ -129,7 +129,7 @@ describe('DedupRuleExecutor.fire', () => {
 
   it('passes the canonical into the eval context for ticket actions', async () => {
     await executor.fire('outbox_about_to_skip', makeBugReport());
-    expect(context.loadCanonical).toHaveBeenCalledWith('bug-canonical');
+    expect(context.loadCanonical).toHaveBeenCalledWith('bug-canonical', 'project-1');
     const ctxArg = dispatchSpy.mock.calls[0][0] as RuleEvalContext;
     expect(ctxArg.canonical?.id).toBe('bug-canonical');
   });
@@ -317,8 +317,18 @@ describe('DedupRuleExecutor.fire', () => {
     const results = await executor.fire('outbox_about_to_skip', makeBugReport());
     expect(results[0].fired).toBe(true);
     expect(context.countHitsInWindow).toHaveBeenCalledTimes(2);
-    expect(context.countHitsInWindow).toHaveBeenNthCalledWith(1, 'bug-canonical', '1h');
-    expect(context.countHitsInWindow).toHaveBeenNthCalledWith(2, 'bug-canonical', '24h');
+    expect(context.countHitsInWindow).toHaveBeenNthCalledWith(
+      1,
+      'bug-canonical',
+      'project-1',
+      '1h'
+    );
+    expect(context.countHitsInWindow).toHaveBeenNthCalledWith(
+      2,
+      'bug-canonical',
+      'project-1',
+      '24h'
+    );
   });
 
   it('fails the rule when one window passes but the other does not', async () => {

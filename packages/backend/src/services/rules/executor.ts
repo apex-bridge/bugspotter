@@ -56,10 +56,20 @@ const logger = getLogger();
  * interface so tests can stub the DB-touching parts.
  */
 export interface RuleContextProvider {
-  /** Fetch the canonical bug (the one `duplicate_of` points at), or null. */
-  loadCanonical(canonicalBugId: string): Promise<BugReport | null>;
-  /** Count bugs whose `duplicate_of` is `canonicalBugId` within the window. */
-  countHitsInWindow(canonicalBugId: string, window: string): Promise<number>;
+  /**
+   * Fetch the canonical bug (the one `duplicate_of` points at), or null.
+   * Scoped by `projectId` — defense-in-depth so a stale `duplicate_of`
+   * pointing at a bug in a different project (shouldn't happen for
+   * globally-unique UUIDs, but a tampered row could) returns null
+   * rather than leaking the foreign canonical.
+   */
+  loadCanonical(canonicalBugId: string, projectId: string): Promise<BugReport | null>;
+  /**
+   * Count bugs whose `duplicate_of` is `canonicalBugId` within the
+   * window. Scoped by `projectId` for the same reason as
+   * `loadCanonical`.
+   */
+  countHitsInWindow(canonicalBugId: string, projectId: string, window: string): Promise<number>;
 }
 
 export class DedupRuleExecutor {
@@ -140,7 +150,10 @@ export class DedupRuleExecutor {
       if (!canonicalLoaded && this.needsCanonical(rule)) {
         if (bugReport.duplicate_of) {
           try {
-            evalContext.canonical = await this.context.loadCanonical(bugReport.duplicate_of);
+            evalContext.canonical = await this.context.loadCanonical(
+              bugReport.duplicate_of,
+              bugReport.project_id
+            );
           } catch (error) {
             logger.warn('Rule executor: canonical lookup failed', {
               ruleId: row.id,
@@ -296,7 +309,7 @@ export class DedupRuleExecutor {
             const w = cond.window ?? '24h';
             context.resolved.set(
               key,
-              await this.context.countHitsInWindow(context.canonical.id, w)
+              await this.context.countHitsInWindow(context.canonical.id, context.projectId, w)
             );
           } else {
             context.resolved.set(key, null);

@@ -398,6 +398,27 @@ describe('NotificationThrottleRepository', () => {
       expect(refused).toBe(concurrent - max);
     });
 
+    it.each([
+      { maxNotifications: 0, windowMinutes: 60 },
+      { maxNotifications: -1, windowMinutes: 60 },
+      { maxNotifications: 5, windowMinutes: 0 },
+      { maxNotifications: 5, windowMinutes: -5 },
+    ])(
+      'returns false (fails closed) on invalid params: %s',
+      async ({ maxNotifications, windowMinutes }) => {
+        // Without the early-return guard, windowMinutes < 1 makes the
+        // window math produce NaN dates that throw on .toISOString().
+        // Verify the guard short-circuits with a clean `false`.
+        const reserved = await db.notificationThrottle.tryReserveSlot(
+          randomUUID(),
+          'g',
+          maxNotifications,
+          windowMinutes
+        );
+        expect(reserved).toBe(false);
+      }
+    );
+
     it('does not interfere with the legacy isThrottled path on a different rule', async () => {
       // Sanity check that the new atomic path and the old read-then-
       // increment path don't tread on each other's rows when keyed

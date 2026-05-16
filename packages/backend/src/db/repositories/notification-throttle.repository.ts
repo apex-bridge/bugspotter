@@ -138,6 +138,21 @@ export class NotificationThrottleRepository {
     maxNotifications: number,
     windowMinutes: number
   ): Promise<boolean> {
+    // Fail closed on invalid parameters. `windowMinutes < 1` would
+    // produce `Math.floor(now/0) * 0 = NaN`, which `new Date(NaN)`
+    // accepts and `.toISOString()` then throws on. Production callers
+    // go through `windowStringToMinutes` (which clamps to ≥1), but
+    // direct callers have no such guard.
+    if (maxNotifications < 1 || windowMinutes < 1) {
+      logger.warn('Throttle slot refused: invalid parameters', {
+        ruleId,
+        groupKey,
+        maxNotifications,
+        windowMinutes,
+      });
+      return false;
+    }
+
     const now = new Date();
     const windowDuration = windowMinutes * 60 * 1000;
     const windowStart = new Date(Math.floor(now.getTime() / windowDuration) * windowDuration);
