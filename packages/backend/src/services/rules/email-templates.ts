@@ -8,13 +8,18 @@
  * once the admin UI lets users edit dedup-rule templates; for now
  * the three presets that the seed rules will use live here.
  *
- * Interpolation is intentionally tiny: `{{path.to.value}}` is looked
- * up against the `vars` map, missing values render as empty string.
- * No conditionals, no escaping logic — these templates are short and
- * deterministic, and the body is delivered as plain text by the
- * channel handler anyway. (The handler's email-sending path uses
- * nodemailer with `html: body`, but we render plain prose; the
- * client treats it as text.)
+ * Interpolation is `{{path.to.value}}`, looked up against the `vars`
+ * map; missing values render as empty string.
+ *
+ * Two rendering modes:
+ *   - **Subject**: plain text (per RFC 5322). Interpolated values
+ *     are NOT HTML-escaped — entities would render literally in the
+ *     inbox.
+ *   - **Body**: HTML (the channel handler sends with nodemailer's
+ *     `html:` field). Interpolated values ARE HTML-escaped to block
+ *     `<script>` payloads from user-controlled fields, and `\n` in
+ *     the rendered output is replaced with `<br>` because HTML
+ *     collapses runs of whitespace.
  *
  * If a rule references an unknown template id, the executor logs a
  * warn and skips — same fail-closed pattern as missing channels.
@@ -76,6 +81,20 @@ const TEMPLATES: Record<string, EmailTemplate> = {
 /**
  * Render `subject` + `body` for a known template. Returns null when
  * the id is unknown — callers should fail closed and log.
+ *
+ * The subject and body have different rendering rules:
+ *  - **Subject** is the email's `Subject:` header, which is plain
+ *    text per RFC 5322. HTML-escaping it would produce visible
+ *    entities (`&amp;`, `&lt;`) in the recipient's inbox. We render
+ *    it without escaping.
+ *  - **Body** is delivered via `EmailChannelHandler` as
+ *    nodemailer's `html:`, so it MUST be HTML-escaped (XSS via
+ *    user-controlled values) AND newlines must be converted to
+ *    `<br>` because HTML collapses whitespace runs.
+ *
+ * If `EmailChannelHandler` ever switches to dual `text:` + `html:`,
+ * this layer can render both. Today it doesn't, so we render HTML
+ * and hand it to the handler as-is.
  */
 export function renderEmailTemplate(
   templateId: string,
@@ -87,8 +106,8 @@ export function renderEmailTemplate(
     return null;
   }
   return {
-    subject: interpolate(tmpl.subject, vars),
-    body: interpolate(tmpl.body, vars),
+    subject: interpolate(tmpl.subject, vars, { escape: false }),
+    body: interpolate(tmpl.body, vars, { escape: true }).replace(/\n/g, '<br>'),
   };
 }
 
@@ -102,18 +121,24 @@ export function listKnownTemplateIds(): string[] {
  * values render as empty string — a missing canonical title is
  * better than an undefined-literal in the email body.
  *
- * **Interpolated values are HTML-escaped.** `EmailChannelHandler.send`
- * passes the rendered body to nodemailer as `html: payload.body`, so
- * any unescaped `<` or `&` from a variable would be interpreted as
- * markup. A malicious bug filer could otherwise put a `<script>` /
- * `<a href="javascript:...">` payload into a bug title and have it
- * land in the recipient's inbox (the `reporter` token resolves to a
- * different user than the bug-title author when one cluster spans
- * multiple submitters). The template strings themselves are trusted
- * — they live in code — so we ONLY escape the value, not the
- * surrounding template.
+ * **`escape: true`** (the body case) HTML-escapes every interpolated
+ * string. Without this, a malicious bug filer could put a
+ * `<script>` / `<a href="javascript:...">` payload into a bug title
+ * and have it land in the recipient's inbox as live markup (the
+ * channel handler sends with nodemailer's `html:` field).
+ *
+ * **`escape: false`** (the subject case) skips the escape because
+ * the Subject header is plain text per RFC 5322 — entities would
+ * render literally (`&amp;` etc).
+ *
+ * In either case, only the value side is touched. Template strings
+ * are trusted code.
  */
-function interpolate(template: string, vars: Record<string, unknown>): string {
+function interpolate(
+  template: string,
+  vars: Record<string, unknown>,
+  opts: { escape: boolean }
+): string {
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path: string) => {
     const segments = path.split('.');
     let cur: unknown = vars;
@@ -127,7 +152,7 @@ function interpolate(template: string, vars: Record<string, unknown>): string {
       return '';
     }
     if (typeof cur === 'string') {
-      return escapeHtml(cur);
+      return opts.escape ? escapeHtml(cur) : cur;
     }
     if (typeof cur === 'number' || typeof cur === 'boolean') {
       // Numbers and booleans can't contain HTML, no escape needed.

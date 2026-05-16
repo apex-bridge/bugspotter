@@ -8,11 +8,19 @@
  * machinery.
  *
  * The recipient resolution rules mirror the schema's `EMAIL_TARGET_PATTERN`:
- *   - `reporter` -> `bugReport.metadata.metadata.user.email` (the SDK-
- *     supplied reporter email on the duplicate that just fired the
- *     rule; legitimate spam-vector concern is bounded because the
- *     rate-limit applies per (rule, canonical) and the "reporter" of
- *     a duplicate is whoever submitted that specific duplicate)
+ *   - `reporter` -> `bugReport.metadata.metadata.user.email`. **This is
+ *     SDK-controlled with no verification** — the bug filer chooses
+ *     any string. A malicious bug filer can therefore make the engine
+ *     send a "your bug was matched" email to any address (e.g.
+ *     `victim@example.com`). The per-(rule, canonical) rate limit
+ *     caps spam at one email per canonical per window, but the
+ *     attacker can fabricate duplicates of many canonicals, so the
+ *     bound is ≈ number-of-canonicals × rules-with-B1 / window.
+ *     **Mitigation lands in PR-D**: either require reporter emails
+ *     to match an authenticated org-member identity (SaaS) or add a
+ *     per-recipient rate limit. Until then, operators should enable
+ *     B1 only when their ingest path requires authenticated SDK
+ *     submissions.
  *   - `closer` and `all_reporters` are recognised by the schema but
  *     not yet resolvable — they need the closer-identity / cluster-
  *     reporters wiring that the persona analysis flagged but didn't

@@ -64,13 +64,26 @@ describe('renderEmailTemplate', () => {
     expect(ids).toContain('weekly_digest');
   });
 
-  describe('HTML escaping (XSS protection)', () => {
-    // The rendered body is passed to nodemailer as `html:`, so any
-    // un-escaped `<` or `&` from a variable becomes interpreted markup.
-    // The interpolation HTML-escapes only the value side; surrounding
-    // template prose is trusted (lives in code).
+  describe('subject vs body rendering', () => {
+    // Subject is the email's plain-text `Subject:` header — escaping
+    // would surface as literal entities in the inbox. Body is HTML
+    // (nodemailer `html:` field), so it MUST be escaped (XSS) and
+    // `\n` becomes `<br>` (HTML collapses whitespace).
 
-    it('escapes <script> in a canonical title', () => {
+    it('does NOT HTML-escape the subject (plain-text header)', () => {
+      const rendered = renderEmailTemplate('regression_alert', {
+        canonical: { title: 'A & B <c>', status: 'closed' },
+        hits: { count: 0 },
+      });
+      // Subject contains `Regression detected: {{canonical.title}}` → no escape
+      expect(rendered!.subject).toBe('Regression detected: A & B <c>');
+      expect(rendered!.subject).not.toContain('&amp;');
+    });
+
+    it('HTML-escapes interpolated values in the body (XSS protection)', () => {
+      // The rendered body is passed to nodemailer as `html:`, so any
+      // un-escaped `<` or `&` from a variable becomes interpreted
+      // markup.
       const rendered = renderEmailTemplate('dedup_ack', {
         canonical: { title: '<script>alert(1)</script>', status: 'open' },
       });
@@ -78,7 +91,7 @@ describe('renderEmailTemplate', () => {
       expect(rendered!.body).toContain('&lt;script&gt;');
     });
 
-    it('escapes & < > " and \' in interpolated strings', () => {
+    it('escapes & < > " and \' in body values', () => {
       const rendered = renderEmailTemplate('regression_alert', {
         canonical: {
           title: 'A & B <c> "d" \'e\'',
@@ -86,7 +99,7 @@ describe('renderEmailTemplate', () => {
         },
         hits: { count: 0 },
       });
-      expect(rendered!.subject).toContain('A &amp; B &lt;c&gt; &quot;d&quot; &#39;e&#39;');
+      expect(rendered!.body).toContain('A &amp; B &lt;c&gt; &quot;d&quot; &#39;e&#39;');
     });
 
     it('does not escape numbers or booleans (no HTML chars possible)', () => {
@@ -97,11 +110,7 @@ describe('renderEmailTemplate', () => {
       expect(rendered!.body).toContain('Hits in window: 42');
     });
 
-    it('escapes the recipient-controlled `reporter` email path if it ever lands in a template var', () => {
-      // Defense-in-depth — the dispatcher today doesn't pass the
-      // reporter email INTO the template vars, but if a future
-      // change adds `{{reporter.email}}` we want the escape to
-      // already be there.
+    it('escapes any future template var sourced from user input (defense-in-depth)', () => {
       const rendered = renderEmailTemplate('dedup_ack', {
         canonical: {
           title: '"><img src=x onerror=alert(1)>',
@@ -110,6 +119,28 @@ describe('renderEmailTemplate', () => {
       });
       expect(rendered!.body).not.toMatch(/<img\s+src=/);
       expect(rendered!.body).toContain('&quot;&gt;&lt;img src=x onerror=alert(1)&gt;');
+    });
+
+    it('converts `\\n` to `<br>` in the body so multi-line templates render', () => {
+      // HTML collapses runs of whitespace, so a template body with
+      // explicit `\n` separators would otherwise appear as one
+      // single line in the recipient's inbox.
+      const rendered = renderEmailTemplate('dedup_ack', {
+        canonical: { title: 'X', status: 'open' },
+      });
+      expect(rendered!.body).toContain('<br>');
+      expect(rendered!.body).not.toContain('\n');
+    });
+
+    it('preserves `\\n` to `<br>` conversion through escaped values too', () => {
+      // A user-supplied value containing a real newline gets the
+      // same `<br>` treatment as the template's structural
+      // newlines. That's intentional — multi-line bug titles render
+      // as visible line breaks, not as collapsed whitespace.
+      const rendered = renderEmailTemplate('dedup_ack', {
+        canonical: { title: 'line1\nline2', status: 'open' },
+      });
+      expect(rendered!.body).toContain('line1<br>line2');
     });
   });
 });
