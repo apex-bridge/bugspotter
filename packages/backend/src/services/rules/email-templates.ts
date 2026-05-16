@@ -107,7 +107,7 @@ export function renderEmailTemplate(
   }
   return {
     subject: interpolate(tmpl.subject, vars, { escape: false }),
-    body: interpolate(tmpl.body, vars, { escape: true }).replace(/\n/g, '<br>'),
+    body: interpolate(tmpl.body, vars, { escape: true }).replace(/\r?\n/g, '<br>'),
   };
 }
 

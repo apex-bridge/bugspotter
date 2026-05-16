@@ -142,5 +142,16 @@ describe('renderEmailTemplate', () => {
       });
       expect(rendered!.body).toContain('line1<br>line2');
     });
+
+    it('converts CRLF (`\\r\\n`) to `<br>` so Windows-supplied values render cleanly', () => {
+      // A bug title pasted from a Windows clipboard arrives with CRLF.
+      // The `\r` would otherwise survive as `\r<br>` and render as a
+      // visible artifact in some clients.
+      const rendered = renderEmailTemplate('dedup_ack', {
+        canonical: { title: 'line1\r\nline2', status: 'open' },
+      });
+      expect(rendered!.body).toContain('line1<br>line2');
+      expect(rendered!.body).not.toContain('\r');
+    });
   });
 });
