@@ -41,10 +41,21 @@ export class DatabaseRuleContextProvider implements RuleContextProvider {
       return null;
     }
     try {
+      // Filter by live statuses only. `subscriptions` keeps rows
+      // around after cancellation (status values include 'canceled',
+      // 'past_due', 'paused', 'incomplete_expired' — see
+      // BILLING_STATUS in db/types.ts). Without this filter, a rule
+      // conditioned on `reporter.customer.tier eq 'enterprise'`
+      // would continue to fire for orgs that have cancelled or
+      // whose billing has lapsed, driving external API calls on
+      // behalf of non-paying tenants. Other readers in the codebase
+      // (e.g. saas/jobs/invoice-scheduler.job.ts) follow the same
+      // pattern with `BILLING_STATUS.ACTIVE`.
       const result = await this.db.getPool().query<{ plan_name: string }>(
         `SELECT plan_name
          FROM saas.subscriptions
          WHERE organization_id = $1
+           AND status IN ('active', 'trial')
          LIMIT 1`,
         [organizationId]
       );

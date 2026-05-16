@@ -221,11 +221,20 @@ export class TicketsTableResolver implements CanonicalTicketResolver {
       project_id: string;
       integration_id: string | null;
     }>(
+      // Filter `br.deleted_at IS NULL` — without it, the resolver
+      // bypasses the soft-delete guard that `loadCanonical` applies in
+      // the context provider. When `context.canonical` is null because
+      // the canonical was soft-deleted, the dispatcher's fallback to
+      // `bugReport.duplicate_of` would otherwise reach this SQL and
+      // happily resolve the soft-deleted canonical's external ticket,
+      // letting the engine post comments / transitions to a ticket an
+      // admin has just retired.
       `SELECT t.external_id, br.project_id, t.integration_id
        FROM application.tickets t
        JOIN application.bug_reports br ON br.id = t.bug_report_id
        WHERE t.bug_report_id = $1
          AND br.project_id = $2
+         AND br.deleted_at IS NULL
          AND t.integration_id IS NOT NULL
        ORDER BY t.created_at DESC
        LIMIT 1`,
