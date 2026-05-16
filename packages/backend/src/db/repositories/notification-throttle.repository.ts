@@ -165,6 +165,15 @@ export class NotificationThrottleRepository {
     // hit the limit. In either case, RETURNING gives us the post-
     // operation count — if no row comes back, the limit was exceeded
     // and we report throttled.
+    //
+    // Subtle but important: `notification_throttle.count < $5` in the
+    // WHERE refers to the EXISTING row's count (pre-UPDATE), per
+    // Postgres semantics for `ON CONFLICT DO UPDATE` — `<table>.<col>`
+    // is the conflicting row's pre-update value, `EXCLUDED.<col>` is
+    // the proposed-insert value. So a row already at the limit sees
+    // its WHERE evaluate to false, the UPDATE is skipped, no row is
+    // returned. The integration test (12 parallel callers with max=3
+    // → exactly 3 trues) pins this empirically.
     const result = await this.pool.query<{ count: number }>(
       `INSERT INTO notification_throttle
          (rule_id, group_key, count, window_start, window_end)

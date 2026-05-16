@@ -51,11 +51,20 @@ export class DatabaseRuleContextProvider implements RuleContextProvider {
       // behalf of non-paying tenants. Other readers in the codebase
       // (e.g. saas/jobs/invoice-scheduler.job.ts) follow the same
       // pattern with `BILLING_STATUS.ACTIVE`.
+      // `subscriptions.organization_id` has a UNIQUE constraint
+      // (migration 001), so at most one row matches per org and the
+      // LIMIT 1 is theoretically redundant. The explicit
+      // `ORDER BY created_at DESC` is defense-in-depth against a
+      // future schema change that drops the UNIQUE — if multiple
+      // matching rows ever appear, we deterministically pick the
+      // most recent one rather than getting whichever Postgres
+      // happens to return.
       const result = await this.db.getPool().query<{ plan_name: string }>(
         `SELECT plan_name
          FROM saas.subscriptions
          WHERE organization_id = $1
            AND status IN ('active', 'trial')
+         ORDER BY created_at DESC
          LIMIT 1`,
         [organizationId]
       );
