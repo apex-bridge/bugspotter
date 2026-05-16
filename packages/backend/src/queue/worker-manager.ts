@@ -91,7 +91,8 @@ type OutboxWorkerFactory = (
 type IntelligenceWorkerFactory = (
   clientFactory: IClientFactory,
   db: DatabaseClient,
-  connection: Redis
+  connection: Redis,
+  pluginRegistry: PluginRegistry | null
 ) => AnyWorker;
 
 /** Worker configuration with discriminated union for type-safe factories */
@@ -305,7 +306,12 @@ export class WorkerManager {
               'Ensure INTELLIGENCE_ENABLED=true and WORKER_INTELLIGENCE_ENABLED=true.'
           );
         }
-        return workerConfig.factory(this.intelligenceClientFactory, this.db, connection);
+        return workerConfig.factory(
+          this.intelligenceClientFactory,
+          this.db,
+          connection,
+          this.pluginRegistry
+        );
       }
 
       default: {

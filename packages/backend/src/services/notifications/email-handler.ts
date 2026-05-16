@@ -44,14 +44,27 @@ function createTransporter(config: EmailChannelConfig): Transporter {
 }
 
 /**
- * Strip HTML tags from string for plain text version
+ * Strip HTML tags from string for the multipart `text/plain` alternative.
+ *
+ * `<br>` and block-level closers (`</p>`, `</div>`, `</li>`, `</h1..6>`) are
+ * converted to `\n` before the catch-all strip so text-only clients see the
+ * document's line / paragraph structure. Without this, a body whose HTML
+ * uses `<br>` to separate lines collapses into one run-on paragraph in plain
+ * text (HTML clients render fine because they read the `html:` part).
+ *
+ * Horizontal whitespace runs collapse to one space; newline runs collapse to
+ * at most a blank line so paragraph breaks survive without unbounded vertical
+ * gaps.
  */
 function stripHtml(html: string): string {
   return html
     .replace(/<style[^>]*>.*?<\/style>/gis, '')
     .replace(/<script[^>]*>.*?<\/script>/gis, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|li|h[1-6])>/gi, '\n')
     .replace(/<[^>]+>/g, '')
-    .replace(/\s+/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 

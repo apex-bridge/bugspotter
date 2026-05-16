@@ -458,7 +458,76 @@ describe('EmailChannelHandler', () => {
       await handler.send(config, payload);
 
       const call = mockTransporter.sendMail.mock.calls[0][0];
-      expect(call.text).not.toMatch(/\s{2,}/);
+      // Horizontal whitespace runs collapse, but paragraph breaks (\n\n) are
+      // intentionally preserved — so check no double-space, not /\s{2,}/.
+      expect(call.text).not.toMatch(/ {2,}/);
+      expect(call.text).not.toMatch(/\t/);
+    });
+
+    it('should convert <br> to newline so text clients see line breaks', async () => {
+      // Without this, a body whose HTML uses <br> to separate lines (the
+      // dedup-rule email templates do exactly that) collapses into one
+      // run-on paragraph in the multipart text/plain alternative.
+      const payload: NotificationPayload = {
+        to: 'test@example.com',
+        subject: 'Test',
+        body: 'Line one<br>Line two<br><br>Line three',
+      };
+
+      mockTransporter.sendMail.mockResolvedValue({
+        messageId: '<msg-123@example.com>',
+        accepted: [],
+        rejected: [],
+        response: '250 OK',
+      });
+
+      await handler.send(config, payload);
+
+      const call = mockTransporter.sendMail.mock.calls[0][0];
+      expect(call.text).toBe('Line one\nLine two\n\nLine three');
+    });
+
+    it('should convert block-close tags (</p>, </li>, </h1..6>) to newline', async () => {
+      const payload: NotificationPayload = {
+        to: 'test@example.com',
+        subject: 'Test',
+        body: '<h2>Heading</h2><p>Paragraph one</p><ul><li>One</li><li>Two</li></ul>',
+      };
+
+      mockTransporter.sendMail.mockResolvedValue({
+        messageId: '<msg-123@example.com>',
+        accepted: [],
+        rejected: [],
+        response: '250 OK',
+      });
+
+      await handler.send(config, payload);
+
+      const call = mockTransporter.sendMail.mock.calls[0][0];
+      expect(call.text).toContain('Heading\n');
+      expect(call.text).toContain('Paragraph one\n');
+      expect(call.text).toContain('One\nTwo');
+    });
+
+    it('caps consecutive newlines at one blank line (no unbounded gaps)', async () => {
+      // Many <br> in a row shouldn't produce a wall of empty lines.
+      const payload: NotificationPayload = {
+        to: 'test@example.com',
+        subject: 'Test',
+        body: 'A<br><br><br><br><br>B',
+      };
+
+      mockTransporter.sendMail.mockResolvedValue({
+        messageId: '<msg-123@example.com>',
+        accepted: [],
+        rejected: [],
+        response: '250 OK',
+      });
+
+      await handler.send(config, payload);
+
+      const call = mockTransporter.sendMail.mock.calls[0][0];
+      expect(call.text).toBe('A\n\nB');
     });
   });
 });

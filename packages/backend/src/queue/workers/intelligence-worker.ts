@@ -31,6 +31,9 @@ import type { IntelligenceClientFactory } from '../../services/intelligence/tena
 import { IntelligenceEnrichmentService } from '../../services/intelligence/enrichment-service.js';
 import { IntelligenceMitigationService } from '../../services/intelligence/mitigation-service.js';
 import { IntelligenceDedupService } from '../../services/intelligence/dedup-service.js';
+import type { PluginRegistry } from '../../integrations/plugin-registry.js';
+import type { DedupRuleExecutor } from '../../services/rules/executor.js';
+import { buildDedupRuleExecutor } from '../../services/rules/wiring.js';
 import type {
   IntelligenceJobData,
   IntelligenceJobResult,
@@ -128,7 +131,8 @@ async function resolveClient(
 async function processIntelligenceJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
   clientFactory: IntelligenceClientFactory,
-  db: DatabaseClient
+  db: DatabaseClient,
+  ruleExecutor: DedupRuleExecutor
 ): Promise<IntelligenceJobResult> {
   const startTime = Date.now();
 
@@ -153,7 +157,7 @@ async function processIntelligenceJob(
   const { client, orgId } = await resolveClient(job, clientFactory, db);
 
   if (type === 'analyze') {
-    return processAnalyzeJob(job, client, db, orgId, startTime);
+    return processAnalyzeJob(job, client, db, orgId, startTime, ruleExecutor);
   }
 
   if (type === 'resolution') {
@@ -183,7 +187,8 @@ async function processAnalyzeJob(
   client: IntelligenceClient,
   db: DatabaseClient,
   resolvedOrgId: string | undefined,
-  startTime: number
+  startTime: number,
+  ruleExecutor: DedupRuleExecutor
 ): Promise<IntelligenceJobResult> {
   const { bugReportId, projectId } = job.data;
   const payload = job.data.payload as AnalyzeBugRequest;
@@ -249,6 +254,53 @@ async function processAnalyzeJob(
           duplicateOf: dedupResult.duplicateOf,
           statusChanged: dedupResult.statusChanged,
         });
+
+        // Fire the duplicate_detected rule trigger. The bug has its
+        // duplicate_of set now, so re-fetch to give the executor the
+        // post-update row. The fire path is fully error-contained —
+        // rule load / dispatch / limiter failures are swallowed
+        // inside the executor, and we wrap an outer try just in case
+        // a bug in the engine itself escapes (the analysis result
+        // must still be returned to the queue).
+        //
+        try {
+          const updatedBug = await db.bugReports.findById(bugReportId);
+          // Defense-in-depth: confirm the re-fetched bug belongs
+          // to the job's project. A poisoned queue entry pointing
+          // at a cross-project bugReportId would otherwise cause
+          // the executor to load THAT other project's rules and
+          // dispatch its actions under our worker — see Claude's
+          // review on PR #147. The BullMQ queue is internal so
+          // the realistic vector is small, but the check is free.
+          if (updatedBug && updatedBug.project_id !== projectId) {
+            logger.error(
+              'Rejecting duplicate_detected fire: bugReport.project_id mismatches job.projectId',
+              {
+                jobId: job.id,
+                bugReportId,
+                bugProjectId: updatedBug.project_id,
+                jobProjectId: projectId,
+              }
+            );
+          } else if (updatedBug) {
+            const results = await ruleExecutor.fire('duplicate_detected', updatedBug);
+            if (results.length > 0) {
+              logger.info('Dedup rules evaluated for duplicate_detected', {
+                jobId: job.id,
+                bugReportId,
+                fired: results.filter((r) => r.fired).length,
+                total: results.length,
+              });
+            }
+          }
+        } catch (error) {
+          logger.error('Dedup rule executor crashed for duplicate_detected', {
+            jobId: job.id,
+            bugReportId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+        }
       }
     } catch (error) {
       // Never throw from dedup — analysis result must still be returned
@@ -476,9 +528,23 @@ async function processMitigationJob(
 export function createIntelligenceWorker(
   clientFactory: IntelligenceClientFactory,
   db: DatabaseClient,
-  connection: Redis
+  connection: Redis,
+  pluginRegistry: PluginRegistry | null
 ): IWorkerHost<IntelligenceJobData, IntelligenceJobResult> {
   logger.info('Creating intelligence worker');
+
+  // Build the rule executor once at worker construction and reuse it
+  // across every job. The executor is stateless (its collaborators
+  // share the same db + plugin registry references), so a single
+  // instance is correct AND avoids the per-job allocation churn that
+  // Gemini flagged on PR #147.
+  //
+  // pluginRegistry may be null on selfhosted-without-integrations
+  // deployments. We still build the executor: `notify.email` rules
+  // don't touch the registry, and the wiring helper supplies a
+  // null-yielding capability lookup so `ticket.*` actions runtime-
+  // skip cleanly instead of being globally disabled.
+  const ruleExecutor = buildDedupRuleExecutor(db, pluginRegistry);
 
   const worker = createWorker<
     IntelligenceJobData,
@@ -486,7 +552,7 @@ export function createIntelligenceWorker(
     typeof QUEUE_NAMES.INTELLIGENCE
   >({
     name: QUEUE_NAMES.INTELLIGENCE,
-    processor: async (job) => processIntelligenceJob(job, clientFactory, db),
+    processor: async (job) => processIntelligenceJob(job, clientFactory, db, ruleExecutor),
     connection,
     workerType: QUEUE_NAMES.INTELLIGENCE,
   });

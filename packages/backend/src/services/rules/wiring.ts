@@ -17,9 +17,11 @@ import { NotificationThrottleRepository } from '../../db/repositories/notificati
 import type { TicketIntegrationCapabilities } from '../../integrations/capabilities.js';
 import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import { getLogger } from '../../logger.js';
+import { EmailChannelHandler } from '../notifications/email-handler.js';
 import { DatabaseRuleContextProvider } from './context-provider.js';
 import { DefaultActionDispatcher, TicketsTableResolver } from './dispatcher.js';
 import type { CapabilityServiceLookup } from './dispatcher.js';
+import { ChannelBackedEmailSender } from './email-sender.js';
 import { DedupRuleExecutor } from './executor.js';
 import { ThrottleBackedRateLimiter } from './rate-limiter.js';
 
@@ -39,8 +41,19 @@ const logger = getLogger();
  */
 export function buildCapabilityServiceLookup(
   db: DatabaseClient,
-  pluginRegistry: PluginRegistry
+  pluginRegistry: PluginRegistry | null
 ): CapabilityServiceLookup {
+  // Selfhosted deployments without any integration plugins still get
+  // an executor — they just can't run `ticket.*` actions. Returning
+  // a null-yielding lookup keeps the dispatcher contract intact:
+  // `canDispatch('ticket.add_comment')` still returns true (the
+  // dispatcher doesn't know plugins are missing), the dispatch
+  // attempt looks up null, logs `integration does not support …`,
+  // returns false. `notify.email` rules — which have nothing to do
+  // with the plugin registry — continue to work.
+  if (!pluginRegistry) {
+    return async () => null;
+  }
   return async (
     integrationId: string,
     projectId: string
@@ -88,14 +101,22 @@ export function buildCapabilityServiceLookup(
  */
 export function buildDedupRuleExecutor(
   db: DatabaseClient,
-  pluginRegistry: PluginRegistry
+  pluginRegistry: PluginRegistry | null
 ): DedupRuleExecutor {
   const pool = db.getPool();
   const repo = new DedupRuleRepository(pool);
   const throttle = new NotificationThrottleRepository(pool);
   const resolver = new TicketsTableResolver(db);
   const lookup = buildCapabilityServiceLookup(db, pluginRegistry);
-  const dispatcher = new DefaultActionDispatcher(resolver, lookup);
+  // EmailChannelHandler is stateless (no constructor args) and the
+  // channel repo is already wired on the db client. Pass both to
+  // ChannelBackedEmailSender so the dispatcher can fire notify.email
+  // actions through the project's configured channel.
+  const emailSender = new ChannelBackedEmailSender(
+    db.notificationChannels,
+    new EmailChannelHandler()
+  );
+  const dispatcher = new DefaultActionDispatcher(resolver, lookup, emailSender);
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);
   return new DedupRuleExecutor(repo, dispatcher, rateLimiter, contextProvider);

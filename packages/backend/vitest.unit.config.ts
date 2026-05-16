@@ -83,6 +83,8 @@ export default defineConfig({
       'tests/services/rules/executor.test.ts',
       'tests/services/rules/dispatcher.test.ts',
       'tests/services/rules/rate-limiter.test.ts',
+      'tests/services/rules/email-templates.test.ts',
+      'tests/services/rules/email-sender.test.ts',
       // Pure env-var / config validation test, no DB.
       'tests/config.test.ts',
     ],
