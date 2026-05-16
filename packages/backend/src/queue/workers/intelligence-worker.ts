@@ -32,6 +32,7 @@ import { IntelligenceEnrichmentService } from '../../services/intelligence/enric
 import { IntelligenceMitigationService } from '../../services/intelligence/mitigation-service.js';
 import { IntelligenceDedupService } from '../../services/intelligence/dedup-service.js';
 import type { PluginRegistry } from '../../integrations/plugin-registry.js';
+import type { DedupRuleExecutor } from '../../services/rules/executor.js';
 import { buildDedupRuleExecutor } from '../../services/rules/wiring.js';
 import type {
   IntelligenceJobData,
@@ -131,7 +132,7 @@ async function processIntelligenceJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
   clientFactory: IntelligenceClientFactory,
   db: DatabaseClient,
-  pluginRegistry: PluginRegistry | null
+  ruleExecutor: DedupRuleExecutor | null
 ): Promise<IntelligenceJobResult> {
   const startTime = Date.now();
 
@@ -156,7 +157,7 @@ async function processIntelligenceJob(
   const { client, orgId } = await resolveClient(job, clientFactory, db);
 
   if (type === 'analyze') {
-    return processAnalyzeJob(job, client, db, orgId, startTime, pluginRegistry);
+    return processAnalyzeJob(job, client, db, orgId, startTime, ruleExecutor);
   }
 
   if (type === 'resolution') {
@@ -187,7 +188,7 @@ async function processAnalyzeJob(
   db: DatabaseClient,
   resolvedOrgId: string | undefined,
   startTime: number,
-  pluginRegistry: PluginRegistry | null
+  ruleExecutor: DedupRuleExecutor | null
 ): Promise<IntelligenceJobResult> {
   const { bugReportId, projectId } = job.data;
   const payload = job.data.payload as AnalyzeBugRequest;
@@ -262,17 +263,34 @@ async function processAnalyzeJob(
         // a bug in the engine itself escapes (the analysis result
         // must still be returned to the queue).
         //
-        // pluginRegistry is optional on this code path: ticket.*
-        // actions on duplicate_detected would target a canonical
-        // whose external ticket may not exist yet (the outbox
-        // hasn't filed it). The common case here is notify.email
-        // (B1 "reporter ack"); without a registry, those work,
-        // and ticket actions log a no-supported-actions skip.
-        if (pluginRegistry) {
+        // ruleExecutor is null when pluginRegistry wasn't wired at
+        // worker construction (selfhosted without integrations,
+        // tests). The common useful case here is notify.email
+        // (B1 "reporter ack") which works even without a registry,
+        // so as long as the executor exists we fire; ticket.* rules
+        // that need plugin services log a no_supported_actions skip
+        // from inside the dispatcher.
+        if (ruleExecutor) {
           try {
             const updatedBug = await db.bugReports.findById(bugReportId);
-            if (updatedBug) {
-              const ruleExecutor = buildDedupRuleExecutor(db, pluginRegistry);
+            // Defense-in-depth: confirm the re-fetched bug belongs
+            // to the job's project. A poisoned queue entry pointing
+            // at a cross-project bugReportId would otherwise cause
+            // the executor to load THAT other project's rules and
+            // dispatch its actions under our worker — see Claude's
+            // review on PR #147. The BullMQ queue is internal so
+            // the realistic vector is small, but the check is free.
+            if (updatedBug && updatedBug.project_id !== projectId) {
+              logger.error(
+                'Rejecting duplicate_detected fire: bugReport.project_id mismatches job.projectId',
+                {
+                  jobId: job.id,
+                  bugReportId,
+                  bugProjectId: updatedBug.project_id,
+                  jobProjectId: projectId,
+                }
+              );
+            } else if (updatedBug) {
               const results = await ruleExecutor.fire('duplicate_detected', updatedBug);
               if (results.length > 0) {
                 logger.info('Dedup rules evaluated for duplicate_detected', {
@@ -524,13 +542,24 @@ export function createIntelligenceWorker(
 ): IWorkerHost<IntelligenceJobData, IntelligenceJobResult> {
   logger.info('Creating intelligence worker');
 
+  // Build the rule executor once at worker construction and reuse it
+  // across every job. The executor is stateless (its collaborators
+  // share the same db + plugin registry references), so a single
+  // instance is correct AND avoids the per-job allocation churn that
+  // Gemini flagged on PR #147. When `pluginRegistry` is null (no
+  // integrations wired — selfhosted minimal, tests), we skip building
+  // entirely; the worker hook checks `ruleExecutor` for truthiness.
+  const ruleExecutor: DedupRuleExecutor | null = pluginRegistry
+    ? buildDedupRuleExecutor(db, pluginRegistry)
+    : null;
+
   const worker = createWorker<
     IntelligenceJobData,
     IntelligenceJobResult,
     typeof QUEUE_NAMES.INTELLIGENCE
   >({
     name: QUEUE_NAMES.INTELLIGENCE,
-    processor: async (job) => processIntelligenceJob(job, clientFactory, db, pluginRegistry),
+    processor: async (job) => processIntelligenceJob(job, clientFactory, db, ruleExecutor),
     connection,
     workerType: QUEUE_NAMES.INTELLIGENCE,
   });

