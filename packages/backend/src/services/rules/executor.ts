@@ -79,7 +79,12 @@ export class DedupRuleExecutor {
   async fire(trigger: TriggerType, bugReport: BugReport): Promise<RuleFireResult[]> {
     let candidateRules;
     try {
-      candidateRules = await this.repo.findByProject(bugReport.project_id, false);
+      // The second arg is `includeDisabled` — `false` means the
+      // repository's SQL filters with `AND enabled = true` and only
+      // enabled rows come back. The naming is easy to misread as
+      // "skip enabled rules"; spelling out the intent here.
+      const includeDisabled = false;
+      candidateRules = await this.repo.findByProject(bugReport.project_id, includeDisabled);
     } catch (error) {
       logger.error('Rule executor: failed to load rules', {
         projectId: bugReport.project_id,

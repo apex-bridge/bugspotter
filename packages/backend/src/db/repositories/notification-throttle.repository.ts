@@ -122,6 +122,13 @@ export class NotificationThrottleRepository {
    * engine where concurrent outbox workers processing duplicates of
    * the same canonical can race for the same slot.
    *
+   * `ruleId` here may reference EITHER `notification_rules.id` OR
+   * `dedup_rules.id`. The FK constraint on
+   * `notification_throttle.rule_id` was dropped in migration 023 to
+   * make this column polymorphic — without that, inserts from the
+   * dedup-rule engine were rejected at runtime. See the migration
+   * comment for the deletion / cleanup semantics.
+   *
    * The existing `isThrottled` callers (notification rules) keep
    * their behaviour — they don't need strict max-count enforcement.
    */
