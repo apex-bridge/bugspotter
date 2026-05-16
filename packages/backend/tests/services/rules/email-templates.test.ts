@@ -63,4 +63,53 @@ describe('renderEmailTemplate', () => {
     expect(ids).toContain('regression_alert');
     expect(ids).toContain('weekly_digest');
   });
+
+  describe('HTML escaping (XSS protection)', () => {
+    // The rendered body is passed to nodemailer as `html:`, so any
+    // un-escaped `<` or `&` from a variable becomes interpreted markup.
+    // The interpolation HTML-escapes only the value side; surrounding
+    // template prose is trusted (lives in code).
+
+    it('escapes <script> in a canonical title', () => {
+      const rendered = renderEmailTemplate('dedup_ack', {
+        canonical: { title: '<script>alert(1)</script>', status: 'open' },
+      });
+      expect(rendered!.body).not.toContain('<script>');
+      expect(rendered!.body).toContain('&lt;script&gt;');
+    });
+
+    it('escapes & < > " and \' in interpolated strings', () => {
+      const rendered = renderEmailTemplate('regression_alert', {
+        canonical: {
+          title: 'A & B <c> "d" \'e\'',
+          status: 'closed',
+        },
+        hits: { count: 0 },
+      });
+      expect(rendered!.subject).toContain('A &amp; B &lt;c&gt; &quot;d&quot; &#39;e&#39;');
+    });
+
+    it('does not escape numbers or booleans (no HTML chars possible)', () => {
+      const rendered = renderEmailTemplate('regression_alert', {
+        canonical: { title: 't', status: 's' },
+        hits: { count: 42 },
+      });
+      expect(rendered!.body).toContain('Hits in window: 42');
+    });
+
+    it('escapes the recipient-controlled `reporter` email path if it ever lands in a template var', () => {
+      // Defense-in-depth — the dispatcher today doesn't pass the
+      // reporter email INTO the template vars, but if a future
+      // change adds `{{reporter.email}}` we want the escape to
+      // already be there.
+      const rendered = renderEmailTemplate('dedup_ack', {
+        canonical: {
+          title: '"><img src=x onerror=alert(1)>',
+          status: 'closed',
+        },
+      });
+      expect(rendered!.body).not.toMatch(/<img\s+src=/);
+      expect(rendered!.body).toContain('&quot;&gt;&lt;img src=x onerror=alert(1)&gt;');
+    });
+  });
 });

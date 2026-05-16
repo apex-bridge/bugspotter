@@ -41,8 +41,19 @@ const logger = getLogger();
  */
 export function buildCapabilityServiceLookup(
   db: DatabaseClient,
-  pluginRegistry: PluginRegistry
+  pluginRegistry: PluginRegistry | null
 ): CapabilityServiceLookup {
+  // Selfhosted deployments without any integration plugins still get
+  // an executor — they just can't run `ticket.*` actions. Returning
+  // a null-yielding lookup keeps the dispatcher contract intact:
+  // `canDispatch('ticket.add_comment')` still returns true (the
+  // dispatcher doesn't know plugins are missing), the dispatch
+  // attempt looks up null, logs `integration does not support …`,
+  // returns false. `notify.email` rules — which have nothing to do
+  // with the plugin registry — continue to work.
+  if (!pluginRegistry) {
+    return async () => null;
+  }
   return async (
     integrationId: string,
     projectId: string
@@ -90,7 +101,7 @@ export function buildCapabilityServiceLookup(
  */
 export function buildDedupRuleExecutor(
   db: DatabaseClient,
-  pluginRegistry: PluginRegistry
+  pluginRegistry: PluginRegistry | null
 ): DedupRuleExecutor {
   const pool = db.getPool();
   const repo = new DedupRuleRepository(pool);

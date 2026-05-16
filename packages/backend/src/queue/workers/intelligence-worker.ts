@@ -132,7 +132,7 @@ async function processIntelligenceJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
   clientFactory: IntelligenceClientFactory,
   db: DatabaseClient,
-  ruleExecutor: DedupRuleExecutor | null
+  ruleExecutor: DedupRuleExecutor
 ): Promise<IntelligenceJobResult> {
   const startTime = Date.now();
 
@@ -188,7 +188,7 @@ async function processAnalyzeJob(
   db: DatabaseClient,
   resolvedOrgId: string | undefined,
   startTime: number,
-  ruleExecutor: DedupRuleExecutor | null
+  ruleExecutor: DedupRuleExecutor
 ): Promise<IntelligenceJobResult> {
   const { bugReportId, projectId } = job.data;
   const payload = job.data.payload as AnalyzeBugRequest;
@@ -263,52 +263,43 @@ async function processAnalyzeJob(
         // a bug in the engine itself escapes (the analysis result
         // must still be returned to the queue).
         //
-        // ruleExecutor is null when pluginRegistry wasn't wired at
-        // worker construction (selfhosted without integrations,
-        // tests). The common useful case here is notify.email
-        // (B1 "reporter ack") which works even without a registry,
-        // so as long as the executor exists we fire; ticket.* rules
-        // that need plugin services log a no_supported_actions skip
-        // from inside the dispatcher.
-        if (ruleExecutor) {
-          try {
-            const updatedBug = await db.bugReports.findById(bugReportId);
-            // Defense-in-depth: confirm the re-fetched bug belongs
-            // to the job's project. A poisoned queue entry pointing
-            // at a cross-project bugReportId would otherwise cause
-            // the executor to load THAT other project's rules and
-            // dispatch its actions under our worker — see Claude's
-            // review on PR #147. The BullMQ queue is internal so
-            // the realistic vector is small, but the check is free.
-            if (updatedBug && updatedBug.project_id !== projectId) {
-              logger.error(
-                'Rejecting duplicate_detected fire: bugReport.project_id mismatches job.projectId',
-                {
-                  jobId: job.id,
-                  bugReportId,
-                  bugProjectId: updatedBug.project_id,
-                  jobProjectId: projectId,
-                }
-              );
-            } else if (updatedBug) {
-              const results = await ruleExecutor.fire('duplicate_detected', updatedBug);
-              if (results.length > 0) {
-                logger.info('Dedup rules evaluated for duplicate_detected', {
-                  jobId: job.id,
-                  bugReportId,
-                  fired: results.filter((r) => r.fired).length,
-                  total: results.length,
-                });
+        try {
+          const updatedBug = await db.bugReports.findById(bugReportId);
+          // Defense-in-depth: confirm the re-fetched bug belongs
+          // to the job's project. A poisoned queue entry pointing
+          // at a cross-project bugReportId would otherwise cause
+          // the executor to load THAT other project's rules and
+          // dispatch its actions under our worker — see Claude's
+          // review on PR #147. The BullMQ queue is internal so
+          // the realistic vector is small, but the check is free.
+          if (updatedBug && updatedBug.project_id !== projectId) {
+            logger.error(
+              'Rejecting duplicate_detected fire: bugReport.project_id mismatches job.projectId',
+              {
+                jobId: job.id,
+                bugReportId,
+                bugProjectId: updatedBug.project_id,
+                jobProjectId: projectId,
               }
+            );
+          } else if (updatedBug) {
+            const results = await ruleExecutor.fire('duplicate_detected', updatedBug);
+            if (results.length > 0) {
+              logger.info('Dedup rules evaluated for duplicate_detected', {
+                jobId: job.id,
+                bugReportId,
+                fired: results.filter((r) => r.fired).length,
+                total: results.length,
+              });
             }
-          } catch (error) {
-            logger.error('Dedup rule executor crashed for duplicate_detected', {
-              jobId: job.id,
-              bugReportId,
-              error: error instanceof Error ? error.message : String(error),
-              stack: error instanceof Error ? error.stack : undefined,
-            });
           }
+        } catch (error) {
+          logger.error('Dedup rule executor crashed for duplicate_detected', {
+            jobId: job.id,
+            bugReportId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          });
         }
       }
     } catch (error) {
@@ -546,12 +537,14 @@ export function createIntelligenceWorker(
   // across every job. The executor is stateless (its collaborators
   // share the same db + plugin registry references), so a single
   // instance is correct AND avoids the per-job allocation churn that
-  // Gemini flagged on PR #147. When `pluginRegistry` is null (no
-  // integrations wired — selfhosted minimal, tests), we skip building
-  // entirely; the worker hook checks `ruleExecutor` for truthiness.
-  const ruleExecutor: DedupRuleExecutor | null = pluginRegistry
-    ? buildDedupRuleExecutor(db, pluginRegistry)
-    : null;
+  // Gemini flagged on PR #147.
+  //
+  // pluginRegistry may be null on selfhosted-without-integrations
+  // deployments. We still build the executor: `notify.email` rules
+  // don't touch the registry, and the wiring helper supplies a
+  // null-yielding capability lookup so `ticket.*` actions runtime-
+  // skip cleanly instead of being globally disabled.
+  const ruleExecutor = buildDedupRuleExecutor(db, pluginRegistry);
 
   const worker = createWorker<
     IntelligenceJobData,

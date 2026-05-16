@@ -101,6 +101,17 @@ export function listKnownTemplateIds(): string[] {
  * Replace `{{path.to.value}}` tokens. Missing or non-stringifiable
  * values render as empty string — a missing canonical title is
  * better than an undefined-literal in the email body.
+ *
+ * **Interpolated values are HTML-escaped.** `EmailChannelHandler.send`
+ * passes the rendered body to nodemailer as `html: payload.body`, so
+ * any unescaped `<` or `&` from a variable would be interpreted as
+ * markup. A malicious bug filer could otherwise put a `<script>` /
+ * `<a href="javascript:...">` payload into a bug title and have it
+ * land in the recipient's inbox (the `reporter` token resolves to a
+ * different user than the bug-title author when one cluster spans
+ * multiple submitters). The template strings themselves are trusted
+ * — they live in code — so we ONLY escape the value, not the
+ * surrounding template.
  */
 function interpolate(template: string, vars: Record<string, unknown>): string {
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path: string) => {
@@ -116,11 +127,27 @@ function interpolate(template: string, vars: Record<string, unknown>): string {
       return '';
     }
     if (typeof cur === 'string') {
-      return cur;
+      return escapeHtml(cur);
     }
     if (typeof cur === 'number' || typeof cur === 'boolean') {
+      // Numbers and booleans can't contain HTML, no escape needed.
       return String(cur);
     }
     return '';
   });
+}
+
+/**
+ * Minimal HTML entity escape covering the five characters whose raw
+ * appearance changes how a renderer parses the document. We don't
+ * use a library here because the templates are short and the surface
+ * is small; the equivalent of `lodash.escape`.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

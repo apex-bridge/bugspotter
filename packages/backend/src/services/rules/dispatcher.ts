@@ -225,6 +225,17 @@ export class DefaultActionDispatcher implements ActionDispatcher {
    * bodies. Keep additions backward-compatible: removing or
    * renaming a top-level key would silently break existing
    * templates.
+   *
+   * Currently populates `bug` and `canonical`. The shipped templates
+   * also reference `{{hits.count}}` (used by `regression_alert`) and
+   * `{{digest.body}}` (used by `weekly_digest`); both render as empty
+   * strings today because the triggers that would populate them
+   * (`cluster_growing`, `schedule`) aren't wired in this PR. The
+   * fixes land alongside those triggers — `hits` from the windowed
+   * count already resolved by `RuleContextProvider.countHitsInWindow`,
+   * `digest` from the schedule-trigger context. The unused templates
+   * are kept in the registry so PR-D's seed rules can reference them
+   * without a second round-trip.
    */
   private buildEmailVars(context: RuleEvalContext): Record<string, unknown> {
     return {
