@@ -419,6 +419,53 @@ describe('NotificationThrottleRepository', () => {
       }
     );
 
+    it('deletes throttle rows when the owning notification_rule is deleted (migration 024 trigger)', async () => {
+      // Migration 023 dropped the FK + CASCADE that originally
+      // wiped throttle rows on rule deletion. Migration 024 restores
+      // the cascade via an AFTER DELETE trigger on notification_rules.
+      // Without it, deleted rules would leak throttle rows forever.
+      await db.notificationThrottle.tryReserveSlot(testRuleId1, 'g1', 5, 60);
+      await db.notificationThrottle.tryReserveSlot(testRuleId1, 'g2', 5, 60);
+
+      // Confirm the rows exist
+      const now = new Date();
+      const windowDuration = 60 * 60 * 1000;
+      const windowStart = new Date(Math.floor(now.getTime() / windowDuration) * windowDuration);
+      const windowEnd = new Date(windowStart.getTime() + windowDuration);
+      const before1 = await db.notificationThrottle.getWindowCount(
+        testRuleId1,
+        'g1',
+        windowStart,
+        windowEnd
+      );
+      const before2 = await db.notificationThrottle.getWindowCount(
+        testRuleId1,
+        'g2',
+        windowStart,
+        windowEnd
+      );
+      expect(before1).toBe(1);
+      expect(before2).toBe(1);
+
+      // Delete the parent rule — trigger should drop both throttle rows.
+      await db.notificationRules.delete(testRuleId1);
+
+      const after1 = await db.notificationThrottle.getWindowCount(
+        testRuleId1,
+        'g1',
+        windowStart,
+        windowEnd
+      );
+      const after2 = await db.notificationThrottle.getWindowCount(
+        testRuleId1,
+        'g2',
+        windowStart,
+        windowEnd
+      );
+      expect(after1).toBe(0);
+      expect(after2).toBe(0);
+    });
+
     it('does not interfere with the legacy isThrottled path on a different rule', async () => {
       // Sanity check that the new atomic path and the old read-then-
       // increment path don't tread on each other's rows when keyed
