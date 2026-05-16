@@ -25,6 +25,8 @@ import { getLogger } from '../../../logger.js';
 import type { DatabaseClient } from '../../../db/client.js';
 import type { BugReport } from '../../../db/types.js';
 import type { PluginRegistry } from '../../../integrations/plugin-registry.js';
+import { DedupRuleExecutor } from '../../../services/rules/executor.js';
+import { buildDedupRuleExecutor } from '../../../services/rules/wiring.js';
 import type { TicketCreationOutboxEntry } from '../../../db/repositories/ticket-creation-outbox.repository.js';
 
 const logger = getLogger();
@@ -40,11 +42,30 @@ export interface OutboxProcessorJobData {
  * Worker to process ticket creation outbox entries
  */
 export class TicketCreationOutboxProcessor {
+  // Lazy-built so tests that construct this processor with stub
+  // pluginRegistry / db don't have to also stub the rule engine. The
+  // first outbox_about_to_skip event in any process pays the (cheap)
+  // construction cost; subsequent events reuse the same executor.
+  // Tests can also inject a pre-built executor via the constructor
+  // (4th arg) to bypass the build helper entirely — required for
+  // coverage of the hook path without spinning up the plugin registry.
+  private ruleExecutor: DedupRuleExecutor | null;
+
   constructor(
     private readonly db: DatabaseClient,
     private readonly pluginRegistry: PluginRegistry,
-    private readonly queue?: Queue<OutboxProcessorJobData>
-  ) {}
+    private readonly queue?: Queue<OutboxProcessorJobData>,
+    injectedRuleExecutor?: DedupRuleExecutor
+  ) {
+    this.ruleExecutor = injectedRuleExecutor ?? null;
+  }
+
+  private getRuleExecutor(): DedupRuleExecutor {
+    if (!this.ruleExecutor) {
+      this.ruleExecutor = buildDedupRuleExecutor(this.db, this.pluginRegistry);
+    }
+    return this.ruleExecutor;
+  }
 
   /**
    * Process a single outbox entry (called by Bull queue)
@@ -110,7 +131,47 @@ export class TicketCreationOutboxProcessor {
           bugReportId: entry.bug_report_id,
           duplicateOf: bugReport.duplicate_of,
         });
+        // Order matters: `markSkipped` (terminal state) FIRST, then
+        // fire the rule. The reverse order would mean a `markSkipped`
+        // failure (DB blip, pool exhaustion) bubbles up and BullMQ
+        // retries the job — the worker re-fetches the bug, sees
+        // `duplicate_of` still set, and fires the trigger again,
+        // replaying every action. Rules without a `rate_limit`
+        // (allowed by the schema) would spam the canonical ticket.
+        //
+        // After `markSkipped` succeeds the row is in a terminal state;
+        // any retry hits the `markProcessing` early-out and never re-
+        // fires the rule. The trade-off: a one-shot `markSkipped`
+        // success followed by a process crash before `fire` runs means
+        // the rule misses this event. We accept that — "rule skipped
+        // on a rare blip" is far better than "rule fires twice".
         await this.db.ticketOutbox.markSkipped(outboxEntryId, 'duplicate_of_set');
+        try {
+          const results = await this.getRuleExecutor().fire('outbox_about_to_skip', bugReport);
+          if (results.length > 0) {
+            logger.info('Dedup rules evaluated for outbox_about_to_skip', {
+              outboxEntryId,
+              bugReportId: entry.bug_report_id,
+              fired: results.filter((r) => r.fired).length,
+              total: results.length,
+            });
+          }
+        } catch (error) {
+          // Defensive: the executor wraps its own errors, but if a
+          // bug in the engine itself escapes, log and continue. The
+          // entry is already in `skipped`, so the worker simply
+          // returns.
+          logger.error('Dedup rule executor crashed for outbox_about_to_skip', {
+            outboxEntryId,
+            bugReportId: entry.bug_report_id,
+            error: error instanceof Error ? error.message : String(error),
+            // Stack trace mirrors the surrounding error-log pattern in
+            // this file — the executor wraps its own errors, so a
+            // throw reaching us means a genuine engine bug worth
+            // debugging from the trace.
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+        }
         return;
       }
 
