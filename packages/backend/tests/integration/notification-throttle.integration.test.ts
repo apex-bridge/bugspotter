@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { createTestDatabase } from '../setup.integration.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 
@@ -315,6 +316,101 @@ describe('NotificationThrottleRepository', () => {
         60
       );
 
+      expect(isThrottled).toBe(false);
+    });
+  });
+
+  describe('tryReserveSlot (atomic check-and-reserve)', () => {
+    // Migration 023 dropped the FK from `notification_throttle.rule_id`
+    // -> `notification_rules.id` so the dedup-rule engine can share
+    // this table without its rule ids being rejected by Postgres. The
+    // unit tests for ThrottleBackedRateLimiter mock the repository and
+    // never exercise the real SQL path, so these tests are the actual
+    // guard against the FK reappearing (or `tryReserveSlot`'s
+    // ON CONFLICT clause regressing).
+
+    it('accepts a rule_id UUID that does not exist in notification_rules (FK is dropped)', async () => {
+      // This is the regression test for the production bug Claude
+      // flagged: before migration 023, this insert would fail with
+      // `violates foreign key constraint
+      //  notification_throttle_rule_id_fkey`. After the migration the
+      // column is polymorphic — any UUID is accepted.
+      const dedupRuleId = randomUUID();
+      const reserved = await db.notificationThrottle.tryReserveSlot(
+        dedupRuleId,
+        'canonical-bug-uuid',
+        3,
+        60
+      );
+      expect(reserved).toBe(true);
+    });
+
+    it('returns true up to the limit, then false', async () => {
+      const ruleId = randomUUID();
+      const groupKey = 'canonical-A';
+
+      const r1 = await db.notificationThrottle.tryReserveSlot(ruleId, groupKey, 2, 60);
+      const r2 = await db.notificationThrottle.tryReserveSlot(ruleId, groupKey, 2, 60);
+      const r3 = await db.notificationThrottle.tryReserveSlot(ruleId, groupKey, 2, 60);
+      const r4 = await db.notificationThrottle.tryReserveSlot(ruleId, groupKey, 2, 60);
+
+      expect(r1).toBe(true);
+      expect(r2).toBe(true);
+      expect(r3).toBe(false);
+      expect(r4).toBe(false);
+    });
+
+    it('separates limits across different group_keys', async () => {
+      const ruleId = randomUUID();
+
+      // groupKey A exhausts the limit
+      await db.notificationThrottle.tryReserveSlot(ruleId, 'A', 1, 60);
+      const aSecond = await db.notificationThrottle.tryReserveSlot(ruleId, 'A', 1, 60);
+      // groupKey B is still fresh
+      const bFirst = await db.notificationThrottle.tryReserveSlot(ruleId, 'B', 1, 60);
+
+      expect(aSecond).toBe(false);
+      expect(bFirst).toBe(true);
+    });
+
+    it('enforces max-count atomically under concurrent callers (TOCTOU resistant)', async () => {
+      // This is the property that motivated tryReserveSlot in the
+      // first place: two outbox workers racing on the same canonical
+      // must not both win. With the old read-then-increment path
+      // both could see currentCount < max and both increment. With
+      // INSERT ... ON CONFLICT DO UPDATE WHERE count < $max
+      // RETURNING, exactly `max` callers come back with `true`.
+      const ruleId = randomUUID();
+      const groupKey = 'race-canonical';
+      const max = 3;
+      const concurrent = 12;
+
+      const results = await Promise.all(
+        Array.from({ length: concurrent }, () =>
+          db.notificationThrottle.tryReserveSlot(ruleId, groupKey, max, 60)
+        )
+      );
+
+      const reserved = results.filter((r) => r === true).length;
+      const refused = results.filter((r) => r === false).length;
+
+      expect(reserved).toBe(max);
+      expect(refused).toBe(concurrent - max);
+    });
+
+    it('does not interfere with the legacy isThrottled path on a different rule', async () => {
+      // Sanity check that the new atomic path and the old read-then-
+      // increment path don't tread on each other's rows when keyed
+      // by different rule_ids — i.e. the unique constraint
+      // (rule_id, group_key, window_start) keeps them isolated.
+      const dedupRuleId = randomUUID();
+
+      await db.notificationThrottle.tryReserveSlot(dedupRuleId, 'g', 5, 60);
+      await db.notificationThrottle.tryReserveSlot(dedupRuleId, 'g', 5, 60);
+
+      // testRuleId1 is a real notification_rule from beforeEach.
+      // Its counter for the same group_key should still be 0.
+      const isThrottled = await db.notificationThrottle.isThrottled(testRuleId1, 'g', 5, 60);
       expect(isThrottled).toBe(false);
     });
   });
