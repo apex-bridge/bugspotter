@@ -100,7 +100,9 @@ describe('DedupRuleExecutor.fire', () => {
   beforeEach(() => {
     repo = { findByProject: vi.fn().mockResolvedValue([COMMENT_RULE]) };
     dispatchSpy = vi.fn().mockResolvedValue(true);
-    dispatcher = { dispatch: dispatchSpy };
+    // Default stub: all actions are dispatchable. Specific tests
+    // override canDispatch to exercise the no-supported-actions path.
+    dispatcher = { dispatch: dispatchSpy, canDispatch: vi.fn().mockReturnValue(true) };
     rateLimiter = {
       shouldFire: vi.fn().mockResolvedValue(true),
       recordFire: vi.fn().mockResolvedValue(undefined),
@@ -108,6 +110,7 @@ describe('DedupRuleExecutor.fire', () => {
     context = {
       loadCanonical: vi.fn().mockResolvedValue(makeCanonical()),
       countHitsInWindow: vi.fn().mockResolvedValue(7),
+      loadReporterTier: vi.fn().mockResolvedValue(null),
     };
     executor = new DedupRuleExecutor(
       repo as unknown as DedupRuleRepository,
@@ -353,6 +356,157 @@ describe('DedupRuleExecutor.fire', () => {
     const results = await executor.fire('outbox_about_to_skip', makeBugReport());
     expect(results[0].fired).toBe(false);
     expect(results[0].skipReason).toBe('conditions_unmet');
+  });
+
+  describe('canonical.closed_days_ago gating', () => {
+    it('returns null (condition fails) for an open canonical, even if last touched long ago', async () => {
+      // Regression: previously the resolver returned days-since-
+      // updated regardless of status, so a stale-but-open canonical
+      // matched `closed_days_ago >= 7`. Now the value is null unless
+      // status is closed/resolved.
+      const staleOpen = makeCanonical({
+        status: 'open',
+        updated_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      });
+      (context.loadCanonical as ReturnType<typeof vi.fn>).mockResolvedValueOnce(staleOpen);
+
+      const rule: DedupRuleRow = {
+        ...COMMENT_RULE,
+        id: 'rule-stale-open',
+        rule_json: {
+          name: 'reopen old closed',
+          when: { type: 'outbox_about_to_skip' },
+          if: [{ field: 'canonical.closed_days_ago', op: 'gte', value: 7 }],
+          then: [{ type: 'ticket.add_comment', target: 'canonical', body: 'hi' }],
+        },
+      };
+      repo.findByProject.mockResolvedValueOnce([rule]);
+
+      const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+      expect(results[0].fired).toBe(false);
+      expect(results[0].skipReason).toBe('conditions_unmet');
+    });
+
+    it('returns days-since for a closed canonical', async () => {
+      const closedOld = makeCanonical({
+        status: 'closed',
+        updated_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+      });
+      (context.loadCanonical as ReturnType<typeof vi.fn>).mockResolvedValueOnce(closedOld);
+
+      const rule: DedupRuleRow = {
+        ...COMMENT_RULE,
+        id: 'rule-closed-7',
+        rule_json: {
+          name: 'reopen old closed',
+          when: { type: 'outbox_about_to_skip' },
+          if: [{ field: 'canonical.closed_days_ago', op: 'gte', value: 7 }],
+          then: [{ type: 'ticket.add_comment', target: 'canonical', body: 'hi' }],
+        },
+      };
+      repo.findByProject.mockResolvedValueOnce([rule]);
+
+      const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+      expect(results[0].fired).toBe(true);
+    });
+  });
+
+  describe('reporter.customer.tier sourcing', () => {
+    it('routes through context.loadReporterTier(organization_id), not through bugReport.metadata', async () => {
+      // The path was previously read from bugReport.metadata.user.tier
+      // — which no writer populates and which an SDK could spoof.
+      // Now it's sourced from subscriptions via the provider.
+      (context.loadReporterTier as ReturnType<typeof vi.fn>).mockResolvedValueOnce('enterprise');
+
+      const bug = makeBugReport({ organization_id: 'org-uuid' });
+      const rule: DedupRuleRow = {
+        ...COMMENT_RULE,
+        id: 'rule-tier',
+        rule_json: {
+          name: 'enterprise only',
+          when: { type: 'outbox_about_to_skip' },
+          if: [{ field: 'reporter.customer.tier', op: 'eq', value: 'enterprise' }],
+          then: [{ type: 'ticket.add_comment', target: 'canonical', body: 'hi' }],
+        },
+      };
+      repo.findByProject.mockResolvedValueOnce([rule]);
+
+      const results = await executor.fire('outbox_about_to_skip', bug);
+
+      expect(context.loadReporterTier).toHaveBeenCalledWith('org-uuid');
+      expect(results[0].fired).toBe(true);
+    });
+
+    it('passes null when bugReport has no organization_id (selfhosted / legacy)', async () => {
+      (context.loadReporterTier as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+      const bug = makeBugReport({ organization_id: null });
+      const rule: DedupRuleRow = {
+        ...COMMENT_RULE,
+        id: 'rule-tier-null',
+        rule_json: {
+          name: 'enterprise only',
+          when: { type: 'outbox_about_to_skip' },
+          if: [{ field: 'reporter.customer.tier', op: 'eq', value: 'enterprise' }],
+          then: [{ type: 'ticket.add_comment', target: 'canonical', body: 'hi' }],
+        },
+      };
+      repo.findByProject.mockResolvedValueOnce([rule]);
+
+      const results = await executor.fire('outbox_about_to_skip', bug);
+
+      expect(context.loadReporterTier).toHaveBeenCalledWith(null);
+      // Tier resolves to null -> condition fails closed
+      expect(results[0].fired).toBe(false);
+      expect(results[0].skipReason).toBe('conditions_unmet');
+    });
+  });
+
+  describe('no_supported_actions', () => {
+    it('skips the rule without consuming the rate-limit slot when no action is dispatchable', async () => {
+      // Regression: a rule whose only actions are not-yet-wired
+      // (e.g. all-notify.slack in PR-C) used to burn the throttle
+      // budget for zero work. Now the executor probes canDispatch
+      // upfront and skips the rule entirely.
+      (dispatcher.canDispatch as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+      const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+
+      expect(results[0].fired).toBe(false);
+      expect(results[0].skipReason).toBe('no_supported_actions');
+      expect(results[0].actionsDispatched).toBe(0);
+      expect(results[0].actionsSkipped).toBe(1); // mirrors rule.then.length
+      // Rate limiter MUST NOT have been touched — that's the whole point.
+      expect(rateLimiter.shouldFire).not.toHaveBeenCalled();
+      expect(rateLimiter.recordFire).not.toHaveBeenCalled();
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('still fires when at least one action is dispatchable', async () => {
+      // Mixed dispatchability: as long as one action can run, the
+      // rule fires and consumes the slot normally.
+      (dispatcher.canDispatch as ReturnType<typeof vi.fn>)
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(true);
+      const mixedRule: DedupRuleRow = {
+        ...COMMENT_RULE,
+        id: 'rule-mixed',
+        rule_json: {
+          name: 'mixed-dispatchability',
+          when: { type: 'outbox_about_to_skip' },
+          if: [{ field: 'canonical.status', op: 'eq', value: 'closed' }],
+          then: [
+            { type: 'notify.slack', channel: '#x', message: 'hi' },
+            { type: 'ticket.add_comment', target: 'canonical', body: 'hi' },
+          ],
+        },
+      };
+      repo.findByProject.mockResolvedValueOnce([mixedRule]);
+
+      const results = await executor.fire('outbox_about_to_skip', makeBugReport());
+
+      expect(results[0].fired).toBe(true);
+      expect(rateLimiter.shouldFire).toHaveBeenCalled();
+    });
   });
 
   describe('per-rule error isolation', () => {

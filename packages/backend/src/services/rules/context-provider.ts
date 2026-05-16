@@ -32,6 +32,35 @@ export class DatabaseRuleContextProvider implements RuleContextProvider {
     return result.rows[0] ?? null;
   }
 
+  async loadReporterTier(organizationId: string | null): Promise<string | null> {
+    if (!organizationId) {
+      // Legacy bug reports without organization_id (pre-SaaS data) and
+      // selfhosted deployments (no `subscriptions` rows at all) both
+      // resolve to null. A condition like `reporter.customer.tier eq
+      // 'enterprise'` will fail closed.
+      return null;
+    }
+    try {
+      const result = await this.db.getPool().query<{ plan_name: string }>(
+        `SELECT plan_name
+         FROM saas.subscriptions
+         WHERE organization_id = $1
+         LIMIT 1`,
+        [organizationId]
+      );
+      return result.rows[0]?.plan_name ?? null;
+    } catch (error) {
+      // Common case in selfhosted: the `saas.subscriptions` table
+      // doesn't exist. Log at debug and fall through to null —
+      // tier-based rules simply never match in that mode.
+      logger.debug('Failed to load reporter tier, defaulting to null', {
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
   async countHitsInWindow(
     canonicalBugId: string,
     projectId: string,

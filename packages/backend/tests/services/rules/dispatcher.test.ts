@@ -221,6 +221,36 @@ describe('DefaultActionDispatcher', () => {
     });
   });
 
+  describe('canDispatch', () => {
+    it('returns true for ticket.* actions', () => {
+      expect(
+        dispatcher.canDispatch({
+          type: 'ticket.add_comment',
+          target: 'canonical',
+          body: 'x',
+        })
+      ).toBe(true);
+      expect(
+        dispatcher.canDispatch({
+          type: 'ticket.transition',
+          target: 'canonical',
+          to: 'closed',
+        })
+      ).toBe(true);
+    });
+
+    it.each<ActionSpec>([
+      { type: 'notify.email', to: 'reporter', template: 'ack' },
+      { type: 'notify.slack', channel: '#x', message: 'hi' },
+      { type: 'notify.webhook', url: 'https://example.com/hook' },
+    ])('returns false for not-yet-wired %s', (action) => {
+      // PR-C2 / PR-D will flip these as the dispatchers land. The
+      // executor relies on this to skip rate-limit-consuming fires
+      // that would do zero work.
+      expect(dispatcher.canDispatch(action)).toBe(false);
+    });
+  });
+
   describe('notify.* (not wired in PR-C)', () => {
     // The action types parse and dispatch, but the dispatcher
     // intentionally logs+returns false until PR-C2 (email) / PR-D

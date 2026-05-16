@@ -70,6 +70,15 @@ export interface RuleContextProvider {
    * `loadCanonical`.
    */
   countHitsInWindow(canonicalBugId: string, projectId: string, window: string): Promise<number>;
+  /**
+   * Resolve the customer tier for the bug report's owning
+   * organization. Sourced from `subscriptions.plan_name` — NOT from
+   * SDK-supplied `bug_reports.metadata`, which would let any reporter
+   * spoof "enterprise". Returns null when the bug has no
+   * organization_id (legacy / selfhosted) or there's no subscription
+   * row.
+   */
+  loadReporterTier(organizationId: string | null): Promise<string | null>;
 }
 
 export class DedupRuleExecutor {
@@ -198,6 +207,24 @@ export class DedupRuleExecutor {
         continue;
       }
 
+      // Pre-flight: skip the rule entirely if the dispatcher can't
+      // handle ANY of its actions. This avoids consuming a rate-limit
+      // slot for a rule whose only actions are not-yet-wired (e.g. an
+      // all-`notify.slack` rule before PR-D lands). Without this, the
+      // throttle window burns out for zero actual work and future
+      // legitimate fires get blocked.
+      const dispatchableActions = rule.then.filter((a) => this.dispatcher.canDispatch(a));
+      if (dispatchableActions.length === 0) {
+        results.push({
+          ruleId: row.id,
+          fired: false,
+          skipReason: 'no_supported_actions',
+          actionsDispatched: 0,
+          actionsSkipped: rule.then.length,
+        });
+        continue;
+      }
+
       // Rate limit applies per (rule, canonical) pair. Prefer
       // `canonical.id`; fall back to `bugReport.duplicate_of` (the same
       // cluster identifier the dedup pipeline used to set
@@ -298,7 +325,7 @@ export class DedupRuleExecutor {
           context.resolved.set(key, mapStatusToCanonical(context.canonical));
           break;
         case 'canonical.closed_days_ago':
-          context.resolved.set(key, daysSinceUpdate(context.canonical));
+          context.resolved.set(key, daysSinceClose(context.canonical));
           break;
         case 'hits_in_window':
           // `cond.window` is guaranteed non-empty by the schema's
@@ -316,7 +343,15 @@ export class DedupRuleExecutor {
           }
           break;
         case 'reporter.customer.tier': {
-          const tier = readPath(context.bugReport.metadata, ['user', 'tier']);
+          // Source from `subscriptions.plan_name` via the provider —
+          // NOT from `bug_reports.metadata`, which is SDK-supplied
+          // and would let any reporter set tier='enterprise'. The
+          // bug's owning org may be null in selfhosted / legacy
+          // data, in which case the tier resolves to null and the
+          // condition fails closed.
+          const tier = await this.context.loadReporterTier(
+            context.bugReport.organization_id ?? null
+          );
           context.resolved.set(key, tier);
           break;
         }
@@ -370,9 +405,25 @@ function mapStatusToCanonical(canonical: BugReport | null): string | null {
   }
 }
 
-/** Whole days since the canonical's `updated_at` (proxy for "closed at"). */
-function daysSinceUpdate(canonical: BugReport | null): number | null {
+/**
+ * Whole days since the canonical was last touched, but ONLY if the
+ * canonical is in a closed-ish status. Returns null for open / in-
+ * progress canonicals so a rule like `canonical.closed_days_ago >= 7`
+ * doesn't misfire on an open ticket that's simply been quiet for a
+ * week. The evaluator treats null as "fail closed".
+ *
+ * `updated_at` is the closest proxy for "closed at" we have today —
+ * `bug_reports` doesn't carry a dedicated closure timestamp. The
+ * status gate makes this approximation safe: an ascended-then-closed
+ * canonical's updated_at refers to the closure, and any subsequent
+ * activity that bumps updated_at (e.g. an admin re-opening) also
+ * moves the canonical out of `closed`, which falls back to null.
+ */
+function daysSinceClose(canonical: BugReport | null): number | null {
   if (!canonical) {
+    return null;
+  }
+  if (canonical.status !== 'closed' && canonical.status !== 'resolved') {
     return null;
   }
   const updated =
@@ -382,16 +433,4 @@ function daysSinceUpdate(canonical: BugReport | null): number | null {
   // gte/lte comparisons. Treat "future" timestamps as "just now".
   const elapsedMs = Math.max(0, Date.now() - updated.getTime());
   return Math.floor(elapsedMs / (1000 * 60 * 60 * 24));
-}
-
-/** Safe traversal of an unknown object by a dotted-path-equivalent array. */
-function readPath(obj: unknown, path: string[]): unknown {
-  let cur: unknown = obj;
-  for (const key of path) {
-    if (cur === null || cur === undefined || typeof cur !== 'object') {
-      return null;
-    }
-    cur = (cur as Record<string, unknown>)[key];
-  }
-  return cur ?? null;
 }

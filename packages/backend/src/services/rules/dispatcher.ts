@@ -62,6 +62,30 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     private readonly lookupService: CapabilityServiceLookup
   ) {}
 
+  /**
+   * Synchronous capability probe — used by the executor to skip
+   * rules whose actions can't run yet, so the rate-limit slot
+   * isn't consumed for zero work. Keep in sync with `dispatch` below.
+   */
+  canDispatch(action: ActionSpec): boolean {
+    switch (action.type) {
+      case 'ticket.add_comment':
+      case 'ticket.transition':
+        return true;
+      case 'notify.email':
+      case 'notify.slack':
+      case 'notify.webhook':
+        // PR-C2 (email) + PR-D (slack / webhook) flip these to true
+        // as the wiring lands.
+        return false;
+      default: {
+        const _exhaustive: never = action;
+        void _exhaustive;
+        return false;
+      }
+    }
+  }
+
   async dispatch(context: RuleEvalContext, action: ActionSpec): Promise<boolean> {
     switch (action.type) {
       case 'ticket.add_comment':

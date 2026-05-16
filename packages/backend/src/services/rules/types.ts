@@ -64,6 +64,20 @@ export interface RuleEvalContext {
  */
 export interface ActionDispatcher {
   dispatch(context: RuleEvalContext, action: ActionSpec): Promise<boolean>;
+  /**
+   * Synchronous capability probe — does this dispatcher have any
+   * wiring for the given action type?
+   *
+   * The executor calls this BEFORE consuming the rate-limit slot:
+   * a rule whose actions are all unsupported (e.g. notify.slack
+   * before its dispatcher lands) would otherwise burn the throttle
+   * budget for zero work, blocking future legitimate fires within
+   * the window.
+   *
+   * Implementations should return `false` for actions they log-and-
+   * skip in `dispatch` and `true` for actions they actually wire.
+   */
+  canDispatch(action: ActionSpec): boolean;
 }
 
 /**
@@ -86,7 +100,13 @@ export interface RuleFireResult {
   ruleId: string;
   fired: boolean;
   /** When fired=false, the reason. `null` when fired=true. */
-  skipReason: 'conditions_unmet' | 'rate_limited' | 'dispatch_error' | 'evaluation_error' | null;
+  skipReason:
+    | 'conditions_unmet'
+    | 'rate_limited'
+    | 'dispatch_error'
+    | 'evaluation_error'
+    | 'no_supported_actions'
+    | null;
   /** Count of actions that ran successfully (vs were skipped). */
   actionsDispatched: number;
   actionsSkipped: number;
