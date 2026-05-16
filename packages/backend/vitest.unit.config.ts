@@ -79,6 +79,10 @@ export default defineConfig({
       'tests/api/utils/enrichment-trigger.test.ts',
       'tests/services/intelligence/dedup-service.test.ts',
       'tests/services/intelligence/self-service.test.ts',
+      'tests/services/rules/evaluator.test.ts',
+      'tests/services/rules/executor.test.ts',
+      'tests/services/rules/dispatcher.test.ts',
+      'tests/services/rules/rate-limiter.test.ts',
       // Pure env-var / config validation test, no DB.
       'tests/config.test.ts',
     ],
