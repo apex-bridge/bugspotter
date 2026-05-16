@@ -239,27 +239,31 @@ describe('DefaultActionDispatcher', () => {
       ).toBe(true);
     });
 
+    it('returns false for notify.email when no EmailSender is wired', () => {
+      // Dispatcher constructed without an emailSender (the default
+      // 3-arg form used by other tests in this file). canDispatch
+      // flips to true once the wiring helper provides one.
+      expect(
+        dispatcher.canDispatch({ type: 'notify.email', to: 'reporter', template: 'ack' })
+      ).toBe(false);
+    });
+
     it.each<ActionSpec>([
-      { type: 'notify.email', to: 'reporter', template: 'ack' },
       { type: 'notify.slack', channel: '#x', message: 'hi' },
       { type: 'notify.webhook', url: 'https://example.com/hook' },
     ])('returns false for not-yet-wired %s', (action) => {
-      // PR-C2 / PR-D will flip these as the dispatchers land. The
-      // executor relies on this to skip rate-limit-consuming fires
-      // that would do zero work.
+      // PR-D will flip these as the slack / webhook dispatchers
+      // land. The executor relies on this to skip rate-limit-
+      // consuming fires that would do zero work.
       expect(dispatcher.canDispatch(action)).toBe(false);
     });
   });
 
-  describe('notify.* (not wired in PR-C)', () => {
-    // The action types parse and dispatch, but the dispatcher
-    // intentionally logs+returns false until PR-C2 (email) / PR-D
-    // (slack, webhook). Pinning false here means a future PR that
-    // adds real wiring also has to update this test, which is the
-    // signal we want.
+  describe('notify.slack / notify.webhook (not wired in PR-C2)', () => {
+    // Pinning false here means a future PR that adds real wiring also
+    // has to update this test, which is the signal we want.
 
     it.each<ActionSpec>([
-      { type: 'notify.email', to: 'reporter', template: 'dedup_ack' },
       { type: 'notify.slack', channel: '#regressions', message: 'hit' },
       { type: 'notify.webhook', url: 'https://example.com/hook' },
     ])('returns false for %s without touching the resolver or lookup', async (action) => {
@@ -267,6 +271,95 @@ describe('DefaultActionDispatcher', () => {
       expect(ok).toBe(false);
       expect(resolver.resolve).not.toHaveBeenCalled();
       expect(lookup).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('notify.email (wired with EmailSender)', () => {
+    function buildEmailDispatcher() {
+      const send: Mock = vi.fn().mockResolvedValue(true);
+      const emailSender = { send };
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        emailSender
+      );
+      return { dispatcher: d, send };
+    }
+
+    it('canDispatch returns true once an EmailSender is provided', () => {
+      const { dispatcher: d } = buildEmailDispatcher();
+      expect(d.canDispatch({ type: 'notify.email', to: 'reporter', template: 'dedup_ack' })).toBe(
+        true
+      );
+    });
+
+    it('dispatches to the EmailSender with projectId, resolved recipient, and template id', async () => {
+      const { dispatcher: d, send } = buildEmailDispatcher();
+      const ctx = makeContext({
+        bugReport: makeBug({
+          metadata: { metadata: { user: { email: 'reporter@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+      const arg = send.mock.calls[0][0];
+      expect(arg.projectId).toBe('project-1');
+      expect(arg.to).toBe('reporter@example.com');
+      expect(arg.templateId).toBe('dedup_ack');
+      // Vars include the canonical-shaped projection expected by the
+      // few-shot templates (`{{canonical.title}}` etc).
+      expect(arg.vars).toMatchObject({
+        bug: { id: ctx.bugReport.id, title: ctx.bugReport.title },
+        canonical: { id: ctx.canonical?.id, title: ctx.canonical?.title },
+      });
+    });
+
+    it('returns false when the recipient resolves to null (e.g. reporter email missing)', async () => {
+      const { dispatcher: d, send } = buildEmailDispatcher();
+      // No metadata.metadata.user — reporter resolution returns null.
+      const ctx = makeContext({ bugReport: makeBug({ metadata: {} }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+      expect(ok).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the EmailSender reports failure (executor stays alive)', async () => {
+      const { dispatcher: d, send } = buildEmailDispatcher();
+      send.mockResolvedValueOnce(false);
+      const ctx = makeContext({
+        bugReport: makeBug({
+          metadata: { metadata: { user: { email: 'reporter@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+      expect(ok).toBe(false);
+    });
+
+    it('passes a literal email recipient straight through', async () => {
+      const { dispatcher: d, send } = buildEmailDispatcher();
+      await d.dispatch(makeContext(), {
+        type: 'notify.email',
+        to: 'ops@example.com',
+        template: 'dedup_ack',
+      });
+      expect(send.mock.calls[0][0].to).toBe('ops@example.com');
     });
   });
 });
