@@ -31,6 +31,8 @@ import type { IntelligenceClientFactory } from '../../services/intelligence/tena
 import { IntelligenceEnrichmentService } from '../../services/intelligence/enrichment-service.js';
 import { IntelligenceMitigationService } from '../../services/intelligence/mitigation-service.js';
 import { IntelligenceDedupService } from '../../services/intelligence/dedup-service.js';
+import type { PluginRegistry } from '../../integrations/plugin-registry.js';
+import { buildDedupRuleExecutor } from '../../services/rules/wiring.js';
 import type {
   IntelligenceJobData,
   IntelligenceJobResult,
@@ -128,7 +130,8 @@ async function resolveClient(
 async function processIntelligenceJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
   clientFactory: IntelligenceClientFactory,
-  db: DatabaseClient
+  db: DatabaseClient,
+  pluginRegistry: PluginRegistry | null
 ): Promise<IntelligenceJobResult> {
   const startTime = Date.now();
 
@@ -153,7 +156,7 @@ async function processIntelligenceJob(
   const { client, orgId } = await resolveClient(job, clientFactory, db);
 
   if (type === 'analyze') {
-    return processAnalyzeJob(job, client, db, orgId, startTime);
+    return processAnalyzeJob(job, client, db, orgId, startTime, pluginRegistry);
   }
 
   if (type === 'resolution') {
@@ -183,7 +186,8 @@ async function processAnalyzeJob(
   client: IntelligenceClient,
   db: DatabaseClient,
   resolvedOrgId: string | undefined,
-  startTime: number
+  startTime: number,
+  pluginRegistry: PluginRegistry | null
 ): Promise<IntelligenceJobResult> {
   const { bugReportId, projectId } = job.data;
   const payload = job.data.payload as AnalyzeBugRequest;
@@ -249,6 +253,45 @@ async function processAnalyzeJob(
           duplicateOf: dedupResult.duplicateOf,
           statusChanged: dedupResult.statusChanged,
         });
+
+        // Fire the duplicate_detected rule trigger. The bug has its
+        // duplicate_of set now, so re-fetch to give the executor the
+        // post-update row. The fire path is fully error-contained —
+        // rule load / dispatch / limiter failures are swallowed
+        // inside the executor, and we wrap an outer try just in case
+        // a bug in the engine itself escapes (the analysis result
+        // must still be returned to the queue).
+        //
+        // pluginRegistry is optional on this code path: ticket.*
+        // actions on duplicate_detected would target a canonical
+        // whose external ticket may not exist yet (the outbox
+        // hasn't filed it). The common case here is notify.email
+        // (B1 "reporter ack"); without a registry, those work,
+        // and ticket actions log a no-supported-actions skip.
+        if (pluginRegistry) {
+          try {
+            const updatedBug = await db.bugReports.findById(bugReportId);
+            if (updatedBug) {
+              const ruleExecutor = buildDedupRuleExecutor(db, pluginRegistry);
+              const results = await ruleExecutor.fire('duplicate_detected', updatedBug);
+              if (results.length > 0) {
+                logger.info('Dedup rules evaluated for duplicate_detected', {
+                  jobId: job.id,
+                  bugReportId,
+                  fired: results.filter((r) => r.fired).length,
+                  total: results.length,
+                });
+              }
+            }
+          } catch (error) {
+            logger.error('Dedup rule executor crashed for duplicate_detected', {
+              jobId: job.id,
+              bugReportId,
+              error: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : undefined,
+            });
+          }
+        }
       }
     } catch (error) {
       // Never throw from dedup — analysis result must still be returned
@@ -476,7 +519,8 @@ async function processMitigationJob(
 export function createIntelligenceWorker(
   clientFactory: IntelligenceClientFactory,
   db: DatabaseClient,
-  connection: Redis
+  connection: Redis,
+  pluginRegistry: PluginRegistry | null
 ): IWorkerHost<IntelligenceJobData, IntelligenceJobResult> {
   logger.info('Creating intelligence worker');
 
@@ -486,7 +530,7 @@ export function createIntelligenceWorker(
     typeof QUEUE_NAMES.INTELLIGENCE
   >({
     name: QUEUE_NAMES.INTELLIGENCE,
-    processor: async (job) => processIntelligenceJob(job, clientFactory, db),
+    processor: async (job) => processIntelligenceJob(job, clientFactory, db, pluginRegistry),
     connection,
     workerType: QUEUE_NAMES.INTELLIGENCE,
   });

@@ -21,6 +21,8 @@ import type {
 import { pluginSupports } from '../../integrations/capabilities.js';
 import type { ActionSpec } from '../../integrations/dedup-rule.schema.js';
 import { getLogger } from '../../logger.js';
+import type { EmailSender } from './email-sender.js';
+import { resolveEmailRecipient } from './email-sender.js';
 import type { ActionDispatcher, RuleEvalContext } from './types.js';
 
 const logger = getLogger();
@@ -59,7 +61,17 @@ export type CapabilityServiceLookup = (
 export class DefaultActionDispatcher implements ActionDispatcher {
   constructor(
     private readonly resolver: CanonicalTicketResolver,
-    private readonly lookupService: CapabilityServiceLookup
+    private readonly lookupService: CapabilityServiceLookup,
+    /**
+     * Optional. When provided, `notify.email` actions are dispatched
+     * via this sender. Left optional so the executor's unit tests
+     * (and any selfhosted deployment without notification channels)
+     * keep working without forcing a sender to exist. The
+     * `canDispatch` probe flips with this — rules with email-only
+     * actions are skipped if no sender is wired, avoiding the
+     * throttle-budget burn.
+     */
+    private readonly emailSender?: EmailSender
   ) {}
 
   /**
@@ -73,10 +85,14 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       case 'ticket.transition':
         return true;
       case 'notify.email':
+        // Wired in PR-C2 when an EmailSender is provided. Without
+        // one (test harness, selfhosted with no channels configured)
+        // we still report false so the rule skips cleanly.
+        return this.emailSender !== undefined;
       case 'notify.slack':
       case 'notify.webhook':
-        // PR-C2 (email) + PR-D (slack / webhook) flip these to true
-        // as the wiring lands.
+        // PR-D flips these to true as the slack / webhook wiring
+        // lands.
         return false;
       default: {
         const _exhaustive: never = action;
@@ -93,6 +109,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       case 'ticket.transition':
         return this.dispatchTicketTransition(context, action.to);
       case 'notify.email':
+        return this.dispatchEmail(context, action.to, action.template);
       case 'notify.slack':
       case 'notify.webhook':
         // Recognised but not yet wired — log once at info so deploys
@@ -170,6 +187,60 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       });
       return false;
     }
+  }
+
+  private async dispatchEmail(
+    context: RuleEvalContext,
+    to: string,
+    templateId: string
+  ): Promise<boolean> {
+    if (!this.emailSender) {
+      // Defensive — `canDispatch` already excludes this path when no
+      // sender is wired, so the executor shouldn't actually call us
+      // here. Log at info in case a custom dispatcher subclass
+      // overrides only one of the two.
+      logger.info('Skipping notify.email: no EmailSender wired', {
+        bugReportId: context.bugReport.id,
+      });
+      return false;
+    }
+    const recipient = resolveEmailRecipient(to, context);
+    if (!recipient) {
+      // resolveEmailRecipient logs the reason (unknown token, missing
+      // reporter email, etc).
+      return false;
+    }
+    return this.emailSender.send({
+      projectId: context.projectId,
+      to: recipient,
+      templateId,
+      vars: this.buildEmailVars(context),
+    });
+  }
+
+  /**
+   * Build the `{{path.to.value}}` substitution map handed to
+   * `renderEmailTemplate`. Mirrors the few-shot examples in the
+   * Pydantic prompt — rule authors can reference these in template
+   * bodies. Keep additions backward-compatible: removing or
+   * renaming a top-level key would silently break existing
+   * templates.
+   */
+  private buildEmailVars(context: RuleEvalContext): Record<string, unknown> {
+    return {
+      bug: {
+        id: context.bugReport.id,
+        title: context.bugReport.title,
+        priority: context.bugReport.priority,
+      },
+      canonical: context.canonical
+        ? {
+            id: context.canonical.id,
+            title: context.canonical.title,
+            status: context.canonical.status,
+          }
+        : null,
+    };
   }
 
   private async resolveTarget(context: RuleEvalContext): Promise<CapabilityTarget | null> {
