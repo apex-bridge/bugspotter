@@ -33,6 +33,7 @@ import {
   DATA_RESIDENCY_REGION,
 } from '../../db/types.js';
 import { AppError } from '../../api/middleware/error.js';
+import { seedDefaultDedupRules } from '../../services/rules/seed.js';
 import { PASSWORD } from '../../api/utils/constants.js';
 import { getQuotaForPlan } from '../plans.js';
 import { SubdomainService } from './subdomain.service.js';
@@ -276,6 +277,12 @@ export class SignupService {
           organization_id: organization.id,
           settings: {},
         });
+
+        // Seed the B1 / B2 dedup-rule presets inside the same tx so
+        // they roll back with the project on failure. The hook is
+        // resilient to individual preset failures internally — see
+        // `seedDefaultDedupRules` — so it won't abort the signup.
+        await seedDefaultDedupRules(tx.dedupRules, project.id);
 
         const plaintextKey = generatePlaintextKey();
         const keyHash = hashKey(plaintextKey);

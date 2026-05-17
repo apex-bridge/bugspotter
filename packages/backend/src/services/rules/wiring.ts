@@ -12,7 +12,6 @@
  */
 
 import type { DatabaseClient } from '../../db/client.js';
-import { DedupRuleRepository } from '../../db/dedup-rule.repository.js';
 import { NotificationThrottleRepository } from '../../db/repositories/notification-throttle.repository.js';
 import type { TicketIntegrationCapabilities } from '../../integrations/capabilities.js';
 import type { PluginRegistry } from '../../integrations/plugin-registry.js';
@@ -104,7 +103,7 @@ export function buildDedupRuleExecutor(
   pluginRegistry: PluginRegistry | null
 ): DedupRuleExecutor {
   const pool = db.getPool();
-  const repo = new DedupRuleRepository(pool);
+  const repo = db.dedupRules;
   const throttle = new NotificationThrottleRepository(pool);
   const resolver = new TicketsTableResolver(db);
   const lookup = buildCapabilityServiceLookup(db, pluginRegistry);
