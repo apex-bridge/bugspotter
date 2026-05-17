@@ -298,6 +298,24 @@ describe('Dedup Rules API', () => {
       expect(arg.rule_json).toMatchObject({ name: 'New name' });
     });
 
+    it('preserves existing enabled when full-PATCH body omits the field', async () => {
+      // The Zod schema has `enabled: z.boolean().default(true)`. Without
+      // explicit handling, a full-rule PATCH that doesn't carry `enabled`
+      // would Zod-fill `true` and silently re-enable a previously-disabled
+      // rule. The route preserves the existing column value in that case.
+      repo.findById.mockResolvedValueOnce(makeRow({ name: 'Old name', enabled: false }));
+      const { enabled: _drop, ...bodyWithoutEnabled } = VALID_RULE_BODY;
+      const res = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/projects/${PROJECT_ID}/dedup-rules/${RULE_ID}`,
+        payload: { ...bodyWithoutEnabled, name: 'New name' },
+      });
+      expect(res.statusCode).toBe(200);
+      const arg = repo.update.mock.calls[0][1];
+      expect(arg.enabled).toBe(false);
+      expect(arg.rule_json).toMatchObject({ enabled: false });
+    });
+
     it('returns 409 if the renamed rule collides with another in the project', async () => {
       repo.findById.mockResolvedValueOnce(makeRow({ name: 'Old name' }));
       repo.findByProjectAndName.mockResolvedValueOnce(

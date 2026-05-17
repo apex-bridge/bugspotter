@@ -271,12 +271,23 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
         // shape. The executor would have rejected the malformed blob
         // anyway via `parseDedupRule`; the toggle path doesn't need
         // to re-validate the entire body.
-        const existingJson =
+        const isObjectBlob =
           typeof existing.rule_json === 'object' &&
           existing.rule_json !== null &&
-          !Array.isArray(existing.rule_json)
-            ? (existing.rule_json as Record<string, unknown>)
-            : {};
+          !Array.isArray(existing.rule_json);
+        if (!isObjectBlob) {
+          // Log so corrupted rows surface in dashboards rather than
+          // silently being downgraded to `{ enabled }` by the toggle.
+          // Operator action: full-rule PATCH or DELETE to restore a
+          // valid shape; until then the executor rejects this row on
+          // every fire via parseDedupRule anyway.
+          logger.warn('Dedup rule has malformed rule_json; toggle preserved enabled only', {
+            projectId,
+            ruleId,
+            existingJsonType: existing.rule_json === null ? 'null' : typeof existing.rule_json,
+          });
+        }
+        const existingJson = isObjectBlob ? (existing.rule_json as Record<string, unknown>) : {};
         const syncedRuleJson = { ...existingJson, enabled: body.enabled };
         const updated = await db.dedupRules.update(ruleId, {
           enabled: body.enabled,
@@ -298,6 +309,18 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
       } catch (err) {
         rejectIfInvalid(err);
       }
+      // `dedupRuleSchema.enabled` has `.default(true)`, so a PATCH body
+      // that omits `enabled` would Zod-fill `true` and silently re-enable
+      // a previously-disabled rule. Preserve the existing column value
+      // when the client didn't explicitly set it. Check the raw body
+      // (`body.enabled` is the wire-format flag; Zod's default makes
+      // the parsed `rule.enabled` indistinguishable from a real
+      // request value).
+      const clientSetEnabled = 'enabled' in body;
+      const nextEnabled = clientSetEnabled ? rule.enabled : existing.enabled;
+      // Keep the rule_json blob and the column in sync (same invariant
+      // the toggle path maintains).
+      const nextRuleJson = { ...rule, enabled: nextEnabled };
       if (rule.name !== existing.name) {
         const nameClash = await db.dedupRules.findByProjectAndName(projectId, rule.name);
         if (nameClash && nameClash.id !== ruleId) {
@@ -312,8 +335,8 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
       try {
         updated = await db.dedupRules.update(ruleId, {
           name: rule.name,
-          rule_json: rule,
-          enabled: rule.enabled,
+          rule_json: nextRuleJson,
+          enabled: nextEnabled,
         });
       } catch (err) {
         // TOCTOU: a concurrent rename to the same target name slips
