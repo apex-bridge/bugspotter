@@ -227,15 +227,22 @@ describe('Dedup Rules API', () => {
   });
 
   describe('PATCH /projects/:projectId/dedup-rules/:ruleId', () => {
-    it('toggles enabled without re-validating the full rule body', async () => {
-      repo.findById.mockResolvedValueOnce(makeRow());
+    it('toggles enabled and keeps rule_json.enabled in sync', async () => {
+      repo.findById.mockResolvedValueOnce(
+        makeRow({ rule_json: { name: 'r', enabled: true, foo: 'bar' } })
+      );
       const res = await server.inject({
         method: 'PATCH',
         url: `/api/v1/projects/${PROJECT_ID}/dedup-rules/${RULE_ID}`,
         payload: { enabled: false },
       });
       expect(res.statusCode).toBe(200);
-      expect(repo.update).toHaveBeenCalledWith(RULE_ID, { enabled: false });
+      // Both the column and the blob field must flip together so any
+      // future code reading rule_json.enabled (the admin UI, a
+      // re-validation pass) doesn't see drift.
+      const arg = repo.update.mock.calls[0][1];
+      expect(arg.enabled).toBe(false);
+      expect(arg.rule_json).toMatchObject({ enabled: false, foo: 'bar' });
     });
 
     it('rejects non-boolean enabled on the toggle-only path', async () => {

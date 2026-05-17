@@ -241,7 +241,21 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
         if (typeof body.enabled !== 'boolean') {
           throw new AppError('enabled must be a boolean', 400, 'BadRequest');
         }
-        const updated = await db.dedupRules.update(ruleId, { enabled: body.enabled });
+        // Keep the `enabled` column and `rule_json.enabled` field in
+        // sync. The executor filters by the column, but the rule
+        // blob also carries an `enabled` field that future code (the
+        // admin UI, an audit log, a re-validation pass) might read.
+        // A drift between the two is technically harmless today but
+        // breaks the implicit contract that `rule_json` is the
+        // canonical rule shape.
+        const syncedRuleJson = {
+          ...(existing.rule_json as Record<string, unknown>),
+          enabled: body.enabled,
+        };
+        const updated = await db.dedupRules.update(ruleId, {
+          enabled: body.enabled,
+          rule_json: syncedRuleJson,
+        });
         logger.info('Dedup rule toggled', {
           projectId,
           ruleId,

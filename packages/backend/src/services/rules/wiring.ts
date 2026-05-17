@@ -12,7 +12,6 @@
  */
 
 import type { DatabaseClient } from '../../db/client.js';
-import { NotificationThrottleRepository } from '../../db/repositories/notification-throttle.repository.js';
 import type { TicketIntegrationCapabilities } from '../../integrations/capabilities.js';
 import type { PluginRegistry } from '../../integrations/plugin-registry.js';
 import { getLogger } from '../../logger.js';
@@ -102,9 +101,8 @@ export function buildDedupRuleExecutor(
   db: DatabaseClient,
   pluginRegistry: PluginRegistry | null
 ): DedupRuleExecutor {
-  const pool = db.getPool();
   const repo = db.dedupRules;
-  const throttle = new NotificationThrottleRepository(pool);
+  const throttle = db.notificationThrottle;
   const resolver = new TicketsTableResolver(db);
   const lookup = buildCapabilityServiceLookup(db, pluginRegistry);
   // EmailChannelHandler is stateless (no constructor args) and the
