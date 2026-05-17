@@ -73,15 +73,18 @@ const PRESETS: Array<DedupRule> = [
 ];
 
 /**
- * Insert the default presets for a project. Pass the tx-bound
- * `tx.dedupRules` when called from inside `db.transaction` (signup
- * wizard) so the seeds roll back with the project create on failure;
- * pass `db.dedupRules` for the fire-and-forget admin path.
+ * Insert the default presets for a project. **Call AFTER any
+ * surrounding transaction has committed**, with the post-commit
+ * `db.dedupRules` repo — the per-preset try/catch below can swallow
+ * a JS error but cannot un-abort a Postgres transaction, see the
+ * file-header warning. The admin `POST /projects` path calls this
+ * outside any tx; the signup wizard calls it after `db.transaction`
+ * returns.
  *
  * Returns the count of rules actually inserted. A uniqueness
  * violation on any single preset (operator manually pre-created one
- * with the same name) is swallowed — partial seeding is still better
- * than aborting the whole hook.
+ * with the same name) is swallowed — partial seeding is still
+ * better than aborting the whole hook.
  */
 export async function seedDefaultDedupRules(
   repo: DedupRuleRepository,

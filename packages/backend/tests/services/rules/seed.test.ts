@@ -8,8 +8,11 @@
  * past the caller (project creation continues even on seed failure).
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import type { DedupRuleRepository } from '../../../src/db/dedup-rule.repository.js';
+import { parseDedupRule } from '../../../src/integrations/dedup-rule.schema.js';
 import { seedDefaultDedupRules } from '../../../src/services/rules/seed.js';
 
 function mockRepo(overrides: Partial<DedupRuleRepository> = {}): DedupRuleRepository {
@@ -111,5 +114,70 @@ describe('seedDefaultDedupRules', () => {
     const repo = mockRepo({ create });
 
     await expect(seedDefaultDedupRules(repo, PROJECT_ID)).resolves.toBe(0);
+  });
+});
+
+/**
+ * The B1 / B2 preset shapes live in three places: the `PRESETS` array
+ * in seed.ts, the INSERT statements in migration 025, and the Zod
+ * `parseDedupRule` schema they must conform to. A drift between any
+ * two of those would silently break the engine on the affected
+ * deployment (the executor parses on read and rejects bad blobs).
+ *
+ * These tests are the canary: they fail the suite when someone
+ * touches one side without the other.
+ */
+describe('preset / migration 025 / Zod schema consistency', () => {
+  const MIGRATION_PATH = join(
+    __dirname,
+    '../../../src/db/migrations/025_dedup_rules_cascade_and_seed.sql'
+  );
+
+  /**
+   * Pull every `'{...}'::jsonb` literal out of the migration. The
+   * naive single-quote split is good enough because the migration
+   * has no embedded apostrophes inside the JSON blobs and no other
+   * `::jsonb` casts in the file.
+   */
+  function extractMigrationBlobs(): unknown[] {
+    const sql = readFileSync(MIGRATION_PATH, 'utf8');
+    const blobs: unknown[] = [];
+    const re = /'(\{[\s\S]*?\})'::jsonb/g;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(sql)) !== null) {
+      blobs.push(JSON.parse(match[1]));
+    }
+    return blobs;
+  }
+
+  it('migration 025 contains exactly two seed inserts (B1 + B2)', () => {
+    const blobs = extractMigrationBlobs();
+    expect(blobs).toHaveLength(2);
+  });
+
+  it('every migration 025 JSON blob round-trips through parseDedupRule', () => {
+    // If this fails, the migration would store rows the executor
+    // silently rejects on read — a deployment-time data corruption
+    // hazard that no other test catches.
+    for (const blob of extractMigrationBlobs()) {
+      expect(() => parseDedupRule(blob)).not.toThrow();
+    }
+  });
+
+  it('migration 025 B1/B2 shapes match the seed.ts PRESETS array', async () => {
+    // Re-derive PRESETS by inspecting what `seedDefaultDedupRules`
+    // tries to insert for a fresh project — keeps this test
+    // resilient to PRESETS being un-exported.
+    const create = vi.fn().mockResolvedValue({ id: 'r' });
+    await seedDefaultDedupRules(mockRepo({ create }), PROJECT_ID);
+    const fromSeed = create.mock.calls.map((c) => c[0].rule_json);
+
+    const fromMigration = extractMigrationBlobs();
+    expect(fromSeed).toHaveLength(fromMigration.length);
+    // Match by name rather than positional, so re-ordering one side
+    // doesn't cause a false drift signal.
+    const byName = (list: unknown[]) =>
+      Object.fromEntries(list.map((r) => [(r as { name: string }).name, r]));
+    expect(byName(fromSeed)).toEqual(byName(fromMigration));
   });
 });

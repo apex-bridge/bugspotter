@@ -260,6 +260,31 @@ describe('Dedup Rules API', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it.each([
+      ['null', null],
+      ['primitive string', 'broken'],
+      ['array', ['a', 'b']],
+    ])(
+      'toggle path falls back to { enabled } on malformed rule_json (%s)',
+      async (_label, malformed) => {
+        // Defensive fallback path: the row's rule_json is unparseable,
+        // so the toggle nudges it toward a canonical shape rather than
+        // TypeError-ing on spread. The executor would have rejected
+        // the malformed blob anyway; migration 025's backfill is the
+        // recovery mechanism for the rule definition itself.
+        repo.findById.mockResolvedValueOnce(makeRow({ rule_json: malformed }));
+        const res = await server.inject({
+          method: 'PATCH',
+          url: `/api/v1/projects/${PROJECT_ID}/dedup-rules/${RULE_ID}`,
+          payload: { enabled: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const arg = repo.update.mock.calls[0][1];
+        expect(arg.enabled).toBe(false);
+        expect(arg.rule_json).toEqual({ enabled: false });
+      }
+    );
+
     it('replaces the full rule when the body is the complete DedupRule shape', async () => {
       repo.findById.mockResolvedValueOnce(makeRow({ name: 'Old name' }));
       const res = await server.inject({
