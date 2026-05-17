@@ -61,6 +61,24 @@ function rejectIfInvalid(err: unknown): never {
 }
 
 /**
+ * pg unique_violation code. The `findByProjectAndName` pre-check
+ * surfaces a friendlier 409 on the happy path, but the read-then-write
+ * sequence is non-atomic — two concurrent POSTs (or a PATCH rename
+ * racing a POST) can both pass the check, with the DB constraint
+ * catching only one. Map the resulting 23505 to the same 409 the
+ * pre-check produces.
+ */
+const PG_UNIQUE_VIOLATION = '23505';
+
+function isUniqueNameViolation(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: string }).code === PG_UNIQUE_VIOLATION
+  );
+}
+
+/**
  * Look up a rule and verify it belongs to the project in the URL path.
  * A globally-unique UUID makes cross-project hits unlikely in practice,
  * but the check closes the rest of the surface (stale link, swapped
@@ -81,11 +99,19 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
    * UI needs both so it can render the disabled rows with a toggle;
    * the executor uses `findByProject(_, false)` for its hot path, which
    * is a different code path.
+   *
+   * Admin-gated because rule bodies contain `notify.email.to` literals
+   * and condition fields that should not be visible to project viewers
+   * until the C2 carry-overs (auth-bound reporter, allowlist) land.
    */
   fastify.get<{ Params: { projectId: string } }>(
     '/api/v1/projects/:projectId/dedup-rules',
     {
-      preHandler: [requireAuth, requireProjectAccess(db, { paramName: 'projectId' })],
+      preHandler: [
+        requireAuth,
+        requireProjectAccess(db, { paramName: 'projectId' }),
+        requireProjectRole('admin'),
+      ],
     },
     async (request, reply) => {
       const { projectId } = request.params;
@@ -101,12 +127,16 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
 
   /**
    * GET /api/v1/projects/:projectId/dedup-rules/:ruleId
-   * Single rule lookup. Same viewer-level gate as list.
+   * Single rule lookup. Admin-gated for the same reason as list.
    */
   fastify.get<{ Params: { projectId: string; ruleId: string } }>(
     '/api/v1/projects/:projectId/dedup-rules/:ruleId',
     {
-      preHandler: [requireAuth, requireProjectAccess(db, { paramName: 'projectId' })],
+      preHandler: [
+        requireAuth,
+        requireProjectAccess(db, { paramName: 'projectId' }),
+        requireProjectRole('admin'),
+      ],
     },
     async (request, reply) => {
       const { projectId, ruleId } = request.params;
@@ -138,7 +168,9 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
         rejectIfInvalid(err);
       }
       // Friendlier 409 than the raw uniqueness-constraint error the
-      // DB would emit.
+      // DB would emit. The pre-check covers the common case; the
+      // try/catch below catches the TOCTOU race where two concurrent
+      // POSTs both pass this check.
       const existing = await db.dedupRules.findByProjectAndName(projectId, rule.name);
       if (existing) {
         throw new AppError(
@@ -147,12 +179,24 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
           'Conflict'
         );
       }
-      const created = await db.dedupRules.create({
-        project_id: projectId,
-        name: rule.name,
-        rule_json: rule,
-        enabled: rule.enabled,
-      });
+      let created;
+      try {
+        created = await db.dedupRules.create({
+          project_id: projectId,
+          name: rule.name,
+          rule_json: rule,
+          enabled: rule.enabled,
+        });
+      } catch (err) {
+        if (isUniqueNameViolation(err)) {
+          throw new AppError(
+            `Dedup rule '${rule.name}' already exists in this project`,
+            409,
+            'Conflict'
+          );
+        }
+        throw err;
+      }
       logger.info('Dedup rule created', {
         projectId,
         ruleId: created.id,
@@ -227,11 +271,25 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
           );
         }
       }
-      const updated = await db.dedupRules.update(ruleId, {
-        name: rule.name,
-        rule_json: rule,
-        enabled: rule.enabled,
-      });
+      let updated;
+      try {
+        updated = await db.dedupRules.update(ruleId, {
+          name: rule.name,
+          rule_json: rule,
+          enabled: rule.enabled,
+        });
+      } catch (err) {
+        // TOCTOU: a concurrent rename to the same target name slips
+        // past the pre-check above; the unique constraint catches it.
+        if (isUniqueNameViolation(err)) {
+          throw new AppError(
+            `Dedup rule '${rule.name}' already exists in this project`,
+            409,
+            'Conflict'
+          );
+        }
+        throw err;
+      }
       logger.info('Dedup rule updated', {
         projectId,
         ruleId,
@@ -267,7 +325,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
         name: rule.name,
         userId: getAuditUserId(request),
       });
-      return reply.code(200).send({ success: true, message: `Dedup rule '${rule.name}' deleted` });
+      return sendSuccess(reply, { message: `Dedup rule '${rule.name}' deleted` });
     }
   );
 

@@ -208,6 +208,22 @@ describe('Dedup Rules API', () => {
       expect(res.statusCode).toBe(409);
       expect(repo.create).not.toHaveBeenCalled();
     });
+
+    it('returns 409 when a concurrent insert wins the TOCTOU race (pg 23505)', async () => {
+      // Pre-check passes (no existing row), then a parallel POST commits
+      // first; our INSERT trips the unique constraint. The handler must
+      // map 23505 to 409, not let it surface as a 500.
+      const uniqueErr = Object.assign(new Error('duplicate key value'), { code: '23505' });
+      repo.create.mockRejectedValueOnce(uniqueErr);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/api/v1/projects/${PROJECT_ID}/dedup-rules`,
+        payload: VALID_RULE_BODY,
+      });
+
+      expect(res.statusCode).toBe(409);
+    });
   });
 
   describe('PATCH /projects/:projectId/dedup-rules/:ruleId', () => {
@@ -259,6 +275,22 @@ describe('Dedup Rules API', () => {
 
       expect(res.statusCode).toBe(409);
       expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when the rename race trips pg 23505 (TOCTOU)', async () => {
+      repo.findById.mockResolvedValueOnce(makeRow({ name: 'Old name' }));
+      // Pre-check finds no collision, but a concurrent rename slips
+      // through; the UPDATE trips the unique constraint.
+      const uniqueErr = Object.assign(new Error('duplicate key value'), { code: '23505' });
+      repo.update.mockRejectedValueOnce(uniqueErr);
+
+      const res = await server.inject({
+        method: 'PATCH',
+        url: `/api/v1/projects/${PROJECT_ID}/dedup-rules/${RULE_ID}`,
+        payload: { ...VALID_RULE_BODY, name: 'New name' },
+      });
+
+      expect(res.statusCode).toBe(409);
     });
 
     it('returns 404 when the rule is scoped to another project', async () => {
