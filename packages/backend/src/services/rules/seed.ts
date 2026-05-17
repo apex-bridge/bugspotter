@@ -49,12 +49,22 @@ const logger = getLogger();
  */
 const PRESETS: Array<DedupRule> = [
   {
+    // Seeded DISABLED. `to: 'reporter'` resolves to the SDK-supplied
+    // `bugReport.metadata.metadata.user.email`, which has no
+    // verification today — a malicious SDK caller can set it to any
+    // address and use BugSpotter as an email relay against a victim.
+    // The per-(rule, canonical) 24h rate limit caps the spam at one
+    // email per canonical, but an attacker fabricating duplicates of
+    // many canonicals scales linearly. The C2 mitigations (auth-bound
+    // reporter resolver, per-recipient rate limit, literal-email
+    // allowlist) close this; until they ship, operators opt in
+    // explicitly by toggling the seeded rule on per project.
     name: 'Notify reporter on dedup',
     when: { type: 'duplicate_detected' },
     conditions: [],
     then: [{ type: 'notify.email', to: 'reporter', template: 'dedup_ack' }],
     rate_limit: { count: 1, window: '24h' },
-    enabled: true,
+    enabled: false,
   },
   {
     name: 'Counter on canonical',

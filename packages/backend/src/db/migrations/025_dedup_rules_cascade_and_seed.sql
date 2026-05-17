@@ -53,6 +53,13 @@ COMMENT ON FUNCTION cascade_delete_dedup_rule_throttle() IS
 -- the executor rejects on read. The schema lives in
 -- src/integrations/dedup-rule.schema.ts.
 
+-- B1 is seeded DISABLED. `to: "reporter"` resolves to the SDK-supplied
+-- `bug_reports.metadata.metadata.user.email`, which has no verification
+-- today — until the C2 mitigations (auth-bound reporter resolver,
+-- per-recipient rate limit, literal-email allowlist) ship, operators
+-- opt B1 on per project explicitly. See `src/services/rules/seed.ts`
+-- for the matching JS preset; the drift test in
+-- `tests/services/rules/seed.test.ts` enforces parity.
 INSERT INTO dedup_rules (project_id, name, rule_json, enabled)
 SELECT
   p.id,
@@ -63,9 +70,9 @@ SELECT
     "conditions": [],
     "then": [{"type": "notify.email", "to": "reporter", "template": "dedup_ack"}],
     "rate_limit": {"count": 1, "window": "24h"},
-    "enabled": true
+    "enabled": false
   }'::jsonb,
-  true
+  false
 FROM projects p
 ON CONFLICT (project_id, name) DO NOTHING;
 

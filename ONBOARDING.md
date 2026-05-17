@@ -61,8 +61,8 @@ docker-compose*.yml + dev.sh   Local dev orchestration.
 
 A few active workstreams worth knowing about so you don't accidentally collide:
 
-- **Phase 0.5 dedup-rule engine** — a tiny per-project rule engine that fires on dedup events to send acknowledgement emails, comment on canonical tickets, etc. Shipped in PRs #142 / #143 / #146 / #148; admin CRUD (PR-D1) currently in review on #150. The full architecture is documented in [packages/backend/docs/architecture.md](packages/backend/docs/architecture.md) under "Dedup-rule engine."
-- **Admin UI for the rule engine (PR-D2)** — frontend on top of the #150 CRUD API. Not started.
+- **Phase 0.5 dedup-rule engine** — a tiny per-project rule engine that fires on dedup events to send acknowledgement emails, comment on canonical tickets, etc. Shipped in PRs #142 / #143 / #146 / #148; admin CRUD (PR-D1) currently in review. The full architecture is documented in [packages/backend/docs/architecture.md](packages/backend/docs/architecture.md) under "Dedup-rule engine."
+- **Admin UI for the rule engine (PR-D2)** — frontend on top of the PR-D1 CRUD API. Not started.
 - **C2 security carry-overs** — auth-bound `reporter` recipient, per-recipient rate limit, literal-email allowlist. Block tenant-user rule authoring; rule creation is admin-only until they land.
 
 ## Common commands
@@ -107,4 +107,4 @@ docker compose --profile monitoring up -d dozzle  # then http://localhost:9999
 
 - PR review tools (CodeRabbit, Gemini, Claude) auto-review every PR. They generate a lot of signal; read their threads but use judgment — accept real findings, push back politely on noise.
 - Production logs: Dozzle at `http://localhost:9999` (after enabling the `monitoring` Docker compose profile).
-- Memory: there is no team chat channel pointer documented here. Ask your lead.
+- Note: there is no team chat channel pointer documented here. Ask your lead.
