@@ -14,13 +14,15 @@
  * are tracked separately; when they land, the role gate can relax.
  *
  * **API-key surface**: `requireProjectRole` bypasses for API-key auth
- * (machines aren't project members), so the GET routes ALSO gate on
- * `requireApiKeyPermission('dedup_rules:read')`. Today no scope grants
- * this permission by default — only full-scope (`['*']`) keys pass.
- * SDK ingest keys (`reports:write` / `sessions:write` only) cannot
- * read rules. Writes don't enforce the same gate because, per the
- * repo's convention documented in `packages/backend/CLAUDE.md`,
- * write permissions are advisory until the broader rollout.
+ * (machines aren't project members), so every route ALSO gates on
+ * `requireApiKeyPermission('dedup_rules:read'|'dedup_rules:write')`.
+ * Today no scope grants these permissions by default — only full-
+ * scope (`['*']`) keys pass. SDK ingest keys (`reports:write` /
+ * `sessions:write` only) cannot touch rule storage. The repo's
+ * convention (per `packages/backend/CLAUDE.md`) treats write
+ * permissions as advisory for reports/sessions routes, but dedup
+ * rules are admin-CRUD and should never be hit by an API key — the
+ * stricter gate matches the intent.
  *
  * **Validation**: every write goes through `parseDedupRule` (Zod). The
  * repository stores the raw blob; the schema is what the executor
@@ -163,6 +165,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        requireApiKeyPermission('dedup_rules:write'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],
@@ -236,6 +239,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        requireApiKeyPermission('dedup_rules:write'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],
@@ -259,10 +263,21 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
         // A drift between the two is technically harmless today but
         // breaks the implicit contract that `rule_json` is the
         // canonical rule shape.
-        const syncedRuleJson = {
-          ...(existing.rule_json as Record<string, unknown>),
-          enabled: body.enabled,
-        };
+        //
+        // `rule_json` is typed `unknown` at the repo boundary. A
+        // non-object value (null, primitive, array) would TypeError
+        // on spread — fall back to `{ enabled }` only so the toggle
+        // still succeeds and the row gets nudged toward a canonical
+        // shape. The executor would have rejected the malformed blob
+        // anyway via `parseDedupRule`; the toggle path doesn't need
+        // to re-validate the entire body.
+        const existingJson =
+          typeof existing.rule_json === 'object' &&
+          existing.rule_json !== null &&
+          !Array.isArray(existing.rule_json)
+            ? (existing.rule_json as Record<string, unknown>)
+            : {};
+        const syncedRuleJson = { ...existingJson, enabled: body.enabled };
         const updated = await db.dedupRules.update(ruleId, {
           enabled: body.enabled,
           rule_json: syncedRuleJson,
@@ -333,6 +348,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        requireApiKeyPermission('dedup_rules:write'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],

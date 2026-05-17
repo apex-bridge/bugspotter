@@ -101,7 +101,7 @@ docker compose --profile monitoring up -d dozzle  # then http://localhost:9999
 - **What does this migration do?** — Read its header comment. They're written for humans.
 - **What's the auth model?** — [packages/backend/docs/auth.md](packages/backend/docs/auth.md). The trio + project-access + RBAC layers are non-trivial.
 - **Why does the dedup grace exist?** — See migration 021's header + [packages/backend/docs/db-schema.md](packages/backend/docs/db-schema.md) "Transactional outbox."
-- **Tests pass locally but CI fails?** — The unit suite has occasional flakes in `tests/integrations/rpc-bridge-security.test.ts` (HTTP method/header timeouts). Re-run; if it persists, it's a real issue.
+- **Tests pass locally but CI fails?** — The unit suite has occasional flakes in `packages/backend/tests/integrations/rpc-bridge-security.test.ts` (HTTP method/header timeouts). Re-run; if it persists, it's a real issue.
 
 ## Getting help
 
