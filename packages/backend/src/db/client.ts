@@ -23,6 +23,7 @@ import type { EmailVerificationTokenRepository } from './repositories/email-veri
 import type { AuditLogRepository } from './repositories/audit-log.repository.js';
 import type { ProjectIntegrationRepository } from './project-integration.repository.js';
 import type { IntegrationRuleRepository } from './integration-rule.repository.js';
+import type { DedupRuleRepository } from './dedup-rule.repository.js';
 import type { IntegrationRepository } from './repositories/integration.repository.js';
 import type { IntegrationSyncLogRepository } from './repositories/integration-sync-log.repository.js';
 import type { FieldMappingRepository } from './repositories/field-mapping.repository.js';
@@ -173,6 +174,7 @@ export class DatabaseClient implements RepositoryRegistry {
   public readonly oauthTokens!: OAuthTokenRepository;
   public readonly apiKeys!: ApiKeyRepository;
   public readonly integrationRules!: IntegrationRuleRepository;
+  public readonly dedupRules!: DedupRuleRepository;
   public readonly ticketOutbox!: TicketCreationOutboxRepository;
   public readonly dataResidency!: DataResidencyRepository;
   // SaaS multi-tenant repositories
@@ -228,6 +230,7 @@ export class DatabaseClient implements RepositoryRegistry {
     this.oauthTokens = this.wrapWithRetry(repositories.oauthTokens);
     this.apiKeys = this.wrapWithRetry(repositories.apiKeys);
     this.integrationRules = this.wrapWithRetry(repositories.integrationRules);
+    this.dedupRules = this.wrapWithRetry(repositories.dedupRules);
     this.ticketOutbox = this.wrapWithRetry(repositories.ticketOutbox);
     // SaaS multi-tenant repositories
     this.organizations = this.wrapWithRetry(repositories.organizations);
