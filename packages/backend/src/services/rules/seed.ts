@@ -19,6 +19,7 @@
  */
 
 import type { DedupRuleRepository } from '../../db/dedup-rule.repository.js';
+import { PG_UNIQUE_VIOLATION } from '../../db/pg-error-codes.js';
 import type { DedupRule } from '../../integrations/dedup-rule.schema.js';
 import { getLogger } from '../../logger.js';
 
@@ -87,12 +88,12 @@ export async function seedDefaultDedupRules(
       });
       inserted++;
     } catch (error) {
-      // 23505 is unique_violation — expected if migration 025's
-      // backfill already ran or the operator manually pre-seeded.
-      // Anything else is a real failure; log but don't throw, the
-      // project itself is fine without seeds.
+      // unique_violation is expected if migration 025's backfill
+      // already ran or the operator manually pre-seeded. Anything
+      // else is a real failure; log but don't throw — the project
+      // itself is fine without seeds.
       const code = (error as { code?: string } | null)?.code;
-      if (code !== '23505') {
+      if (code !== PG_UNIQUE_VIOLATION) {
         logger.warn('Failed to seed dedup-rule preset', {
           projectId,
           name: preset.name,

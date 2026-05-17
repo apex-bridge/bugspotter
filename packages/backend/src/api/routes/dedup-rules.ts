@@ -22,6 +22,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import type { DatabaseClient } from '../../db/client.js';
+import { PG_UNIQUE_VIOLATION } from '../../db/pg-error-codes.js';
 import {
   parseDedupRule,
   dedupRuleSchema,
@@ -61,15 +62,11 @@ function rejectIfInvalid(err: unknown): never {
 }
 
 /**
- * pg unique_violation code. The `findByProjectAndName` pre-check
- * surfaces a friendlier 409 on the happy path, but the read-then-write
- * sequence is non-atomic — two concurrent POSTs (or a PATCH rename
- * racing a POST) can both pass the check, with the DB constraint
- * catching only one. Map the resulting 23505 to the same 409 the
- * pre-check produces.
+ * Catches the TOCTOU race where the `findByProjectAndName` pre-check
+ * passes for two concurrent writes and the DB unique constraint trips
+ * for the loser. Map the pg `23505` (unique_violation) to the same
+ * 409 the pre-check produces, so the API contract stays consistent.
  */
-const PG_UNIQUE_VIOLATION = '23505';
-
 function isUniqueNameViolation(err: unknown): boolean {
   return (
     typeof err === 'object' &&
