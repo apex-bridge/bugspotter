@@ -13,6 +13,15 @@
  * data via `notify.email.to = 'attacker@evil.com'`. Those mitigations
  * are tracked separately; when they land, the role gate can relax.
  *
+ * **API-key surface**: `requireProjectRole` bypasses for API-key auth
+ * (machines aren't project members), so the GET routes ALSO gate on
+ * `requireApiKeyPermission('dedup_rules:read')`. Today no scope grants
+ * this permission by default — only full-scope (`['*']`) keys pass.
+ * SDK ingest keys (`reports:write` / `sessions:write` only) cannot
+ * read rules. Writes don't enforce the same gate because, per the
+ * repo's convention documented in `packages/backend/CLAUDE.md`,
+ * write permissions are advisory until the broader rollout.
+ *
  * **Validation**: every write goes through `parseDedupRule` (Zod). The
  * repository stores the raw blob; the schema is what the executor
  * parses on read, so writing a malformed rule would silently no-op the
@@ -29,7 +38,7 @@ import {
   type DedupRule,
 } from '../../integrations/dedup-rule.schema.js';
 import { getLogger } from '../../logger.js';
-import { requireAuth, requireProjectRole } from '../middleware/auth.js';
+import { requireApiKeyPermission, requireAuth, requireProjectRole } from '../middleware/auth.js';
 import { AppError } from '../middleware/error.js';
 import { requireProjectAccess } from '../middleware/project-access.js';
 import { getAuditUserId } from '../utils/audit-attribution.js';
@@ -106,6 +115,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        requireApiKeyPermission('dedup_rules:read'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],
@@ -131,6 +141,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        requireApiKeyPermission('dedup_rules:read'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
       ],

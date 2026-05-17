@@ -278,12 +278,6 @@ export class SignupService {
           settings: {},
         });
 
-        // Seed the B1 / B2 dedup-rule presets inside the same tx so
-        // they roll back with the project on failure. The hook is
-        // resilient to individual preset failures internally — see
-        // `seedDefaultDedupRules` — so it won't abort the signup.
-        await seedDefaultDedupRules(tx.dedupRules, project.id);
-
         const plaintextKey = generatePlaintextKey();
         const keyHash = hashKey(plaintextKey);
         const { prefix, suffix } = extractKeyMetadata(plaintextKey);
@@ -395,6 +389,20 @@ export class SignupService {
       subdomain,
       projectId: result.project.id,
     });
+
+    // Seed B1 / B2 dedup-rule presets POST-commit. The helper catches
+    // per-preset failures, which only works on a non-aborted client;
+    // inside the signup tx, a single failed INSERT would abort it and
+    // every subsequent statement would error with "current transaction
+    // is aborted" — the swallow logic would be a lie. Running here on
+    // `db.dedupRules` gives the helper a fresh, non-tx client.
+    //
+    // A crash between the COMMIT above and this call leaves the
+    // project unseeded; migration 025's idempotent backfill catches
+    // up on the next deploy, and an operator can also POST /dedup-rules
+    // to add presets manually. Acceptable failure mode — the user's
+    // signup itself never fails because of seed trouble.
+    await seedDefaultDedupRules(this.db.dedupRules, result.project.id);
 
     // Fire-and-forget verification email. Non-blocking by design:
     // signup is "Sentry-style" — a transient SMTP outage must never

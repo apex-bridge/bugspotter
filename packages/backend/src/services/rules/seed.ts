@@ -2,9 +2,9 @@
  * Seed default dedup-rule presets on a new project.
  *
  * Called from the two project-creation paths (admin `POST /projects`
- * and the SaaS signup wizard's tx). Migration 025 backfills the same
- * presets for existing projects, so the two layers together ensure
- * every project the executor reads has B1 / B2 available.
+ * and the SaaS signup wizard, post-commit). Migration 025 backfills
+ * the same presets for existing projects, so the two layers together
+ * ensure every project the executor reads has B1 / B2 available.
  *
  * Idempotent via the `unique_dedup_rule_name_per_project` constraint
  * — running this twice (e.g. operator manually creates B1 then the
@@ -16,6 +16,16 @@
  * for it; the operator can add rules later via the admin API), so
  * surfacing a seed failure as a 500 on project-create would be worse
  * than logging and continuing.
+ *
+ * **NOT safe inside `db.transaction(...)`.** The per-preset try/catch
+ * looks like it tolerates failures, but Postgres aborts the entire
+ * transaction on any failed statement and every subsequent query in
+ * the same tx will fail with "current transaction is aborted" —
+ * `db.transaction` does not use savepoints. Callers running inside a
+ * tx (signup wizard) MUST invoke this AFTER the tx commits, with the
+ * post-commit `db.dedupRules` repo. Crash-between-commit-and-seed is
+ * the accepted failure mode; migration 025's idempotent backfill is
+ * the safety net.
  */
 
 import type { DedupRuleRepository } from '../../db/dedup-rule.repository.js';

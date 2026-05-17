@@ -61,8 +61,8 @@ docker-compose*.yml + dev.sh   Local dev orchestration.
 
 A few active workstreams worth knowing about so you don't accidentally collide:
 
-- **Phase 0.5 dedup-rule engine** — a tiny per-project rule engine that fires on dedup events to send acknowledgement emails, comment on canonical tickets, etc. Shipped in PRs #142 / #143 / #146 / #148 / #149 (admin CRUD currently in review). The full architecture is documented in [packages/backend/docs/architecture.md](packages/backend/docs/architecture.md) under "Dedup-rule engine."
-- **Admin UI for the rule engine (PR-D2)** — frontend on top of the #149 CRUD API. Not started.
+- **Phase 0.5 dedup-rule engine** — a tiny per-project rule engine that fires on dedup events to send acknowledgement emails, comment on canonical tickets, etc. Shipped in PRs #142 / #143 / #146 / #148; admin CRUD (PR-D1) currently in review on #150. The full architecture is documented in [packages/backend/docs/architecture.md](packages/backend/docs/architecture.md) under "Dedup-rule engine."
+- **Admin UI for the rule engine (PR-D2)** — frontend on top of the #150 CRUD API. Not started.
 - **C2 security carry-overs** — auth-bound `reporter` recipient, per-recipient rate limit, literal-email allowlist. Block tenant-user rule authoring; rule creation is admin-only until they land.
 
 ## Common commands

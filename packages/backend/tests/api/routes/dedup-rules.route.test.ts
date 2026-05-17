@@ -12,7 +12,7 @@
  *    and the repo's `delete` was called.
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseClient } from '../../../src/db/client.js';
 import type { DedupRuleRow } from '../../../src/db/dedup-rule.repository.js';
@@ -20,6 +20,7 @@ import type { DedupRuleRow } from '../../../src/db/dedup-rule.repository.js';
 vi.mock('../../../src/api/middleware/auth.js', () => ({
   requireAuth: vi.fn(async () => undefined),
   requireProjectRole: () => async () => undefined,
+  requireApiKeyPermission: () => async () => undefined,
 }));
 
 vi.mock('../../../src/api/middleware/project-access.js', () => ({
@@ -105,6 +106,10 @@ describe('Dedup Rules API', () => {
     return buildServer(setup.db).then((s) => {
       server = s;
     });
+  });
+
+  afterEach(async () => {
+    await server?.close();
   });
 
   describe('GET /projects/:projectId/dedup-rules', () => {
