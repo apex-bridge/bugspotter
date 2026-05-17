@@ -36,7 +36,7 @@ const logger = getLogger();
  * that lives in a follow-up PR. Seeding it disabled-but-unfireable
  * would be worse than not seeding it at all.
  */
-const PRESETS: Array<Omit<DedupRule, 'enabled'> & { enabled: boolean }> = [
+const PRESETS: Array<DedupRule> = [
   {
     name: 'Notify reporter on dedup',
     when: { type: 'duplicate_detected' },

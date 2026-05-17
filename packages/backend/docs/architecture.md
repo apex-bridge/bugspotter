@@ -4,7 +4,7 @@ System overview for `packages/backend`. Pairs with [db-schema.md](db-schema.md) 
 
 ## Topology
 
-```
+```text
                 ┌──────────────┐
                 │   Admin UI   │  React/Vite, talks HTTP/JWT
                 └──────┬───────┘
@@ -103,7 +103,7 @@ Only active when `DEPLOYMENT_MODE=saas`. Holds multi-tenant code that selfhosted
 
 ### 1. SDK bug submission
 
-```
+```text
 SDK ──POST /api/v1/reports── api/routes/reports.ts
                                 │
                                 ├─► db.bugReports.create
@@ -116,7 +116,7 @@ The route returns 201 once the row is committed; the three trigger calls dispatc
 
 ### 2. Outbox worker → external ticket
 
-```
+```text
 ticket_creation_outbox.worker.ts
    ├─► poll outbox rows in 'pending' state where next_retry_at <= now()
    ├─► resolve plugin via PluginRegistry
@@ -128,7 +128,7 @@ ticket_creation_outbox.worker.ts
 
 ### 3. Intelligence worker → dedup decision → rule engine
 
-```
+```text
 intelligence-worker.ts
    ├─► IntelligenceClient.analyze(bugReport)         (HTTP → FastAPI)
    ├─► IntelligenceDedupService.applyDedupAction
@@ -140,7 +140,7 @@ intelligence-worker.ts
 
 ### 4. Dedup-rule engine (PR-C / PR-C2 / PR-D1)
 
-```
+```text
 Trigger source                          (outbox skip path / intelligence dedup path)
        │
        ▼
@@ -165,7 +165,7 @@ Wiring lives in [services/rules/wiring.ts](../src/services/rules/wiring.ts) (`bu
 
 ### 5. Notification pipeline
 
-```
+```text
 producer
    │
    ▼

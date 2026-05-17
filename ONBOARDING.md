@@ -42,7 +42,7 @@ The two separate repos worth knowing about:
 
 ## Repo layout
 
-```
+```text
 packages/
   backend/          Fastify + pg + BullMQ. Most complex package.
   sdk/              The browser SDK customers embed.
