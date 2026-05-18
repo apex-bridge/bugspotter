@@ -12,6 +12,7 @@ import { requireUser } from '../middleware/auth.js';
 import { assertAuthUser, isPlatformAdmin } from '../middleware/auth/assertions.js';
 import { AppError } from '../middleware/error.js';
 import { sendSuccess, sendCreated, sendPaginated } from '../utils/response.js';
+import { userIsOrgAdminAnywhere } from '../utils/saas-admin-check.js';
 import { RATE_LIMITS } from '../utils/constants.js';
 import { ApiKeyService } from '../../services/api-key/index.js';
 import { mapUpdateFields, getRateLimitStatus } from '../utils/api-key-helpers.js';
@@ -194,7 +195,18 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
     },
     async (request, reply) => {
       assertAuthUser(request);
-      if (!isPlatformAdmin(request) && request.authUser.role === 'viewer') {
+      // System role 'viewer' is the default for SaaS customer-tenant
+      // users (platform-admin is a BugSpotter-staff concept, not a
+      // customer one). Org owners/admins must still be able to manage
+      // their own keys, so consult organization membership instead of
+      // blocking on system role alone. assertCanGrantProjects below
+      // is the authoritative gate that enforces project-level
+      // ownership of the `allowed_projects` list.
+      if (
+        !isPlatformAdmin(request) &&
+        request.authUser.role === 'viewer' &&
+        !(await userIsOrgAdminAnywhere(db, request.authUser.id))
+      ) {
         throw new AppError('Viewers cannot create API keys', 403, 'Forbidden');
       }
 
@@ -431,7 +443,14 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
     },
     async (request, reply) => {
       assertAuthUser(request);
-      if (!isPlatformAdmin(request) && request.authUser.role === 'viewer') {
+      // Same gate rationale as the POST handler: a SaaS org owner has
+      // system role 'viewer' but must be allowed to manage their org's
+      // keys. authorizeApiKeyAccess below enforces project-level scope.
+      if (
+        !isPlatformAdmin(request) &&
+        request.authUser.role === 'viewer' &&
+        !(await userIsOrgAdminAnywhere(db, request.authUser.id))
+      ) {
         throw new AppError('Viewers cannot delete API keys', 403, 'Forbidden');
       }
       const { id } = request.params as { id: string };

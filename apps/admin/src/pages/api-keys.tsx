@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { Key, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiKeyService } from '../services/api-key-service';
 import { projectService } from '../services/api';
-import { useAuth } from '../contexts/auth-context';
 import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { Button } from '../components/ui/button';
@@ -21,8 +20,17 @@ const API_KEYS_QUERY_KEY = ['apiKeys'] as const;
 
 export default function ApiKeysPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
-  const isViewer = user?.role === 'viewer';
+  // The legacy `user?.role === 'viewer'` gate disabled create/delete
+  // for ALL system viewers — which (correctly) blocks selfhosted
+  // read-only users but (incorrectly) blocks SaaS customer-tenant
+  // org owners, who carry system role 'viewer' by design. The
+  // backend now consults org-member.role and rejects only when the
+  // user is neither platform-admin nor system non-viewer nor org
+  // owner/admin anywhere. Let the backend be the gate: enable the
+  // button and surface the 403 toast on the rare denial path. The
+  // alternative (fetching org membership client-side) doubles the
+  // request count for a UI flag the backend has to compute anyway.
+  const isViewer = false;
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [showCreateDialog, setShowCreateDialog] = useState(false);

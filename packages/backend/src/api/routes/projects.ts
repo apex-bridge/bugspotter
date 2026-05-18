@@ -19,6 +19,7 @@ import { AppError } from '../middleware/error.js';
 import { OrganizationService } from '../../saas/services/organization.service.js';
 import { getDeploymentConfig, DEPLOYMENT_MODE } from '../../saas/config.js';
 import { seedDefaultDedupRules } from '../../services/rules/seed.js';
+import { userIsOrgAdminAnywhere } from '../utils/saas-admin-check.js';
 
 interface CreateProjectBody {
   name: string;
@@ -125,7 +126,16 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       preHandler: [requireUser],
     },
     async (request, reply) => {
-      if (!isPlatformAdmin(request) && request.authUser?.role === 'viewer') {
+      // System role 'viewer' is the default for SaaS customer-tenant
+      // users — org owners/admins MUST be able to create projects in
+      // their tenant. Consult organization membership before
+      // rejecting. (See packages/backend/src/api/utils/saas-admin-check.ts
+      // for the broader rationale.)
+      if (
+        !isPlatformAdmin(request) &&
+        request.authUser?.role === 'viewer' &&
+        !(request.authUser && (await userIsOrgAdminAnywhere(db, request.authUser.id)))
+      ) {
         throw new AppError('Viewers cannot create projects', 403, 'Forbidden');
       }
       const { name, settings, organization_id: bodyOrgId } = request.body;
