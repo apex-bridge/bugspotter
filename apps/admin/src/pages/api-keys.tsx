@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { Key, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiKeyService } from '../services/api-key-service';
 import { projectService } from '../services/api';
-import { useAuth } from '../contexts/auth-context';
 import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { Button } from '../components/ui/button';
@@ -21,8 +20,13 @@ const API_KEYS_QUERY_KEY = ['apiKeys'] as const;
 
 export default function ApiKeysPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
-  const isViewer = user?.role === 'viewer';
+  // No client-side role gate. SaaS customer-tenant org owners carry
+  // system role 'viewer' by design, so a `role === 'viewer'` check
+  // would over-block them. The backend is authoritative on every
+  // mutation (POST + DELETE consult `saas.organization_members`;
+  // revoke/rotate use `authorizeApiKeyAccess` which admits the key's
+  // creator). Show the actions and let the 403 toast handle the rare
+  // denial path.
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -151,11 +155,7 @@ export default function ApiKeysPage() {
           </h1>
           <p className="text-gray-500 mt-1">{t('apiKeys.description')}</p>
         </div>
-        <Button
-          onClick={() => setShowCreateDialog(true)}
-          disabled={isViewer}
-          className="whitespace-nowrap"
-        >
+        <Button onClick={() => setShowCreateDialog(true)} className="whitespace-nowrap">
           <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
           {t('apiKeys.createApiKey')}
         </Button>
@@ -204,7 +204,6 @@ export default function ApiKeysPage() {
             onRotate={(id) => rotateMutation.mutate(id)}
             onViewUsage={setUsageDialogId}
             isLoading={revokeMutation.isPending || rotateMutation.isPending}
-            readOnly={isViewer}
           />
 
           {/* Pagination */}
