@@ -199,7 +199,9 @@ describe('SaaS-tenant RBAC for api-keys + projects creation', () => {
         },
       });
       expect(res.statusCode).toBe(201);
-      return JSON.parse(res.body).data.id;
+      // POST shape is { api_key (plaintext), key_details } wrapped
+      // in { success, data, ... }. The id lives on key_details.
+      return JSON.parse(res.body).data.key_details.id;
     }
 
     it('SaaS org owner (system viewer) can delete an API key', async () => {
@@ -256,7 +258,7 @@ describe('SaaS-tenant RBAC for api-keys + projects creation', () => {
         },
       });
       expect(createRes.statusCode).toBe(201);
-      const keyId = JSON.parse(createRes.body).data.id;
+      const keyId = JSON.parse(createRes.body).data.key_details.id;
 
       const delRes = await server.inject({
         method: 'DELETE',
