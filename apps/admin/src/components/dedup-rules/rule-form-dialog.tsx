@@ -243,7 +243,11 @@ export function DedupRuleFormDialog({
 }: DedupRuleFormDialogProps) {
   const { t } = useTranslation();
   const [formData, setFormData] = useState<DedupRule>(createEmptyRule);
-  const [invalidActions, setInvalidActions] = useState<Set<number>>(new Set());
+  // Keyed by the stable per-action key from `useStableKeys`, not the
+  // list index. Indices shift when an action is removed from the
+  // middle, but the flag must continue identifying the *same* action
+  // whose textarea still contains the bad input.
+  const [invalidActions, setInvalidActions] = useState<Set<string>>(new Set());
 
   // Reset on open/close + when the editingRule reference changes. The
   // dialog is the same React element across create/edit; without this
@@ -265,17 +269,17 @@ export function DedupRuleFormDialog({
    * so the user can't accidentally save the last-good payload while
    * their visible text shows a parse error.
    */
-  const setActionValidity = (index: number, valid: boolean) => {
+  const setActionValidity = (key: string, valid: boolean) => {
     setInvalidActions((prev) => {
-      const wasInvalid = prev.has(index);
+      const wasInvalid = prev.has(key);
       if (valid === !wasInvalid) {
         return prev;
       }
       const next = new Set(prev);
       if (valid) {
-        next.delete(index);
+        next.delete(key);
       } else {
-        next.add(index);
+        next.add(key);
       }
       return next;
     });
@@ -562,8 +566,10 @@ interface ActionsEditorProps {
    * invalid in-progress state (e.g. invalid JSON in a webhook payload
    * textarea). The dialog uses this to gate the Save button so an
    * apparently-broken form can't quietly submit the last-good values.
+   * Keyed by the stable per-action key (not array index) — see the
+   * comment on `invalidActions` in the parent dialog.
    */
-  onActionValidityChange?: (index: number, valid: boolean) => void;
+  onActionValidityChange?: (key: string, valid: boolean) => void;
 }
 
 function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEditorProps) {
@@ -616,8 +622,14 @@ function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEdito
               variant="ghost"
               size="sm"
               onClick={() => {
-                // Clear any validity flag the removed action was carrying.
-                onActionValidityChange?.(i, true);
+                // Clear any validity flag the removed action was
+                // carrying. Capture the stable key before `removeAt`
+                // because the index `i` no longer identifies this
+                // action once the list shifts.
+                const removedKey = keys[i];
+                if (removedKey) {
+                  onActionValidityChange?.(removedKey, true);
+                }
                 removeAt(i);
                 onChange(value.filter((_, j) => j !== i));
               }}
@@ -633,7 +645,12 @@ function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEdito
               list[i] = next;
               onChange(list);
             }}
-            onValidityChange={(valid) => onActionValidityChange?.(i, valid)}
+            onValidityChange={(valid) => {
+              const k = keys[i];
+              if (k) {
+                onActionValidityChange?.(k, valid);
+              }
+            }}
           />
         </div>
       ))}
