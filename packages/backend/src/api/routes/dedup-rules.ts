@@ -13,16 +13,16 @@
  * data via `notify.email.to = 'attacker@evil.com'`. Those mitigations
  * are tracked separately; when they land, the role gate can relax.
  *
- * **API-key surface**: `requireProjectRole` bypasses for API-key auth
- * (machines aren't project members), so every route ALSO gates on
- * `requireApiKeyPermission('dedup_rules:read'|'dedup_rules:write')`.
- * Today no scope grants these permissions by default — only full-
- * scope (`['*']`) keys pass. SDK ingest keys (`reports:write` /
- * `sessions:write` only) cannot touch rule storage. The repo's
- * convention (per `packages/backend/CLAUDE.md`) treats write
- * permissions as advisory for reports/sessions routes, but dedup
- * rules are admin-CRUD and should never be hit by an API key — the
- * stricter gate matches the intent.
+ * **API-key surface**: every route rejects API-key auth outright via
+ * `rejectApiKeyAuth`. `requireProjectRole` bypasses for API keys
+ * (machines aren't project members) and `requireApiKeyPermission`
+ * admits full-scope (`['*']`) keys, so the role/permission stack
+ * alone would let any full-scope project key author rules — including
+ * `notify.email.to = 'attacker@evil.com'` — reopening the
+ * exfiltration path the C2 carry-overs are meant to close. Dedup-
+ * rule CRUD is human-admin only until those mitigations ship; machine
+ * automation can land alongside the C2 work or via a separately
+ * scoped API.
  *
  * **Validation**: every write goes through `parseDedupRule` (Zod). The
  * repository stores the raw blob; the schema is what the executor
@@ -30,7 +30,7 @@
  * executor — fail-closed at the API boundary instead.
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 import type { DatabaseClient } from '../../db/client.js';
 import { PG_UNIQUE_VIOLATION } from '../../db/pg-error-codes.js';
@@ -87,6 +87,26 @@ function isUniqueNameViolation(err: unknown): boolean {
 }
 
 /**
+ * Reject API-key auth on every dedup-rule route. `requireProjectRole`
+ * bypasses for API-key requests (machines aren't project members),
+ * and `requireApiKeyPermission` admits full-scope `['*']` keys — so
+ * without this preHandler a full-scope key could still author rules
+ * (including `notify.email.to = 'attacker@evil.com'`) and reopen the
+ * exfiltration path the C2 carry-overs are meant to close.
+ * Dedup-rule CRUD is human-admin only until those land; machine
+ * automation is out of scope for this PR.
+ */
+async function rejectApiKeyAuth(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
+  if (request.apiKey) {
+    throw new AppError(
+      'Dedup rule routes require a human project admin; API keys are not accepted',
+      403,
+      'Forbidden'
+    );
+  }
+}
+
+/**
  * Look up a rule and verify it belongs to the project in the URL path.
  * A globally-unique UUID makes cross-project hits unlikely in practice,
  * but the check closes the rest of the surface (stale link, swapped
@@ -117,6 +137,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        rejectApiKeyAuth,
         requireApiKeyPermission('dedup_rules:read'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
@@ -143,6 +164,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        rejectApiKeyAuth,
         requireApiKeyPermission('dedup_rules:read'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
@@ -165,6 +187,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        rejectApiKeyAuth,
         requireApiKeyPermission('dedup_rules:write'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
@@ -239,6 +262,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        rejectApiKeyAuth,
         requireApiKeyPermission('dedup_rules:write'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),
@@ -371,6 +395,7 @@ export function registerDedupRuleRoutes(fastify: FastifyInstance, db: DatabaseCl
     {
       preHandler: [
         requireAuth,
+        rejectApiKeyAuth,
         requireApiKeyPermission('dedup_rules:write'),
         requireProjectAccess(db, { paramName: 'projectId' }),
         requireProjectRole('admin'),

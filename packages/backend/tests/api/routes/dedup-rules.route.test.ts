@@ -81,6 +81,14 @@ function makeDb(): { db: DatabaseClient; repo: MockDedupRepo } {
 
 async function buildServer(db: DatabaseClient): Promise<FastifyInstance> {
   const server = Fastify();
+  // Test-only hook: simulate API-key auth by setting request.apiKey
+  // when a `x-test-apikey: 1` header is present. The real auth
+  // middleware is mocked to no-op, so we forge the field directly.
+  server.addHook('onRequest', async (request) => {
+    if (request.headers['x-test-apikey'] === '1') {
+      (request as unknown as { apiKey: { id: string } }).apiKey = { id: 'test-key' };
+    }
+  });
   server.setErrorHandler(errorHandler);
   registerDedupRuleRoutes(server, db);
   await server.ready();
@@ -110,6 +118,28 @@ describe('Dedup Rules API', () => {
 
   afterEach(async () => {
     await server?.close();
+  });
+
+  describe('rejectApiKeyAuth gate', () => {
+    // The role/permission stack alone admits full-scope (`['*']`) API
+    // keys via requireApiKeyPermission's wildcard branch — and
+    // requireProjectRole bypasses for API keys entirely. The
+    // rejectApiKeyAuth preHandler closes that path so dedup-rule
+    // routes stay human-admin-only until the C2 mitigations land.
+    it.each([
+      ['GET list', 'GET', `/api/v1/projects/${PROJECT_ID}/dedup-rules`],
+      ['GET one', 'GET', `/api/v1/projects/${PROJECT_ID}/dedup-rules/${RULE_ID}`],
+      ['POST', 'POST', `/api/v1/projects/${PROJECT_ID}/dedup-rules`],
+      ['PATCH', 'PATCH', `/api/v1/projects/${PROJECT_ID}/dedup-rules/${RULE_ID}`],
+      ['DELETE', 'DELETE', `/api/v1/projects/${PROJECT_ID}/dedup-rules/${RULE_ID}`],
+    ])('rejects API-key auth on %s with 403', async (_label, method, url) => {
+      const res = await server.inject({
+        method: method as 'GET',
+        url,
+        headers: { 'x-test-apikey': '1' },
+      });
+      expect(res.statusCode).toBe(403);
+    });
   });
 
   describe('GET /projects/:projectId/dedup-rules', () => {
