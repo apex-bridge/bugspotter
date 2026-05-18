@@ -15,7 +15,7 @@
  * becomes 5-way conditional), and the rule body fits in one update.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -136,6 +136,61 @@ function defaultActionOf(type: ActionType): ActionSpec {
     case 'notify.webhook':
       return { type, url: '', payload: null };
   }
+}
+
+/**
+ * Maintain stable React keys for a list whose items are edited in
+ * place. Naïve `key={i}` causes React to reuse a DOM/state slot when
+ * a middle item is removed — internal state (e.g. WebhookFields's
+ * `payloadText`) attaches to the wrong item. We carry a parallel
+ * `string[]` of generated keys, synced via the returned helpers.
+ *
+ * Length-mismatch sync handles parent-driven resets (dialog opens
+ * with a new editingRule, parent passes a fresh `value` array of
+ * different length); the helpers below cover in-component
+ * add/remove. In-place edits keep the array length and so the
+ * existing keys, which is exactly what we want.
+ */
+function useStableKeys(length: number): {
+  keys: string[];
+  insertAt: (index: number) => void;
+  removeAt: (index: number) => void;
+} {
+  const [keys, setKeys] = useState<string[]>(() => Array.from({ length }, makeKey));
+  // Sync on length change from outside (e.g. parent reset). Trim if
+  // shorter, append fresh keys if longer.
+  const lastLengthRef = useRef(keys.length);
+  if (length !== lastLengthRef.current && length !== keys.length) {
+    lastLengthRef.current = length;
+    setKeys((prev) => {
+      if (prev.length === length) {
+        return prev;
+      }
+      if (prev.length > length) {
+        return prev.slice(0, length);
+      }
+      return [...prev, ...Array.from({ length: length - prev.length }, makeKey)];
+    });
+  }
+  return {
+    keys,
+    insertAt: (index: number) => {
+      setKeys((prev) => {
+        const next = [...prev];
+        next.splice(index, 0, makeKey());
+        return next;
+      });
+    },
+    removeAt: (index: number) => {
+      setKeys((prev) => prev.filter((_, j) => j !== index));
+    },
+  };
+}
+
+function makeKey(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ?? `k-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
 }
 
 /**
@@ -366,6 +421,7 @@ interface ConditionsEditorProps {
 
 function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
   const { t } = useTranslation();
+  const { keys, insertAt, removeAt } = useStableKeys(value.length);
   return (
     <div className="space-y-2 rounded-md border p-4">
       <div className="flex items-center justify-between">
@@ -374,9 +430,10 @@ function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
           type="button"
           variant="outline"
           size="sm"
-          onClick={() =>
-            onChange([...value, { field: 'canonical.status', op: 'eq', value: 'open' }])
-          }
+          onClick={() => {
+            insertAt(value.length);
+            onChange([...value, { field: 'canonical.status', op: 'eq', value: 'open' }]);
+          }}
         >
           <Plus className="h-3 w-3 mr-1" />
           {t('common.add')}
@@ -386,7 +443,7 @@ function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
         <p className="text-xs text-gray-500">{t('dedupRules.form.noConditions')}</p>
       ) : (
         value.map((c, i) => (
-          <div key={i} className="flex gap-2 items-start">
+          <div key={keys[i] ?? `fallback-${i}`} className="flex gap-2 items-start">
             <Select
               value={c.field}
               onChange={(e) => {
@@ -464,7 +521,10 @@ function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => onChange(value.filter((_, j) => j !== i))}
+              onClick={() => {
+                removeAt(i);
+                onChange(value.filter((_, j) => j !== i));
+              }}
               aria-label={t('dedupRules.form.removeCondition')}
             >
               <Trash2 className="h-4 w-4 text-red-600" />
@@ -490,6 +550,10 @@ interface ActionsEditorProps {
 
 function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEditorProps) {
   const { t } = useTranslation();
+  // Stable keys are load-bearing here: `WebhookFields` holds internal
+  // `payloadText` state. Naïve `key={i}` would attach that state to
+  // the wrong action when a middle item is removed.
+  const { keys, insertAt, removeAt } = useStableKeys(value.length);
   return (
     <div className="space-y-2 rounded-md border p-4">
       <div className="flex items-center justify-between">
@@ -498,14 +562,17 @@ function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEdito
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => onChange([...value, defaultActionOf('ticket.add_comment')])}
+          onClick={() => {
+            insertAt(value.length);
+            onChange([...value, defaultActionOf('ticket.add_comment')]);
+          }}
         >
           <Plus className="h-3 w-3 mr-1" />
           {t('common.add')}
         </Button>
       </div>
       {value.map((a, i) => (
-        <div key={i} className="space-y-2 rounded border p-3">
+        <div key={keys[i] ?? `fallback-${i}`} className="space-y-2 rounded border p-3">
           <div className="flex items-center gap-2">
             <Select
               value={a.type}
@@ -518,7 +585,11 @@ function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEdito
             >
               {ACTION_TYPES.map((at) => (
                 <option key={at} value={at}>
-                  {t(`dedupRules.action.${at.replace('.', '_')}`)}
+                  {/* Global regex (vs `String.replace(string, string)` which
+                      only replaces the first occurrence) so future action
+                      types with multiple dots (e.g. `notify.email.digest`)
+                      still flatten cleanly to a single key. */}
+                  {t(`dedupRules.action.${at.replace(/\./g, '_')}`)}
                 </option>
               ))}
             </Select>
@@ -529,6 +600,7 @@ function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEdito
               onClick={() => {
                 // Clear any validity flag the removed action was carrying.
                 onActionValidityChange?.(i, true);
+                removeAt(i);
                 onChange(value.filter((_, j) => j !== i));
               }}
               aria-label={t('dedupRules.form.removeAction')}
@@ -668,6 +740,7 @@ function WebhookFields({
   return (
     <div className="space-y-2">
       <Input
+        type="url"
         value={action.url}
         onChange={(e) => onChange({ ...action, url: e.target.value })}
         placeholder={t('dedupRules.form.webhookUrlPlaceholder')}

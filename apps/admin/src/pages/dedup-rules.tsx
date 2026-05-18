@@ -59,7 +59,10 @@ export default function DedupRulesPage() {
     setEditingRule(null);
   }
 
-  const mutations = useDedupRules({
+  // Destructure individual mutators — `useDedupRules` returns a fresh
+  // object each render, so depending on the wrapper object would
+  // recreate every callback on every render and defeat useCallback.
+  const { create, update, toggleEnabled, deleteRule } = useDedupRules({
     projectId: projectId!,
     onSuccess: handleCloseFormDialog,
   });
@@ -77,19 +80,19 @@ export default function DedupRulesPage() {
   const handleFormSubmit = useCallback(
     (payload: DedupRule, ruleId?: string) => {
       if (ruleId) {
-        mutations.update.mutate({ ruleId, payload });
+        update.mutate({ ruleId, payload });
       } else {
-        mutations.create.mutate(payload);
+        create.mutate(payload);
       }
     },
-    [mutations]
+    [create, update]
   );
 
   const handleToggleEnabled = useCallback(
     (ruleId: string, currentEnabled: boolean) => {
-      mutations.toggleEnabled.mutate({ ruleId, enabled: !currentEnabled });
+      toggleEnabled.mutate({ ruleId, enabled: !currentEnabled });
     },
-    [mutations]
+    [toggleEnabled]
   );
 
   const handleDelete = useCallback(() => {
@@ -98,11 +101,11 @@ export default function DedupRulesPage() {
       // `isDeleting` can drive a spinner; close on success only.
       // The hook surfaces failures via toast — the user stays on
       // the dialog and can retry or cancel.
-      mutations.deleteRule.mutate(deletingRuleId, {
+      deleteRule.mutate(deletingRuleId, {
         onSuccess: () => setDeletingRuleId(null),
       });
     }
-  }, [deletingRuleId, mutations]);
+  }, [deletingRuleId, deleteRule]);
 
   const handleBackNavigation = useCallback(() => {
     navigate(`/projects/${projectId}`);
@@ -183,14 +186,14 @@ export default function DedupRulesPage() {
           readOnly={!canManageIntegrations}
           onClose={handleCloseFormDialog}
           onSubmit={handleFormSubmit}
-          isSubmitting={mutations.create.isPending || mutations.update.isPending}
+          isSubmitting={create.isPending || update.isPending}
         />
 
         <DedupRuleDeleteDialog
           open={!!deletingRuleId}
           onConfirm={handleDelete}
           onClose={() => setDeletingRuleId(null)}
-          isDeleting={mutations.deleteRule.isPending}
+          isDeleting={deleteRule.isPending}
         />
       </div>
     </TooltipProvider>

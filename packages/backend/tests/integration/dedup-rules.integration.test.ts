@@ -41,7 +41,14 @@ describe('Migration 025 — dedup_rules cascade trigger + seed', () => {
 
       const rules = await db.dedupRules.findByProject(projectId, true);
       expect(rules).toHaveLength(2);
-      const target = rules.find((r) => r.name === 'Counter on canonical')!;
+      const target = rules.find((r) => r.name === 'Counter on canonical');
+      // Explicit guard so a future preset-rename surfaces here with a
+      // clear failure instead of "Cannot read property 'id' of
+      // undefined" three lines down.
+      expect(target).toBeDefined();
+      if (!target) {
+        return;
+      }
 
       // Drop a synthetic throttle row pointing at the rule (the
       // executor's rate-limiter normally writes this; we forge it
@@ -100,10 +107,12 @@ describe('Migration 025 — dedup_rules cascade trigger + seed', () => {
     it("seeds B1 disabled and B2 enabled (matches PR-D1's security stance)", async () => {
       await seedDefaultDedupRules(db.dedupRules, projectId);
       const rules = await db.dedupRules.findByProject(projectId, true);
-      const b1 = rules.find((r) => r.name === 'Notify reporter on dedup')!;
-      const b2 = rules.find((r) => r.name === 'Counter on canonical')!;
-      expect(b1.enabled).toBe(false);
-      expect(b2.enabled).toBe(true);
+      const b1 = rules.find((r) => r.name === 'Notify reporter on dedup');
+      const b2 = rules.find((r) => r.name === 'Counter on canonical');
+      expect(b1).toBeDefined();
+      expect(b2).toBeDefined();
+      expect(b1?.enabled).toBe(false);
+      expect(b2?.enabled).toBe(true);
     });
 
     it('every seeded preset round-trips through parseDedupRule', async () => {
