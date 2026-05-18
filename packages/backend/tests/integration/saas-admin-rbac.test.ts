@@ -341,6 +341,15 @@ describe('SaaS mode — RBAC for api-keys + projects creation', () => {
       }
     });
 
+    it('SaaS org admin (system viewer) can create a project in their own org', async () => {
+      const { status, body } = await attemptCreate(orgAdmin, org.id);
+      expect([201, 429]).toContain(status);
+      expect(body).not.toContain('Viewers cannot create projects');
+      if (status === 201) {
+        cleanup.trackProject(JSON.parse(body).data.id);
+      }
+    });
+
     it('SaaS org member (system viewer) cannot create a project', async () => {
       const { status, body } = await attemptCreate(orgMember, org.id);
       expect(status).toBe(403);

@@ -13,12 +13,14 @@ import {
   deleteProjectSchema,
 } from '../schemas/project-schema.js';
 import { requireUser, isPlatformAdmin } from '../middleware/auth.js';
+import { assertAuthUser } from '../middleware/auth/assertions.js';
 import { guard } from '../authorization/index.js';
 import { sendSuccess, sendCreated } from '../utils/response.js';
 import { AppError } from '../middleware/error.js';
 import { OrganizationService } from '../../saas/services/organization.service.js';
 import { getDeploymentConfig, DEPLOYMENT_MODE } from '../../saas/config.js';
 import { seedDefaultDedupRules } from '../../services/rules/seed.js';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 import { userIsOrgAdminOfOrg } from '../utils/saas-admin-check.js';
 
 interface CreateProjectBody {
@@ -126,6 +128,7 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       preHandler: [requireUser],
     },
     async (request, reply) => {
+      assertAuthUser(request);
       const { name, settings, organization_id: bodyOrgId } = request.body;
       // Resolve the target org BEFORE the role check. An earlier
       // version of this code consulted `userIsOrgAdminAnywhere(db,
@@ -140,10 +143,10 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       // THEIR org (not just any org they're admin of somewhere).
       // Selfhosted (no organizationId resolves) keeps the viewer
       // block as a coarse read-only gate.
-      if (!isPlatformAdmin(request) && request.authUser!.role === 'viewer') {
+      if (!isPlatformAdmin(request) && request.authUser.role === 'viewer') {
         const allowed =
           organizationId !== null &&
-          (await userIsOrgAdminOfOrg(db, request.authUser!.id, organizationId));
+          (await userIsOrgAdminOfOrg(db, request.authUser.id, organizationId));
         if (!allowed) {
           throw new AppError('Viewers cannot create projects', 403, 'Forbidden');
         }
@@ -152,7 +155,7 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       const projectInput = {
         name,
         settings: settings ?? {},
-        created_by: request.authUser?.id,
+        created_by: getAuditUserId(request) ?? undefined,
         organization_id: organizationId,
       };
 
