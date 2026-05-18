@@ -15,6 +15,7 @@ import { SystemConfigRepository } from './system-config.repository.js';
 import { AuditLogRepository } from './audit-log.repository.js';
 import { ProjectIntegrationRepository } from '../project-integration.repository.js';
 import { IntegrationRuleRepository } from '../integration-rule.repository.js';
+import { DedupRuleRepository } from '../dedup-rule.repository.js';
 import { NotificationChannelRepository } from './notification-channel.repository.js';
 import { NotificationRuleRepository } from './notification-rule.repository.js';
 import { NotificationTemplateRepository } from './notification-template.repository.js';
@@ -63,6 +64,7 @@ export interface RepositoryRegistry {
   oauthTokens: OAuthTokenRepository;
   apiKeys: ApiKeyRepository;
   integrationRules: IntegrationRuleRepository;
+  dedupRules: DedupRuleRepository;
   ticketOutbox: TicketCreationOutboxRepository;
   dataResidency: DataResidencyRepository;
   // SaaS multi-tenant repositories
@@ -113,6 +115,7 @@ export function createRepositories(pool: Pool | PoolClient): RepositoryRegistry 
     oauthTokens: new OAuthTokenRepository(pool),
     apiKeys: new ApiKeyRepository(pool),
     integrationRules: new IntegrationRuleRepository(pool),
+    dedupRules: new DedupRuleRepository(pool),
     ticketOutbox: new TicketCreationOutboxRepository(pool),
     dataResidency: new DataResidencyRepository(pool),
     // SaaS multi-tenant repositories
