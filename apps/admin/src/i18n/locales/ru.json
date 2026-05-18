@@ -700,7 +700,8 @@
       "rateLimitCount": "Количество",
       "rateLimitWindow": "Окно",
       "errorNameRequired": "Укажите название правила.",
-      "errorActionRequired": "Нужно как минимум одно действие."
+      "errorActionRequired": "Нужно как минимум одно действие.",
+      "errorActionInvalid": "В одном или нескольких действиях ошибка. Исправьте выделенные ошибки перед сохранением."
     }
   },
   "notifications": {

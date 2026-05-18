@@ -163,10 +163,18 @@ export const dedupRulesService = {
 
   /**
    * Full-rule replacement PATCH. Sends the whole DedupRule body; the
-   * backend validates via parseDedupRule. If the body omits `enabled`,
-   * the backend preserves the existing row's column value (avoids
-   * Zod's `.default(true)` silently re-enabling disabled rules on
-   * rename).
+   * backend validates via parseDedupRule.
+   *
+   * Note on the backend's `omit-enabled-to-preserve` safety net:
+   * `packages/backend/src/api/routes/dedup-rules.ts` checks
+   * `'enabled' in body` and falls back to the existing column value
+   * when absent. The admin UI ALWAYS sends `enabled` (form state
+   * carries it explicitly), so that safety net is unreachable from
+   * here — it exists for non-UI callers (curl, PR-D2's future
+   * structured admin scripts) who might PATCH a partial body. A
+   * concurrent-edit lost-update window remains (Admin A opens edit
+   * → Admin B toggles disabled → Admin A saves → row flips back on)
+   * and lands in a follow-up via ETag / optimistic concurrency.
    */
   update: async (projectId: string, ruleId: string, payload: DedupRule): Promise<DedupRuleRow> => {
     const res = await api.patch<OneResponse>(

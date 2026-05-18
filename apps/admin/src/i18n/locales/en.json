@@ -700,7 +700,8 @@
       "rateLimitCount": "Count",
       "rateLimitWindow": "Window",
       "errorNameRequired": "Rule name is required.",
-      "errorActionRequired": "At least one action is required."
+      "errorActionRequired": "At least one action is required.",
+      "errorActionInvalid": "One or more actions have invalid input. Fix the highlighted errors before saving."
     }
   },
   "notifications": {

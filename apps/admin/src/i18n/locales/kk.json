@@ -700,7 +700,8 @@
       "rateLimitCount": "Саны",
       "rateLimitWindow": "Терезе",
       "errorNameRequired": "Ереже атауын көрсетіңіз.",
-      "errorActionRequired": "Кемінде бір әрекет қажет."
+      "errorActionRequired": "Кемінде бір әрекет қажет.",
+      "errorActionInvalid": "Бір немесе бірнеше әрекетте қате бар. Сақтау алдында белгіленген қателерді түзетіңіз."
     }
   },
   "notifications": {

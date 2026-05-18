@@ -78,7 +78,7 @@ const NUMERIC_CONDITION_FIELDS = new Set<ConditionSpec['field']>([
   'canonical.closed_days_ago',
 ]);
 
-function displayConditionValue(value: ConditionSpec['value']): string {
+export function displayConditionValue(value: ConditionSpec['value']): string {
   if (Array.isArray(value)) {
     return value.join(', ');
   }
@@ -94,7 +94,7 @@ function displayConditionValue(value: ConditionSpec['value']): string {
  *    validation will surface a clearer error than a silent type
  *    mismatch).
  */
-function parseConditionValue(
+export function parseConditionValue(
   field: ConditionSpec['field'],
   op: ConditionSpec['op'],
   raw: string
@@ -138,14 +138,22 @@ function defaultActionOf(type: ActionType): ActionSpec {
   }
 }
 
-const EMPTY_RULE: DedupRule = {
-  name: '',
-  when: { type: 'duplicate_detected' },
-  conditions: [],
-  then: [defaultActionOf('ticket.add_comment')],
-  rate_limit: null,
-  enabled: true,
-};
+/**
+ * Fresh empty-rule object per call. A shared module-level constant
+ * would survive across dialog opens; any accidental in-place mutation
+ * (a future `setFormData(prev)` that doesn't fully clone) would leak
+ * back into the "create new rule" preset.
+ */
+function createEmptyRule(): DedupRule {
+  return {
+    name: '',
+    when: { type: 'duplicate_detected' },
+    conditions: [],
+    then: [defaultActionOf('ticket.add_comment')],
+    rate_limit: null,
+    enabled: true,
+  };
+}
 
 // ---------------------------------------------------------------------
 // Public dialog
@@ -169,16 +177,44 @@ export function DedupRuleFormDialog({
   isSubmitting,
 }: DedupRuleFormDialogProps) {
   const { t } = useTranslation();
-  const [formData, setFormData] = useState<DedupRule>(EMPTY_RULE);
+  const [formData, setFormData] = useState<DedupRule>(createEmptyRule);
+  const [invalidActions, setInvalidActions] = useState<Set<number>>(new Set());
 
   // Reset on open/close + when the editingRule reference changes. The
   // dialog is the same React element across create/edit; without this
   // sync, the previous rule's state would leak into a fresh "create".
   useEffect(() => {
     if (open) {
-      setFormData(editingRule ? editingRule.rule_json : EMPTY_RULE);
+      setFormData(editingRule ? editingRule.rule_json : createEmptyRule());
+      // Drop any stale per-action validity flags carried from a
+      // previous dialog open (e.g. a webhook payload error left over
+      // from a rule the user dismissed without saving).
+      setInvalidActions(new Set());
     }
   }, [open, editingRule]);
+
+  /**
+   * Tracks per-action validity for sub-forms whose in-progress text
+   * isn't yet a valid `ActionSpec` (today: invalid JSON in a webhook
+   * payload textarea). Submit stays disabled while any flag is set
+   * so the user can't accidentally save the last-good payload while
+   * their visible text shows a parse error.
+   */
+  const setActionValidity = (index: number, valid: boolean) => {
+    setInvalidActions((prev) => {
+      const wasInvalid = prev.has(index);
+      if (valid === !wasInvalid) {
+        return prev;
+      }
+      const next = new Set(prev);
+      if (valid) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
 
   function handleSubmit() {
     if (!formData.name.trim()) {
@@ -187,6 +223,10 @@ export function DedupRuleFormDialog({
     }
     if (formData.then.length === 0) {
       toast.error(t('dedupRules.form.errorActionRequired'));
+      return;
+    }
+    if (invalidActions.size > 0) {
+      toast.error(t('dedupRules.form.errorActionInvalid'));
       return;
     }
     onSubmit(formData, editingRule?.id);
@@ -238,6 +278,7 @@ export function DedupRuleFormDialog({
           <ActionsEditor
             value={formData.then}
             onChange={(then) => setFormData({ ...formData, then })}
+            onActionValidityChange={setActionValidity}
           />
 
           <RateLimitEditor
@@ -250,7 +291,11 @@ export function DedupRuleFormDialog({
             {t('common.cancel')}
           </Button>
           {!readOnly && (
-            <Button onClick={handleSubmit} disabled={isSubmitting}>
+            <Button
+              onClick={handleSubmit}
+              disabled={isSubmitting || invalidActions.size > 0}
+              title={invalidActions.size > 0 ? t('dedupRules.form.errorActionInvalid') : undefined}
+            >
               {editingRule ? t('common.save') : t('common.create')}
             </Button>
           )}
@@ -345,8 +390,21 @@ function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
             <Select
               value={c.field}
               onChange={(e) => {
+                const newField = e.target.value as ConditionSpec['field'];
+                // Reset `value` when crossing the string ↔ number type
+                // boundary. Without this, switching from
+                // `canonical.status` (string) to `hits_in_window`
+                // (numeric) would carry "open" through as the value
+                // and the backend's Zod `eq` check would fail to
+                // match a numeric column.
+                const wasNumeric = NUMERIC_CONDITION_FIELDS.has(c.field);
+                const isNumeric = NUMERIC_CONDITION_FIELDS.has(newField);
                 const next = [...value];
-                next[i] = { ...c, field: e.target.value as ConditionSpec['field'] };
+                next[i] = {
+                  ...c,
+                  field: newField,
+                  ...(wasNumeric !== isNumeric ? { value: '' } : {}),
+                };
                 onChange(next);
               }}
             >
@@ -359,8 +417,19 @@ function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
             <Select
               value={c.op}
               onChange={(e) => {
+                const newOp = e.target.value as ConditionSpec['op'];
+                // Switching to/from list ops (`in` / `not_in`)
+                // requires the value to flip between scalar and
+                // array; reset to a clean string so the next
+                // keystroke parses correctly.
+                const wasList = c.op === 'in' || c.op === 'not_in';
+                const isList = newOp === 'in' || newOp === 'not_in';
                 const next = [...value];
-                next[i] = { ...c, op: e.target.value as ConditionSpec['op'] };
+                next[i] = {
+                  ...c,
+                  op: newOp,
+                  ...(wasList !== isList ? { value: isList ? [] : '' } : {}),
+                };
                 onChange(next);
               }}
             >
@@ -410,9 +479,16 @@ function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
 interface ActionsEditorProps {
   value: ActionSpec[];
   onChange: (next: ActionSpec[]) => void;
+  /**
+   * Fires when a per-action sub-form transitions between valid and
+   * invalid in-progress state (e.g. invalid JSON in a webhook payload
+   * textarea). The dialog uses this to gate the Save button so an
+   * apparently-broken form can't quietly submit the last-good values.
+   */
+  onActionValidityChange?: (index: number, valid: boolean) => void;
 }
 
-function ActionsEditor({ value, onChange }: ActionsEditorProps) {
+function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEditorProps) {
   const { t } = useTranslation();
   return (
     <div className="space-y-2 rounded-md border p-4">
@@ -450,7 +526,11 @@ function ActionsEditor({ value, onChange }: ActionsEditorProps) {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => onChange(value.filter((_, j) => j !== i))}
+              onClick={() => {
+                // Clear any validity flag the removed action was carrying.
+                onActionValidityChange?.(i, true);
+                onChange(value.filter((_, j) => j !== i));
+              }}
               aria-label={t('dedupRules.form.removeAction')}
             >
               <Trash2 className="h-4 w-4 text-red-600" />
@@ -463,6 +543,7 @@ function ActionsEditor({ value, onChange }: ActionsEditorProps) {
               list[i] = next;
               onChange(list);
             }}
+            onValidityChange={(valid) => onActionValidityChange?.(i, valid)}
           />
         </div>
       ))}
@@ -473,9 +554,12 @@ function ActionsEditor({ value, onChange }: ActionsEditorProps) {
 function ActionFields({
   action,
   onChange,
+  onValidityChange,
 }: {
   action: ActionSpec;
   onChange: (next: ActionSpec) => void;
+  /** Webhook payload editor reports parse-state via this callback. */
+  onValidityChange?: (valid: boolean) => void;
 }) {
   const { t } = useTranslation();
   switch (action.type) {
@@ -545,7 +629,9 @@ function ActionFields({
         </div>
       );
     case 'notify.webhook':
-      return <WebhookFields action={action} onChange={onChange} />;
+      return (
+        <WebhookFields action={action} onChange={onChange} onValidityChange={onValidityChange} />
+      );
   }
 }
 
@@ -559,15 +645,26 @@ function ActionFields({
 function WebhookFields({
   action,
   onChange,
+  onValidityChange,
 }: {
   action: Extract<ActionSpec, { type: 'notify.webhook' }>;
   onChange: (next: ActionSpec) => void;
+  onValidityChange?: (valid: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [payloadText, setPayloadText] = useState(() =>
     action.payload ? JSON.stringify(action.payload, null, 2) : ''
   );
   const [parseError, setParseError] = useState<string | null>(null);
+
+  // Mirror the local parseError state to the parent gate so the
+  // dialog's Save can't quietly submit `action.payload`'s last-good
+  // value while the textarea still shows bad text.
+  const setError = (msg: string | null) => {
+    setParseError(msg);
+    onValidityChange?.(msg === null);
+  };
+
   return (
     <div className="space-y-2">
       <Input
@@ -582,20 +679,20 @@ function WebhookFields({
           const text = e.target.value;
           setPayloadText(text);
           if (text.trim() === '') {
-            setParseError(null);
+            setError(null);
             onChange({ ...action, payload: null });
             return;
           }
           try {
             const parsed = JSON.parse(text);
             if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-              setParseError(t('dedupRules.form.webhookPayloadMustBeObject'));
+              setError(t('dedupRules.form.webhookPayloadMustBeObject'));
               return;
             }
-            setParseError(null);
+            setError(null);
             onChange({ ...action, payload: parsed as Record<string, unknown> });
           } catch (err) {
-            setParseError(err instanceof Error ? err.message : String(err));
+            setError(err instanceof Error ? err.message : String(err));
           }
         }}
         placeholder={t('dedupRules.form.webhookPayloadPlaceholder')}
