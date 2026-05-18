@@ -305,6 +305,20 @@ export const API_ENDPOINTS = {
     search: (projectId: string) => `${API_VERSION}/intelligence/projects/${projectId}/search`,
   },
 
+  // Dedup-rule engine (Phase 0.5). Project-scoped, human-admin-only —
+  // the backend rejects API-key auth on these routes. See
+  // packages/backend/src/api/routes/dedup-rules.ts.
+  dedupRules: {
+    list: (projectId: string) => `${API_VERSION}/projects/${projectId}/dedup-rules`,
+    create: (projectId: string) => `${API_VERSION}/projects/${projectId}/dedup-rules`,
+    get: (projectId: string, ruleId: string) =>
+      `${API_VERSION}/projects/${projectId}/dedup-rules/${ruleId}`,
+    update: (projectId: string, ruleId: string) =>
+      `${API_VERSION}/projects/${projectId}/dedup-rules/${ruleId}`,
+    delete: (projectId: string, ruleId: string) =>
+      `${API_VERSION}/projects/${projectId}/dedup-rules/${ruleId}`,
+  },
+
   // Health check
   health: () => `${API_VERSION}/health`,
 };

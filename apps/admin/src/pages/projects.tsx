@@ -13,7 +13,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
-import { FolderPlus, Trash2, Users, Settings, ShieldCheck, Search, Building2 } from 'lucide-react';
+import {
+  FolderPlus,
+  Trash2,
+  Users,
+  Settings,
+  ShieldCheck,
+  Search,
+  Building2,
+  GitMerge,
+} from 'lucide-react';
 import { isPlatformAdmin } from '../types';
 import type { Project } from '../types';
 
@@ -413,6 +422,15 @@ export default function ProjectsPage() {
                     >
                       <Users className="w-4 h-4 mr-1" aria-hidden="true" />
                       {t('projects.members')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => navigate(`/projects/${project.id}/dedup-rules`)}
+                      aria-label={t('projects.manageDedupRules', { name: project.name })}
+                    >
+                      <GitMerge className="w-4 h-4 mr-1" aria-hidden="true" />
+                      {t('projects.dedupRules')}
                     </Button>
                     <Button
                       size="sm"

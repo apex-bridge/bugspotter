@@ -35,6 +35,7 @@ import CreateIntegration from './pages/integrations/create';
 import IntegrationConfigPage from './pages/integrations/integration-config';
 import IntegrationEditPage from './pages/integrations/edit';
 import IntegrationRulesPage from './pages/integrations/rules';
+import DedupRulesPage from './pages/dedup-rules';
 import ApiKeysPage from './pages/api-keys';
 import SharedReplayViewer from './pages/shared-replay-viewer';
 import OrganizationsPage from './pages/platform/organizations';
@@ -192,6 +193,8 @@ function App() {
                     path="integrations/:platform/:projectId/rules"
                     element={<IntegrationRulesPage />}
                   />
+
+                  <Route path="projects/:projectId/dedup-rules" element={<DedupRulesPage />} />
 
                   <Route path="api-keys" element={<ApiKeysPage />} />
 
