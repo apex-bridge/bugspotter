@@ -67,6 +67,62 @@ function defaultTriggerOf(type: TriggerType): TriggerSpec {
   }
 }
 
+/**
+ * Numeric condition fields (per the Zod schema). For these, the
+ * executor compares against numbers — sending strings would silently
+ * fail to match on `eq`/`in`/`not_in` (the backend's transform only
+ * coerces strings → numbers for `gte`/`lte`).
+ */
+const NUMERIC_CONDITION_FIELDS = new Set<ConditionSpec['field']>([
+  'hits_in_window',
+  'canonical.closed_days_ago',
+]);
+
+function displayConditionValue(value: ConditionSpec['value']): string {
+  if (Array.isArray(value)) {
+    return value.join(', ');
+  }
+  return value === undefined || value === null ? '' : String(value);
+}
+
+/**
+ * Parse the raw text input into the shape the backend expects, based
+ * on (field, op):
+ *  - `in` / `not_in` need an array → split by comma, trim, drop empties.
+ *  - Numeric fields parse to number when the input is a clean numeric
+ *    string. Anything else stays a string (the backend's Zod
+ *    validation will surface a clearer error than a silent type
+ *    mismatch).
+ */
+function parseConditionValue(
+  field: ConditionSpec['field'],
+  op: ConditionSpec['op'],
+  raw: string
+): ConditionSpec['value'] {
+  const isList = op === 'in' || op === 'not_in';
+  const isNumeric = NUMERIC_CONDITION_FIELDS.has(field);
+  if (isList) {
+    const parts = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (isNumeric) {
+      return parts.map((p) => {
+        const n = Number(p);
+        return Number.isFinite(n) ? n : p;
+      });
+    }
+    return parts;
+  }
+  if (isNumeric && raw.trim() !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n)) {
+      return n;
+    }
+  }
+  return raw;
+}
+
 function defaultActionOf(type: ActionType): ActionSpec {
   switch (type) {
     case 'ticket.add_comment':
@@ -137,7 +193,7 @@ export function DedupRuleFormDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={readOnly ? undefined : onClose}>
+    <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
@@ -315,10 +371,10 @@ function ConditionsEditor({ value, onChange }: ConditionsEditorProps) {
               ))}
             </Select>
             <Input
-              value={String(c.value)}
+              value={displayConditionValue(c.value)}
               onChange={(e) => {
                 const next = [...value];
-                next[i] = { ...c, value: e.target.value };
+                next[i] = { ...c, value: parseConditionValue(c.field, c.op, e.target.value) };
                 onChange(next);
               }}
               placeholder={t('dedupRules.form.valuePlaceholder')}
@@ -489,15 +545,67 @@ function ActionFields({
         </div>
       );
     case 'notify.webhook':
-      return (
-        <Input
-          value={action.url}
-          onChange={(e) => onChange({ ...action, url: e.target.value })}
-          placeholder={t('dedupRules.form.webhookUrlPlaceholder')}
-          aria-label={t('dedupRules.form.webhookUrl')}
-        />
-      );
+      return <WebhookFields action={action} onChange={onChange} />;
   }
+}
+
+/**
+ * Webhook editor with URL + optional JSON payload. The payload is
+ * edited as raw text; we try to parse on every keystroke but tolerate
+ * invalid JSON (the textarea keeps the bad text so the user can fix
+ * it without losing what they typed). Save shows a Zod error if the
+ * payload is still invalid at submit time.
+ */
+function WebhookFields({
+  action,
+  onChange,
+}: {
+  action: Extract<ActionSpec, { type: 'notify.webhook' }>;
+  onChange: (next: ActionSpec) => void;
+}) {
+  const { t } = useTranslation();
+  const [payloadText, setPayloadText] = useState(() =>
+    action.payload ? JSON.stringify(action.payload, null, 2) : ''
+  );
+  const [parseError, setParseError] = useState<string | null>(null);
+  return (
+    <div className="space-y-2">
+      <Input
+        value={action.url}
+        onChange={(e) => onChange({ ...action, url: e.target.value })}
+        placeholder={t('dedupRules.form.webhookUrlPlaceholder')}
+        aria-label={t('dedupRules.form.webhookUrl')}
+      />
+      <Textarea
+        value={payloadText}
+        onChange={(e) => {
+          const text = e.target.value;
+          setPayloadText(text);
+          if (text.trim() === '') {
+            setParseError(null);
+            onChange({ ...action, payload: null });
+            return;
+          }
+          try {
+            const parsed = JSON.parse(text);
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+              setParseError(t('dedupRules.form.webhookPayloadMustBeObject'));
+              return;
+            }
+            setParseError(null);
+            onChange({ ...action, payload: parsed as Record<string, unknown> });
+          } catch (err) {
+            setParseError(err instanceof Error ? err.message : String(err));
+          }
+        }}
+        placeholder={t('dedupRules.form.webhookPayloadPlaceholder')}
+        aria-label={t('dedupRules.form.webhookPayload')}
+        className="font-mono text-xs"
+        rows={4}
+      />
+      {parseError && <p className="text-xs text-red-600">{parseError}</p>}
+    </div>
+  );
 }
 
 interface RateLimitEditorProps {

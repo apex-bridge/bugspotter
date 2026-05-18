@@ -46,7 +46,12 @@ export default function DedupRulesPage() {
   } = useQuery({
     queryKey: [DEDUP_RULES_QUERY_KEY, projectId],
     queryFn: async () => dedupRulesService.list(projectId!),
-    enabled: !!projectId,
+    // Gate the request on permission too — the backend admin gate
+    // would 403 a non-admin URL-typer, and surfacing that as an
+    // "Error loading rules" toast is worse than just not making the
+    // call. `canManageIntegrations` starts false until the
+    // permissions query resolves, which naturally defers our fetch.
+    enabled: !!projectId && canManageIntegrations,
   });
 
   function handleCloseFormDialog() {
@@ -89,8 +94,13 @@ export default function DedupRulesPage() {
 
   const handleDelete = useCallback(() => {
     if (deletingRuleId) {
-      mutations.deleteRule.mutate(deletingRuleId);
-      setDeletingRuleId(null);
+      // Keep the dialog open while the mutation is in flight so
+      // `isDeleting` can drive a spinner; close on success only.
+      // The hook surfaces failures via toast — the user stays on
+      // the dialog and can retry or cancel.
+      mutations.deleteRule.mutate(deletingRuleId, {
+        onSuccess: () => setDeletingRuleId(null),
+      });
     }
   }, [deletingRuleId, mutations]);
 

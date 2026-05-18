@@ -634,7 +634,7 @@
     "backToProject": "Жобаға қайту",
     "createRule": "Ереже жасау",
     "loading": "Ережелерді жүктеу...",
-    "empty": "Дедупликация ережелері әлі конфигурацияланбаған. Стандартты пресеттер (B1, B2) қосылған, бірақ өшірілген — оларды қосыңыз немесе өзіңіздікін жасаңыз.",
+    "empty": "Дедупликация ережелері әлі конфигурацияланбаған. Стандартты пресеттер (B1, B2) алдын ала қосылған, бірақ әдепкіде өшірулі — оларды қосыңыз немесе өзіңіздікін жасаңыз.",
     "disabled": "Өшірілген",
     "rateLimitLabel": "Шектеу: {{window}} ішінде {{count}}",
     "trigger": {
@@ -693,6 +693,9 @@
       "slackMessagePlaceholder": "Хабар мәтіні...",
       "webhookUrl": "Webhook URL",
       "webhookUrlPlaceholder": "https://example.com/hook",
+      "webhookPayload": "Жүктеме (JSON)",
+      "webhookPayloadPlaceholder": "{ \"key\": \"value\" }",
+      "webhookPayloadMustBeObject": "Жүктеме JSON-объект болуы керек.",
       "rateLimitEnable": "Жиілікті шектеу",
       "rateLimitCount": "Саны",
       "rateLimitWindow": "Терезе",
