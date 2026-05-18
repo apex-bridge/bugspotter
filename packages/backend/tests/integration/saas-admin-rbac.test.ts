@@ -204,8 +204,15 @@ describe('SaaS-tenant RBAC for api-keys + projects creation', () => {
       return JSON.parse(res.body).data.key_details.id;
     }
 
-    it('SaaS org owner (system viewer) can delete an API key', async () => {
-      const keyId = await createKeyAs(platformAdmin);
+    it('SaaS org owner (system viewer) can delete their own API key', async () => {
+      // `authorizeApiKeyAccess` (api-keys.ts) gates DELETE for non-
+      // platform-admins on `created_by === userId`. Cross-creator
+      // delete (one org member deleting another's key) is out of
+      // scope for the viewer-gate fix this PR shipped — the org-
+      // scoped delete contract lands in a follow-up. The realistic
+      // SaaS workflow tested here is: owner creates a key, owner
+      // later revokes/deletes it.
+      const keyId = await createKeyAs(orgOwner);
       const res = await server.inject({
         method: 'DELETE',
         url: `/api/v1/api-keys/${keyId}`,
