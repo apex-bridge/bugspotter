@@ -40,6 +40,7 @@ import { BillingRegionRegistry, KzBillingPlugin } from '@bugspotter/billing';
 import { jobRoutes } from './routes/jobs.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerIntegrationRuleRoutes } from './routes/integration-rules.js';
+import { registerDedupRuleRoutes } from './routes/dedup-rules.js';
 import { registerAdminIntegrationRoutes } from './routes/admin-integrations.js';
 import { adminRoutes } from './routes/admin.js';
 import { adminJobsRoutes } from './routes/admin-jobs.js';
@@ -533,6 +534,9 @@ export async function createServer(options: ServerOptions): Promise<FastifyInsta
 
   // Register integration rules routes
   await registerIntegrationRuleRoutes(fastify, db, options.pluginRegistry);
+
+  // Register dedup rules routes (admin CRUD for the Phase 0.5 rule engine)
+  registerDedupRuleRoutes(fastify, db);
 
   // Register admin integration management routes
   await registerAdminIntegrationRoutes(fastify, db, options.pluginRegistry);

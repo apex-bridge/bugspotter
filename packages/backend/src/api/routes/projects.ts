@@ -18,6 +18,7 @@ import { sendSuccess, sendCreated } from '../utils/response.js';
 import { AppError } from '../middleware/error.js';
 import { OrganizationService } from '../../saas/services/organization.service.js';
 import { getDeploymentConfig, DEPLOYMENT_MODE } from '../../saas/config.js';
+import { seedDefaultDedupRules } from '../../services/rules/seed.js';
 
 interface CreateProjectBody {
   name: string;
@@ -142,6 +143,12 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       const project = organizationId
         ? await orgService.createProjectWithQuotaCheck(organizationId, projectInput)
         : await db.projects.create(projectInput);
+
+      // Seed B1 / B2 dedup presets so the rule engine has something
+      // to fire from day one. Failures are logged but not surfaced —
+      // a project without seed rules is still usable, and migration
+      // 025's backfill is the safety net.
+      await seedDefaultDedupRules(db.dedupRules, project.id);
 
       return sendCreated(reply, project);
     }

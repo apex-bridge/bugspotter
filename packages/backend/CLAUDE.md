@@ -2,6 +2,12 @@
 
 Fastify + pg + BullMQ. Most complex package in the monorepo.
 
+## Where to look first
+
+- **System architecture** — [docs/architecture.md](docs/architecture.md). Component map, the major end-to-end flows (SDK ingest, outbox, intelligence dedup, the rule engine, notifications), deployment modes, external boundaries.
+- **DB schema** — [docs/db-schema.md](docs/db-schema.md). Per-table reference for `application.*` and `saas.*`, the cross-cutting patterns (polymorphic throttle, soft-delete, JSONB validation), and the migration ordering invariants.
+- **Auth + RBAC** — [docs/auth.md](docs/auth.md). Header precedence, 3-layer model, effective project role, API-key bypass rules.
+
 ## The auth trio
 
 Every request can carry up to four auth artifacts:
@@ -28,6 +34,7 @@ For the full RBAC reference — header precedence rules, the 3-layer authorizati
 - `application.*` — users, projects, bug_reports, api_keys (used in every mode).
 - `saas.*` — organizations, subscriptions, organization_requests, invitations (SaaS-mode only).
 - Migrations in `src/db/migrations/NNN_description.sql`, run via `pnpm migrate`. Never rewrite a merged migration — add a new one.
+- Per-table reference + cross-cutting patterns: [docs/db-schema.md](docs/db-schema.md).
 
 ## Repositories + transactions
 
