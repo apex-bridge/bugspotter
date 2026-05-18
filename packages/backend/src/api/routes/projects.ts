@@ -140,10 +140,10 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       // THEIR org (not just any org they're admin of somewhere).
       // Selfhosted (no organizationId resolves) keeps the viewer
       // block as a coarse read-only gate.
-      if (!isPlatformAdmin(request) && request.authUser?.role === 'viewer') {
+      if (!isPlatformAdmin(request) && request.authUser!.role === 'viewer') {
         const allowed =
           organizationId !== null &&
-          (await userIsOrgAdminOfOrg(db, request.authUser.id, organizationId));
+          (await userIsOrgAdminOfOrg(db, request.authUser!.id, organizationId));
         if (!allowed) {
           throw new AppError('Viewers cannot create projects', 403, 'Forbidden');
         }

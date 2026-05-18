@@ -4,7 +4,6 @@ import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { Key, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiKeyService } from '../services/api-key-service';
-import { useAuth } from '../contexts/auth-context';
 import { projectService } from '../services/api';
 import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
@@ -21,19 +20,13 @@ const API_KEYS_QUERY_KEY = ['apiKeys'] as const;
 
 export default function ApiKeysPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
-  // `isViewer` reflects the SYSTEM role only. It still gates the
-  // table's mutation actions (revoke/rotate) because those routes
-  // were not relaxed in this PR — they keep the legacy "system
-  // viewer = read-only" semantics. The Create button below
-  // intentionally bypasses this flag: SaaS customer-tenant org
-  // owners carry system role 'viewer' by design, and the backend's
-  // viewer-gate on POST now consults `saas.organization_members`
-  // and admits owners/admins. Surfacing the button (with a 403
-  // toast on the rare denial path) is the right UX for them; the
-  // alternative is fetching org membership client-side to mirror a
-  // flag the backend has to recompute on every request anyway.
-  const isViewer = user?.role === 'viewer';
+  // No client-side role gate. SaaS customer-tenant org owners carry
+  // system role 'viewer' by design, so a `role === 'viewer'` check
+  // would over-block them. The backend is authoritative on every
+  // mutation (POST + DELETE consult `saas.organization_members`;
+  // revoke/rotate use `authorizeApiKeyAccess` which admits the key's
+  // creator). Show the actions and let the 403 toast handle the rare
+  // denial path.
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -162,13 +155,7 @@ export default function ApiKeysPage() {
           </h1>
           <p className="text-gray-500 mt-1">{t('apiKeys.description')}</p>
         </div>
-        <Button
-          onClick={() => setShowCreateDialog(true)}
-          // Intentionally not gated on isViewer — see the file-header
-          // comment on `isViewer`. SaaS org owners need this button
-          // enabled despite their system 'viewer' role.
-          className="whitespace-nowrap"
-        >
+        <Button onClick={() => setShowCreateDialog(true)} className="whitespace-nowrap">
           <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
           {t('apiKeys.createApiKey')}
         </Button>
@@ -217,7 +204,6 @@ export default function ApiKeysPage() {
             onRotate={(id) => rotateMutation.mutate(id)}
             onViewUsage={setUsageDialogId}
             isLoading={revokeMutation.isPending || rotateMutation.isPending}
-            readOnly={isViewer}
           />
 
           {/* Pagination */}
