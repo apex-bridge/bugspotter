@@ -19,7 +19,7 @@ import { AppError } from '../middleware/error.js';
 import { OrganizationService } from '../../saas/services/organization.service.js';
 import { getDeploymentConfig, DEPLOYMENT_MODE } from '../../saas/config.js';
 import { seedDefaultDedupRules } from '../../services/rules/seed.js';
-import { userIsOrgAdminAnywhere } from '../utils/saas-admin-check.js';
+import { userIsOrgAdminOfOrg } from '../utils/saas-admin-check.js';
 
 interface CreateProjectBody {
   name: string;
@@ -126,20 +126,28 @@ export function projectRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       preHandler: [requireUser],
     },
     async (request, reply) => {
+      const { name, settings, organization_id: bodyOrgId } = request.body;
+      // Resolve the target org BEFORE the role check. An earlier
+      // version of this code consulted `userIsOrgAdminAnywhere(db,
+      // userId)` BEFORE resolving the org — that opens a cross-tenant
+      // escalation: an admin of Org A who is only a `member` of Org B
+      // could POST against Org B's subdomain and the gate would wave
+      // them through. Pin the gate to the *resolved* target org.
+      const organizationId = await resolveOrganizationForProject(request, bodyOrgId, db);
+
       // System role 'viewer' is the default for SaaS customer-tenant
       // users — org owners/admins MUST be able to create projects in
-      // their tenant. Consult organization membership before
-      // rejecting. (See packages/backend/src/api/utils/saas-admin-check.ts
-      // for the broader rationale.)
-      if (
-        !isPlatformAdmin(request) &&
-        request.authUser?.role === 'viewer' &&
-        !(request.authUser && (await userIsOrgAdminAnywhere(db, request.authUser.id)))
-      ) {
-        throw new AppError('Viewers cannot create projects', 403, 'Forbidden');
+      // THEIR org (not just any org they're admin of somewhere).
+      // Selfhosted (no organizationId resolves) keeps the viewer
+      // block as a coarse read-only gate.
+      if (!isPlatformAdmin(request) && request.authUser?.role === 'viewer') {
+        const allowed =
+          organizationId !== null &&
+          (await userIsOrgAdminOfOrg(db, request.authUser.id, organizationId));
+        if (!allowed) {
+          throw new AppError('Viewers cannot create projects', 403, 'Forbidden');
+        }
       }
-      const { name, settings, organization_id: bodyOrgId } = request.body;
-      const organizationId = await resolveOrganizationForProject(request, bodyOrgId, db);
 
       const projectInput = {
         name,

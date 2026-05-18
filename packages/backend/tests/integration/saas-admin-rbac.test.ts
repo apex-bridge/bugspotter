@@ -331,6 +331,30 @@ describe('SaaS-tenant RBAC for api-keys + projects creation', () => {
       expect(body).toContain('Viewers cannot create projects');
     });
 
+    it('SaaS admin of Org A cannot create a project in Org B (cross-tenant)', async () => {
+      // Regression for Gemini's security-high finding on the
+      // original viewer-gate fix: the first iteration used
+      // `userIsOrgAdminAnywhere`, which would let an admin of Org A
+      // who is only a `member` of Org B POST a project in B by
+      // resolving B from the tenant subdomain. The fix is
+      // `userIsOrgAdminOfOrg` — gate on the RESOLVED org, not "any".
+      const sub = `cross-tenant-${generateUniqueId()}`;
+      const orgB = await db.organizations.create({ name: sub, subdomain: sub });
+      cleanup.trackOrganization(orgB.id);
+
+      // orgAdmin is admin of `org` (set up in beforeAll) and only
+      // a member of `orgB` here.
+      await db.organizationMembers.create({
+        organization_id: orgB.id,
+        user_id: orgAdmin.user.id,
+        role: 'member',
+      });
+
+      const { status, body } = await attemptCreate(orgAdmin, orgB.id);
+      expect(status).toBe(403);
+      expect(body).toContain('Viewers cannot create projects');
+    });
+
     it('system user (selfhosted) can create a project', async () => {
       const { status, body } = await attemptCreate(systemUser);
       // Selfhosted: no org, so no quota path — pure 201 or a downstream
