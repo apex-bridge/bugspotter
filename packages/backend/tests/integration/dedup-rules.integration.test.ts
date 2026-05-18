@@ -88,11 +88,9 @@ describe('Migration 025 — dedup_rules cascade trigger + seed', () => {
       // would otherwise leak into a `SELECT *` query.
       await db.dedupRules.delete(r1.id);
 
-      const remaining = await db
-        .getPool()
-        .query<{
-          rule_id: string;
-        }>(`SELECT rule_id FROM application.notification_throttle WHERE rule_id = ANY($1::uuid[])`, [[r1.id, r2.id]]);
+      const remaining = await db.getPool().query<{
+        rule_id: string;
+      }>(`SELECT rule_id FROM application.notification_throttle WHERE rule_id = ANY($1::uuid[])`, [[r1.id, r2.id]]);
       const ids = remaining.rows.map((row) => row.rule_id);
       expect(ids).toEqual([r2.id]);
     });
