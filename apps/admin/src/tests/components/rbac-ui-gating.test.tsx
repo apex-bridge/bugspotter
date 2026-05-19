@@ -104,6 +104,22 @@ describe('BugReportList — delete gating', () => {
       expect(btn).toBeDisabled();
     }
   });
+
+  it('should show the spinner only on the row matching deletingId', () => {
+    const reportTwo = { ...mockReport, id: 'report-2', title: 'Other' };
+    render(
+      <BugReportList
+        {...defaultProps}
+        reports={[mockReport, reportTwo]}
+        isDeleting={true}
+        deletingId="report-1"
+      />
+    );
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
+    expect(deleteButtons[0].querySelector('.animate-spin')).toBeTruthy();
+    expect(deleteButtons[1].querySelector('.animate-spin')).toBeNull();
+  });
 });
 
 // ============================================================================
