@@ -13,6 +13,8 @@ interface BugReportListProps {
   onViewDetails: (report: BugReport) => void;
   onDelete: (id: string) => void;
   isDeleting: boolean;
+  /** ID of the report whose delete is currently in flight (for the spinner). */
+  deletingId?: string | null;
 }
 
 export function BugReportList({
@@ -21,6 +23,7 @@ export function BugReportList({
   onViewDetails,
   onDelete,
   isDeleting,
+  deletingId,
 }: BugReportListProps) {
   const { t } = useTranslation();
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -128,7 +131,7 @@ export function BugReportList({
                     size="sm"
                     variant="destructive"
                     onClick={() => handleDelete(report.id)}
-                    isLoading={isDeleting && deleteConfirm === report.id}
+                    isLoading={deletingId === report.id}
                     // `isDeleting` is shared across the whole list (the
                     // parent has one delete mutation), so this disables
                     // every row while any delete is in flight — prevents

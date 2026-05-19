@@ -225,6 +225,7 @@ export default function BugReportsPage() {
                 onViewDetails={handleViewDetails}
                 onDelete={handleDelete}
                 isDeleting={deleteMutation.isPending}
+                deletingId={deleteMutation.isPending ? deleteMutation.variables : null}
               />
 
               {/* Pagination */}
