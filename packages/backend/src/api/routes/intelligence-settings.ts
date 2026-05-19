@@ -62,6 +62,13 @@ const updateSettingsBody = {
     intelligence_similarity_threshold: { type: ['number', 'null'], minimum: 0, maximum: 1 },
     intelligence_dedup_enabled: { type: 'boolean' },
     intelligence_dedup_action: { type: ['string', 'null'], enum: ['flag', 'auto_close', null] },
+    // Pre-file dedup grace window in milliseconds. 0 = file immediately (default).
+    // Backend clamps to [0, 300_000]; we mirror the cap here for an early 400.
+    intelligence_pre_file_dedup_grace_ms: {
+      type: ['number', 'null'],
+      minimum: 0,
+      maximum: 300_000,
+    },
     intelligence_self_service_enabled: { type: 'boolean' },
   },
   additionalProperties: false,
@@ -83,6 +90,7 @@ interface UpdateSettingsBody {
   intelligence_similarity_threshold?: number | null;
   intelligence_dedup_enabled?: boolean;
   intelligence_dedup_action?: 'flag' | 'auto_close' | null;
+  intelligence_pre_file_dedup_grace_ms?: number | null;
   intelligence_self_service_enabled?: boolean;
 }
 

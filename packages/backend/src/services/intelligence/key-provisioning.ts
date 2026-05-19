@@ -57,6 +57,7 @@ export type IntelligenceSettingsUpdate = Pick<
   | 'intelligence_similarity_threshold'
   | 'intelligence_dedup_enabled'
   | 'intelligence_dedup_action'
+  | 'intelligence_pre_file_dedup_grace_ms'
   | 'intelligence_self_service_enabled'
 >;
 

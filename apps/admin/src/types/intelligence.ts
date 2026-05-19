@@ -22,6 +22,7 @@ export interface IntelligenceSettings {
   intelligence_similarity_threshold: number;
   intelligence_dedup_enabled: boolean;
   intelligence_dedup_action: 'flag' | 'auto_close';
+  intelligence_pre_file_dedup_grace_ms: number;
   intelligence_self_service_enabled: boolean;
   key_status?: IntelligenceKeyStatus;
 }
@@ -34,6 +35,7 @@ export interface UpdateIntelligenceSettingsInput {
   intelligence_similarity_threshold?: number | null;
   intelligence_dedup_enabled?: boolean;
   intelligence_dedup_action?: 'flag' | 'auto_close' | null;
+  intelligence_pre_file_dedup_grace_ms?: number | null;
   intelligence_self_service_enabled?: boolean;
 }
 
