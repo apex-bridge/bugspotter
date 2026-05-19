@@ -13,7 +13,6 @@ interface BugReportListProps {
   onViewDetails: (report: BugReport) => void;
   onDelete: (id: string) => void;
   isDeleting: boolean;
-  readOnly?: boolean;
 }
 
 export function BugReportList({
@@ -22,7 +21,6 @@ export function BugReportList({
   onViewDetails,
   onDelete,
   isDeleting,
-  readOnly,
 }: BugReportListProps) {
   const { t } = useTranslation();
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -131,7 +129,7 @@ export function BugReportList({
                     variant="destructive"
                     onClick={() => handleDelete(report.id)}
                     isLoading={isDeleting && deleteConfirm === report.id}
-                    disabled={report.legal_hold || readOnly}
+                    disabled={report.legal_hold}
                     title={report.legal_hold ? t('bugReports.cannotDeleteLegalHold') : ''}
                   >
                     <Trash2 className="w-4 h-4 mr-1" />
