@@ -24,6 +24,11 @@ import type {
   UpdateIntelligenceSettingsInput,
 } from '../../types/intelligence';
 
+// Grace window is exposed as seconds in the UI but stored as ms server-side.
+// Server clamps to [0, 300_000ms]; mirror that cap here so we don't post a
+// value that'll be silently clamped.
+const PRE_FILE_DEDUP_GRACE_MAX_SEC = 300;
+
 function applyKeyStatus(
   old: IntelligenceSettings | undefined,
   result: ProvisionKeyResult
@@ -194,10 +199,6 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
     [updateMutation]
   );
 
-  // Grace window is exposed as seconds in the UI but stored as ms server-side.
-  // Server clamps to [0, 300_000ms]; mirror that cap here so we don't post a
-  // value that'll be silently clamped.
-  const PRE_FILE_DEDUP_GRACE_MAX_SEC = 300;
   const handlePreFileDedupGraceBlur = useCallback(
     (value: string) => {
       const num = parseInt(value, 10);
@@ -212,11 +213,10 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
         return;
       }
       const clamped = Math.min(num, PRE_FILE_DEDUP_GRACE_MAX_SEC);
-      // Echo the clamp into local state so an over-max input snaps to
-      // the cap immediately instead of waiting for the server round-trip.
-      if (clamped !== num) {
-        setPreFileDedupGraceSec(String(clamped));
-      }
+      // Always echo the parsed/clamped value into local state so things
+      // like "005" or "5.7" snap to their integer form immediately
+      // instead of waiting for the server round-trip via useEffect.
+      setPreFileDedupGraceSec(String(clamped));
       updateMutation.mutate({ intelligence_pre_file_dedup_grace_ms: clamped * 1000 });
     },
     [updateMutation, settings?.intelligence_pre_file_dedup_grace_ms]
