@@ -438,16 +438,19 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
    * `bigint` (COUNT) as a string so we parse explicitly.
    */
   async getUsageStats(apiKeyId: string): Promise<ApiKeyUsageStats | null> {
+    // The LATERAL subquery's COUNT(*) is never NULL (returns 0 with no
+    // matches), and `ON true` always yields a row, so the outer SELECT
+    // can read `u.*` directly — no COALESCE needed.
     const query = `
       SELECT
         k.id,
         k.name,
         k.created_at,
         k.last_used_at,
-        COALESCE(u.total_requests, 0)     AS total_requests,
-        COALESCE(u.requests_last_24h, 0)  AS requests_last_24h,
-        COALESCE(u.requests_last_7d, 0)   AS requests_last_7d,
-        COALESCE(u.requests_last_30d, 0)  AS requests_last_30d
+        u.total_requests,
+        u.requests_last_24h,
+        u.requests_last_7d,
+        u.requests_last_30d
       FROM ${this.schema}.${this.tableName} k
       LEFT JOIN LATERAL (
         SELECT
