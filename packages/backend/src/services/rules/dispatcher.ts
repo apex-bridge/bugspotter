@@ -242,10 +242,14 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         // Treat a verifier failure the same as "not verified" — the
         // worst-case alternative is leaking bug data on a transient
         // DB blip. The executor relies on this being non-throwing.
+        // Log the error type/name, not `error.message`. A verifier
+        // implementation could embed user-controlled strings (an email,
+        // an org-name fragment from a SQL error) in the message;
+        // sticking to the class name keeps logs PII-free.
         logger.warn('Skipping notify.email: reporter verifier threw', {
           bugReportId: context.bugReport.id,
           organizationId: context.bugReport.organization_id,
-          error: error instanceof Error ? error.message : String(error),
+          errorType: error instanceof Error ? error.name : 'NonErrorThrown',
         });
         return false;
       }
