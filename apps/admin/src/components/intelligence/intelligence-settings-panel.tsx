@@ -79,6 +79,7 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [showProvisionForm, setShowProvisionForm] = useState(false);
   const [threshold, setThreshold] = useState('0.75');
+  const [preFileDedupGraceSec, setPreFileDedupGraceSec] = useState('0');
 
   const queryKey = ['intelligence-settings', orgId];
 
@@ -155,6 +156,18 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
     }
   }, [settings?.intelligence_similarity_threshold]);
 
+  // Store as seconds in the input; convert back to ms on submit. The
+  // null branch matters: if the setting is cleared server-side, the
+  // local input must follow back to '0' rather than holding the user's
+  // last typed value.
+  useEffect(() => {
+    setPreFileDedupGraceSec(
+      settings?.intelligence_pre_file_dedup_grace_ms != null
+        ? String(Math.round(settings.intelligence_pre_file_dedup_grace_ms / 1000))
+        : '0'
+    );
+  }, [settings?.intelligence_pre_file_dedup_grace_ms]);
+
   const handleToggle = useCallback(
     (field: BooleanSettingsKey, value: boolean) => {
       updateMutation.mutate({ [field]: value });
@@ -179,6 +192,34 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
       }
     },
     [updateMutation]
+  );
+
+  // Grace window is exposed as seconds in the UI but stored as ms server-side.
+  // Server clamps to [0, 300_000ms]; mirror that cap here so we don't post a
+  // value that'll be silently clamped.
+  const PRE_FILE_DEDUP_GRACE_MAX_SEC = 300;
+  const handlePreFileDedupGraceBlur = useCallback(
+    (value: string) => {
+      const num = parseInt(value, 10);
+      if (Number.isNaN(num) || num < 0) {
+        // Revert to the last server-known value so the field doesn't
+        // sit displaying invalid text the server never accepted.
+        setPreFileDedupGraceSec(
+          settings?.intelligence_pre_file_dedup_grace_ms != null
+            ? String(Math.round(settings.intelligence_pre_file_dedup_grace_ms / 1000))
+            : '0'
+        );
+        return;
+      }
+      const clamped = Math.min(num, PRE_FILE_DEDUP_GRACE_MAX_SEC);
+      // Echo the clamp into local state so an over-max input snaps to
+      // the cap immediately instead of waiting for the server round-trip.
+      if (clamped !== num) {
+        setPreFileDedupGraceSec(String(clamped));
+      }
+      updateMutation.mutate({ intelligence_pre_file_dedup_grace_ms: clamped * 1000 });
+    },
+    [updateMutation, settings?.intelligence_pre_file_dedup_grace_ms]
   );
 
   if (isLoading) {
@@ -424,6 +465,27 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
               </option>
             </select>
           </div>
+
+          {settings.intelligence_dedup_enabled && (
+            <div className="max-w-xs">
+              <Label htmlFor="pre-file-dedup-grace">
+                {t('intelligence.featureFlags.preFileDedupGrace')}
+              </Label>
+              <p className="text-sm text-gray-500 mb-1">
+                {t('intelligence.featureFlags.preFileDedupGraceDescription')}
+              </p>
+              <Input
+                id="pre-file-dedup-grace"
+                type="number"
+                min={0}
+                max={PRE_FILE_DEDUP_GRACE_MAX_SEC}
+                step={1}
+                value={preFileDedupGraceSec}
+                onChange={(e) => setPreFileDedupGraceSec(e.target.value)}
+                onBlur={(e) => handlePreFileDedupGraceBlur(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="flex items-center gap-3">
             <Checkbox
