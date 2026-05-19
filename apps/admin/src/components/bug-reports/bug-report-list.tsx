@@ -129,7 +129,15 @@ export function BugReportList({
                     variant="destructive"
                     onClick={() => handleDelete(report.id)}
                     isLoading={isDeleting && deleteConfirm === report.id}
-                    disabled={report.legal_hold}
+                    // `isDeleting` is shared across the whole list (the
+                    // parent has one delete mutation), so this disables
+                    // every row while any delete is in flight — prevents
+                    // a second-click race after `setDeleteConfirm(null)`
+                    // clears synchronously but the mutation hasn't
+                    // resolved yet. Mild side effect: parallel deletes
+                    // are serialised on the visible page, which is fine
+                    // (page is 20 rows, soft-delete is fast).
+                    disabled={report.legal_hold || isDeleting}
                     title={report.legal_hold ? t('bugReports.cannotDeleteLegalHold') : ''}
                   >
                     <Trash2 className="w-4 h-4 mr-1" />
