@@ -362,4 +362,130 @@ describe('DefaultActionDispatcher', () => {
       expect(send.mock.calls[0][0].to).toBe('ops@example.com');
     });
   });
+
+  describe('notify.email — auth-bound reporter (SaaS)', () => {
+    function buildVerifierDispatcher(verifyReporter: Mock) {
+      const send: Mock = vi.fn().mockResolvedValue(true);
+      const emailSender = { send };
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        emailSender,
+        verifyReporter as unknown as (orgId: string, email: string) => Promise<boolean>
+      );
+      return { dispatcher: d, send, verifyReporter };
+    }
+
+    const SAAS_CTX = (): RuleEvalContext =>
+      makeContext({
+        bugReport: makeBug({
+          organization_id: 'org-1',
+          metadata: { metadata: { user: { email: 'reporter@example.com' } } },
+        }),
+      });
+
+    it('sends when verifier confirms the reporter is an org member', async () => {
+      const verify = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d, send } = buildVerifierDispatcher(verify);
+
+      const ok = await d.dispatch(SAAS_CTX(), {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(verify).toHaveBeenCalledWith('org-1', 'reporter@example.com');
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips when verifier returns false (reporter not in org)', async () => {
+      const verify = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d, send } = buildVerifierDispatcher(verify);
+
+      const ok = await d.dispatch(SAAS_CTX(), {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(false);
+      expect(verify).toHaveBeenCalledTimes(1);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when verifier throws (does not propagate)', async () => {
+      const verify = vi.fn().mockRejectedValue(new Error('db unreachable'));
+      const { dispatcher: d, send } = buildVerifierDispatcher(verify);
+
+      const ok = await d.dispatch(SAAS_CTX(), {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('fails closed in SaaS mode when no verifier is wired', async () => {
+      const send: Mock = vi.fn().mockResolvedValue(true);
+      const emailSender = { send };
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        emailSender
+        // verifyReporter intentionally omitted
+      );
+
+      const ok = await d.dispatch(SAAS_CTX(), {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('skips verifier entirely for selfhosted (organization_id is null)', async () => {
+      const verify = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d, send } = buildVerifierDispatcher(verify);
+      const ctx = makeContext({
+        bugReport: makeBug({
+          organization_id: null,
+          metadata: { metadata: { user: { email: 'reporter@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(verify).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not invoke verifier for literal recipients', async () => {
+      const verify = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d, send } = buildVerifierDispatcher(verify);
+      const ctx = makeContext({
+        bugReport: makeBug({ organization_id: 'org-1', metadata: {} }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'ops@example.com',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(verify).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0].to).toBe('ops@example.com');
+    });
+  });
 });
