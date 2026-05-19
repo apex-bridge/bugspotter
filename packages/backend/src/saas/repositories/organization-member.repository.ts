@@ -47,6 +47,30 @@ export class OrganizationMemberRepository extends BaseRepository<
   }
 
   /**
+   * Cheap existence probe — does `email` map to an active member of
+   * `organizationId`? Used by the dedup-rule engine to gate the
+   * `notify.email` action when the rule targets the SDK-supplied
+   * `reporter` field (which is otherwise attacker-controllable).
+   *
+   * Case-insensitive on email to match `users.findByEmail`'s pattern;
+   * the data the SDK posts can come from any client and shouldn't be
+   * required to round-trip exact casing. Returns `false` on any error
+   * the caller can't recover from — the dedup engine treats that the
+   * same as "not verified" and skips the send.
+   */
+  async existsByOrganizationAndEmail(organizationId: string, email: string): Promise<boolean> {
+    const query = `
+      SELECT 1
+      FROM ${this.schema}.${this.tableName} om
+      INNER JOIN application.users u ON u.id = om.user_id
+      WHERE om.organization_id = $1 AND LOWER(u.email) = LOWER($2)
+      LIMIT 1
+    `;
+    const result = await this.pool.query(query, [organizationId, email]);
+    return result.rows.length > 0;
+  }
+
+  /**
    * Find a specific membership (user + org combination)
    */
   async findMembership(organizationId: string, userId: string): Promise<OrganizationMember | null> {

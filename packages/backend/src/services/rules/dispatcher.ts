@@ -21,7 +21,7 @@ import type {
 import { pluginSupports } from '../../integrations/capabilities.js';
 import type { ActionSpec } from '../../integrations/dedup-rule.schema.js';
 import { getLogger } from '../../logger.js';
-import type { EmailSender } from './email-sender.js';
+import type { EmailSender, ReporterVerifier } from './email-sender.js';
 import { resolveEmailRecipient } from './email-sender.js';
 import type { ActionDispatcher, RuleEvalContext } from './types.js';
 
@@ -71,7 +71,17 @@ export class DefaultActionDispatcher implements ActionDispatcher {
      * actions are skipped if no sender is wired, avoiding the
      * throttle-budget burn.
      */
-    private readonly emailSender?: EmailSender
+    private readonly emailSender?: EmailSender,
+    /**
+     * Optional. Required in SaaS mode (where `bugReport.organization_id`
+     * is non-null) to gate the `reporter` recipient token against
+     * org-member identity. Without it, a SaaS rule with
+     * `notify.email { to: 'reporter' }` fails closed — the bug filer
+     * controls the email field they put in `metadata.user.email`, so
+     * we can't honour it unverified. Selfhosted bugs have
+     * `organization_id === null` and never reach the verifier.
+     */
+    private readonly verifyReporter?: ReporterVerifier
   ) {}
 
   /**
@@ -209,6 +219,45 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       // resolveEmailRecipient logs the reason (unknown token, missing
       // reporter email, etc).
       return false;
+    }
+    // Auth-bound `reporter` gate. The `reporter` field comes from the
+    // SDK payload — a bug filer chooses any string for
+    // `metadata.user.email`. SaaS mode requires it to match an
+    // org-member identity before we'll relay bug data to it; without
+    // a verifier wired we fail closed rather than silently regress to
+    // the spammable shape. Selfhosted bugs have `organization_id ===
+    // null` and skip the check entirely.
+    if (to === 'reporter' && context.bugReport.organization_id !== null) {
+      if (!this.verifyReporter) {
+        logger.warn('Skipping notify.email: SaaS mode without reporter verifier', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+        });
+        return false;
+      }
+      let verified: boolean;
+      try {
+        verified = await this.verifyReporter(context.bugReport.organization_id, recipient);
+      } catch (error) {
+        // Treat a verifier failure the same as "not verified" — the
+        // worst-case alternative is leaking bug data on a transient
+        // DB blip. The executor relies on this being non-throwing.
+        logger.warn('Skipping notify.email: reporter verifier threw', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+      if (!verified) {
+        // Email value itself is intentionally not logged — it's PII
+        // and the boolean outcome is enough for ops.
+        logger.info('Skipping notify.email: reporter not in org membership', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+        });
+        return false;
+      }
     }
     return this.emailSender.send({
       projectId: context.projectId,
