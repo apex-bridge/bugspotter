@@ -54,9 +54,11 @@ export class OrganizationMemberRepository extends BaseRepository<
    *
    * Case-insensitive on email to match `users.findByEmail`'s pattern;
    * the data the SDK posts can come from any client and shouldn't be
-   * required to round-trip exact casing. Returns `false` on any error
-   * the caller can't recover from — the dedup engine treats that the
-   * same as "not verified" and skips the send.
+   * required to round-trip exact casing.
+   *
+   * DB errors propagate (matches the rest of this repo). The dedup
+   * dispatcher catches and treats a throw as "not verified" — see the
+   * verifier-threw branch in `DefaultActionDispatcher.dispatchEmail`.
    */
   async existsByOrganizationAndEmail(organizationId: string, email: string): Promise<boolean> {
     const query = `
