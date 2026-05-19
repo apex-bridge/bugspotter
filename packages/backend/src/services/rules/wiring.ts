@@ -113,7 +113,13 @@ export function buildDedupRuleExecutor(
     db.notificationChannels,
     new EmailChannelHandler()
   );
-  const dispatcher = new DefaultActionDispatcher(resolver, lookup, emailSender);
+  // Reporter verifier — gates the `notify.email { to: 'reporter' }`
+  // path against the bug's organisation membership. Without it the
+  // dispatcher fails closed in SaaS mode (bugs with non-null
+  // organization_id), so wiring this here is load-bearing.
+  const verifyReporter = (orgId: string, email: string): Promise<boolean> =>
+    db.organizationMembers.existsByOrganizationAndEmail(orgId, email);
+  const dispatcher = new DefaultActionDispatcher(resolver, lookup, emailSender, verifyReporter);
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);
   return new DedupRuleExecutor(repo, dispatcher, rateLimiter, contextProvider);

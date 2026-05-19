@@ -8,24 +8,22 @@
  * machinery.
  *
  * The recipient resolution rules mirror the schema's `EMAIL_TARGET_PATTERN`:
- *   - `reporter` -> `bugReport.metadata.metadata.user.email`. **This is
- *     SDK-controlled with no verification** — the bug filer chooses
- *     any string. A malicious bug filer can therefore make the engine
- *     send a "your bug was matched" email to any address (e.g.
- *     `victim@example.com`). The per-(rule, canonical) rate limit
- *     caps spam at one email per canonical per window, but the
- *     attacker can fabricate duplicates of many canonicals, so the
- *     bound is ≈ number-of-canonicals × rules-with-B1 / window.
- *     **Mitigation lands in PR-D**: either require reporter emails
- *     to match an authenticated org-member identity (SaaS) or add a
- *     per-recipient rate limit. Until then, operators should enable
- *     B1 only when their ingest path requires authenticated SDK
- *     submissions.
+ *   - `reporter` -> `bugReport.metadata.metadata.user.email`. The
+ *     value is SDK-controlled, so the dispatcher gates the send on a
+ *     `ReporterVerifier` callback (see `dispatcher.ts`) that confirms
+ *     the email maps to a member of the bug's organisation. In SaaS
+ *     mode without a verifier wired, the send is skipped fail-closed.
+ *     In selfhosted mode (`organization_id === null`) the verifier
+ *     never runs — there's no org-membership concept, so the historical
+ *     "trust the SDK" behaviour stays.
  *   - `closer` and `all_reporters` are recognised by the schema but
  *     not yet resolvable — they need the closer-identity / cluster-
  *     reporters wiring that the persona analysis flagged but didn't
  *     scope into Phase 0.5. Log and skip.
- *   - A literal email passes through.
+ *   - A literal email passes through. The per-org allowlist /
+ *     confirmation flow that protects against `notify.email.to =
+ *     'attacker@evil.com'` rules lands in a follow-up; until then,
+ *     admin-gated rule creation remains the only gate on this branch.
  */
 
 import type { NotificationChannelRepository } from '../../db/repositories/notification-channel.repository.js';
@@ -57,6 +55,21 @@ export interface EmailSendRequest {
 export interface EmailSender {
   send(req: EmailSendRequest): Promise<boolean>;
 }
+
+/**
+ * Auth gate for the `reporter` recipient token. The dispatcher calls
+ * this before sending a `notify.email` whose `to` resolved from the
+ * SDK-supplied reporter field. Returns `true` iff `email` matches an
+ * org-member identity in `organizationId`. Throws and rejects are
+ * surfaced; the dispatcher treats both as "not verified" and skips.
+ *
+ * Production wires this to
+ * `db.organizationMembers.existsByOrganizationAndEmail`. Tests inject
+ * a stub. Selfhosted deployments leave it unset — `bugReport.organization_id`
+ * is null there, so the dispatcher never calls the verifier and the
+ * historical pre-Phase-0.5 trust-the-SDK behaviour is preserved.
+ */
+export type ReporterVerifier = (organizationId: string, email: string) => Promise<boolean>;
 
 /**
  * Production sender — looks up the project's first active email
