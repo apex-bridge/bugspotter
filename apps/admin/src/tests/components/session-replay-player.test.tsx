@@ -152,6 +152,12 @@ describe('SessionReplayPlayer', () => {
       // skipInactive defaults to false so initial timestamps match wall-clock.
       // The player exposes its own toggle for users who want to skip idle time.
       expect(playerCall.props.skipInactive).toBe(false);
+      // Regression pin: `UNSAFE_replayCanvas` was removed when upgrading to
+      // rrweb-player 2.x (canvas replay is now a recorder-side concern, not
+      // a player option). If a merge or dependency auto-update reintroduces
+      // it on the player options, this assertion catches it. See the
+      // matching comment in `session-replay-player.tsx`.
+      expect(playerCall.props.UNSAFE_replayCanvas).toBeUndefined();
 
       // Verify container ref is used
       const containerDiv = container.querySelector('div > div');

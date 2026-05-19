@@ -108,11 +108,25 @@ export function SessionReplayPlayer({
         }
 
         // Create player instance and store reference for cleanup.
+        //
         // skipInactive defaults to false so the displayed timestamps match
         // wall-clock recording time on first view — otherwise the player
         // shows confusing "01:25 / 01:21" mismatches because it skips idle
         // gaps in playback while the totalTime label keeps the full span.
         // The player exposes its own UI toggle to let the user opt in.
+        //
+        // Deliberately NOT passing `UNSAFE_replayCanvas`: in rrweb-player
+        // 2.x the prop is removed from the player options. Canvas replay
+        // is enabled on the *recorder* side (the recorder captures
+        // canvas frames as snapshot events; the player just replays
+        // whatever the event stream contains). An older comment on this
+        // file misattributed the flag to iframe-sandbox bypass — the
+        // sandbox attribute is set on the iframe via separate
+        // `iframeSandbox` plumbing inside rrweb-player and isn't
+        // affected by this option in either major version. See the
+        // matching `toBeUndefined()` assertion in
+        // `session-replay-player.test.tsx` for regression coverage if
+        // a merge / auto-update reintroduces it.
         playerRef.current = new rrwebPlayerDefault({
           target: containerRef.current!,
           props: {
