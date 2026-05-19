@@ -95,6 +95,15 @@ describe('BugReportList — delete gating', () => {
       expect(btn).toBeDisabled();
     }
   });
+
+  it('should disable all delete buttons while a delete is in flight', () => {
+    render(<BugReportList {...defaultProps} isDeleting={true} />);
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
+    for (const btn of deleteButtons) {
+      expect(btn).toBeDisabled();
+    }
+  });
 });
 
 // ============================================================================
