@@ -149,7 +149,9 @@ describe('SessionReplayPlayer', () => {
       expect(playerCall.props.events).toHaveLength(mockEvents.length + 1);
       expect(playerCall.props.autoPlay).toBe(false);
       expect(playerCall.props.showController).toBe(true);
-      expect(playerCall.props.UNSAFE_replayCanvas).toBe(true);
+      // skipInactive defaults to false so initial timestamps match wall-clock.
+      // The player exposes its own toggle for users who want to skip idle time.
+      expect(playerCall.props.skipInactive).toBe(false);
 
       // Verify container ref is used
       const containerDiv = container.querySelector('div > div');

@@ -107,7 +107,12 @@ export function SessionReplayPlayer({
           replayEvents = [metaEvent, ...events];
         }
 
-        // Create player instance and store reference for cleanup
+        // Create player instance and store reference for cleanup.
+        // skipInactive defaults to false so the displayed timestamps match
+        // wall-clock recording time on first view — otherwise the player
+        // shows confusing "01:25 / 01:21" mismatches because it skips idle
+        // gaps in playback while the totalTime label keeps the full span.
+        // The player exposes its own UI toggle to let the user opt in.
         playerRef.current = new rrwebPlayerDefault({
           target: containerRef.current!,
           props: {
@@ -117,12 +122,8 @@ export function SessionReplayPlayer({
             height: PLAYER_DIMENSIONS.HEIGHT,
             autoPlay: false,
             showController: true,
-            skipInactive: true,
+            skipInactive: false,
             speed: 1,
-            // CRITICAL FIX: Allow iframe to run scripts for replay rendering
-            // Without this, browser sandboxes the iframe and blocks script execution
-            // Error: "Blocked script execution because document's frame is sandboxed"
-            UNSAFE_replayCanvas: true,
           },
         });
       } catch (err) {
