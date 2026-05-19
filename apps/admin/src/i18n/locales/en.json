@@ -1766,6 +1766,8 @@
       "dedupActionFlagDescription": "Mark the bug as a duplicate for manual review",
       "dedupActionAutoClose": "Auto-close",
       "dedupActionAutoCloseDescription": "Automatically close the bug and link to the original",
+      "preFileDedupGrace": "Pre-file dedup grace (seconds)",
+      "preFileDedupGraceDescription": "Delay before filing an external ticket so async dedup has time to suppress duplicates. 0 = file immediately. Recommended: 30.",
       "selfServiceEnabled": "Self-Service Resolution",
       "selfServiceEnabledDescription": "Allow end users to check their issue against known resolutions before submitting"
     },

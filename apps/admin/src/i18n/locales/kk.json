@@ -1766,6 +1766,8 @@
       "dedupActionFlagDescription": "Багты қолмен тексеру үшін қайталану ретінде белгілеу",
       "dedupActionAutoClose": "Автожабу",
       "dedupActionAutoCloseDescription": "Багты автоматты жабу және түпнұсқаға сілтеме жасау",
+      "preFileDedupGrace": "Дедупликация күту терезесі (секунд)",
+      "preFileDedupGraceDescription": "Сыртқы тикетті құру алдындағы кідіріс — асинхронды дедупликация қайталануларды сүзіп үлгеру үшін. 0 = бірден құру. Ұсынылады: 30.",
       "selfServiceEnabled": "Өздігінен шешу",
       "selfServiceEnabledDescription": "Пайдаланушыларға жіберу алдында белгілі шешімдерді тексеруге мүмкіндік беру"
     },
