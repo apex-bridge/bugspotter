@@ -1117,17 +1117,12 @@ describe('RPC Bridge Security', () => {
     // synchronous network-error reject for deterministic behaviour.
     // Restored after every test so other describes that need real
     // behaviour aren't affected.
-    let originalFetch: typeof fetch;
-
     beforeEach(() => {
-      originalFetch = globalThis.fetch;
-      globalThis.fetch = vi.fn(async () => {
-        throw new TypeError('fetch failed');
-      }) as unknown as typeof fetch;
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
     });
 
     afterEach(() => {
-      globalThis.fetch = originalFetch;
+      vi.unstubAllGlobals();
     });
 
     describe('Header Sanitization', () => {
