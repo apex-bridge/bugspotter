@@ -1129,10 +1129,10 @@ describe('RPC Bridge Security', () => {
     // The handler passes a `Headers` instance (not a plain dict), so we
     // assert against `.get(name)` rather than `objectContaining`.
     function lastFetchHeaders(): Headers {
-      const mock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+      const mock = vi.mocked(globalThis.fetch);
       expect(mock).toHaveBeenCalled();
       const [, options] = mock.mock.calls[mock.mock.calls.length - 1];
-      return (options?.headers as Headers) ?? new Headers();
+      return new Headers(options?.headers);
     }
 
     describe('Header Sanitization', () => {
