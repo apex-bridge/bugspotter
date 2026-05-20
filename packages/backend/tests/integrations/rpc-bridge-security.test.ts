@@ -3,7 +3,7 @@
  * Tests that malicious plugin code cannot escape sandbox restrictions
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RpcBridge } from '../../src/integrations/security/rpc-bridge.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 import type { IStorageService } from '../../src/storage/types.js';
@@ -1107,6 +1107,43 @@ describe('RPC Bridge Security', () => {
   });
 
   describe('HTTP Fetch Security', () => {
+    // Every test in this block uses `https://api.example.com/data` as
+    // the target — a public-resolving domain that passes SSRF, so the
+    // handler reaches the real `fetch()` call. In CI / on dev machines
+    // that resolves api.example.com slowly (or not at all), the network
+    // attempt races vitest's 5s default test timeout, producing a
+    // flaky failure. Each test only asserts `result.success === false`,
+    // which a rejected fetch satisfies — so stub the global fetch to a
+    // synchronous network-error reject for deterministic behaviour.
+    // Restored after every test so other describes that need real
+    // behaviour aren't affected.
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // Pull the sanitized `Headers` object out of the last fetch call.
+    // The handler passes a `Headers` instance (not a plain dict), so we
+    // assert against `.get(name)` rather than `objectContaining`.
+    function lastFetchHeaders(): Headers {
+      const mock = vi.mocked(globalThis.fetch);
+      expect(mock).toHaveBeenCalled();
+      const [, options] = mock.mock.calls[mock.mock.calls.length - 1];
+      return new Headers(options?.headers);
+    }
+
+    // Pull the normalized HTTP method out of the last fetch call.
+    // Defaults to GET to match fetch's own semantics.
+    function lastFetchMethod(): string {
+      const mock = vi.mocked(globalThis.fetch);
+      expect(mock).toHaveBeenCalled();
+      const [, options] = mock.mock.calls[mock.mock.calls.length - 1];
+      return (options?.method as string) ?? 'GET';
+    }
+
     describe('Header Sanitization', () => {
       it('should block Authorization header', async () => {
         const result = await rpcBridge.handleCall({
@@ -1124,8 +1161,10 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Should fail due to SSRF validation (no mock setup)
-        // But header sanitization happens first
+        const headers = lastFetchHeaders();
+        // The forbidden header is stripped; the safe one passes through.
+        expect(headers.get('authorization')).toBeNull();
+        expect(headers.get('content-type')).toBe('application/json');
       });
 
       it('should block Cookie header', async () => {
@@ -1144,6 +1183,9 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        expect(headers.get('cookie')).toBeNull();
+        expect(headers.get('content-type')).toBe('application/json');
       });
 
       it('should block X-Api-Key header', async () => {
@@ -1162,6 +1204,9 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        expect(headers.get('x-api-key')).toBeNull();
+        expect(headers.get('content-type')).toBe('application/json');
       });
 
       it('should block Proxy-Authorization header', async () => {
@@ -1179,6 +1224,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        expect(lastFetchHeaders().get('proxy-authorization')).toBeNull();
       });
 
       it('should block X-Forwarded-For header', async () => {
@@ -1196,6 +1242,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        expect(lastFetchHeaders().get('x-forwarded-for')).toBeNull();
       });
 
       it('should block all Sec-* headers', async () => {
@@ -1215,6 +1262,10 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        expect(headers.get('sec-fetch-site')).toBeNull();
+        expect(headers.get('sec-fetch-mode')).toBeNull();
+        expect(headers.get('sec-websocket-key')).toBeNull();
       });
 
       it('should block Set-Cookie header', async () => {
@@ -1232,6 +1283,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        expect(lastFetchHeaders().get('set-cookie')).toBeNull();
       });
 
       it('should block header case-insensitively', async () => {
@@ -1251,6 +1303,11 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        // All three variants must be stripped regardless of casing.
+        expect(headers.get('authorization')).toBeNull();
+        expect(headers.get('cookie')).toBeNull();
+        expect(headers.get('x-api-key')).toBeNull();
       });
     });
 
@@ -1267,8 +1324,9 @@ describe('RPC Bridge Security', () => {
           requestId: 'req-method-1',
         });
 
-        expect(result.success).toBe(false);
-        // Will fail on SSRF validation (no mock), but method validation passes
+        expect(result.success).toBe(false); // network mock rejects
+        // The validation+normalization path reached fetch with GET intact.
+        expect(lastFetchMethod()).toBe('GET');
       });
 
       it('should allow POST method', async () => {
@@ -1285,7 +1343,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation
+        expect(lastFetchMethod()).toBe('POST');
       });
 
       it('should reject CONNECT method', async () => {
@@ -1333,7 +1391,8 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but method normalization works
+        // Normalization happens before fetch, so the mocked call sees uppercase.
+        expect(lastFetchMethod()).toBe('POST');
       });
     });
 
@@ -1375,7 +1434,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but Content-Type passes sanitization
+        expect(lastFetchHeaders().get('content-type')).toBe('application/json');
       });
 
       it('should allow Accept header', async () => {
@@ -1393,7 +1452,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but Accept passes sanitization
+        expect(lastFetchHeaders().get('accept')).toBe('application/json');
       });
 
       it('should allow User-Agent header', async () => {
@@ -1411,7 +1470,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but User-Agent passes sanitization
+        expect(lastFetchHeaders().get('user-agent')).toBe('BugSpotter-Plugin/1.0');
       });
 
       it('should allow custom X-Custom-Header', async () => {
@@ -1429,8 +1488,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but X-Custom-Header passes sanitization
-        // (not in blocked list)
+        expect(lastFetchHeaders().get('x-custom-header')).toBe('custom-value');
       });
     });
   });
