@@ -19,7 +19,9 @@ import type { NotificationThrottleRepository } from '../../../src/db/repositorie
 const SELFHOSTED_OWNER = '00000000-0000-0000-0000-000000000000';
 
 function hash(recipient: string): string {
-  return createHash('sha256').update(recipient).digest('hex').slice(0, 32);
+  // Mirrors the limiter's normalize-then-hash shape.
+  const normalized = recipient.trim().toLowerCase();
+  return createHash('sha256').update(normalized).digest('hex').slice(0, 32);
 }
 
 function buildMockRepo(reserve: Mock): NotificationThrottleRepository {
@@ -87,5 +89,17 @@ describe('ThrottleBackedRecipientLimiter', () => {
     await limiter.check('alice@example.com', 'org-1');
 
     expect(reserve.mock.calls[0][1]).toBe(reserve.mock.calls[1][1]);
+  });
+
+  it('normalizes casing and whitespace before hashing (bypass guard)', async () => {
+    const reserve = vi.fn().mockResolvedValue(true);
+    const limiter = new ThrottleBackedRecipientLimiter(buildMockRepo(reserve));
+
+    await limiter.check('Alice@Example.com', 'org-1');
+    await limiter.check(' alice@example.com ', 'org-1');
+    await limiter.check('alice@example.com', 'org-1');
+
+    const groupKeys = reserve.mock.calls.map((c) => c[1]);
+    expect(new Set(groupKeys).size).toBe(1);
   });
 });

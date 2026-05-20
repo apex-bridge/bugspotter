@@ -63,10 +63,16 @@ export class ThrottleBackedRecipientLimiter implements RecipientRateLimiter {
 
   async check(recipient: string, organizationId: string | null): Promise<boolean> {
     const owner = organizationId ?? SELFHOSTED_THROTTLE_OWNER;
+    // Normalize before hashing so casing/whitespace variants land in
+    // the same bucket. Without this, `Alice@Example.com` and
+    // ` alice@example.com ` would map to different group_keys and
+    // collectively bypass the per-recipient cap. Matches the `LOWER()`
+    // pattern the reporter verifier uses on the read side.
+    const normalized = recipient.trim().toLowerCase();
     // Hash the recipient before it lands in a queryable table. SHA-256
     // truncated to 32 hex chars — 128 bits is more than enough to avoid
     // collisions across realistic recipient counts.
-    const hash = createHash('sha256').update(recipient).digest('hex').slice(0, 32);
+    const hash = createHash('sha256').update(normalized).digest('hex').slice(0, 32);
     const groupKey = `recipient:${hash}`;
     try {
       return await this.throttle.tryReserveSlot(
