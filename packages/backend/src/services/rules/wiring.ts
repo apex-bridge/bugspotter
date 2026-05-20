@@ -22,6 +22,7 @@ import type { CapabilityServiceLookup } from './dispatcher.js';
 import { ChannelBackedEmailSender } from './email-sender.js';
 import { DedupRuleExecutor } from './executor.js';
 import { ThrottleBackedRateLimiter } from './rate-limiter.js';
+import { ThrottleBackedRecipientLimiter } from './recipient-rate-limiter.js';
 
 const logger = getLogger();
 
@@ -119,7 +120,17 @@ export function buildDedupRuleExecutor(
   // organization_id), so wiring this here is load-bearing.
   const verifyReporter = (orgId: string, email: string): Promise<boolean> =>
     db.organizationMembers.existsByOrganizationAndEmail(orgId, email);
-  const dispatcher = new DefaultActionDispatcher(resolver, lookup, emailSender, verifyReporter);
+  // Per-recipient throttle — caps total fan-out to any one address
+  // across canonicals and rules. Uses the existing notification_throttle
+  // table with global defaults (5 emails / 60 minutes per address).
+  const recipientRateLimiter = new ThrottleBackedRecipientLimiter(throttle);
+  const dispatcher = new DefaultActionDispatcher(
+    resolver,
+    lookup,
+    emailSender,
+    verifyReporter,
+    recipientRateLimiter
+  );
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);
   return new DedupRuleExecutor(repo, dispatcher, rateLimiter, contextProvider);

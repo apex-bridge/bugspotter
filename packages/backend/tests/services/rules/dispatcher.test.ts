@@ -488,4 +488,150 @@ describe('DefaultActionDispatcher', () => {
       expect(send.mock.calls[0][0].to).toBe('ops@example.com');
     });
   });
+
+  describe('notify.email — per-recipient rate limiter', () => {
+    function buildLimitedDispatcher(limiter: Mock, verifyReporter?: Mock) {
+      const send: Mock = vi.fn().mockResolvedValue(true);
+      const emailSender = { send };
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        emailSender,
+        verifyReporter as unknown as (orgId: string, email: string) => Promise<boolean>,
+        { check: limiter } as unknown as {
+          check: (recipient: string, organizationId: string | null) => Promise<boolean>;
+        }
+      );
+      return { dispatcher: d, send };
+    }
+
+    it('sends when the limiter reserves a slot', async () => {
+      const limiter = vi.fn().mockResolvedValue(true);
+      const verify = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d, send } = buildLimitedDispatcher(limiter, verify);
+      const ctx = makeContext({
+        bugReport: makeBug({
+          organization_id: 'org-1',
+          metadata: { metadata: { user: { email: 'alice@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(limiter).toHaveBeenCalledWith('alice@example.com', 'org-1');
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips when the limiter denies (recipient hit the window cap)', async () => {
+      const limiter = vi.fn().mockResolvedValue(false);
+      const verify = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d, send } = buildLimitedDispatcher(limiter, verify);
+      const ctx = makeContext({
+        bugReport: makeBug({
+          organization_id: 'org-1',
+          metadata: { metadata: { user: { email: 'alice@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(false);
+      expect(limiter).toHaveBeenCalledTimes(1);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    // Regression scaffold for the spam-vector described in
+    // C2 carry-over #2: same recipient, N different canonicals, no
+    // per-(rule, canonical) cap. Without a per-recipient limiter, all
+    // N would land. With the limiter capped at 2, only the first two
+    // do — and the third skips with `send` never called.
+    it('caps fan-out across multiple canonicals to one recipient', async () => {
+      let allowed = 0;
+      const cap = 2;
+      const limiter = vi.fn().mockImplementation(async () => {
+        if (allowed >= cap) {
+          return false;
+        }
+        allowed += 1;
+        return true;
+      });
+      const verify = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d, send } = buildLimitedDispatcher(limiter, verify);
+
+      const results: boolean[] = [];
+      for (let i = 0; i < 3; i++) {
+        const ctx = makeContext({
+          bugReport: makeBug({
+            id: `dup-${i}`,
+            organization_id: 'org-1',
+            metadata: { metadata: { user: { email: 'alice@example.com' } } },
+          }),
+          canonical: makeBug({ id: `canonical-${i}`, duplicate_of: null }),
+        });
+        results.push(
+          await d.dispatch(ctx, {
+            type: 'notify.email',
+            to: 'reporter',
+            template: 'dedup_ack',
+          })
+        );
+      }
+
+      expect(results).toEqual([true, true, false]);
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+
+    it('runs the verifier first — denied recipients do not consume the budget', async () => {
+      const limiter = vi.fn().mockResolvedValue(true);
+      const verify = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d, send } = buildLimitedDispatcher(limiter, verify);
+      const ctx = makeContext({
+        bugReport: makeBug({
+          organization_id: 'org-1',
+          metadata: { metadata: { user: { email: 'alice@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(false);
+      expect(verify).toHaveBeenCalledTimes(1);
+      expect(limiter).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('passes recipient and null organization_id through on the selfhosted path', async () => {
+      const limiter = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d, send } = buildLimitedDispatcher(limiter);
+      const ctx = makeContext({
+        bugReport: makeBug({
+          organization_id: null,
+          metadata: { metadata: { user: { email: 'alice@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(limiter).toHaveBeenCalledWith('alice@example.com', null);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+  });
 });
