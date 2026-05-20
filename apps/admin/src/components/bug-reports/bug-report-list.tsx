@@ -13,7 +13,8 @@ interface BugReportListProps {
   onViewDetails: (report: BugReport) => void;
   onDelete: (id: string) => void;
   isDeleting: boolean;
-  readOnly?: boolean;
+  /** ID of the report whose delete is currently in flight (for the spinner). */
+  deletingId?: string | null;
 }
 
 export function BugReportList({
@@ -22,7 +23,7 @@ export function BugReportList({
   onViewDetails,
   onDelete,
   isDeleting,
-  readOnly,
+  deletingId,
 }: BugReportListProps) {
   const { t } = useTranslation();
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -130,14 +131,24 @@ export function BugReportList({
                     size="sm"
                     variant="destructive"
                     onClick={() => handleDelete(report.id)}
-                    isLoading={isDeleting && deleteConfirm === report.id}
-                    disabled={report.legal_hold || readOnly}
+                    isLoading={deletingId === report.id}
+                    // `isDeleting` is shared across the whole list (the
+                    // parent has one delete mutation), so this disables
+                    // every row while any delete is in flight — prevents
+                    // a second-click race after `setDeleteConfirm(null)`
+                    // clears synchronously but the mutation hasn't
+                    // resolved yet. Mild side effect: parallel deletes
+                    // are serialised on the visible page, which is fine
+                    // (page is 20 rows, soft-delete is fast).
+                    disabled={report.legal_hold || isDeleting}
                     title={report.legal_hold ? t('bugReports.cannotDeleteLegalHold') : ''}
                   >
                     <Trash2 className="w-4 h-4 mr-1" />
-                    {deleteConfirm === report.id
-                      ? t('bugReports.confirmDelete')
-                      : t('bugReports.delete')}
+                    {deletingId === report.id
+                      ? t('bugReports.deleting')
+                      : deleteConfirm === report.id
+                        ? t('bugReports.confirmDelete')
+                        : t('bugReports.delete')}
                   </Button>
                 </div>
               </div>

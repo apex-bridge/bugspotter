@@ -176,6 +176,7 @@
     "view": "View",
     "confirmDelete": "Confirm?",
     "delete": "Delete",
+    "deleting": "Deleting...",
     "cannotDeleteLegalHold": "Cannot delete reports with legal hold",
     "downloadStarted": "Screenshot download started",
     "loadingDetails": "Loading bug report details",

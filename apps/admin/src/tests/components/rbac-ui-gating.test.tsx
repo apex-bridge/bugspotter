@@ -59,10 +59,16 @@ const mockApiKey: ApiKey = {
 };
 
 // ============================================================================
-// BUG REPORT LIST — readOnly prop
+// BUG REPORT LIST — delete gating
+//
+// The client-side `readOnly` prop was removed (backend's
+// `findReportWithAccess(..., minProjectRole: 'admin')` is now
+// authoritative on who can delete). The only remaining UI-side gate
+// is `legal_hold`, which is per-report state that the backend
+// enforces too — but a disabled button is the right affordance.
 // ============================================================================
 
-describe('BugReportList — readOnly gating', () => {
+describe('BugReportList — delete gating', () => {
   const defaultProps = {
     reports: [mockReport],
     projects: [mockProject],
@@ -71,8 +77,8 @@ describe('BugReportList — readOnly gating', () => {
     isDeleting: false,
   };
 
-  it('should enable delete button when readOnly is false', () => {
-    render(<BugReportList {...defaultProps} readOnly={false} />);
+  it('should enable delete button when the report is not on legal hold', () => {
+    render(<BugReportList {...defaultProps} />);
 
     const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
     for (const btn of deleteButtons) {
@@ -80,32 +86,41 @@ describe('BugReportList — readOnly gating', () => {
     }
   });
 
-  it('should disable delete button when readOnly is true', () => {
-    render(<BugReportList {...defaultProps} readOnly={true} />);
-
-    const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
-    for (const btn of deleteButtons) {
-      expect(btn).toBeDisabled();
-    }
-  });
-
-  it('should keep view button enabled when readOnly is true', () => {
-    render(<BugReportList {...defaultProps} readOnly={true} />);
-
-    const viewButtons = screen.getAllByRole('button', { name: /view/i });
-    for (const btn of viewButtons) {
-      expect(btn).not.toBeDisabled();
-    }
-  });
-
-  it('should disable delete even when not readOnly if legal_hold is true', () => {
+  it('should disable delete when the report is on legal hold', () => {
     const legalHoldReport = { ...mockReport, legal_hold: true };
-    render(<BugReportList {...defaultProps} reports={[legalHoldReport]} readOnly={false} />);
+    render(<BugReportList {...defaultProps} reports={[legalHoldReport]} />);
 
     const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
     for (const btn of deleteButtons) {
       expect(btn).toBeDisabled();
     }
+  });
+
+  it('should disable all delete buttons while a delete is in flight', () => {
+    render(<BugReportList {...defaultProps} isDeleting={true} />);
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
+    for (const btn of deleteButtons) {
+      expect(btn).toBeDisabled();
+    }
+  });
+
+  it('should show the spinner only on the row matching deletingId', () => {
+    const reportTwo = { ...mockReport, id: 'report-2', title: 'Other' };
+    render(
+      <BugReportList
+        {...defaultProps}
+        reports={[mockReport, reportTwo]}
+        isDeleting={true}
+        deletingId="report-1"
+      />
+    );
+
+    // Active row reads "Deleting..." while the other reads "Delete";
+    // neither matches the other's substring, so anchor on both labels.
+    const deleteButtons = screen.getAllByRole('button', { name: /^(Delete|Deleting)/i });
+    expect(deleteButtons[0].querySelector('.animate-spin')).toBeTruthy();
+    expect(deleteButtons[1].querySelector('.animate-spin')).toBeNull();
   });
 });
 
