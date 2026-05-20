@@ -402,5 +402,47 @@ describe('IntelligenceKeyProvisioning', () => {
       });
       expect(mockFactory.invalidateOrg).not.toHaveBeenCalled();
     });
+
+    it('normalizes dedup_email_literal_allowlist on store (trim, lowercase, dedupe)', async () => {
+      await provisioning.updateSettings('org-1', {
+        dedup_email_literal_allowlist: [
+          '  Alice@Example.COM ',
+          'bob@example.com',
+          'BOB@example.com', // case-variant duplicate of bob
+          'carol@example.com',
+        ],
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      // Settles in one canonical form before persistence — matches the
+      // docstring on `OrganizationSettings.dedup_email_literal_allowlist`
+      // and the runtime normalization in the dispatcher.
+      expect(arg.dedup_email_literal_allowlist).toEqual([
+        'alice@example.com',
+        'bob@example.com',
+        'carol@example.com',
+      ]);
+    });
+
+    it('passes through an empty allowlist untouched', async () => {
+      await provisioning.updateSettings('org-1', {
+        dedup_email_literal_allowlist: [],
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      expect(arg.dedup_email_literal_allowlist).toEqual([]);
+    });
+
+    it('passes through a null allowlist (clears the setting)', async () => {
+      await provisioning.updateSettings('org-1', {
+        dedup_email_literal_allowlist: null,
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      expect(arg.dedup_email_literal_allowlist).toBeNull();
+    });
   });
 });

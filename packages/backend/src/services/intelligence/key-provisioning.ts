@@ -272,7 +272,20 @@ export class IntelligenceKeyProvisioning {
       }
     }
 
-    const updated = await this.db.organizations.updateSettings(orgId, updates);
+    // Normalize the literal-recipient allowlist on store so the data
+    // settles in one canonical form (trimmed + lowercased + deduped).
+    // The dispatcher already normalizes at compare time (defense in
+    // depth), so this isn't load-bearing for correctness — but it
+    // keeps stored values consistent with the comment on
+    // `OrganizationSettings.dedup_email_literal_allowlist` and avoids
+    // case-variant duplicates accumulating in the JSONB column.
+    const normalized: IntelligenceSettingsUpdate = { ...updates };
+    if (Array.isArray(normalized.dedup_email_literal_allowlist)) {
+      normalized.dedup_email_literal_allowlist = Array.from(
+        new Set(normalized.dedup_email_literal_allowlist.map((e) => e.trim().toLowerCase()))
+      );
+    }
+    const updated = await this.db.organizations.updateSettings(orgId, normalized);
     if (!updated) {
       throw new AppError('Organization not found', 404, 'NotFound');
     }
