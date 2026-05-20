@@ -1135,6 +1135,15 @@ describe('RPC Bridge Security', () => {
       return new Headers(options?.headers);
     }
 
+    // Pull the normalized HTTP method out of the last fetch call.
+    // Defaults to GET to match fetch's own semantics.
+    function lastFetchMethod(): string {
+      const mock = vi.mocked(globalThis.fetch);
+      expect(mock).toHaveBeenCalled();
+      const [, options] = mock.mock.calls[mock.mock.calls.length - 1];
+      return (options?.method as string) ?? 'GET';
+    }
+
     describe('Header Sanitization', () => {
       it('should block Authorization header', async () => {
         const result = await rpcBridge.handleCall({
@@ -1315,8 +1324,9 @@ describe('RPC Bridge Security', () => {
           requestId: 'req-method-1',
         });
 
-        expect(result.success).toBe(false);
-        // Will fail on SSRF validation (no mock), but method validation passes
+        expect(result.success).toBe(false); // network mock rejects
+        // The validation+normalization path reached fetch with GET intact.
+        expect(lastFetchMethod()).toBe('GET');
       });
 
       it('should allow POST method', async () => {
@@ -1333,7 +1343,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation
+        expect(lastFetchMethod()).toBe('POST');
       });
 
       it('should reject CONNECT method', async () => {
@@ -1381,7 +1391,8 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but method normalization works
+        // Normalization happens before fetch, so the mocked call sees uppercase.
+        expect(lastFetchMethod()).toBe('POST');
       });
     });
 
@@ -1423,7 +1434,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but Content-Type passes sanitization
+        expect(lastFetchHeaders().get('content-type')).toBe('application/json');
       });
 
       it('should allow Accept header', async () => {
@@ -1441,7 +1452,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but Accept passes sanitization
+        expect(lastFetchHeaders().get('accept')).toBe('application/json');
       });
 
       it('should allow User-Agent header', async () => {
@@ -1459,7 +1470,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but User-Agent passes sanitization
+        expect(lastFetchHeaders().get('user-agent')).toBe('BugSpotter-Plugin/1.0');
       });
 
       it('should allow custom X-Custom-Header', async () => {
@@ -1477,8 +1488,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Will fail on SSRF validation, but X-Custom-Header passes sanitization
-        // (not in blocked list)
+        expect(lastFetchHeaders().get('x-custom-header')).toBe('custom-value');
       });
     });
   });
