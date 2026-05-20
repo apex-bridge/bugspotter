@@ -1125,6 +1125,16 @@ describe('RPC Bridge Security', () => {
       vi.unstubAllGlobals();
     });
 
+    // Pull the sanitized `Headers` object out of the last fetch call.
+    // The handler passes a `Headers` instance (not a plain dict), so we
+    // assert against `.get(name)` rather than `objectContaining`.
+    function lastFetchHeaders(): Headers {
+      const mock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+      expect(mock).toHaveBeenCalled();
+      const [, options] = mock.mock.calls[0];
+      return options.headers as Headers;
+    }
+
     describe('Header Sanitization', () => {
       it('should block Authorization header', async () => {
         const result = await rpcBridge.handleCall({
@@ -1142,8 +1152,10 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
-        // Should fail due to SSRF validation (no mock setup)
-        // But header sanitization happens first
+        const headers = lastFetchHeaders();
+        // The forbidden header is stripped; the safe one passes through.
+        expect(headers.get('authorization')).toBeNull();
+        expect(headers.get('content-type')).toBe('application/json');
       });
 
       it('should block Cookie header', async () => {
@@ -1162,6 +1174,9 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        expect(headers.get('cookie')).toBeNull();
+        expect(headers.get('content-type')).toBe('application/json');
       });
 
       it('should block X-Api-Key header', async () => {
@@ -1180,6 +1195,9 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        expect(headers.get('x-api-key')).toBeNull();
+        expect(headers.get('content-type')).toBe('application/json');
       });
 
       it('should block Proxy-Authorization header', async () => {
@@ -1197,6 +1215,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        expect(lastFetchHeaders().get('proxy-authorization')).toBeNull();
       });
 
       it('should block X-Forwarded-For header', async () => {
@@ -1214,6 +1233,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        expect(lastFetchHeaders().get('x-forwarded-for')).toBeNull();
       });
 
       it('should block all Sec-* headers', async () => {
@@ -1233,6 +1253,10 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        expect(headers.get('sec-fetch-site')).toBeNull();
+        expect(headers.get('sec-fetch-mode')).toBeNull();
+        expect(headers.get('sec-websocket-key')).toBeNull();
       });
 
       it('should block Set-Cookie header', async () => {
@@ -1250,6 +1274,7 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        expect(lastFetchHeaders().get('set-cookie')).toBeNull();
       });
 
       it('should block header case-insensitively', async () => {
@@ -1269,6 +1294,11 @@ describe('RPC Bridge Security', () => {
         });
 
         expect(result.success).toBe(false);
+        const headers = lastFetchHeaders();
+        // All three variants must be stripped regardless of casing.
+        expect(headers.get('authorization')).toBeNull();
+        expect(headers.get('cookie')).toBeNull();
+        expect(headers.get('x-api-key')).toBeNull();
       });
     });
 
