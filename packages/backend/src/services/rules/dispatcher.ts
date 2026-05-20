@@ -21,8 +21,12 @@ import type {
 import { pluginSupports } from '../../integrations/capabilities.js';
 import type { ActionSpec } from '../../integrations/dedup-rule.schema.js';
 import { getLogger } from '../../logger.js';
-import type { EmailSender, ReporterVerifier } from './email-sender.js';
-import { resolveEmailRecipient } from './email-sender.js';
+import type {
+  EmailSender,
+  LiteralRecipientAllowlistProvider,
+  ReporterVerifier,
+} from './email-sender.js';
+import { isLiteralRecipient, resolveEmailRecipient } from './email-sender.js';
 import type { RecipientRateLimiter } from './recipient-rate-limiter.js';
 import type { ActionDispatcher, RuleEvalContext } from './types.js';
 
@@ -90,7 +94,15 @@ export class DefaultActionDispatcher implements ActionDispatcher {
      * rules — the per-(rule, canonical) throttle alone doesn't bound
      * this. Tests can omit it; production wiring always passes one.
      */
-    private readonly recipientRateLimiter?: RecipientRateLimiter
+    private readonly recipientRateLimiter?: RecipientRateLimiter,
+    /**
+     * Optional per-org allowlist for literal `notify.email.to`. Only
+     * consulted for literal recipients (tokens like `'reporter'`
+     * bypass — they have their own auth check). Empty / unset list
+     * preserves legacy trust-the-admin behaviour; a configured list
+     * makes the check strict.
+     */
+    private readonly literalRecipientAllowlist?: LiteralRecipientAllowlistProvider
   ) {}
 
   /**
@@ -270,6 +282,43 @@ export class DefaultActionDispatcher implements ActionDispatcher {
           organizationId: context.bugReport.organization_id,
         });
         return false;
+      }
+    }
+    // Literal-recipient allowlist — closes the `notify.email.to =
+    // 'attacker@evil.com'` exfiltration vector for orgs that opt in.
+    // Skipped when `to` is a token (those have their own checks),
+    // when there's no organization (selfhosted), when no provider is
+    // wired (tests), or when the org's allowlist is empty/unset
+    // (legacy trust-the-admin behaviour, soft rollout). Runs before
+    // the rate limiter so a denied literal doesn't burn budget.
+    if (
+      this.literalRecipientAllowlist &&
+      context.bugReport.organization_id !== null &&
+      isLiteralRecipient(to)
+    ) {
+      let allowlist: readonly string[] | null | undefined;
+      try {
+        allowlist = await this.literalRecipientAllowlist(context.bugReport.organization_id);
+      } catch (error) {
+        // Fail closed on provider errors — same shape as the verifier
+        // path. A DB hiccup shouldn't open the exfiltration vector.
+        logger.warn('Skipping notify.email: literal allowlist provider threw', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+          errorType: error instanceof Error ? error.name : 'NonErrorThrown',
+        });
+        return false;
+      }
+      if (allowlist && allowlist.length > 0) {
+        const target = recipient.trim().toLowerCase();
+        const allowed = allowlist.some((entry) => entry.trim().toLowerCase() === target);
+        if (!allowed) {
+          logger.info('Skipping notify.email: literal recipient not on org allowlist', {
+            bugReportId: context.bugReport.id,
+            organizationId: context.bugReport.organization_id,
+          });
+          return false;
+        }
       }
     }
     // Per-recipient throttle — caps fan-out to one address across
