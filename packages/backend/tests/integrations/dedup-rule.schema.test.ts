@@ -334,6 +334,56 @@ describe('dedupRuleSchema — actions', () => {
       })
     ).toThrow();
   });
+
+  // notify.telegram — KZ launch needs a first-class action because raw
+  // webhook is too friction-heavy for the typical org admin. chat_id is
+  // a string (Telegram supports negative numeric ids and @usernames),
+  // message is plain text (no parse mode by default — markdown/HTML
+  // expansion lands later if needed).
+  it('notify.telegram accepts numeric chat_id', () => {
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.telegram', chat_id: '-1001234567890', message: 'hi' }],
+      })
+    ).not.toThrow();
+  });
+
+  it('notify.telegram accepts @username chat_id', () => {
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.telegram', chat_id: '@my_channel', message: 'hi' }],
+      })
+    ).not.toThrow();
+  });
+
+  it('notify.telegram rejects an empty chat_id', () => {
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.telegram', chat_id: '', message: 'hi' }],
+      })
+    ).toThrow();
+  });
+
+  it('notify.telegram rejects an empty message', () => {
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.telegram', chat_id: '@chan', message: '' }],
+      })
+    ).toThrow();
+  });
+
+  it('notify.telegram rejects missing chat_id', () => {
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.telegram', message: 'hi' }],
+      })
+    ).toThrow();
+  });
 });
 
 describe('dedupRuleSchema — top-level', () => {
