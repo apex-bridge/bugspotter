@@ -35,8 +35,9 @@ const logger = getLogger();
  * Sentinel UUID used as the throttle's `rule_id` for selfhosted bugs
  * (which have no organization_id). All selfhosted recipient-throttle
  * rows share this owner; cleanup falls back on window_end expiry.
+ * Exported so tests can assert against the same value the limiter uses.
  */
-const SELFHOSTED_THROTTLE_OWNER = '00000000-0000-0000-0000-000000000000';
+export const SELFHOSTED_THROTTLE_OWNER = '00000000-0000-0000-0000-000000000000';
 
 /** Conservative default: at most 5 dedup emails to any one address per hour. */
 export const RECIPIENT_THROTTLE_DEFAULTS = {

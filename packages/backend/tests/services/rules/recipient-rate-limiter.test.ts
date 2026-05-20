@@ -12,11 +12,10 @@ import { describe, it, expect, vi, type Mock } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
   RECIPIENT_THROTTLE_DEFAULTS,
+  SELFHOSTED_THROTTLE_OWNER,
   ThrottleBackedRecipientLimiter,
 } from '../../../src/services/rules/recipient-rate-limiter.js';
 import type { NotificationThrottleRepository } from '../../../src/db/repositories/notification-throttle.repository.js';
-
-const SELFHOSTED_OWNER = '00000000-0000-0000-0000-000000000000';
 
 function hash(recipient: string): string {
   // Mirrors the limiter's normalize-then-hash shape.
@@ -50,7 +49,7 @@ describe('ThrottleBackedRecipientLimiter', () => {
 
     await limiter.check('alice@example.com', null);
 
-    expect(reserve.mock.calls[0][0]).toBe(SELFHOSTED_OWNER);
+    expect(reserve.mock.calls[0][0]).toBe(SELFHOSTED_THROTTLE_OWNER);
   });
 
   it('returns false when the throttle reports the slot is taken', async () => {
