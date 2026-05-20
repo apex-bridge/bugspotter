@@ -116,7 +116,9 @@ describe('BugReportList — delete gating', () => {
       />
     );
 
-    const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
+    // Active row reads "Deleting..." while the other reads "Delete";
+    // neither matches the other's substring, so anchor on both labels.
+    const deleteButtons = screen.getAllByRole('button', { name: /^(Delete|Deleting)/i });
     expect(deleteButtons[0].querySelector('.animate-spin')).toBeTruthy();
     expect(deleteButtons[1].querySelector('.animate-spin')).toBeNull();
   });

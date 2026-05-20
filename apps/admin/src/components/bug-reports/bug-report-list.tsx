@@ -144,9 +144,11 @@ export function BugReportList({
                     title={report.legal_hold ? t('bugReports.cannotDeleteLegalHold') : ''}
                   >
                     <Trash2 className="w-4 h-4 mr-1" />
-                    {deleteConfirm === report.id
-                      ? t('bugReports.confirmDelete')
-                      : t('bugReports.delete')}
+                    {deletingId === report.id
+                      ? t('bugReports.deleting')
+                      : deleteConfirm === report.id
+                        ? t('bugReports.confirmDelete')
+                        : t('bugReports.delete')}
                   </Button>
                 </div>
               </div>
