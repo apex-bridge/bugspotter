@@ -191,7 +191,10 @@ export const API_ENDPOINTS = {
     update: (id: string) => `${API_VERSION}/api-keys/${id}`,
     delete: (id: string) => `${API_VERSION}/api-keys/${id}`,
     rotate: (id: string) => `${API_VERSION}/api-keys/${id}/rotate`,
-    usage: (id: string) => `${API_VERSION}/api-keys/${id}/usage`,
+    // Aggregate stats (24h/7d/30d windows + name/created_at/last_used_at)
+    // — distinct from the raw `/usage` log array endpoint. The dashboard
+    // usage dialog renders the aggregate shape.
+    usage: (id: string) => `${API_VERSION}/api-keys/${id}/usage-stats`,
   },
 
   // Admin endpoints

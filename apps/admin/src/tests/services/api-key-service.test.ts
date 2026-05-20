@@ -252,7 +252,7 @@ describe('API Key Service', () => {
 
       const result = await apiKeyService.getUsage('key-1');
 
-      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys/key-1/usage');
+      expect(api.get).toHaveBeenCalledWith('/api/v1/api-keys/key-1/usage-stats');
       expect(result).toEqual(mockUsage);
       expect(result.total_requests).toBe(1000);
       expect(result.requests_last_24h).toBe(50);

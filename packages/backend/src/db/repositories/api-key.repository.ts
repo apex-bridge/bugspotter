@@ -25,6 +25,24 @@ import { createFilter } from '../filter-builder.js';
 import { createPagination } from '../pagination-builder.js';
 
 /**
+ * Aggregate rolling-window usage statistics for an API key, returned by
+ * `ApiKeyRepository.getUsageStats`. The service layer and route handler
+ * both reference this shape; pulling it into a named type keeps the
+ * three sites (repo, service, route response schema) honest if a window
+ * is ever added/renamed.
+ */
+export interface ApiKeyUsageStats {
+  id: string;
+  name: string;
+  created_at: Date;
+  last_used_at: Date | null;
+  total_requests: number;
+  requests_last_24h: number;
+  requests_last_7d: number;
+  requests_last_30d: number;
+}
+
+/**
  * API Key Repository
  * Handles all database operations for API keys, usage tracking, and rate limiting
  */
@@ -407,6 +425,59 @@ export class ApiKeyRepository extends BaseRepository<ApiKey, ApiKeyInsert, ApiKe
     ];
 
     await this.pool.query(query, values);
+  }
+
+  /**
+   * Get rolling-window usage statistics for an API key. Distinct from
+   * `findByIdWithStats` (which returns calendar-month / today buckets
+   * for the platform-admin detail view) — the dashboard usage dialog
+   * shows 24h / 7d / 30d rolling windows.
+   *
+   * Returns null when the key does not exist; the route translates
+   * this into a 404. Counts are returned as JS numbers; pg returns
+   * `bigint` (COUNT) as a string so we parse explicitly.
+   */
+  async getUsageStats(apiKeyId: string): Promise<ApiKeyUsageStats | null> {
+    // The LATERAL subquery's COUNT(*) is never NULL (returns 0 with no
+    // matches), and `ON true` always yields a row, so the outer SELECT
+    // can read `u.*` directly — no COALESCE needed.
+    const query = `
+      SELECT
+        k.id,
+        k.name,
+        k.created_at,
+        k.last_used_at,
+        u.total_requests,
+        u.requests_last_24h,
+        u.requests_last_7d,
+        u.requests_last_30d
+      FROM ${this.schema}.${this.tableName} k
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) AS total_requests,
+          COUNT(*) FILTER (WHERE timestamp >= NOW() - INTERVAL '24 hours') AS requests_last_24h,
+          COUNT(*) FILTER (WHERE timestamp >= NOW() - INTERVAL '7 days')   AS requests_last_7d,
+          COUNT(*) FILTER (WHERE timestamp >= NOW() - INTERVAL '30 days')  AS requests_last_30d
+        FROM ${this.schema}.api_key_usage
+        WHERE api_key_id = k.id
+      ) u ON true
+      WHERE k.id = $1
+    `;
+    const result = await this.pool.query(query, [apiKeyId]);
+    if (result.rows.length === 0) {
+      return null;
+    }
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      name: row.name,
+      created_at: row.created_at,
+      last_used_at: row.last_used_at,
+      total_requests: parseInt(row.total_requests, 10) || 0,
+      requests_last_24h: parseInt(row.requests_last_24h, 10) || 0,
+      requests_last_7d: parseInt(row.requests_last_7d, 10) || 0,
+      requests_last_30d: parseInt(row.requests_last_30d, 10) || 0,
+    };
   }
 
   /**

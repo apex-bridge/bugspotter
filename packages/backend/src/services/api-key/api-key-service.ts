@@ -20,6 +20,7 @@ import type {
   PaginatedResult,
   PaginationOptions,
 } from '../../db/types.js';
+import type { ApiKeyUsageStats } from '../../db/repositories/api-key.repository.js';
 
 // Import cache service
 import { getCacheService } from '../../cache/index.js';
@@ -613,6 +614,10 @@ export class ApiKeyService {
     offset: number = 0
   ): Promise<ApiKeyUsage[]> {
     return this.db.apiKeys.getUsageLogs(keyId, limit, offset);
+  }
+
+  async getUsageStats(keyId: string): Promise<ApiKeyUsageStats | null> {
+    return this.db.apiKeys.getUsageStats(keyId);
   }
 
   async getKeyWithStats(keyId: string): Promise<ApiKeyWithUsageStats | null> {

@@ -24,6 +24,7 @@ import {
   revokeApiKeySchema,
   rotateApiKeySchema,
   getApiKeyUsageSchema,
+  getApiKeyUsageStatsSchema,
   getApiKeyAuditSchema,
 } from '../schemas/api-key-schema.js';
 
@@ -528,6 +529,37 @@ export function apiKeyRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       const logs = await apiKeyService.getUsageLogs(id, limit, offset);
 
       return sendSuccess(reply, logs);
+    }
+  );
+
+  // Get rolling-window usage statistics (used by the dashboard usage
+  // dialog). Distinct shape from /usage (raw log array) and from the
+  // /api/v1/api-keys/:id detail's `usage_stats` (calendar buckets).
+  // The dialog wants 24h / 7d / 30d rolling windows next to the key's
+  // name, created_at, and last_used_at.
+  fastify.get(
+    '/api/v1/api-keys/:id/usage-stats',
+    {
+      preHandler: requireUser,
+      schema: getApiKeyUsageStatsSchema,
+    },
+    async (request, reply) => {
+      assertAuthUser(request);
+      const { id } = request.params as { id: string };
+
+      await authorizeApiKeyReadAccess(
+        apiKeyService,
+        id,
+        request.authUser.id,
+        isPlatformAdmin(request),
+        db
+      );
+
+      const stats = await apiKeyService.getUsageStats(id);
+      if (!stats) {
+        throw new AppError('API key not found', 404, 'NotFound');
+      }
+      return sendSuccess(reply, stats);
     }
   );
 

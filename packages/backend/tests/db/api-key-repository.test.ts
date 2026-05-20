@@ -631,6 +631,47 @@ describe('ApiKeyRepository', () => {
       expect(keyWithStats?.usage_stats.unique_ips).toBeGreaterThanOrEqual(2);
     });
 
+    it('should get rolling-window usage stats (getUsageStats)', async () => {
+      // 3 recent rows → all should land in 24h / 7d / 30d / total
+      for (let i = 0; i < 3; i++) {
+        await db.apiKeys.trackUsage({
+          api_key_id: testKey.id,
+          endpoint: `/api/bugs/${i}`,
+          method: 'POST',
+          status_code: 201,
+        });
+      }
+      // 1 older row at -10d → counts in 30d + total but NOT in 7d/24h
+      await db.apiKeys.trackUsage({
+        api_key_id: testKey.id,
+        endpoint: '/api/bugs/old',
+        method: 'POST',
+        status_code: 201,
+        timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+      });
+
+      const stats = await db.apiKeys.getUsageStats(testKey.id);
+
+      expect(stats).not.toBeNull();
+      expect(stats?.id).toBe(testKey.id);
+      expect(stats?.name).toBe(testKey.name);
+      expect(stats?.created_at).toBeInstanceOf(Date);
+      // `testKey` is fresh per-`beforeEach`, so counts on its
+      // `api_key_id` are deterministic: 4 events total, 3 inside
+      // the 24h/7d windows and 1 at -10d that only the 30d/total
+      // counters catch. Exact-equality (vs. `>=`) so an overcount
+      // regression doesn't slip through silently.
+      expect(stats?.total_requests).toBe(4);
+      expect(stats?.requests_last_30d).toBe(4);
+      expect(stats?.requests_last_7d).toBe(3);
+      expect(stats?.requests_last_24h).toBe(3);
+    });
+
+    it('getUsageStats returns null for unknown api key id', async () => {
+      const stats = await db.apiKeys.getUsageStats('00000000-0000-0000-0000-000000000000');
+      expect(stats).toBeNull();
+    });
+
     it('should calculate client error rate (4xx) correctly', async () => {
       const keyData = createTestApiKey('Error Rate Test Key');
       const testKey = await db.apiKeys.create(keyData);
