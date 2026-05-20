@@ -1284,6 +1284,71 @@ describe('API Key Routes', () => {
     });
   });
 
+  describe('GET /api/v1/api-keys/:id/usage-stats', () => {
+    it('should return aggregate stats with the expected shape and numeric types', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/v1/api-keys',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { name: 'Stats Test Key', type: 'development', permission_scope: 'full' },
+      });
+      const keyId = createResponse.json().data.key_details.id;
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/api-keys/${keyId}/usage-stats`,
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const data = response.json().data;
+      // Shape — every field the dashboard dialog reads.
+      expect(data).toHaveProperty('id', keyId);
+      expect(data).toHaveProperty('name', 'Stats Test Key');
+      expect(data).toHaveProperty('created_at');
+      expect(data).toHaveProperty('last_used_at');
+      expect(data).toHaveProperty('total_requests');
+      expect(data).toHaveProperty('requests_last_24h');
+      expect(data).toHaveProperty('requests_last_7d');
+      expect(data).toHaveProperty('requests_last_30d');
+      // Types — pg returns COUNT as a string; the repo's parseInt
+      // must coerce to a JS number, otherwise the dashboard's
+      // `Math.round(... / 30)` arithmetic would silently break.
+      expect(typeof data.total_requests).toBe('number');
+      expect(typeof data.requests_last_24h).toBe('number');
+      expect(typeof data.requests_last_7d).toBe('number');
+      expect(typeof data.requests_last_30d).toBe('number');
+    });
+
+    it('should reject access to other user keys for non-admin', async () => {
+      const createResponse = await server.inject({
+        method: 'POST',
+        url: '/api/v1/api-keys',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { name: 'Stats Auth Test Key', type: 'development', permission_scope: 'full' },
+      });
+      const keyId = createResponse.json().data.key_details.id;
+
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/v1/api-keys/${keyId}/usage-stats`,
+        headers: { authorization: `Bearer ${userToken}` },
+      });
+
+      expect(response.statusCode).toBe(403);
+    });
+
+    it('should 404 for an unknown api key id', async () => {
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/api-keys/00000000-0000-0000-0000-000000000000/usage-stats',
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+  });
+
   describe('GET /api/v1/api-keys/:id/audit', () => {
     it('should get audit logs', async () => {
       const createResponse = await server.inject({

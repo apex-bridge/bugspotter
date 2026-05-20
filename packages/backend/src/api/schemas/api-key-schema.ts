@@ -436,6 +436,55 @@ export const getApiKeyUsageSchema = {
 } as const;
 
 /**
+ * GET /api/v1/api-keys/:id/usage-stats - Aggregate rolling-window stats
+ * (24h / 7d / 30d). Distinct from `/usage` (raw log array) and from the
+ * detail-route `usage_stats` (calendar buckets) — see api-keys.ts.
+ *
+ * Response schema is defined here intentionally (unlike the older
+ * `getApiKeyUsageSchema` / `getApiKeyAuditSchema`): this endpoint was
+ * born from a UI/backend contract mismatch that produced "Invalid Date"
+ * and `NaN` in the dashboard. Validating the response at the boundary
+ * makes the next regression of that shape fail fast in tests instead
+ * of silently rendering bad values.
+ */
+export const getApiKeyUsageStatsSchema = {
+  params: idParamSchema,
+  response: {
+    200: {
+      type: 'object',
+      required: ['success', 'data', 'timestamp'],
+      properties: {
+        success: { type: 'boolean', enum: [true] },
+        data: {
+          type: 'object',
+          required: [
+            'id',
+            'name',
+            'created_at',
+            'last_used_at',
+            'total_requests',
+            'requests_last_24h',
+            'requests_last_7d',
+            'requests_last_30d',
+          ],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            name: { type: 'string' },
+            created_at: { type: 'string', format: 'date-time' },
+            last_used_at: { type: ['string', 'null'], format: 'date-time' },
+            total_requests: { type: 'number' },
+            requests_last_24h: { type: 'number' },
+            requests_last_7d: { type: 'number' },
+            requests_last_30d: { type: 'number' },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+} as const;
+
+/**
  * GET /api/v1/api-keys/:id/audit - Get audit log
  */
 export const getApiKeyAuditSchema = {
