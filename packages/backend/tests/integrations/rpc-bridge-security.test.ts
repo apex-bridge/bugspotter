@@ -3,7 +3,7 @@
  * Tests that malicious plugin code cannot escape sandbox restrictions
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RpcBridge } from '../../src/integrations/security/rpc-bridge.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 import type { IStorageService } from '../../src/storage/types.js';
@@ -1107,6 +1107,29 @@ describe('RPC Bridge Security', () => {
   });
 
   describe('HTTP Fetch Security', () => {
+    // Every test in this block uses `https://api.example.com/data` as
+    // the target — a public-resolving domain that passes SSRF, so the
+    // handler reaches the real `fetch()` call. In CI / on dev machines
+    // that resolves api.example.com slowly (or not at all), the network
+    // attempt races vitest's 5s default test timeout, producing a
+    // flaky failure. Each test only asserts `result.success === false`,
+    // which a rejected fetch satisfies — so stub the global fetch to a
+    // synchronous network-error reject for deterministic behaviour.
+    // Restored after every test so other describes that need real
+    // behaviour aren't affected.
+    let originalFetch: typeof fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async () => {
+        throw new TypeError('fetch failed');
+      }) as unknown as typeof fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
     describe('Header Sanitization', () => {
       it('should block Authorization header', async () => {
         const result = await rpcBridge.handleCall({
