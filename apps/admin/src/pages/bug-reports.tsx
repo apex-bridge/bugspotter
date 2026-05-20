@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { Bug, ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatNumber } from '../utils/format';
 import { bugReportService, projectService } from '../services/api';
-import { useAuth } from '../contexts/auth-context';
 import { useOrgFilter } from '../hooks/use-org-filter';
 import { handleApiError } from '../lib/api-client';
 import { Button } from '../components/ui/button';
@@ -17,8 +16,13 @@ import type { BugReportFilters as Filters, BugReport } from '../types';
 
 export default function BugReportsPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
-  const isViewer = user?.role === 'viewer';
+  // No client-side role gate on Delete. SaaS customer-tenant org
+  // owners carry system role 'viewer' by design, so a
+  // `user.role === 'viewer'` check would over-block them. The
+  // backend's `findReportWithAccess(..., minProjectRole: 'admin')`
+  // is authoritative — it composes the explicit project role with
+  // the org-inherited role (owner/admin → 'admin'), so the right
+  // people pass and everyone else 403s with a toast.
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<Filters>({});
   const [page, setPage] = useState(1);
@@ -221,7 +225,7 @@ export default function BugReportsPage() {
                 onViewDetails={handleViewDetails}
                 onDelete={handleDelete}
                 isDeleting={deleteMutation.isPending}
-                readOnly={isViewer}
+                deletingId={deleteMutation.isPending ? (deleteMutation.variables ?? null) : null}
               />
 
               {/* Pagination */}
