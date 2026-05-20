@@ -721,6 +721,17 @@ export interface OrganizationSettings {
   intelligence_api_key_provisioned_at?: string | null;
   intelligence_api_key_provisioned_by?: string | null;
   intelligence_auto_enrich?: boolean;
+  /**
+   * Per-org allowlist for literal `notify.email.to` values used by
+   * dedup rules. `undefined` / empty = trust-the-admin (legacy
+   * behaviour, all literals pass). Non-empty = strict — only entries
+   * in this list may be sent to. Tokens like `'reporter'` aren't
+   * affected; they have their own auth check (PR #158). Closes the
+   * `notify.email.to = 'attacker@evil.com'` exfiltration vector
+   * once an org configures the list. Emails are lowercased on store
+   * and compared case-insensitively.
+   */
+  dedup_email_literal_allowlist?: string[] | null;
 }
 
 export interface Organization {

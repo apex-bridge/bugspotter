@@ -489,6 +489,167 @@ describe('DefaultActionDispatcher', () => {
     });
   });
 
+  describe('notify.email — literal-recipient allowlist (per-org)', () => {
+    function buildAllowlistDispatcher(provider: Mock) {
+      const send: Mock = vi.fn().mockResolvedValue(true);
+      const emailSender = { send };
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        emailSender,
+        undefined,
+        undefined,
+        provider as unknown as (
+          organizationId: string
+        ) => Promise<readonly string[] | null | undefined>
+      );
+      return { dispatcher: d, send };
+    }
+
+    // Regression scaffold: an admin (or a compromised admin path)
+    // writes a rule with `notify.email.to = 'attacker@evil.com'`.
+    // Without an allowlist this used to ship bug data straight out;
+    // with a configured allowlist the literal is rejected before
+    // `emailSender.send` is ever called.
+    it('skips literal recipients not in the org allowlist', async () => {
+      const provider = vi.fn().mockResolvedValue(['ops@bugspotter.io']);
+      const { dispatcher: d, send } = buildAllowlistDispatcher(provider);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'attacker@evil.com',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(false);
+      expect(provider).toHaveBeenCalledWith('org-1');
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('sends when the literal recipient matches an entry on the allowlist', async () => {
+      const provider = vi.fn().mockResolvedValue(['ops@bugspotter.io']);
+      const { dispatcher: d, send } = buildAllowlistDispatcher(provider);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'ops@bugspotter.io',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('matches the allowlist case-insensitively (and tolerates surrounding whitespace)', async () => {
+      const provider = vi.fn().mockResolvedValue([' Ops@BugSpotter.io ']);
+      const { dispatcher: d, send } = buildAllowlistDispatcher(provider);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'ops@bugspotter.io',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves legacy behaviour when the allowlist is empty or unset', async () => {
+      const provider = vi.fn().mockResolvedValue([]);
+      const { dispatcher: d, send } = buildAllowlistDispatcher(provider);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'ops@bugspotter.io',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+
+      // null also counts as "no allowlist configured" — legacy soft path.
+      provider.mockResolvedValueOnce(null);
+      send.mockClear();
+      const ok2 = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'anywhere@example.com',
+        template: 'dedup_ack',
+      });
+      expect(ok2).toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not consult the allowlist for the `reporter` token', async () => {
+      const provider = vi.fn().mockResolvedValue(['only-this@example.com']);
+      const send: Mock = vi.fn().mockResolvedValue(true);
+      const emailSender = { send };
+      // Wire the reporter verifier too so the reporter path doesn't
+      // fail-closed on the missing verifier in SaaS mode.
+      const verify = vi.fn().mockResolvedValue(true);
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        emailSender,
+        verify as unknown as (orgId: string, email: string) => Promise<boolean>,
+        undefined,
+        provider as unknown as (
+          organizationId: string
+        ) => Promise<readonly string[] | null | undefined>
+      );
+      const ctx = makeContext({
+        bugReport: makeBug({
+          organization_id: 'org-1',
+          metadata: { metadata: { user: { email: 'alice@example.com' } } },
+        }),
+      });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'reporter',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(provider).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips the allowlist entirely on the selfhosted path (organization_id is null)', async () => {
+      const provider = vi.fn().mockResolvedValue(['only-this@example.com']);
+      const { dispatcher: d, send } = buildAllowlistDispatcher(provider);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: null }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'anywhere@example.com',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(true);
+      expect(provider).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed when the provider throws', async () => {
+      const provider = vi.fn().mockRejectedValue(new Error('db gone'));
+      const { dispatcher: d, send } = buildAllowlistDispatcher(provider);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.email',
+        to: 'ops@bugspotter.io',
+        template: 'dedup_ack',
+      });
+
+      expect(ok).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+    });
+  });
+
   describe('notify.email — per-recipient rate limiter', () => {
     function buildLimitedDispatcher(limiter: Mock, verifyReporter?: Mock) {
       const send: Mock = vi.fn().mockResolvedValue(true);

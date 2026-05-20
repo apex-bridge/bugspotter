@@ -124,12 +124,24 @@ export function buildDedupRuleExecutor(
   // across canonicals and rules. Uses the existing notification_throttle
   // table with global defaults (5 emails / 60 minutes per address).
   const recipientRateLimiter = new ThrottleBackedRecipientLimiter(throttle);
+  // Per-org literal-recipient allowlist — closes the
+  // `notify.email.to = 'attacker@evil.com'` exfiltration vector for
+  // orgs that configure it. Empty / unset list preserves the legacy
+  // trust-the-admin behaviour, so this is a soft rollout: orgs opt in
+  // by populating `organizations.settings.dedup_email_literal_allowlist`.
+  const literalRecipientAllowlist = async (
+    orgId: string
+  ): Promise<readonly string[] | null | undefined> => {
+    const org = await db.organizations.findById(orgId);
+    return org?.settings?.dedup_email_literal_allowlist ?? null;
+  };
   const dispatcher = new DefaultActionDispatcher(
     resolver,
     lookup,
     emailSender,
     verifyReporter,
-    recipientRateLimiter
+    recipientRateLimiter,
+    literalRecipientAllowlist
   );
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);

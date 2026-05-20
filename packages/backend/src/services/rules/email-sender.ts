@@ -72,6 +72,33 @@ export interface EmailSender {
 export type ReporterVerifier = (organizationId: string, email: string) => Promise<boolean>;
 
 /**
+ * Per-org allowlist for literal `notify.email.to` values. Returns:
+ *   - `null` / `undefined` / `[]` → no allowlist configured; legacy
+ *     trust-the-admin behaviour, all literals pass.
+ *   - non-empty array → strict; only those emails (case-insensitive)
+ *     are valid notification targets for this org's rules.
+ *
+ * Production loads from `organizations.settings.dedup_email_literal_allowlist`.
+ * The provider is consulted only for literal `to` values — tokens
+ * like `'reporter'` have their own auth check and bypass the
+ * allowlist entirely.
+ */
+export type LiteralRecipientAllowlistProvider = (
+  organizationId: string
+) => Promise<readonly string[] | null | undefined>;
+
+/**
+ * Known recipient tokens recognised by the schema. Anything that's
+ * not one of these is a literal email address (validated by the
+ * schema regex on the way in).
+ */
+const RECIPIENT_TOKENS = new Set(['reporter', 'closer', 'all_reporters']);
+
+export function isLiteralRecipient(to: string): boolean {
+  return !RECIPIENT_TOKENS.has(to);
+}
+
+/**
  * Production sender — looks up the project's first active email
  * channel and dispatches via `EmailChannelHandler`. Returns `false`
  * on any expected failure (no channel, unknown template, SMTP
