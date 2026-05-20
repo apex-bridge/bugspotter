@@ -70,6 +70,18 @@ const updateSettingsBody = {
       maximum: 300_000,
     },
     intelligence_self_service_enabled: { type: 'boolean' },
+    // Per-org allowlist for literal `notify.email.to` in dedup rules.
+    // `null` / `[]` = trust-the-admin (legacy behaviour, soft rollout).
+    // Non-empty = strict (only listed addresses are valid targets).
+    // Cap on list size and per-entry length is defensive — the
+    // dispatcher matches case-insensitively after `.trim()`, so the
+    // cap on the column doesn't need to account for casing variants.
+    dedup_email_literal_allowlist: {
+      type: ['array', 'null'],
+      items: { type: 'string', format: 'email', maxLength: 320 },
+      maxItems: 100,
+      uniqueItems: true,
+    },
   },
   additionalProperties: false,
 } as const;
@@ -92,6 +104,7 @@ interface UpdateSettingsBody {
   intelligence_dedup_action?: 'flag' | 'auto_close' | null;
   intelligence_pre_file_dedup_grace_ms?: number | null;
   intelligence_self_service_enabled?: boolean;
+  dedup_email_literal_allowlist?: string[] | null;
 }
 
 // ============================================================================

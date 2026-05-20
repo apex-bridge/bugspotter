@@ -59,6 +59,7 @@ export type IntelligenceSettingsUpdate = Pick<
   | 'intelligence_dedup_action'
   | 'intelligence_pre_file_dedup_grace_ms'
   | 'intelligence_self_service_enabled'
+  | 'dedup_email_literal_allowlist'
 >;
 
 // ============================================================================
