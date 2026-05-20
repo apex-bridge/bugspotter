@@ -1131,8 +1131,8 @@ describe('RPC Bridge Security', () => {
     function lastFetchHeaders(): Headers {
       const mock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
       expect(mock).toHaveBeenCalled();
-      const [, options] = mock.mock.calls[0];
-      return options.headers as Headers;
+      const [, options] = mock.mock.calls[mock.mock.calls.length - 1];
+      return (options?.headers as Headers) ?? new Headers();
     }
 
     describe('Header Sanitization', () => {
