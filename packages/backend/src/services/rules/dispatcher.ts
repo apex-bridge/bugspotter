@@ -23,6 +23,7 @@ import type { ActionSpec } from '../../integrations/dedup-rule.schema.js';
 import { getLogger } from '../../logger.js';
 import type { EmailSender, ReporterVerifier } from './email-sender.js';
 import { resolveEmailRecipient } from './email-sender.js';
+import type { RecipientRateLimiter } from './recipient-rate-limiter.js';
 import type { ActionDispatcher, RuleEvalContext } from './types.js';
 
 const logger = getLogger();
@@ -81,7 +82,15 @@ export class DefaultActionDispatcher implements ActionDispatcher {
      * we can't honour it unverified. Selfhosted bugs have
      * `organization_id === null` and never reach the verifier.
      */
-    private readonly verifyReporter?: ReporterVerifier
+    private readonly verifyReporter?: ReporterVerifier,
+    /**
+     * Optional per-recipient throttle. When provided, every successful
+     * recipient resolution must clear it before `emailSender.send` is
+     * called. Caps fan-out to a single address across canonicals and
+     * rules — the per-(rule, canonical) throttle alone doesn't bound
+     * this. Tests can omit it; production wiring always passes one.
+     */
+    private readonly recipientRateLimiter?: RecipientRateLimiter
   ) {}
 
   /**
@@ -257,6 +266,23 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         // Email value itself is intentionally not logged — it's PII
         // and the boolean outcome is enough for ops.
         logger.info('Skipping notify.email: reporter not in org membership', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+        });
+        return false;
+      }
+    }
+    // Per-recipient throttle — caps fan-out to one address across
+    // canonicals and rules. Runs after `verifyReporter` so unverified
+    // recipients don't even count against the budget. Recipient stays
+    // out of the log (PII); the limiter logs its own throttle hit.
+    if (this.recipientRateLimiter) {
+      const allowed = await this.recipientRateLimiter.check(
+        recipient,
+        context.bugReport.organization_id
+      );
+      if (!allowed) {
+        logger.info('Skipping notify.email: recipient rate limit reached', {
           bugReportId: context.bugReport.id,
           organizationId: context.bugReport.organization_id,
         });
