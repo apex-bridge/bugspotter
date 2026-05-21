@@ -29,6 +29,7 @@ import type {
 import { isLiteralRecipient, resolveEmailRecipient } from './email-sender.js';
 import type { RecipientRateLimiter } from './recipient-rate-limiter.js';
 import type { TelegramSender, TelegramTokenResolver } from './telegram-sender.js';
+import type { WebhookSender } from './webhook-sender.js';
 import type { ActionDispatcher, RuleEvalContext } from './types.js';
 
 const logger = getLogger();
@@ -117,7 +118,15 @@ export class DefaultActionDispatcher implements ActionDispatcher {
      * paired with `telegramSender`; one without the other is a wiring
      * bug and `canDispatch('notify.telegram')` reflects that.
      */
-    private readonly telegramTokenResolver?: TelegramTokenResolver
+    private readonly telegramTokenResolver?: TelegramTokenResolver,
+    /**
+     * Optional generic-webhook sender. When wired, `notify.webhook`
+     * actions POST their payload to the rule's URL. No per-org
+     * credential — the URL itself is the auth (per Slack/Discord
+     * incoming-webhook convention). Tests inject a stub; production
+     * wires `FetchBackedWebhookSender`.
+     */
+    private readonly webhookSender?: WebhookSender
   ) {}
 
   /**
@@ -136,11 +145,12 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         // we still report false so the rule skips cleanly.
         return this.emailSender !== undefined;
       case 'notify.slack':
-      case 'notify.webhook':
-        // Slack / generic webhook dispatchers still pending —
-        // separate PRs queued behind notify.telegram (KZ launch
-        // priority).
+        // Slack dispatcher still pending — separate PR queued after
+        // this one (needs per-org bot-token storage + chat.postMessage
+        // wiring; bigger scope than the generic webhook).
         return false;
+      case 'notify.webhook':
+        return this.webhookSender !== undefined;
       case 'notify.telegram':
         // Requires BOTH a sender and a token resolver. One without
         // the other is a wiring bug; the rule skips cleanly.
@@ -163,11 +173,12 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         return this.dispatchEmail(context, action.to, action.template);
       case 'notify.telegram':
         return this.dispatchTelegram(context, action.chat_id, action.message);
-      case 'notify.slack':
       case 'notify.webhook':
-        // Recognised but not yet wired — log once at info so deploys
-        // running with a seeded rule of this shape don't look broken,
-        // but we don't spam the error stream.
+        return this.dispatchWebhook(context, action.url, action.payload ?? null);
+      case 'notify.slack':
+        // Slack dispatcher pending — see canDispatch above. Log once
+        // at info on a seeded slack rule so it doesn't look like the
+        // engine is broken.
         logger.info('Rule action type not yet implemented, skipping', {
           actionType: action.type,
           bugReportId: context.bugReport.id,
@@ -426,6 +437,45 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       }
     }
     return this.telegramSender.send({ token, chatId, text: message });
+  }
+
+  /**
+   * Dispatch a `notify.webhook` action. POSTs the payload as JSON to
+   * the rule's URL. No per-org credential — the URL itself is the
+   * auth (matches the Slack/Discord incoming-webhook convention).
+   * Re-runs SSRF validation inside the sender as defense in depth.
+   *
+   * `payload` defaults to `{}` when the rule's action doesn't carry
+   * one — the receiver gets a known shape even if the admin only
+   * configured the URL. Templating (`{{bug.id}}` etc.) is a
+   * follow-up if a real consumer asks for it.
+   */
+  private async dispatchWebhook(
+    context: RuleEvalContext,
+    url: string,
+    payload: Record<string, unknown> | null
+  ): Promise<boolean> {
+    if (!this.webhookSender) {
+      logger.info('Skipping notify.webhook: sender not wired', {
+        bugReportId: context.bugReport.id,
+      });
+      return false;
+    }
+    // Per-recipient throttle — keyed on URL. Caps fan-out to one
+    // webhook endpoint the same way the email and telegram paths
+    // cap their respective channels. Shared limiter, distinct hash
+    // namespace (the input is the raw URL).
+    if (this.recipientRateLimiter) {
+      const allowed = await this.recipientRateLimiter.check(url, context.bugReport.organization_id);
+      if (!allowed) {
+        logger.info('Skipping notify.webhook: recipient rate limit reached', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+        });
+        return false;
+      }
+    }
+    return this.webhookSender.send({ url, payload: payload ?? {} });
   }
 
   /**

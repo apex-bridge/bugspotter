@@ -25,6 +25,7 @@ import { DedupRuleExecutor } from './executor.js';
 import { ThrottleBackedRateLimiter } from './rate-limiter.js';
 import { ThrottleBackedRecipientLimiter } from './recipient-rate-limiter.js';
 import { FetchBackedTelegramSender } from './telegram-sender.js';
+import { FetchBackedWebhookSender } from './webhook-sender.js';
 
 const logger = getLogger();
 
@@ -164,6 +165,9 @@ export function buildDedupRuleExecutor(
       return null;
     }
   };
+  // Generic-webhook sender. Stateless — the URL is the credential,
+  // and SSRF revalidation happens inside the sender.
+  const webhookSender = new FetchBackedWebhookSender();
   const dispatcher = new DefaultActionDispatcher(
     resolver,
     lookup,
@@ -172,7 +176,8 @@ export function buildDedupRuleExecutor(
     recipientRateLimiter,
     literalRecipientAllowlist,
     telegramSender,
-    telegramTokenResolver
+    telegramTokenResolver,
+    webhookSender
   );
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);
