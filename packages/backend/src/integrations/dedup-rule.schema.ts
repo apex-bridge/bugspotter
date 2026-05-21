@@ -225,6 +225,22 @@ const actionWebhookSchema = z.object({
   payload: z.record(z.unknown()).nullable().optional(),
 });
 
+// `chat_id` is a string because Telegram supports both numeric ids
+// (group / supergroup ids are large negatives, well outside JS-safe
+// integer range when one accidentally serializes them as Number) and
+// `@channel_username` references for public channels. The dispatcher
+// passes the value straight to the bot-API as a string, which is what
+// the API documents as canonical.
+// `message` is capped at 4096 — Telegram's sendMessage hard limit on
+// the `text` field. Fail-fast at parse time so admin authors see the
+// error in the rule editor rather than as a 400 from the bot API days
+// later when the rule fires.
+const actionTelegramSchema = z.object({
+  type: z.literal('notify.telegram'),
+  chat_id: z.string().min(1),
+  message: z.string().min(1).max(4096),
+});
+
 // Plain `z.union` instead of `discriminatedUnion`: the latter requires
 // every variant to be a `ZodObject`, but `actionSlackSchema` is a
 // `ZodEffects` (wraps `.superRefine` for the XOR check). The union
@@ -236,6 +252,7 @@ export const actionSpecSchema = z.union([
   actionEmailSchema,
   actionSlackSchema,
   actionWebhookSchema,
+  actionTelegramSchema,
 ]);
 
 export type ActionSpec = z.infer<typeof actionSpecSchema>;
