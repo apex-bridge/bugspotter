@@ -23,6 +23,15 @@ const logger = getLogger();
 // up indefinitely.
 const TELEGRAM_TIMEOUT_MS = 10_000;
 
+// BotFather-issued token shape: `<bot_id>:<35-char-secret>`. Bot ids
+// are positive integers; the secret uses `[A-Za-z0-9_-]`. The PATCH
+// route validates this format too, but the sender re-checks
+// defensively — without the check, a malformed token like
+// `/../admin` (legacy row, test stub, manual SQL) would escape the
+// bot path on URL build (`bot/../admin/sendMessage` →
+// `/admin/sendMessage` after URL normalization).
+const TELEGRAM_TOKEN_PATTERN = /^[0-9]+:[A-Za-z0-9_-]+$/;
+
 export interface TelegramSendRequest {
   /** Plaintext bot token. The wiring layer decrypts before reaching the sender. */
   token: string;
@@ -59,6 +68,11 @@ export type TelegramTokenResolver = (organizationId: string | null) => Promise<s
  */
 export class FetchBackedTelegramSender implements TelegramSender {
   async send(req: TelegramSendRequest): Promise<boolean> {
+    // Defensive token-shape check — see TELEGRAM_TOKEN_PATTERN above.
+    if (!TELEGRAM_TOKEN_PATTERN.test(req.token)) {
+      logger.warn('TelegramSender: refused malformed token (not BotFather shape)');
+      return false;
+    }
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
     try {

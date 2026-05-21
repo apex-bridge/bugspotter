@@ -84,11 +84,18 @@ const updateSettingsBody = {
     },
     // Telegram bot token (plaintext on the wire; encrypted on store
     // by the service layer). `null` or empty string clears the
-    // configured bot. Token shape is `<bot_id>:<35-char-secret>` per
-    // BotFather output, but bot ids vary in length — we cap maxLength
-    // defensively rather than enforce a regex that could lock out
-    // edge cases.
-    telegram_bot_token: { type: ['string', 'null'], maxLength: 200 },
+    // configured bot. The BotFather-issued shape is enforced via
+    // pattern: `<bot_id>:<35-char-secret>` where bot ids are positive
+    // integers and the secret uses `[A-Za-z0-9_-]`. Without the
+    // pattern a token like `/../admin` would escape the bot path on
+    // URL build in the sender; the sender re-checks defensively but
+    // failing here gives admins immediate feedback instead of a silent
+    // dispatch skip later. Empty string is also accepted (clears).
+    telegram_bot_token: {
+      type: ['string', 'null'],
+      maxLength: 200,
+      pattern: '^$|^[0-9]+:[A-Za-z0-9_-]+$',
+    },
   },
   additionalProperties: false,
 } as const;

@@ -231,10 +231,14 @@ const actionWebhookSchema = z.object({
 // `@channel_username` references for public channels. The dispatcher
 // passes the value straight to the bot-API as a string, which is what
 // the API documents as canonical.
+// `message` is capped at 4096 — Telegram's sendMessage hard limit on
+// the `text` field. Fail-fast at parse time so admin authors see the
+// error in the rule editor rather than as a 400 from the bot API days
+// later when the rule fires.
 const actionTelegramSchema = z.object({
   type: z.literal('notify.telegram'),
   chat_id: z.string().min(1),
-  message: z.string().min(1),
+  message: z.string().min(1).max(4096),
 });
 
 // Plain `z.union` instead of `discriminatedUnion`: the latter requires

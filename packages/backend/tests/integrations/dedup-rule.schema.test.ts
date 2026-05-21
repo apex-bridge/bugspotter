@@ -384,6 +384,26 @@ describe('dedupRuleSchema — actions', () => {
       })
     ).toThrow();
   });
+
+  it('notify.telegram rejects messages over 4096 characters', () => {
+    // Telegram's sendMessage caps `text` at 4096 chars; failing here
+    // beats a 400 from the bot API at runtime.
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.telegram', chat_id: '@chan', message: 'a'.repeat(4097) }],
+      })
+    ).toThrow();
+  });
+
+  it('notify.telegram accepts a 4096-character message at the boundary', () => {
+    expect(() =>
+      dedupRuleSchema.parse({
+        ...baseRule,
+        then: [{ type: 'notify.telegram', chat_id: '@chan', message: 'a'.repeat(4096) }],
+      })
+    ).not.toThrow();
+  });
 });
 
 describe('dedupRuleSchema — top-level', () => {
