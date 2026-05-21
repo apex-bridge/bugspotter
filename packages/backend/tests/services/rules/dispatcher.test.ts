@@ -795,4 +795,105 @@ describe('DefaultActionDispatcher', () => {
       expect(send).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('notify.telegram', () => {
+    function buildTelegramDispatcher(sender: Mock, tokenResolver: Mock) {
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { send: sender } as unknown as {
+          send: (req: { token: string; chatId: string; text: string }) => Promise<boolean>;
+        },
+        tokenResolver as unknown as (organizationId: string | null) => Promise<string | null>
+      );
+      return { dispatcher: d, sender };
+    }
+
+    it('canDispatch returns true once a TelegramSender is wired', () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('bot-token');
+      const { dispatcher: d } = buildTelegramDispatcher(sender, tokens);
+      expect(d.canDispatch({ type: 'notify.telegram', chat_id: '@chan', message: 'hi' })).toBe(
+        true
+      );
+    });
+
+    it('canDispatch returns false when no sender is wired', () => {
+      expect(
+        dispatcher.canDispatch({ type: 'notify.telegram', chat_id: '@chan', message: 'hi' })
+      ).toBe(false);
+    });
+
+    it('sends the message via the sender with the resolved token, chat_id, text', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('bot:token-abc');
+      const { dispatcher: d } = buildTelegramDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.telegram',
+        chat_id: '@kz_engineering',
+        message: 'New duplicate: bug-123',
+      });
+
+      expect(ok).toBe(true);
+      expect(tokens).toHaveBeenCalledWith('org-1');
+      expect(sender).toHaveBeenCalledWith({
+        token: 'bot:token-abc',
+        chatId: '@kz_engineering',
+        text: 'New duplicate: bug-123',
+      });
+    });
+
+    it('skips when no bot token is configured for the org', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue(null);
+      const { dispatcher: d } = buildTelegramDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.telegram',
+        chat_id: '@chan',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+      expect(sender).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the sender reports a failure', async () => {
+      const sender = vi.fn().mockResolvedValue(false);
+      const tokens = vi.fn().mockResolvedValue('bot:tok');
+      const { dispatcher: d } = buildTelegramDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.telegram',
+        chat_id: '@chan',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+    });
+
+    it('fails closed when the token resolver throws', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockRejectedValue(new Error('db gone'));
+      const { dispatcher: d } = buildTelegramDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.telegram',
+        chat_id: '@chan',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+      expect(sender).not.toHaveBeenCalled();
+    });
+  });
 });
