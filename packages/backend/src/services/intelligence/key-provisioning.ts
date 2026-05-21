@@ -60,6 +60,7 @@ export type IntelligenceSettingsUpdate = Pick<
   | 'intelligence_pre_file_dedup_grace_ms'
   | 'intelligence_self_service_enabled'
   | 'dedup_email_literal_allowlist'
+  | 'telegram_bot_token'
 >;
 
 // ============================================================================
@@ -284,6 +285,22 @@ export class IntelligenceKeyProvisioning {
       normalized.dedup_email_literal_allowlist = Array.from(
         new Set(normalized.dedup_email_literal_allowlist.map((e) => e.trim().toLowerCase()))
       );
+    }
+    // Telegram bot token comes in as plaintext from the admin PATCH.
+    // Encrypt before persistence (same shape `provisionKey` uses for
+    // `intelligence_api_key`). An empty string is treated as a clear
+    // — without this, we'd store `enc:''` which would later decrypt to
+    // an empty token and break dispatch silently. `null` passes
+    // through to the JSONB merge to clear the field.
+    if (normalized.telegram_bot_token !== undefined) {
+      if (
+        typeof normalized.telegram_bot_token === 'string' &&
+        normalized.telegram_bot_token !== ''
+      ) {
+        normalized.telegram_bot_token = this.encryption.encrypt(normalized.telegram_bot_token);
+      } else {
+        normalized.telegram_bot_token = null;
+      }
     }
     const updated = await this.db.organizations.updateSettings(orgId, normalized);
     if (!updated) {

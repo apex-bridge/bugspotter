@@ -732,6 +732,14 @@ export interface OrganizationSettings {
    * and compared case-insensitively.
    */
   dedup_email_literal_allowlist?: string[] | null;
+  /**
+   * Encrypted Telegram bot token (via CredentialEncryption — same
+   * shape as `intelligence_api_key`). Used by `notify.telegram`
+   * dispatch. `undefined` / `null` = no Telegram bot configured;
+   * dispatcher skips `notify.telegram` cleanly. Never returned to
+   * the client on GET — the settings route strips it on response.
+   */
+  telegram_bot_token?: string | null;
 }
 
 export interface Organization {
