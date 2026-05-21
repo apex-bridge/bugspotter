@@ -408,6 +408,23 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       });
       return false;
     }
+    // Per-recipient throttle (shared with notify.email) — keyed on
+    // chat_id here. Caps fan-out to one Telegram chat across rules /
+    // canonicals, same way it does for email recipients. Runs after
+    // token resolution so an unconfigured org doesn't burn budget.
+    if (this.recipientRateLimiter) {
+      const allowed = await this.recipientRateLimiter.check(
+        chatId,
+        context.bugReport.organization_id
+      );
+      if (!allowed) {
+        logger.info('Skipping notify.telegram: recipient rate limit reached', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+        });
+        return false;
+      }
+    }
     return this.telegramSender.send({ token, chatId, text: message });
   }
 

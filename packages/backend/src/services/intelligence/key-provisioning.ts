@@ -293,11 +293,13 @@ export class IntelligenceKeyProvisioning {
     // an empty token and break dispatch silently. `null` passes
     // through to the JSONB merge to clear the field.
     if (normalized.telegram_bot_token !== undefined) {
-      if (
-        typeof normalized.telegram_bot_token === 'string' &&
-        normalized.telegram_bot_token !== ''
-      ) {
-        normalized.telegram_bot_token = this.encryption.encrypt(normalized.telegram_bot_token);
+      if (typeof normalized.telegram_bot_token === 'string') {
+        // Trim before encrypting so leading/trailing whitespace
+        // doesn't end up in the cipher. Empty / whitespace-only
+        // input clears the field.
+        const trimmed = normalized.telegram_bot_token.trim();
+        normalized.telegram_bot_token =
+          trimmed.length > 0 ? this.encryption.encrypt(trimmed) : null;
       } else {
         normalized.telegram_bot_token = null;
       }

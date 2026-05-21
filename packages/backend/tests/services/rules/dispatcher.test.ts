@@ -797,13 +797,17 @@ describe('DefaultActionDispatcher', () => {
   });
 
   describe('notify.telegram', () => {
-    function buildTelegramDispatcher(sender: Mock, tokenResolver: Mock) {
+    function buildTelegramDispatcher(sender: Mock, tokenResolver: Mock, limiter?: Mock) {
       const d = new DefaultActionDispatcher(
         resolver as unknown as CanonicalTicketResolver,
         lookup as CapabilityServiceLookup,
         undefined,
         undefined,
-        undefined,
+        limiter
+          ? ({ check: limiter } as unknown as {
+              check: (recipient: string, organizationId: string | null) => Promise<boolean>;
+            })
+          : undefined,
         undefined,
         { send: sender } as unknown as {
           send: (req: { token: string; chatId: string; text: string }) => Promise<boolean>;
@@ -894,6 +898,42 @@ describe('DefaultActionDispatcher', () => {
 
       expect(ok).toBe(false);
       expect(sender).not.toHaveBeenCalled();
+    });
+
+    it('consults the recipient rate limiter with chat_id and skips when denied', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('bot:tok');
+      const limiter = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d } = buildTelegramDispatcher(sender, tokens, limiter);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.telegram',
+        chat_id: '@target_chat',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+      expect(limiter).toHaveBeenCalledWith('@target_chat', 'org-1');
+      expect(sender).not.toHaveBeenCalled();
+    });
+
+    it('sends when the recipient rate limiter allows', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('bot:tok');
+      const limiter = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d } = buildTelegramDispatcher(sender, tokens, limiter);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.telegram',
+        chat_id: '@target_chat',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(true);
+      expect(limiter).toHaveBeenCalledWith('@target_chat', 'org-1');
+      expect(sender).toHaveBeenCalledTimes(1);
     });
   });
 });

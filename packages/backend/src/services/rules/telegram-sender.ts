@@ -62,15 +62,16 @@ export class FetchBackedTelegramSender implements TelegramSender {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
     try {
-      const response = await fetch(
-        `https://api.telegram.org/bot${encodeURIComponent(req.token)}/sendMessage`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: req.chatId, text: req.text }),
-          signal: controller.signal,
-        }
-      );
+      // Token goes literally in the path — Telegram expects the raw
+      // `<bot_id>:<secret>` and the secret only uses URL-safe chars
+      // (`[A-Za-z0-9_-]`). `encodeURIComponent` would escape the `:`
+      // separator to `%3A` and the request would 404.
+      const response = await fetch(`https://api.telegram.org/bot${req.token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: req.chatId, text: req.text }),
+        signal: controller.signal,
+      });
       if (!response.ok) {
         // Pull `description` out of the body if present — it's the
         // bot API's human-readable error. Suppress otherwise; raw

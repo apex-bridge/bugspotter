@@ -479,5 +479,42 @@ describe('IntelligenceKeyProvisioning', () => {
       // Coerce to null so the JSONB merge clears the field cleanly.
       expect(arg.telegram_bot_token).toBeNull();
     });
+
+    it('treats a whitespace-only telegram_bot_token as a clear (null)', async () => {
+      await provisioning.updateSettings('org-1', {
+        telegram_bot_token: '   ',
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      expect(arg.telegram_bot_token).toBeNull();
+    });
+
+    it('trims the telegram_bot_token before encrypting', async () => {
+      await provisioning.updateSettings('org-1', {
+        telegram_bot_token: '  bot:abc:secret  ',
+      });
+
+      // Surrounding whitespace must NOT survive into the cipher; the
+      // trimmed value is what gets encrypted.
+      expect(mockEncryption.encrypt).toHaveBeenCalledWith('bot:abc:secret');
+    });
+
+    // Regression for the GET-response leak Claude bot flagged. The
+    // current shape is structurally safe (`OrgIntelligenceSettings`
+    // doesn't carry `telegram_bot_token`), but pinning the contract
+    // here means a future addition to `resolveOrgIntelligenceSettings`
+    // can't quietly leak the encrypted blob.
+    it('does not include telegram_bot_token in the resolved intelligence settings', async () => {
+      const { resolveOrgIntelligenceSettings } = await import(
+        '../../../src/services/intelligence/tenant-config.js'
+      );
+      const resolved = resolveOrgIntelligenceSettings({
+        intelligence_enabled: true,
+        intelligence_api_key: 'enc:secret',
+        telegram_bot_token: 'enc:tg-token',
+      });
+      expect((resolved as unknown as Record<string, unknown>).telegram_bot_token).toBeUndefined();
+    });
   });
 });

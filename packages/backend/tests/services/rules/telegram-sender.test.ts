@@ -38,10 +38,11 @@ describe('FetchBackedTelegramSender', () => {
     const mock = vi.mocked(globalThis.fetch);
     expect(mock).toHaveBeenCalledTimes(1);
     const [url, init] = mock.mock.calls[0];
-    // Token is URL-encoded in the path; `:` becomes %3A.
-    expect(url).toBe(
-      'https://api.telegram.org/bot' + encodeURIComponent('bot:secret-123') + '/sendMessage'
-    );
+    // Token is passed literally in the path — Telegram's API expects
+    // the raw `<bot_id>:<secret>` format, and `:` is RFC-3986-safe in
+    // the path component. Encoding via `encodeURIComponent` would
+    // escape `:` to `%3A` and break the request.
+    expect(url).toBe('https://api.telegram.org/botbot:secret-123/sendMessage');
     expect(init?.method).toBe('POST');
     expect(init?.headers).toMatchObject({ 'Content-Type': 'application/json' });
     expect(JSON.parse(init?.body as string)).toEqual({
