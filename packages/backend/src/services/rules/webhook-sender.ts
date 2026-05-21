@@ -74,10 +74,15 @@ export class FetchBackedWebhookSender implements WebhookSender {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+    let response: Response | undefined;
     try {
-      const response = await fetch(validatedUrl, {
+      response = await fetch(validatedUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': 'BugSpotter-Webhook',
+        },
         body: JSON.stringify(req.payload),
         signal: controller.signal,
         // Block redirect-based SSRF: a public URL that 302s to a
@@ -102,6 +107,16 @@ export class FetchBackedWebhookSender implements WebhookSender {
       return false;
     } finally {
       clearTimeout(timeoutId);
+      // Drain the body so undici releases the socket back to the
+      // pool. Without this, every successful or 4xx/5xx response
+      // holds the socket until idle-timeout, exhausting the pool
+      // under sustained webhook traffic. Mirrors the pattern in
+      // hardened-http.ts between redirect hops.
+      try {
+        await response?.body?.cancel?.();
+      } catch {
+        // best-effort cleanup
+      }
     }
   }
 }

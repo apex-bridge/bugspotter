@@ -36,7 +36,11 @@ describe('FetchBackedWebhookSender', () => {
     expect(url).toBeInstanceOf(URL);
     expect((url as URL).toString()).toBe('https://hooks.example.com/dedup');
     expect(init?.method).toBe('POST');
-    expect(init?.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(init?.headers).toMatchObject({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'User-Agent': 'BugSpotter-Webhook',
+    });
     expect(JSON.parse(init?.body as string)).toEqual({
       event: 'duplicate_detected',
       priority: 'high',
