@@ -19,10 +19,12 @@ import { EmailChannelHandler } from '../notifications/email-handler.js';
 import { DatabaseRuleContextProvider } from './context-provider.js';
 import { DefaultActionDispatcher, TicketsTableResolver } from './dispatcher.js';
 import type { CapabilityServiceLookup } from './dispatcher.js';
+import { getEncryptionService } from '../../utils/encryption.js';
 import { ChannelBackedEmailSender } from './email-sender.js';
 import { DedupRuleExecutor } from './executor.js';
 import { ThrottleBackedRateLimiter } from './rate-limiter.js';
 import { ThrottleBackedRecipientLimiter } from './recipient-rate-limiter.js';
+import { FetchBackedTelegramSender } from './telegram-sender.js';
 
 const logger = getLogger();
 
@@ -135,13 +137,42 @@ export function buildDedupRuleExecutor(
     const org = await db.organizations.findById(orgId);
     return org?.settings?.dedup_email_literal_allowlist ?? null;
   };
+  // Telegram sender + token resolver. The resolver fetches the
+  // encrypted bot token from `organizations.settings.telegram_bot_token`
+  // and decrypts on demand. Returns null when no token is configured
+  // (most orgs at launch), for selfhosted bugs (no organization_id),
+  // or if decryption fails (treated as "not configured" rather than
+  // an error — matches the verifier-throws fail-closed pattern).
+  const telegramSender = new FetchBackedTelegramSender();
+  const encryption = getEncryptionService();
+  const telegramTokenResolver = async (organizationId: string | null): Promise<string | null> => {
+    if (!organizationId) {
+      return null;
+    }
+    const org = await db.organizations.findById(organizationId);
+    const encrypted = org?.settings?.telegram_bot_token;
+    if (!encrypted || typeof encrypted !== 'string') {
+      return null;
+    }
+    try {
+      return encryption.decrypt(encrypted);
+    } catch (err) {
+      logger.warn('Telegram token resolver: decryption failed', {
+        organizationId,
+        errorType: err instanceof Error ? err.name : 'NonErrorThrown',
+      });
+      return null;
+    }
+  };
   const dispatcher = new DefaultActionDispatcher(
     resolver,
     lookup,
     emailSender,
     verifyReporter,
     recipientRateLimiter,
-    literalRecipientAllowlist
+    literalRecipientAllowlist,
+    telegramSender,
+    telegramTokenResolver
   );
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);

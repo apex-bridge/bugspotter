@@ -732,6 +732,17 @@ export interface OrganizationSettings {
    * and compared case-insensitively.
    */
   dedup_email_literal_allowlist?: string[] | null;
+  /**
+   * Encrypted Telegram bot token (via CredentialEncryption — same
+   * shape as `intelligence_api_key`). Used by `notify.telegram`
+   * dispatch. `undefined` / `null` = no Telegram bot configured;
+   * dispatcher skips `notify.telegram` cleanly. Never appears on the
+   * GET response because `resolveOrgIntelligenceSettings` explicitly
+   * enumerates the fields it carries through and this isn't one of
+   * them — `key-provisioning.test.ts` pins that contract so a future
+   * addition to the resolve can't quietly leak the encrypted blob.
+   */
+  telegram_bot_token?: string | null;
 }
 
 export interface Organization {

@@ -82,6 +82,20 @@ const updateSettingsBody = {
       maxItems: 100,
       uniqueItems: true,
     },
+    // Telegram bot token (plaintext on the wire; encrypted on store
+    // by the service layer). `null` or empty string clears the
+    // configured bot. The BotFather-issued shape is enforced via
+    // pattern: `<bot_id>:<35-char-secret>` where bot ids are positive
+    // integers and the secret uses `[A-Za-z0-9_-]`. Without the
+    // pattern a token like `/../admin` would escape the bot path on
+    // URL build in the sender; the sender re-checks defensively but
+    // failing here gives admins immediate feedback instead of a silent
+    // dispatch skip later. Empty string is also accepted (clears).
+    telegram_bot_token: {
+      type: ['string', 'null'],
+      maxLength: 200,
+      pattern: '^$|^[0-9]+:[A-Za-z0-9_-]+$',
+    },
   },
   additionalProperties: false,
 } as const;
@@ -105,6 +119,7 @@ interface UpdateSettingsBody {
   intelligence_pre_file_dedup_grace_ms?: number | null;
   intelligence_self_service_enabled?: boolean;
   dedup_email_literal_allowlist?: string[] | null;
+  telegram_bot_token?: string | null;
 }
 
 // ============================================================================

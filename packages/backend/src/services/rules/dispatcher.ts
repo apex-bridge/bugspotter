@@ -28,6 +28,7 @@ import type {
 } from './email-sender.js';
 import { isLiteralRecipient, resolveEmailRecipient } from './email-sender.js';
 import type { RecipientRateLimiter } from './recipient-rate-limiter.js';
+import type { TelegramSender, TelegramTokenResolver } from './telegram-sender.js';
 import type { ActionDispatcher, RuleEvalContext } from './types.js';
 
 const logger = getLogger();
@@ -102,7 +103,21 @@ export class DefaultActionDispatcher implements ActionDispatcher {
      * preserves legacy trust-the-admin behaviour; a configured list
      * makes the check strict.
      */
-    private readonly literalRecipientAllowlist?: LiteralRecipientAllowlistProvider
+    private readonly literalRecipientAllowlist?: LiteralRecipientAllowlistProvider,
+    /**
+     * Optional Telegram bot-API sender. When provided alongside a
+     * token resolver, `notify.telegram` actions dispatch through it.
+     * Tests inject a stub; production wires `FetchBackedTelegramSender`.
+     */
+    private readonly telegramSender?: TelegramSender,
+    /**
+     * Resolves the org's bot token (decrypted plaintext) for
+     * `notify.telegram` dispatch. Returns `null` when no token is
+     * configured — dispatcher treats that as "skip cleanly". Must be
+     * paired with `telegramSender`; one without the other is a wiring
+     * bug and `canDispatch('notify.telegram')` reflects that.
+     */
+    private readonly telegramTokenResolver?: TelegramTokenResolver
   ) {}
 
   /**
@@ -122,9 +137,14 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         return this.emailSender !== undefined;
       case 'notify.slack':
       case 'notify.webhook':
-        // PR-D flips these to true as the slack / webhook wiring
-        // lands.
+        // Slack / generic webhook dispatchers still pending —
+        // separate PRs queued behind notify.telegram (KZ launch
+        // priority).
         return false;
+      case 'notify.telegram':
+        // Requires BOTH a sender and a token resolver. One without
+        // the other is a wiring bug; the rule skips cleanly.
+        return this.telegramSender !== undefined && this.telegramTokenResolver !== undefined;
       default: {
         const _exhaustive: never = action;
         void _exhaustive;
@@ -141,6 +161,8 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         return this.dispatchTicketTransition(context, action.to);
       case 'notify.email':
         return this.dispatchEmail(context, action.to, action.template);
+      case 'notify.telegram':
+        return this.dispatchTelegram(context, action.chat_id, action.message);
       case 'notify.slack':
       case 'notify.webhook':
         // Recognised but not yet wired — log once at info so deploys
@@ -344,6 +366,66 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       templateId,
       vars: this.buildEmailVars(context),
     });
+  }
+
+  /**
+   * Dispatch a `notify.telegram` action. Resolves the org's bot
+   * token (decrypted plaintext) via the injected resolver and hands
+   * off to the sender. Skips cleanly when no token is configured —
+   * not every org runs Telegram. Fails closed on resolver errors.
+   *
+   * No PII in the success log (chat_id is identifying); the sender's
+   * own logging carries enough for ops on the failure path.
+   */
+  private async dispatchTelegram(
+    context: RuleEvalContext,
+    chatId: string,
+    message: string
+  ): Promise<boolean> {
+    if (!this.telegramSender || !this.telegramTokenResolver) {
+      // `canDispatch` already excludes this — defensive no-op if a
+      // subclass overrides one of the two.
+      logger.info('Skipping notify.telegram: sender or token resolver not wired', {
+        bugReportId: context.bugReport.id,
+      });
+      return false;
+    }
+    let token: string | null;
+    try {
+      token = await this.telegramTokenResolver(context.bugReport.organization_id);
+    } catch (error) {
+      logger.warn('Skipping notify.telegram: token resolver threw', {
+        bugReportId: context.bugReport.id,
+        organizationId: context.bugReport.organization_id,
+        errorType: error instanceof Error ? error.name : 'NonErrorThrown',
+      });
+      return false;
+    }
+    if (!token) {
+      logger.info('Skipping notify.telegram: no bot token configured for org', {
+        bugReportId: context.bugReport.id,
+        organizationId: context.bugReport.organization_id,
+      });
+      return false;
+    }
+    // Per-recipient throttle (shared with notify.email) — keyed on
+    // chat_id here. Caps fan-out to one Telegram chat across rules /
+    // canonicals, same way it does for email recipients. Runs after
+    // token resolution so an unconfigured org doesn't burn budget.
+    if (this.recipientRateLimiter) {
+      const allowed = await this.recipientRateLimiter.check(
+        chatId,
+        context.bugReport.organization_id
+      );
+      if (!allowed) {
+        logger.info('Skipping notify.telegram: recipient rate limit reached', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+        });
+        return false;
+      }
+    }
+    return this.telegramSender.send({ token, chatId, text: message });
   }
 
   /**
