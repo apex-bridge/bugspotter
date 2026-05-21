@@ -936,4 +936,102 @@ describe('DefaultActionDispatcher', () => {
       expect(sender).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('notify.webhook', () => {
+    function buildWebhookDispatcher(sender: Mock, limiter?: Mock) {
+      const d = new DefaultActionDispatcher(
+        resolver as unknown as CanonicalTicketResolver,
+        lookup as CapabilityServiceLookup,
+        undefined,
+        undefined,
+        limiter
+          ? ({ check: limiter } as unknown as {
+              check: (recipient: string, organizationId: string | null) => Promise<boolean>;
+            })
+          : undefined,
+        undefined,
+        undefined,
+        undefined,
+        { send: sender } as unknown as {
+          send: (req: { url: string; payload: Record<string, unknown> }) => Promise<boolean>;
+        }
+      );
+      return { dispatcher: d, sender };
+    }
+
+    it('canDispatch returns true once a WebhookSender is wired', () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d } = buildWebhookDispatcher(sender);
+      expect(d.canDispatch({ type: 'notify.webhook', url: 'https://hooks.example.com/x' })).toBe(
+        true
+      );
+    });
+
+    it('canDispatch returns false when no sender is wired', () => {
+      expect(
+        dispatcher.canDispatch({ type: 'notify.webhook', url: 'https://hooks.example.com/x' })
+      ).toBe(false);
+    });
+
+    it('sends to the URL with the configured payload', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d } = buildWebhookDispatcher(sender);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.webhook',
+        url: 'https://hooks.example.com/dedup',
+        payload: { event: 'duplicate_detected', priority: 'high' },
+      });
+
+      expect(ok).toBe(true);
+      expect(sender).toHaveBeenCalledWith({
+        url: 'https://hooks.example.com/dedup',
+        payload: { event: 'duplicate_detected', priority: 'high' },
+      });
+    });
+
+    it('sends an empty payload object when none is configured', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d } = buildWebhookDispatcher(sender);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.webhook',
+        url: 'https://hooks.example.com/dedup',
+      });
+
+      expect(ok).toBe(true);
+      expect(sender.mock.calls[0][0].payload).toEqual({});
+    });
+
+    it('returns false when the sender reports a failure', async () => {
+      const sender = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d } = buildWebhookDispatcher(sender);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.webhook',
+        url: 'https://hooks.example.com/x',
+      });
+
+      expect(ok).toBe(false);
+    });
+
+    it('consults the recipient rate limiter with the URL and skips when denied', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const limiter = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d } = buildWebhookDispatcher(sender, limiter);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.webhook',
+        url: 'https://hooks.example.com/x',
+      });
+
+      expect(ok).toBe(false);
+      expect(limiter).toHaveBeenCalledWith('https://hooks.example.com/x', 'org-1');
+      expect(sender).not.toHaveBeenCalled();
+    });
+  });
 });
