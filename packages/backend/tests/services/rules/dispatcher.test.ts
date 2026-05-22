@@ -1090,6 +1090,32 @@ describe('DefaultActionDispatcher', () => {
       });
     });
 
+    // Defense-in-depth against a legacy row that sneaks past the
+    // schema XOR with BOTH channel and user set. Picking one
+    // arbitrarily would risk leaking bug data to the target the
+    // admin didn't intend, so the dispatcher fails closed.
+    it('skips when both channel and user are set on the action', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      // Bypass the schema's XOR refinement by casting — simulates a
+      // row that was inserted via raw SQL or before the refinement
+      // landed. Production parses go through the schema and reject
+      // this shape; the test pins the runtime defense.
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#x',
+        user: 'U999',
+        message: 'hi',
+      } as unknown as Parameters<typeof d.dispatch>[1]);
+
+      expect(ok).toBe(false);
+      expect(tokens).not.toHaveBeenCalled();
+      expect(sender).not.toHaveBeenCalled();
+    });
+
     // Schema enforces XOR between `channel` and `user`. When `user` is
     // set, the sender's `channel` arg is the user id — Slack's
     // chat.postMessage takes either in the same field.

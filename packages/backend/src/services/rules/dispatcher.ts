@@ -517,17 +517,24 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       });
       return false;
     }
-    // The schema's `superRefine` enforces XOR at parse time, so one
-    // of these is non-null in well-formed rules. Defensive `?? user`
-    // covers the case where a legacy row sneaks through with both
-    // unset — we'd rather skip than POST `null` as the channel.
-    const conversation = channel ?? user;
-    if (!conversation) {
-      logger.info('Skipping notify.slack: no channel or user configured on rule', {
+    // The schema's `superRefine` enforces XOR at parse time, but a
+    // legacy row, direct SQL edit, or future relaxation could slip a
+    // both-set or both-unset action through. Re-check at dispatch
+    // (same defense-in-depth shape used for SSRF in webhook-sender):
+    //  - both unset → no target, skip cleanly
+    //  - both set → don't pick arbitrarily; the wrong choice would
+    //    leak bug data to a target the admin didn't intend.
+    const hasChannel = !!channel && channel.length > 0;
+    const hasUser = !!user && user.length > 0;
+    if (hasChannel === hasUser) {
+      logger.info('Skipping notify.slack: requires exactly one of channel/user', {
         bugReportId: context.bugReport.id,
+        hasChannel,
+        hasUser,
       });
       return false;
     }
+    const conversation = hasChannel ? channel! : user!;
     let token: string | null;
     try {
       token = await this.deps.slackTokenResolver(context.bugReport.organization_id);
