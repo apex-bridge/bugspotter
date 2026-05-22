@@ -69,7 +69,8 @@ export type ActionSpec =
       type: 'notify.webhook';
       url: string;
       payload?: Record<string, unknown> | null;
-    };
+    }
+  | { type: 'notify.telegram'; chat_id: string; message: string };
 
 export const ACTION_TYPES = [
   'ticket.add_comment',
@@ -77,6 +78,7 @@ export const ACTION_TYPES = [
   'notify.email',
   'notify.slack',
   'notify.webhook',
+  'notify.telegram',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 

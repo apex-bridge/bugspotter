@@ -515,6 +515,33 @@ describe('IntelligenceKeyProvisioning', () => {
         telegram_bot_token: 'enc:tg-token',
       });
       expect((resolved as unknown as Record<string, unknown>).telegram_bot_token).toBeUndefined();
+      // The boolean signal IS in the response — admin UI needs to
+      // render "configured" without ever receiving the ciphertext.
+      expect(resolved.telegram_bot_token_configured).toBe(true);
+    });
+
+    it('reports telegram_bot_token_configured = false when unset / empty', async () => {
+      const { resolveOrgIntelligenceSettings } = await import(
+        '../../../src/services/intelligence/tenant-config.js'
+      );
+      // unset
+      expect(
+        resolveOrgIntelligenceSettings({ intelligence_enabled: true }).telegram_bot_token_configured
+      ).toBe(false);
+      // empty string (post-clear)
+      expect(
+        resolveOrgIntelligenceSettings({
+          intelligence_enabled: true,
+          telegram_bot_token: '',
+        }).telegram_bot_token_configured
+      ).toBe(false);
+      // null (post-clear via JSONB merge)
+      expect(
+        resolveOrgIntelligenceSettings({
+          intelligence_enabled: true,
+          telegram_bot_token: null,
+        }).telegram_bot_token_configured
+      ).toBe(false);
     });
 
     // Same shape as the telegram suite above. The slack token follows
@@ -579,6 +606,28 @@ describe('IntelligenceKeyProvisioning', () => {
         slack_bot_token: 'enc:slack-tok',
       });
       expect((resolved as unknown as Record<string, unknown>).slack_bot_token).toBeUndefined();
+      expect(resolved.slack_bot_token_configured).toBe(true);
+    });
+
+    it('reports slack_bot_token_configured = false when unset / empty', async () => {
+      const { resolveOrgIntelligenceSettings } = await import(
+        '../../../src/services/intelligence/tenant-config.js'
+      );
+      expect(
+        resolveOrgIntelligenceSettings({ intelligence_enabled: true }).slack_bot_token_configured
+      ).toBe(false);
+      expect(
+        resolveOrgIntelligenceSettings({
+          intelligence_enabled: true,
+          slack_bot_token: '',
+        }).slack_bot_token_configured
+      ).toBe(false);
+      expect(
+        resolveOrgIntelligenceSettings({
+          intelligence_enabled: true,
+          slack_bot_token: null,
+        }).slack_bot_token_configured
+      ).toBe(false);
     });
   });
 });
