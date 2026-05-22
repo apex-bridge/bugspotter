@@ -47,6 +47,11 @@ function summarizeAction(action: ActionSpec, t: (k: string) => string): string {
       return t('dedupRules.action.notify_slack');
     case 'notify.webhook':
       return t('dedupRules.action.notify_webhook');
+    case 'notify.telegram':
+      // chat_id can be a numeric group id or `@username`; both render
+      // fine inline. PII risk is low — admins author chat_ids, not
+      // end users — so showing it in the card summary is fine.
+      return `${t('dedupRules.action.notify_telegram')} → ${action.chat_id}`;
   }
 }
 

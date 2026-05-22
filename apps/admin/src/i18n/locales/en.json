@@ -649,7 +649,8 @@
       "ticket_transition": "Transition ticket",
       "notify_email": "Notify by email",
       "notify_slack": "Notify on Slack",
-      "notify_webhook": "Call webhook"
+      "notify_webhook": "Call webhook",
+      "notify_telegram": "Notify on Telegram"
     },
     "aria": {
       "enableRule": "Enable rule",
@@ -702,7 +703,10 @@
       "rateLimitWindow": "Window",
       "errorNameRequired": "Rule name is required.",
       "errorActionRequired": "At least one action is required.",
-      "errorActionInvalid": "One or more actions have invalid input. Fix the highlighted errors before saving."
+      "errorActionInvalid": "One or more actions have invalid input. Fix the highlighted errors before saving.",
+      "telegramChatId": "Telegram chat id",
+      "telegramChatIdPlaceholder": "@channel_username or -1001234567890",
+      "telegramMessagePlaceholder": "Message body..."
     }
   },
   "notifications": {
@@ -1873,6 +1877,22 @@
       "descriptionAdmin": "AI enrichment, similar-bug detection, and fix suggestions are disabled for this organization. Enable them in Intelligence Settings.",
       "descriptionMember": "AI enrichment, similar-bug detection, and fix suggestions are disabled for this organization. Ask an organization admin to enable them.",
       "enableLink": "Open Intelligence Settings"
+    },
+    "channels": {
+      "title": "Notification channels",
+      "description": "Per-organization bot tokens for the dedup rule engine. Tokens are encrypted at rest and never returned by the API.",
+      "telegram": "Telegram",
+      "telegramPlaceholder": "123456789:AAEhBP...",
+      "telegramHelp": "BotFather-issued token. Used by notify.telegram rule actions to post via the Bot API.",
+      "slack": "Slack",
+      "slackPlaceholder": "xoxb-...",
+      "slackHelp": "Slack workspace bot token (xoxb-). Used by notify.slack rule actions to post via chat.postMessage.",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "configure": "Configure",
+      "replace": "Replace",
+      "clear": "Clear",
+      "clearConfirm": "Clear this bot token? Rules using this channel will skip cleanly until you configure a new token."
     }
   },
   "orgRetention": {
