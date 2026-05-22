@@ -74,53 +74,53 @@ export type CapabilityServiceLookup = (
  * the matching `canDispatch` probe.
  */
 export interface ActionDispatcherDeps {
-  resolver: CanonicalTicketResolver;
-  lookupService: CapabilityServiceLookup;
+  readonly resolver: CanonicalTicketResolver;
+  readonly lookupService: CapabilityServiceLookup;
   /**
    * When provided, `notify.email` actions are dispatched via this
    * sender. Left optional so the executor's unit tests (and any
    * selfhosted deployment without notification channels) keep
    * working without forcing a sender to exist.
    */
-  emailSender?: EmailSender;
+  readonly emailSender?: EmailSender;
   /**
    * Required in SaaS mode (where `bugReport.organization_id` is
    * non-null) to gate the `reporter` recipient token against
    * org-member identity. Without it, a SaaS rule with
    * `notify.email { to: 'reporter' }` fails closed.
    */
-  verifyReporter?: ReporterVerifier;
+  readonly verifyReporter?: ReporterVerifier;
   /**
    * Per-recipient throttle. Caps fan-out to a single address
    * across canonicals and rules — the per-(rule, canonical)
    * throttle alone doesn't bound this. Tests can omit it;
    * production wiring always passes one.
    */
-  recipientRateLimiter?: RecipientRateLimiter;
+  readonly recipientRateLimiter?: RecipientRateLimiter;
   /**
    * Per-org allowlist for literal `notify.email.to`. Only consulted
    * for literal recipients (tokens like `'reporter'` bypass — they
    * have their own auth check). Empty / unset list preserves legacy
    * trust-the-admin behaviour.
    */
-  literalRecipientAllowlist?: LiteralRecipientAllowlistProvider;
+  readonly literalRecipientAllowlist?: LiteralRecipientAllowlistProvider;
   /**
    * Telegram bot-API sender. Must be paired with
    * `telegramTokenResolver`; one without the other is a wiring bug
    * and `canDispatch('notify.telegram')` reflects that.
    */
-  telegramSender?: TelegramSender;
+  readonly telegramSender?: TelegramSender;
   /**
    * Resolves the org's bot token (decrypted plaintext) for
    * `notify.telegram` dispatch. Returns `null` when no token is
    * configured — dispatcher treats that as "skip cleanly".
    */
-  telegramTokenResolver?: TelegramTokenResolver;
+  readonly telegramTokenResolver?: TelegramTokenResolver;
   /**
    * Generic-webhook sender. No per-org credential — the URL itself
    * is the auth (per Slack/Discord incoming-webhook convention).
    */
-  webhookSender?: WebhookSender;
+  readonly webhookSender?: WebhookSender;
 }
 
 export class DefaultActionDispatcher implements ActionDispatcher {
