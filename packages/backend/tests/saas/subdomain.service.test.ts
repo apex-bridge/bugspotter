@@ -136,6 +136,11 @@ describe('SubdomainService', () => {
       // Assert any throw — short-named entries (e.g. "ai") are rejected
       // for length rather than the reserved-name message, but the
       // user-visible outcome is the same: signup refuses them.
+      //
+      // Sanity guard: if the import resolves to an empty set (bad merge,
+      // both contributing lists emptied), the for-loop would pass
+      // silently. Fail loudly instead.
+      expect(SERVICE_RESERVED_SUBDOMAINS.size).toBeGreaterThan(0);
       for (const reserved of SERVICE_RESERVED_SUBDOMAINS) {
         expect(() => service.validateFormat(reserved)).toThrow();
       }

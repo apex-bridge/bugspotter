@@ -31,7 +31,7 @@ const SUBDOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
  * router would never serve. Extras here cover environments, monitoring,
  * and platform-only names that the middleware doesn't need to know about.
  */
-export const SIGNUP_ONLY_RESERVED = new Set([
+export const SIGNUP_ONLY_RESERVED: ReadonlySet<string> = new Set([
   // Platform infra
   'media',
   'uploads',
