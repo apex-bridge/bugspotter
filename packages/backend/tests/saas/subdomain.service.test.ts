@@ -5,8 +5,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { SubdomainService } from '../../src/saas/services/subdomain.service.js';
-import { RESERVED_SUBDOMAINS } from '../../src/saas/middleware/tenant.js';
+import {
+  SubdomainService,
+  RESERVED_SUBDOMAINS as SERVICE_RESERVED_SUBDOMAINS,
+} from '../../src/saas/services/subdomain.service.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 
 vi.mock('../../src/logger.js', () => ({
@@ -120,27 +122,33 @@ describe('SubdomainService', () => {
       expect(() => service.validateFormat('signup')).toThrow(/reserved/);
     });
 
-    it('blocks every subdomain the tenant middleware refuses to route', () => {
-      // Regression guard: the reserved list used at signup must be a
-      // superset of the tenant resolution middleware's reserved set.
-      // Otherwise a user could register an org with a subdomain the
-      // router will never serve — an unrecoverable broken state.
+    it('rejects every subdomain on the service-level reserved set', () => {
+      // Regression guard: anything in the service's `RESERVED_SUBDOMAINS`
+      // (which unions the tenant-middleware list with the signup-only
+      // list — environments, monitoring, blog/register/onboarding, etc.)
+      // must be rejected. Without this, removing an entry from either
+      // contributing set could leave a user able to register an org
+      // whose subdomain the router will never serve.
       //
-      // Iterate over the actual RESERVED_SUBDOMAINS set so additions to
-      // the middleware list are automatically test-covered.
-      for (const reserved of RESERVED_SUBDOMAINS) {
-        expect(() => service.validateFormat(reserved)).toThrow(/reserved/);
+      // Iterate over the actual set so additions to either contributing
+      // list are automatically test-covered.
+      //
+      // Assert any throw — short-named entries (e.g. "ai") are rejected
+      // for length rather than the reserved-name message, but the
+      // user-visible outcome is the same: signup refuses them.
+      for (const reserved of SERVICE_RESERVED_SUBDOMAINS) {
+        expect(() => service.validateFormat(reserved)).toThrow();
       }
     });
 
     it('blocks AI / agent product surfaces (mcp, agents, bot)', () => {
       // Explicit assertion that the names we reserved for the v0.3
       // bugspotter-mcp hosted endpoint and adjacent future surfaces
-      // are rejected at signup. Drives intent — if these are ever
-      // removed from RESERVED_SUBDOMAINS, this test fails first.
-      //
-      // "ai" is 2 chars — implicitly blocked by the 3-char minimum
-      // length check, doesn't need an entry in RESERVED_SUBDOMAINS.
+      // are rejected at signup with the "reserved" code path
+      // specifically (not length, not LDH). Stronger than the
+      // iterating test above: if mcp/agents/bot are removed from
+      // RESERVED_SUBDOMAINS, the iterating test would just iterate
+      // a shorter set and still pass — this one fails loudly.
       for (const reserved of ['mcp', 'agents', 'bot']) {
         expect(() => service.validateFormat(reserved)).toThrow(/reserved/);
       }
