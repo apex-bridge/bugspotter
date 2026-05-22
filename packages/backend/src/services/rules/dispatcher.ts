@@ -1,16 +1,18 @@
 /**
- * Action dispatcher for the dedup-rule engine (PR-C slice).
+ * Action dispatcher for the dedup-rule engine.
  *
- * Routes `ticket.add_comment` and `ticket.transition` actions to the
- * platform-neutral capability interface introduced in PR #142.
- * `notify.email` / `notify.slack` / `notify.webhook` log a one-shot
- * info message and skip — those land in PR-C2 (email), PR-D (slack /
- * webhook), so they're recognised by the schema but no-op at runtime.
+ * Routes the schema's action variants to their respective collaborators:
+ *  - `ticket.add_comment` / `ticket.transition` → the platform-neutral
+ *    capability interface introduced in PR #142;
+ *  - `notify.email` → `EmailSender` with auth-bound reporter gating,
+ *    per-recipient throttling, and per-org literal allowlist;
+ *  - `notify.telegram` / `notify.slack` → bot-API senders with
+ *    per-org encrypted tokens resolved at dispatch time;
+ *  - `notify.webhook` → generic POST sender with SSRF revalidation.
  *
- * The dispatcher takes its dependencies via constructor so the
- * executor stays unit-testable: tests inject a stub
- * `TicketIntegrationCapabilities` instance instead of the real
- * Jira/Linear service.
+ * The dispatcher takes its dependencies via constructor (a single
+ * `ActionDispatcherDeps` object) so the executor stays unit-testable:
+ * tests inject stubs for each collaborator instead of the real service.
  */
 
 import type { DatabaseClient } from '../../db/client.js';
@@ -28,6 +30,7 @@ import type {
 } from './email-sender.js';
 import { isLiteralRecipient, resolveEmailRecipient } from './email-sender.js';
 import type { RecipientRateLimiter } from './recipient-rate-limiter.js';
+import type { SlackSender, SlackTokenResolver } from './slack-sender.js';
 import type { TelegramSender, TelegramTokenResolver } from './telegram-sender.js';
 import type { WebhookSender } from './webhook-sender.js';
 import type { ActionDispatcher, RuleEvalContext } from './types.js';
@@ -121,6 +124,18 @@ export interface ActionDispatcherDeps {
    * is the auth (per Slack/Discord incoming-webhook convention).
    */
   readonly webhookSender?: WebhookSender;
+  /**
+   * Slack Web API sender (`chat.postMessage`). Must be paired with
+   * `slackTokenResolver`; one without the other is a wiring bug and
+   * `canDispatch('notify.slack')` reflects that.
+   */
+  readonly slackSender?: SlackSender;
+  /**
+   * Resolves the org's Slack bot token (decrypted plaintext) for
+   * `notify.slack` dispatch. Returns `null` when no token is
+   * configured — dispatcher treats that as "skip cleanly".
+   */
+  readonly slackTokenResolver?: SlackTokenResolver;
 }
 
 export class DefaultActionDispatcher implements ActionDispatcher {
@@ -142,10 +157,9 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         // we still report false so the rule skips cleanly.
         return this.deps.emailSender !== undefined;
       case 'notify.slack':
-        // Slack dispatcher still pending — separate PR queued after
-        // this one (needs per-org bot-token storage + chat.postMessage
-        // wiring; bigger scope than the generic webhook).
-        return false;
+        // Requires BOTH a sender and a token resolver. One without
+        // the other is a wiring bug; the rule skips cleanly.
+        return this.deps.slackSender !== undefined && this.deps.slackTokenResolver !== undefined;
       case 'notify.webhook':
         return this.deps.webhookSender !== undefined;
       case 'notify.telegram':
@@ -175,14 +189,12 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       case 'notify.webhook':
         return this.dispatchWebhook(context, action.url, action.payload ?? null);
       case 'notify.slack':
-        // Slack dispatcher pending — see canDispatch above. Log once
-        // at info on a seeded slack rule so it doesn't look like the
-        // engine is broken.
-        logger.info('Rule action type not yet implemented, skipping', {
-          actionType: action.type,
-          bugReportId: context.bugReport.id,
-        });
-        return false;
+        return this.dispatchSlack(
+          context,
+          action.channel ?? null,
+          action.user ?? null,
+          action.message
+        );
       default: {
         // Exhaustiveness check — if a new ActionSpec variant is added
         // to the schema and not handled here, the assignment fails to
@@ -478,6 +490,79 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       }
     }
     return this.deps.webhookSender.send({ url, payload: payload ?? {} });
+  }
+
+  /**
+   * Dispatch a `notify.slack` action. The schema enforces that
+   * exactly one of `channel` / `user` is set; whichever is non-null
+   * is the conversation target (Slack's `chat.postMessage` takes a
+   * channel id, channel name, or user id in the same field). Resolves
+   * the org's bot token (decrypted plaintext) via the injected
+   * resolver and hands off to the sender. Skips cleanly when no
+   * token is configured — not every org runs Slack. Fails closed on
+   * resolver errors.
+   *
+   * No PII in the success log (channel / user names are identifying);
+   * the sender's own logging carries enough for ops on the failure path.
+   */
+  private async dispatchSlack(
+    context: RuleEvalContext,
+    channel: string | null,
+    user: string | null,
+    message: string
+  ): Promise<boolean> {
+    if (!this.deps.slackSender || !this.deps.slackTokenResolver) {
+      logger.info('Skipping notify.slack: sender or token resolver not wired', {
+        bugReportId: context.bugReport.id,
+      });
+      return false;
+    }
+    // The schema's `superRefine` enforces XOR at parse time, so one
+    // of these is non-null in well-formed rules. Defensive `?? user`
+    // covers the case where a legacy row sneaks through with both
+    // unset — we'd rather skip than POST `null` as the channel.
+    const conversation = channel ?? user;
+    if (!conversation) {
+      logger.info('Skipping notify.slack: no channel or user configured on rule', {
+        bugReportId: context.bugReport.id,
+      });
+      return false;
+    }
+    let token: string | null;
+    try {
+      token = await this.deps.slackTokenResolver(context.bugReport.organization_id);
+    } catch (error) {
+      logger.warn('Skipping notify.slack: token resolver threw', {
+        bugReportId: context.bugReport.id,
+        organizationId: context.bugReport.organization_id,
+        errorType: error instanceof Error ? error.name : 'NonErrorThrown',
+      });
+      return false;
+    }
+    if (!token) {
+      logger.info('Skipping notify.slack: no bot token configured for org', {
+        bugReportId: context.bugReport.id,
+        organizationId: context.bugReport.organization_id,
+      });
+      return false;
+    }
+    // Per-recipient throttle (shared with email / telegram / webhook)
+    // — keyed on the conversation target. Caps fan-out to one Slack
+    // channel or user across rules and canonicals.
+    if (this.deps.recipientRateLimiter) {
+      const allowed = await this.deps.recipientRateLimiter.check(
+        conversation,
+        context.bugReport.organization_id
+      );
+      if (!allowed) {
+        logger.info('Skipping notify.slack: recipient rate limit reached', {
+          bugReportId: context.bugReport.id,
+          organizationId: context.bugReport.organization_id,
+        });
+        return false;
+      }
+    }
+    return this.deps.slackSender.send({ token, channel: conversation, text: message });
   }
 
   /**

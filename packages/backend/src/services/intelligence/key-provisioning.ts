@@ -61,6 +61,7 @@ export type IntelligenceSettingsUpdate = Pick<
   | 'intelligence_self_service_enabled'
   | 'dedup_email_literal_allowlist'
   | 'telegram_bot_token'
+  | 'slack_bot_token'
 >;
 
 // ============================================================================
@@ -302,6 +303,17 @@ export class IntelligenceKeyProvisioning {
           trimmed.length > 0 ? this.encryption.encrypt(trimmed) : null;
       } else {
         normalized.telegram_bot_token = null;
+      }
+    }
+    // Same shape as the telegram path: trim, encrypt, treat empty as
+    // clear. Slack bot tokens are admin-configured and never leave
+    // the server in plaintext after the PATCH lands.
+    if (normalized.slack_bot_token !== undefined) {
+      if (typeof normalized.slack_bot_token === 'string') {
+        const trimmed = normalized.slack_bot_token.trim();
+        normalized.slack_bot_token = trimmed.length > 0 ? this.encryption.encrypt(trimmed) : null;
+      } else {
+        normalized.slack_bot_token = null;
       }
     }
     const updated = await this.db.organizations.updateSettings(orgId, normalized);

@@ -96,6 +96,20 @@ const updateSettingsBody = {
       maxLength: 200,
       pattern: '^$|^[0-9]+:[A-Za-z0-9_-]+$',
     },
+    // Slack bot token (plaintext on the wire; encrypted on store by
+    // the service layer). `null` or empty string clears the configured
+    // bot. Pattern enforces the `xoxb-` bot-token shape — `xoxp-`
+    // user tokens are intentionally rejected because chat.postMessage
+    // permissions on user tokens depend on a workspace's individual
+    // settings and are an anti-pattern for service-account dispatch.
+    // The sender re-checks defensively; failing here gives admins
+    // immediate feedback in the editor instead of a silent dispatch
+    // skip later.
+    slack_bot_token: {
+      type: ['string', 'null'],
+      maxLength: 200,
+      pattern: '^$|^xoxb-[A-Za-z0-9-]+$',
+    },
   },
   additionalProperties: false,
 } as const;
@@ -120,6 +134,7 @@ interface UpdateSettingsBody {
   intelligence_self_service_enabled?: boolean;
   dedup_email_literal_allowlist?: string[] | null;
   telegram_bot_token?: string | null;
+  slack_bot_token?: string | null;
 }
 
 // ============================================================================
