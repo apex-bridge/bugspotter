@@ -65,69 +65,66 @@ export type CapabilityServiceLookup = (
   projectId: string
 ) => Promise<TicketIntegrationCapabilities | null>;
 
+/**
+ * Dispatcher dependencies. Passed as a single object so callers
+ * don't have to remember a 9-arg positional signature and so adding
+ * a new sender (slack next) is an additive field on this interface
+ * rather than another positional slot. Required fields are the two
+ * `ticket.*` collaborators; everything else is optional and gates
+ * the matching `canDispatch` probe.
+ */
+export interface ActionDispatcherDeps {
+  readonly resolver: CanonicalTicketResolver;
+  readonly lookupService: CapabilityServiceLookup;
+  /**
+   * When provided, `notify.email` actions are dispatched via this
+   * sender. Left optional so the executor's unit tests (and any
+   * selfhosted deployment without notification channels) keep
+   * working without forcing a sender to exist.
+   */
+  readonly emailSender?: EmailSender;
+  /**
+   * Required in SaaS mode (where `bugReport.organization_id` is
+   * non-null) to gate the `reporter` recipient token against
+   * org-member identity. Without it, a SaaS rule with
+   * `notify.email { to: 'reporter' }` fails closed.
+   */
+  readonly verifyReporter?: ReporterVerifier;
+  /**
+   * Per-recipient throttle. Caps fan-out to a single address
+   * across canonicals and rules — the per-(rule, canonical)
+   * throttle alone doesn't bound this. Tests can omit it;
+   * production wiring always passes one.
+   */
+  readonly recipientRateLimiter?: RecipientRateLimiter;
+  /**
+   * Per-org allowlist for literal `notify.email.to`. Only consulted
+   * for literal recipients (tokens like `'reporter'` bypass — they
+   * have their own auth check). Empty / unset list preserves legacy
+   * trust-the-admin behaviour.
+   */
+  readonly literalRecipientAllowlist?: LiteralRecipientAllowlistProvider;
+  /**
+   * Telegram bot-API sender. Must be paired with
+   * `telegramTokenResolver`; one without the other is a wiring bug
+   * and `canDispatch('notify.telegram')` reflects that.
+   */
+  readonly telegramSender?: TelegramSender;
+  /**
+   * Resolves the org's bot token (decrypted plaintext) for
+   * `notify.telegram` dispatch. Returns `null` when no token is
+   * configured — dispatcher treats that as "skip cleanly".
+   */
+  readonly telegramTokenResolver?: TelegramTokenResolver;
+  /**
+   * Generic-webhook sender. No per-org credential — the URL itself
+   * is the auth (per Slack/Discord incoming-webhook convention).
+   */
+  readonly webhookSender?: WebhookSender;
+}
+
 export class DefaultActionDispatcher implements ActionDispatcher {
-  constructor(
-    private readonly resolver: CanonicalTicketResolver,
-    private readonly lookupService: CapabilityServiceLookup,
-    /**
-     * Optional. When provided, `notify.email` actions are dispatched
-     * via this sender. Left optional so the executor's unit tests
-     * (and any selfhosted deployment without notification channels)
-     * keep working without forcing a sender to exist. The
-     * `canDispatch` probe flips with this — rules with email-only
-     * actions are skipped if no sender is wired, avoiding the
-     * throttle-budget burn.
-     */
-    private readonly emailSender?: EmailSender,
-    /**
-     * Optional. Required in SaaS mode (where `bugReport.organization_id`
-     * is non-null) to gate the `reporter` recipient token against
-     * org-member identity. Without it, a SaaS rule with
-     * `notify.email { to: 'reporter' }` fails closed — the bug filer
-     * controls the email field they put in `metadata.user.email`, so
-     * we can't honour it unverified. Selfhosted bugs have
-     * `organization_id === null` and never reach the verifier.
-     */
-    private readonly verifyReporter?: ReporterVerifier,
-    /**
-     * Optional per-recipient throttle. When provided, every successful
-     * recipient resolution must clear it before `emailSender.send` is
-     * called. Caps fan-out to a single address across canonicals and
-     * rules — the per-(rule, canonical) throttle alone doesn't bound
-     * this. Tests can omit it; production wiring always passes one.
-     */
-    private readonly recipientRateLimiter?: RecipientRateLimiter,
-    /**
-     * Optional per-org allowlist for literal `notify.email.to`. Only
-     * consulted for literal recipients (tokens like `'reporter'`
-     * bypass — they have their own auth check). Empty / unset list
-     * preserves legacy trust-the-admin behaviour; a configured list
-     * makes the check strict.
-     */
-    private readonly literalRecipientAllowlist?: LiteralRecipientAllowlistProvider,
-    /**
-     * Optional Telegram bot-API sender. When provided alongside a
-     * token resolver, `notify.telegram` actions dispatch through it.
-     * Tests inject a stub; production wires `FetchBackedTelegramSender`.
-     */
-    private readonly telegramSender?: TelegramSender,
-    /**
-     * Resolves the org's bot token (decrypted plaintext) for
-     * `notify.telegram` dispatch. Returns `null` when no token is
-     * configured — dispatcher treats that as "skip cleanly". Must be
-     * paired with `telegramSender`; one without the other is a wiring
-     * bug and `canDispatch('notify.telegram')` reflects that.
-     */
-    private readonly telegramTokenResolver?: TelegramTokenResolver,
-    /**
-     * Optional generic-webhook sender. When wired, `notify.webhook`
-     * actions POST their payload to the rule's URL. No per-org
-     * credential — the URL itself is the auth (per Slack/Discord
-     * incoming-webhook convention). Tests inject a stub; production
-     * wires `FetchBackedWebhookSender`.
-     */
-    private readonly webhookSender?: WebhookSender
-  ) {}
+  constructor(private readonly deps: ActionDispatcherDeps) {}
 
   /**
    * Synchronous capability probe — used by the executor to skip
@@ -143,18 +140,20 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         // Wired in PR-C2 when an EmailSender is provided. Without
         // one (test harness, selfhosted with no channels configured)
         // we still report false so the rule skips cleanly.
-        return this.emailSender !== undefined;
+        return this.deps.emailSender !== undefined;
       case 'notify.slack':
         // Slack dispatcher still pending — separate PR queued after
         // this one (needs per-org bot-token storage + chat.postMessage
         // wiring; bigger scope than the generic webhook).
         return false;
       case 'notify.webhook':
-        return this.webhookSender !== undefined;
+        return this.deps.webhookSender !== undefined;
       case 'notify.telegram':
         // Requires BOTH a sender and a token resolver. One without
         // the other is a wiring bug; the rule skips cleanly.
-        return this.telegramSender !== undefined && this.telegramTokenResolver !== undefined;
+        return (
+          this.deps.telegramSender !== undefined && this.deps.telegramTokenResolver !== undefined
+        );
       default: {
         const _exhaustive: never = action;
         void _exhaustive;
@@ -200,7 +199,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     if (!target) {
       return false;
     }
-    const service = await this.lookupService(target.integrationId, target.projectId);
+    const service = await this.deps.lookupService(target.integrationId, target.projectId);
     if (!pluginSupports(service, 'addComment')) {
       logger.info('Skipping ticket.add_comment: integration does not support addComment', {
         integrationId: target.integrationId,
@@ -231,7 +230,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     if (!target) {
       return false;
     }
-    const service = await this.lookupService(target.integrationId, target.projectId);
+    const service = await this.deps.lookupService(target.integrationId, target.projectId);
     if (!pluginSupports(service, 'transition')) {
       logger.info('Skipping ticket.transition: integration does not support transition', {
         integrationId: target.integrationId,
@@ -258,7 +257,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     to: string,
     templateId: string
   ): Promise<boolean> {
-    if (!this.emailSender) {
+    if (!this.deps.emailSender) {
       // Defensive — `canDispatch` already excludes this path when no
       // sender is wired, so the executor shouldn't actually call us
       // here. Log at info in case a custom dispatcher subclass
@@ -282,7 +281,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     // the spammable shape. Selfhosted bugs have `organization_id ===
     // null` and skip the check entirely.
     if (to === 'reporter' && context.bugReport.organization_id !== null) {
-      if (!this.verifyReporter) {
+      if (!this.deps.verifyReporter) {
         logger.warn('Skipping notify.email: SaaS mode without reporter verifier', {
           bugReportId: context.bugReport.id,
           organizationId: context.bugReport.organization_id,
@@ -291,7 +290,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       }
       let verified: boolean;
       try {
-        verified = await this.verifyReporter(context.bugReport.organization_id, recipient);
+        verified = await this.deps.verifyReporter(context.bugReport.organization_id, recipient);
       } catch (error) {
         // Treat a verifier failure the same as "not verified" — the
         // worst-case alternative is leaking bug data on a transient
@@ -325,13 +324,13 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     // (legacy trust-the-admin behaviour, soft rollout). Runs before
     // the rate limiter so a denied literal doesn't burn budget.
     if (
-      this.literalRecipientAllowlist &&
+      this.deps.literalRecipientAllowlist &&
       context.bugReport.organization_id !== null &&
       isLiteralRecipient(to)
     ) {
       let allowlist: readonly string[] | null | undefined;
       try {
-        allowlist = await this.literalRecipientAllowlist(context.bugReport.organization_id);
+        allowlist = await this.deps.literalRecipientAllowlist(context.bugReport.organization_id);
       } catch (error) {
         // Fail closed on provider errors — same shape as the verifier
         // path. A DB hiccup shouldn't open the exfiltration vector.
@@ -358,8 +357,8 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     // canonicals and rules. Runs after `verifyReporter` so unverified
     // recipients don't even count against the budget. Recipient stays
     // out of the log (PII); the limiter logs its own throttle hit.
-    if (this.recipientRateLimiter) {
-      const allowed = await this.recipientRateLimiter.check(
+    if (this.deps.recipientRateLimiter) {
+      const allowed = await this.deps.recipientRateLimiter.check(
         recipient,
         context.bugReport.organization_id
       );
@@ -371,7 +370,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         return false;
       }
     }
-    return this.emailSender.send({
+    return this.deps.emailSender.send({
       projectId: context.projectId,
       to: recipient,
       templateId,
@@ -393,7 +392,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     chatId: string,
     message: string
   ): Promise<boolean> {
-    if (!this.telegramSender || !this.telegramTokenResolver) {
+    if (!this.deps.telegramSender || !this.deps.telegramTokenResolver) {
       // `canDispatch` already excludes this — defensive no-op if a
       // subclass overrides one of the two.
       logger.info('Skipping notify.telegram: sender or token resolver not wired', {
@@ -403,7 +402,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     }
     let token: string | null;
     try {
-      token = await this.telegramTokenResolver(context.bugReport.organization_id);
+      token = await this.deps.telegramTokenResolver(context.bugReport.organization_id);
     } catch (error) {
       logger.warn('Skipping notify.telegram: token resolver threw', {
         bugReportId: context.bugReport.id,
@@ -423,8 +422,8 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     // chat_id here. Caps fan-out to one Telegram chat across rules /
     // canonicals, same way it does for email recipients. Runs after
     // token resolution so an unconfigured org doesn't burn budget.
-    if (this.recipientRateLimiter) {
-      const allowed = await this.recipientRateLimiter.check(
+    if (this.deps.recipientRateLimiter) {
+      const allowed = await this.deps.recipientRateLimiter.check(
         chatId,
         context.bugReport.organization_id
       );
@@ -436,7 +435,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         return false;
       }
     }
-    return this.telegramSender.send({ token, chatId, text: message });
+    return this.deps.telegramSender.send({ token, chatId, text: message });
   }
 
   /**
@@ -455,7 +454,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     url: string,
     payload: Record<string, unknown> | null
   ): Promise<boolean> {
-    if (!this.webhookSender) {
+    if (!this.deps.webhookSender) {
       logger.info('Skipping notify.webhook: sender not wired', {
         bugReportId: context.bugReport.id,
       });
@@ -465,8 +464,11 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     // webhook endpoint the same way the email and telegram paths
     // cap their respective channels. Shared limiter, distinct hash
     // namespace (the input is the raw URL).
-    if (this.recipientRateLimiter) {
-      const allowed = await this.recipientRateLimiter.check(url, context.bugReport.organization_id);
+    if (this.deps.recipientRateLimiter) {
+      const allowed = await this.deps.recipientRateLimiter.check(
+        url,
+        context.bugReport.organization_id
+      );
       if (!allowed) {
         logger.info('Skipping notify.webhook: recipient rate limit reached', {
           bugReportId: context.bugReport.id,
@@ -475,7 +477,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
         return false;
       }
     }
-    return this.webhookSender.send({ url, payload: payload ?? {} });
+    return this.deps.webhookSender.send({ url, payload: payload ?? {} });
   }
 
   /**
@@ -528,7 +530,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     // Scope the resolution to the firing rule's project. The resolver
     // returns null if the canonical's project doesn't match — a stale
     // rule must never act on another tenant's ticket.
-    const target = await this.resolver.resolve(canonicalId, context.projectId);
+    const target = await this.deps.resolver.resolve(canonicalId, context.projectId);
     if (!target) {
       // Canonical exists but has no external ticket on file — likely
       // dedup-suppressed its own outbox row before any ticket was
