@@ -756,10 +756,19 @@ function ActionFields({
             placeholder={t('dedupRules.form.telegramChatIdPlaceholder')}
             aria-label={t('dedupRules.form.telegramChatId')}
           />
+          {/*
+            Mirror Telegram's hard `text` cap of 4096 chars on the
+            client so the user sees the textarea stop accepting input
+            instead of typing 500 more chars and then getting a 400
+            from the Bot API at dispatch time. The schema already caps
+            at the same value server-side; this is belt-and-braces.
+          */}
           <Textarea
             value={action.message}
             onChange={(e) => onChange({ ...action, message: e.target.value })}
             placeholder={t('dedupRules.form.telegramMessagePlaceholder')}
+            aria-label={t('dedupRules.form.telegramMessage')}
+            maxLength={4096}
           />
         </div>
       );

@@ -706,7 +706,8 @@
       "errorActionInvalid": "Бір немесе бірнеше әрекетте қате бар. Сақтау алдында белгіленген қателерді түзетіңіз.",
       "telegramChatId": "Telegram чатының идентификаторы",
       "telegramChatIdPlaceholder": "@channel_username немесе -1001234567890",
-      "telegramMessagePlaceholder": "Хабарлама мәтіні..."
+      "telegramMessagePlaceholder": "Хабарлама мәтіні...",
+      "telegramMessage": "Telegram хабарламасының мәтіні"
     }
   },
   "notifications": {

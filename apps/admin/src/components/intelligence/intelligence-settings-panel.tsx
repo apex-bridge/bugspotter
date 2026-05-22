@@ -4,7 +4,7 @@
  * Accepts orgId as a prop instead of relying on useOrganization context.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useId } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -657,11 +657,18 @@ function ChannelTokenRow({
   busy,
   t,
 }: ChannelTokenRowProps) {
+  // `useId` produces an SSR-stable unique id; deriving it from
+  // `label` would collide across locales (the EN and RU labels for
+  // the same channel hash differently, and same-locale labels would
+  // need fragile slugification).
+  const inputId = useId();
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-3">
         {iconElement}
-        <Label className="font-medium">{label}</Label>
+        <Label htmlFor={inputId} className="font-medium">
+          {label}
+        </Label>
         {configured ? (
           <Badge variant="success">{t('intelligence.channels.configured')}</Badge>
         ) : (
@@ -689,6 +696,7 @@ function ChannelTokenRow({
           <div className="flex gap-2 items-end">
             <div className="flex-1 max-w-md">
               <Input
+                id={inputId}
                 type="password"
                 placeholder={placeholder}
                 value={input}

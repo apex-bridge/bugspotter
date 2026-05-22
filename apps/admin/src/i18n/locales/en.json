@@ -706,7 +706,8 @@
       "errorActionInvalid": "One or more actions have invalid input. Fix the highlighted errors before saving.",
       "telegramChatId": "Telegram chat id",
       "telegramChatIdPlaceholder": "@channel_username or -1001234567890",
-      "telegramMessagePlaceholder": "Message body..."
+      "telegramMessagePlaceholder": "Message body...",
+      "telegramMessage": "Telegram message body"
     }
   },
   "notifications": {

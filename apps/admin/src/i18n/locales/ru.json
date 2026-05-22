@@ -706,7 +706,8 @@
       "errorActionInvalid": "В одном или нескольких действиях ошибка. Исправьте выделенные ошибки перед сохранением.",
       "telegramChatId": "Идентификатор чата Telegram",
       "telegramChatIdPlaceholder": "@channel_username или -1001234567890",
-      "telegramMessagePlaceholder": "Текст сообщения..."
+      "telegramMessagePlaceholder": "Текст сообщения...",
+      "telegramMessage": "Текст сообщения Telegram"
     }
   },
   "notifications": {
