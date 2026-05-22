@@ -87,10 +87,10 @@ describe('DefaultActionDispatcher', () => {
     lookup = vi
       .fn()
       .mockResolvedValue(capabilityService as unknown as TicketIntegrationCapabilities);
-    dispatcher = new DefaultActionDispatcher(
-      resolver as unknown as CanonicalTicketResolver,
-      lookup as CapabilityServiceLookup
-    );
+    dispatcher = new DefaultActionDispatcher({
+      resolver: resolver as unknown as CanonicalTicketResolver,
+      lookupService: lookup as CapabilityServiceLookup,
+    });
   });
 
   describe('ticket.add_comment', () => {
@@ -278,11 +278,11 @@ describe('DefaultActionDispatcher', () => {
     function buildEmailDispatcher() {
       const send: Mock = vi.fn().mockResolvedValue(true);
       const emailSender = { send };
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
-        emailSender
-      );
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
+        emailSender,
+      });
       return { dispatcher: d, send };
     }
 
@@ -367,12 +367,15 @@ describe('DefaultActionDispatcher', () => {
     function buildVerifierDispatcher(verifyReporter: Mock) {
       const send: Mock = vi.fn().mockResolvedValue(true);
       const emailSender = { send };
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
         emailSender,
-        verifyReporter as unknown as (orgId: string, email: string) => Promise<boolean>
-      );
+        verifyReporter: verifyReporter as unknown as (
+          orgId: string,
+          email: string
+        ) => Promise<boolean>,
+      });
       return { dispatcher: d, send, verifyReporter };
     }
 
@@ -431,12 +434,12 @@ describe('DefaultActionDispatcher', () => {
     it('fails closed in SaaS mode when no verifier is wired', async () => {
       const send: Mock = vi.fn().mockResolvedValue(true);
       const emailSender = { send };
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
-        emailSender
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
+        emailSender,
         // verifyReporter intentionally omitted
-      );
+      });
 
       const ok = await d.dispatch(SAAS_CTX(), {
         type: 'notify.email',
@@ -493,16 +496,14 @@ describe('DefaultActionDispatcher', () => {
     function buildAllowlistDispatcher(provider: Mock) {
       const send: Mock = vi.fn().mockResolvedValue(true);
       const emailSender = { send };
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
         emailSender,
-        undefined,
-        undefined,
-        provider as unknown as (
+        literalRecipientAllowlist: provider as unknown as (
           organizationId: string
-        ) => Promise<readonly string[] | null | undefined>
-      );
+        ) => Promise<readonly string[] | null | undefined>,
+      });
       return { dispatcher: d, send };
     }
 
@@ -590,16 +591,15 @@ describe('DefaultActionDispatcher', () => {
       // Wire the reporter verifier too so the reporter path doesn't
       // fail-closed on the missing verifier in SaaS mode.
       const verify = vi.fn().mockResolvedValue(true);
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
         emailSender,
-        verify as unknown as (orgId: string, email: string) => Promise<boolean>,
-        undefined,
-        provider as unknown as (
+        verifyReporter: verify as unknown as (orgId: string, email: string) => Promise<boolean>,
+        literalRecipientAllowlist: provider as unknown as (
           organizationId: string
-        ) => Promise<readonly string[] | null | undefined>
-      );
+        ) => Promise<readonly string[] | null | undefined>,
+      });
       const ctx = makeContext({
         bugReport: makeBug({
           organization_id: 'org-1',
@@ -654,15 +654,18 @@ describe('DefaultActionDispatcher', () => {
     function buildLimitedDispatcher(limiter: Mock, verifyReporter?: Mock) {
       const send: Mock = vi.fn().mockResolvedValue(true);
       const emailSender = { send };
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
         emailSender,
-        verifyReporter as unknown as (orgId: string, email: string) => Promise<boolean>,
-        { check: limiter } as unknown as {
+        verifyReporter: verifyReporter as unknown as (
+          orgId: string,
+          email: string
+        ) => Promise<boolean>,
+        recipientRateLimiter: { check: limiter } as unknown as {
           check: (recipient: string, organizationId: string | null) => Promise<boolean>;
-        }
-      );
+        },
+      });
       return { dispatcher: d, send };
     }
 
@@ -798,22 +801,21 @@ describe('DefaultActionDispatcher', () => {
 
   describe('notify.telegram', () => {
     function buildTelegramDispatcher(sender: Mock, tokenResolver: Mock, limiter?: Mock) {
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
-        undefined,
-        undefined,
-        limiter
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
+        recipientRateLimiter: limiter
           ? ({ check: limiter } as unknown as {
               check: (recipient: string, organizationId: string | null) => Promise<boolean>;
             })
           : undefined,
-        undefined,
-        { send: sender } as unknown as {
+        telegramSender: { send: sender } as unknown as {
           send: (req: { token: string; chatId: string; text: string }) => Promise<boolean>;
         },
-        tokenResolver as unknown as (organizationId: string | null) => Promise<string | null>
-      );
+        telegramTokenResolver: tokenResolver as unknown as (
+          organizationId: string | null
+        ) => Promise<string | null>,
+      });
       return { dispatcher: d, sender };
     }
 
@@ -939,23 +941,18 @@ describe('DefaultActionDispatcher', () => {
 
   describe('notify.webhook', () => {
     function buildWebhookDispatcher(sender: Mock, limiter?: Mock) {
-      const d = new DefaultActionDispatcher(
-        resolver as unknown as CanonicalTicketResolver,
-        lookup as CapabilityServiceLookup,
-        undefined,
-        undefined,
-        limiter
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
+        recipientRateLimiter: limiter
           ? ({ check: limiter } as unknown as {
               check: (recipient: string, organizationId: string | null) => Promise<boolean>;
             })
           : undefined,
-        undefined,
-        undefined,
-        undefined,
-        { send: sender } as unknown as {
+        webhookSender: { send: sender } as unknown as {
           send: (req: { url: string; payload: Record<string, unknown> }) => Promise<boolean>;
-        }
-      );
+        },
+      });
       return { dispatcher: d, sender };
     }
 

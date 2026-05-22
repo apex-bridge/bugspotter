@@ -168,17 +168,17 @@ export function buildDedupRuleExecutor(
   // Generic-webhook sender. Stateless — the URL is the credential,
   // and SSRF revalidation happens inside the sender.
   const webhookSender = new FetchBackedWebhookSender();
-  const dispatcher = new DefaultActionDispatcher(
+  const dispatcher = new DefaultActionDispatcher({
     resolver,
-    lookup,
+    lookupService: lookup,
     emailSender,
     verifyReporter,
     recipientRateLimiter,
     literalRecipientAllowlist,
     telegramSender,
     telegramTokenResolver,
-    webhookSender
-  );
+    webhookSender,
+  });
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);
   return new DedupRuleExecutor(repo, dispatcher, rateLimiter, contextProvider);
