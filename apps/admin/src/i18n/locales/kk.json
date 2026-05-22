@@ -649,7 +649,8 @@
       "ticket_transition": "Тикет күйін өзгерту",
       "notify_email": "Email",
       "notify_slack": "Slack",
-      "notify_webhook": "Webhook"
+      "notify_webhook": "Webhook",
+      "notify_telegram": "Telegram арқылы хабарлама"
     },
     "aria": {
       "enableRule": "Ережені қосу",
@@ -702,7 +703,11 @@
       "rateLimitWindow": "Терезе",
       "errorNameRequired": "Ереже атауын көрсетіңіз.",
       "errorActionRequired": "Кемінде бір әрекет қажет.",
-      "errorActionInvalid": "Бір немесе бірнеше әрекетте қате бар. Сақтау алдында белгіленген қателерді түзетіңіз."
+      "errorActionInvalid": "Бір немесе бірнеше әрекетте қате бар. Сақтау алдында белгіленген қателерді түзетіңіз.",
+      "telegramChatId": "Telegram чатының идентификаторы",
+      "telegramChatIdPlaceholder": "@channel_username немесе -1001234567890",
+      "telegramMessagePlaceholder": "Хабарлама мәтіні...",
+      "telegramMessage": "Telegram хабарламасының мәтіні"
     }
   },
   "notifications": {
@@ -1873,6 +1878,22 @@
       "descriptionAdmin": "AI байыту, ұқсас багтарды анықтау және түзету ұсыныстары бұл ұйым үшін өшірілген. Intelligence параметрлерінде қосыңыз.",
       "descriptionMember": "AI байыту, ұқсас багтарды анықтау және түзету ұсыныстары бұл ұйым үшін өшірілген. Ұйым әкімшісінен қосуды сұраңыз.",
       "enableLink": "Intelligence параметрлерін ашу"
+    },
+    "channels": {
+      "title": "Хабарландыру арналары",
+      "description": "Ұйым деңгейіндегі дедупликация ережелері қозғалтқышының bot-токендері. Токендер сақтау кезінде шифрланады және API арқылы қайтарылмайды.",
+      "telegram": "Telegram",
+      "telegramPlaceholder": "123456789:AAEhBP...",
+      "telegramHelp": "BotFather берген токен. notify.telegram әрекеттері Bot API арқылы жіберу үшін қолданады.",
+      "slack": "Slack",
+      "slackPlaceholder": "xoxb-...",
+      "slackHelp": "Slack жұмыс кеңістігінің bot-токені (xoxb-). notify.slack әрекеттері chat.postMessage арқылы жіберу үшін қолданады.",
+      "configured": "Бапталған",
+      "notConfigured": "Бапталмаған",
+      "configure": "Баптау",
+      "replace": "Ауыстыру",
+      "clear": "Тазалау",
+      "clearConfirm": "Bot-токенді тазалау керек пе? Бұл арнаны қолданатын ережелер жаңа токен бапталғанша қатесіз өткізіліп жіберіледі."
     }
   },
   "orgRetention": {

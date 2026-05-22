@@ -37,6 +37,20 @@ export interface OrgIntelligenceSettings {
   intelligence_api_key_provisioned_at: string | null;
   intelligence_api_key_provisioned_by: string | null;
   intelligence_auto_enrich: boolean;
+  /**
+   * Whether the org has a Telegram bot token configured. Surfaces in
+   * the GET response so the admin UI can render "configured" /
+   * "not configured" without us ever returning the encrypted blob.
+   * The actual token stays in `OrganizationSettings.telegram_bot_token`
+   * and is never enumerated here — the no-leak contract is pinned by
+   * key-provisioning.test.ts.
+   */
+  telegram_bot_token_configured: boolean;
+  /**
+   * Whether the org has a Slack bot token configured. Same shape /
+   * no-leak contract as `telegram_bot_token_configured`.
+   */
+  slack_bot_token_configured: boolean;
 }
 
 /**
@@ -66,6 +80,8 @@ export const INTELLIGENCE_SETTINGS_DEFAULTS: OrgIntelligenceSettings = {
   intelligence_api_key_provisioned_at: null,
   intelligence_api_key_provisioned_by: null,
   intelligence_auto_enrich: true,
+  telegram_bot_token_configured: false,
+  slack_bot_token_configured: false,
 };
 
 /**
@@ -110,6 +126,13 @@ export function resolveOrgIntelligenceSettings(
       INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_api_key_provisioned_by,
     intelligence_auto_enrich:
       settings.intelligence_auto_enrich ?? INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_auto_enrich,
+    // Compute booleans from the raw fields without surfacing the
+    // ciphertext. `typeof === 'string'` + non-empty handles both the
+    // "unset" (undefined / null) and the "cleared" (empty string) cases.
+    telegram_bot_token_configured:
+      typeof settings.telegram_bot_token === 'string' && settings.telegram_bot_token.length > 0,
+    slack_bot_token_configured:
+      typeof settings.slack_bot_token === 'string' && settings.slack_bot_token.length > 0,
   };
 }
 

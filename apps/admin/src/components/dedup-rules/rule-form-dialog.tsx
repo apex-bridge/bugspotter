@@ -135,6 +135,8 @@ function defaultActionOf(type: ActionType): ActionSpec {
       return { type, channel: '', message: '' };
     case 'notify.webhook':
       return { type, url: '', payload: null };
+    case 'notify.telegram':
+      return { type, chat_id: '', message: '' };
   }
 }
 
@@ -738,6 +740,37 @@ function ActionFields({
     case 'notify.webhook':
       return (
         <WebhookFields action={action} onChange={onChange} onValidityChange={onValidityChange} />
+      );
+    case 'notify.telegram':
+      // chat_id covers both `@username` and the numeric group/supergroup
+      // ids that exceed JS-safe integer range — keep it a plain string
+      // and let the backend's regex on `chat_id` reject obvious garbage.
+      // Message is capped at 4096 server-side (Telegram's sendMessage
+      // limit); not pre-validated here so the toast carries the canonical
+      // error message instead of a parallel client-side limit drifting.
+      return (
+        <div className="space-y-2">
+          <Input
+            value={action.chat_id}
+            onChange={(e) => onChange({ ...action, chat_id: e.target.value })}
+            placeholder={t('dedupRules.form.telegramChatIdPlaceholder')}
+            aria-label={t('dedupRules.form.telegramChatId')}
+          />
+          {/*
+            Mirror Telegram's hard `text` cap of 4096 chars on the
+            client so the user sees the textarea stop accepting input
+            instead of typing 500 more chars and then getting a 400
+            from the Bot API at dispatch time. The schema already caps
+            at the same value server-side; this is belt-and-braces.
+          */}
+          <Textarea
+            value={action.message}
+            onChange={(e) => onChange({ ...action, message: e.target.value })}
+            placeholder={t('dedupRules.form.telegramMessagePlaceholder')}
+            aria-label={t('dedupRules.form.telegramMessage')}
+            maxLength={4096}
+          />
+        </div>
       );
   }
 }

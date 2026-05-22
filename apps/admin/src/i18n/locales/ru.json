@@ -649,7 +649,8 @@
       "ticket_transition": "Сменить статус тикета",
       "notify_email": "Письмо",
       "notify_slack": "Slack",
-      "notify_webhook": "Webhook"
+      "notify_webhook": "Webhook",
+      "notify_telegram": "Уведомление в Telegram"
     },
     "aria": {
       "enableRule": "Включить правило",
@@ -702,7 +703,11 @@
       "rateLimitWindow": "Окно",
       "errorNameRequired": "Укажите название правила.",
       "errorActionRequired": "Нужно как минимум одно действие.",
-      "errorActionInvalid": "В одном или нескольких действиях ошибка. Исправьте выделенные ошибки перед сохранением."
+      "errorActionInvalid": "В одном или нескольких действиях ошибка. Исправьте выделенные ошибки перед сохранением.",
+      "telegramChatId": "Идентификатор чата Telegram",
+      "telegramChatIdPlaceholder": "@channel_username или -1001234567890",
+      "telegramMessagePlaceholder": "Текст сообщения...",
+      "telegramMessage": "Текст сообщения Telegram"
     }
   },
   "notifications": {
@@ -1873,6 +1878,22 @@
       "descriptionAdmin": "Обогащение AI, поиск похожих багов и предложения по исправлению отключены для этой организации. Включите их в настройках Intelligence.",
       "descriptionMember": "Обогащение AI, поиск похожих багов и предложения по исправлению отключены для этой организации. Попросите администратора включить их.",
       "enableLink": "Открыть настройки Intelligence"
+    },
+    "channels": {
+      "title": "Каналы уведомлений",
+      "description": "Bot-токены для движка правил дедупликации в разрезе организации. Токены шифруются на хранении и никогда не возвращаются API.",
+      "telegram": "Telegram",
+      "telegramPlaceholder": "123456789:AAEhBP...",
+      "telegramHelp": "Токен, выданный BotFather. Используется действиями notify.telegram для отправки через Bot API.",
+      "slack": "Slack",
+      "slackPlaceholder": "xoxb-...",
+      "slackHelp": "Bot-токен рабочего пространства Slack (xoxb-). Используется действиями notify.slack для отправки через chat.postMessage.",
+      "configured": "Настроено",
+      "notConfigured": "Не настроено",
+      "configure": "Настроить",
+      "replace": "Заменить",
+      "clear": "Очистить",
+      "clearConfirm": "Очистить bot-токен? Правила, использующие этот канал, будут пропускаться без ошибок, пока вы не настроите новый токен."
     }
   },
   "orgRetention": {

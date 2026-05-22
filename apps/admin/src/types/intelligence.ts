@@ -25,6 +25,15 @@ export interface IntelligenceSettings {
   intelligence_pre_file_dedup_grace_ms: number;
   intelligence_self_service_enabled: boolean;
   key_status?: IntelligenceKeyStatus;
+  /**
+   * Whether the org has a Telegram bot token configured. Boolean
+   * signal only — the encrypted blob never crosses the wire on GET.
+   * Drives the "configured / not configured" badge in the channels
+   * panel.
+   */
+  telegram_bot_token_configured?: boolean;
+  /** Whether the org has a Slack bot token configured. Same shape. */
+  slack_bot_token_configured?: boolean;
 }
 
 export interface UpdateIntelligenceSettingsInput {
@@ -37,6 +46,15 @@ export interface UpdateIntelligenceSettingsInput {
   intelligence_dedup_action?: 'flag' | 'auto_close' | null;
   intelligence_pre_file_dedup_grace_ms?: number | null;
   intelligence_self_service_enabled?: boolean;
+  /**
+   * Plaintext bot token on the wire — the backend encrypts before
+   * persistence. `null` or empty string clears the field. Pattern
+   * enforced by the PATCH route's JSON schema; the sender re-checks
+   * defensively before any network call.
+   */
+  telegram_bot_token?: string | null;
+  /** Plaintext Slack `xoxb-` bot token. Same shape as telegram. */
+  slack_bot_token?: string | null;
 }
 
 export interface ProvisionKeyResult {

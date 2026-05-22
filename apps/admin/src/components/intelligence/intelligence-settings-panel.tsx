@@ -4,11 +4,11 @@
  * Accepts orgId as a prop instead of relying on useOrganization context.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useId } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Brain, Key, AlertTriangle } from 'lucide-react';
+import { Brain, Key, AlertTriangle, MessageSquare } from 'lucide-react';
 import { intelligenceService } from '../../services/intelligence-service';
 import { handleApiError } from '../../lib/api-client';
 import { SettingsSection } from '../settings/settings-section';
@@ -85,6 +85,15 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
   const [showProvisionForm, setShowProvisionForm] = useState(false);
   const [threshold, setThreshold] = useState('0.75');
   const [preFileDedupGraceSec, setPreFileDedupGraceSec] = useState('0');
+  // Per-channel token inputs — local-only state, never persisted in
+  // the query cache (the cache holds only the `*_configured` boolean
+  // signals so the plaintext token never lingers in memory longer
+  // than needed). Inputs are masked (type="password") and reset on
+  // successful save / cancel.
+  const [telegramTokenInput, setTelegramTokenInput] = useState('');
+  const [showTelegramTokenForm, setShowTelegramTokenForm] = useState(false);
+  const [slackTokenInput, setSlackTokenInput] = useState('');
+  const [showSlackTokenForm, setShowSlackTokenForm] = useState(false);
 
   const queryKey = ['intelligence-settings', orgId];
 
@@ -186,6 +195,30 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
       if (!isNaN(num) && num >= 0 && num <= 1) {
         updateMutation.mutate({ intelligence_similarity_threshold: num });
       }
+    },
+    [updateMutation]
+  );
+
+  // Save / clear a per-channel bot token. Reuses `updateMutation` so
+  // the success toast and query invalidation are shared with the
+  // other settings paths. The plaintext token is sent to the backend
+  // once on save and is encrypted before persistence — neither this
+  // component nor the query cache ever holds the ciphertext.
+  const handleSaveBotToken = useCallback(
+    (field: 'telegram_bot_token' | 'slack_bot_token', value: string, onDone: () => void) => {
+      updateMutation.mutate({ [field]: value } as UpdateIntelligenceSettingsInput, {
+        onSuccess: () => onDone(),
+      });
+    },
+    [updateMutation]
+  );
+
+  const handleClearBotToken = useCallback(
+    (field: 'telegram_bot_token' | 'slack_bot_token') => {
+      // `null` triggers the JSONB merge to drop the field. The
+      // backend treats empty-string the same way (clear), but null
+      // is the explicit signal — keep it unambiguous.
+      updateMutation.mutate({ [field]: null } as UpdateIntelligenceSettingsInput);
     },
     [updateMutation]
   );
@@ -426,6 +459,73 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
         </div>
       </SettingsSection>
 
+      {/* Notification channels (per-org bot tokens) */}
+      <SettingsSection
+        title={t('intelligence.channels.title')}
+        description={t('intelligence.channels.description')}
+      >
+        <div className="space-y-6">
+          {/* Telegram */}
+          <ChannelTokenRow
+            iconElement={<MessageSquare className="h-5 w-5 text-gray-400" aria-hidden="true" />}
+            label={t('intelligence.channels.telegram')}
+            placeholder={t('intelligence.channels.telegramPlaceholder')}
+            help={t('intelligence.channels.telegramHelp')}
+            configured={settings.telegram_bot_token_configured === true}
+            input={telegramTokenInput}
+            onInputChange={setTelegramTokenInput}
+            showForm={showTelegramTokenForm}
+            onShowForm={() => setShowTelegramTokenForm(true)}
+            onCancel={() => {
+              setShowTelegramTokenForm(false);
+              setTelegramTokenInput('');
+            }}
+            onSave={() =>
+              handleSaveBotToken('telegram_bot_token', telegramTokenInput, () => {
+                setShowTelegramTokenForm(false);
+                setTelegramTokenInput('');
+              })
+            }
+            onClear={() => {
+              if (window.confirm(t('intelligence.channels.clearConfirm'))) {
+                handleClearBotToken('telegram_bot_token');
+              }
+            }}
+            busy={updateMutation.isPending}
+            t={t}
+          />
+          {/* Slack */}
+          <ChannelTokenRow
+            iconElement={<MessageSquare className="h-5 w-5 text-gray-400" aria-hidden="true" />}
+            label={t('intelligence.channels.slack')}
+            placeholder={t('intelligence.channels.slackPlaceholder')}
+            help={t('intelligence.channels.slackHelp')}
+            configured={settings.slack_bot_token_configured === true}
+            input={slackTokenInput}
+            onInputChange={setSlackTokenInput}
+            showForm={showSlackTokenForm}
+            onShowForm={() => setShowSlackTokenForm(true)}
+            onCancel={() => {
+              setShowSlackTokenForm(false);
+              setSlackTokenInput('');
+            }}
+            onSave={() =>
+              handleSaveBotToken('slack_bot_token', slackTokenInput, () => {
+                setShowSlackTokenForm(false);
+                setSlackTokenInput('');
+              })
+            }
+            onClear={() => {
+              if (window.confirm(t('intelligence.channels.clearConfirm'))) {
+                handleClearBotToken('slack_bot_token');
+              }
+            }}
+            busy={updateMutation.isPending}
+            t={t}
+          />
+        </div>
+      </SettingsSection>
+
       {/* Feature Flags */}
       <SettingsSection
         title={t('intelligence.featureFlags.title')}
@@ -509,6 +609,110 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
 
       {/* Deflection Stats */}
       <DeflectionStatsCard orgId={orgId} />
+    </div>
+  );
+}
+
+/**
+ * One row for a per-org notification-channel bot token. Mirrors the
+ * API-key UX above: status badge + masked input + Save / Cancel /
+ * Clear buttons. Stateless — the parent owns the input value and
+ * busy flag so all channels share the same `updateMutation` instance.
+ *
+ * Why a helper component? The two channels render identical chrome
+ * with one prop differing per row (label, placeholder, configured
+ * flag, mutation field name); inlining both as 90-line JSX blocks
+ * back-to-back made the parent diff harder to review.
+ */
+interface ChannelTokenRowProps {
+  iconElement: React.ReactNode;
+  label: string;
+  placeholder: string;
+  help: string;
+  configured: boolean;
+  input: string;
+  onInputChange: (value: string) => void;
+  showForm: boolean;
+  onShowForm: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onClear: () => void;
+  busy: boolean;
+  t: (key: string) => string;
+}
+
+function ChannelTokenRow({
+  iconElement,
+  label,
+  placeholder,
+  help,
+  configured,
+  input,
+  onInputChange,
+  showForm,
+  onShowForm,
+  onCancel,
+  onSave,
+  onClear,
+  busy,
+  t,
+}: ChannelTokenRowProps) {
+  // `useId` produces an SSR-stable unique id; deriving it from
+  // `label` would collide across locales (the EN and RU labels for
+  // the same channel hash differently, and same-locale labels would
+  // need fragile slugification).
+  const inputId = useId();
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        {iconElement}
+        <Label htmlFor={inputId} className="font-medium">
+          {label}
+        </Label>
+        {configured ? (
+          <Badge variant="success">{t('intelligence.channels.configured')}</Badge>
+        ) : (
+          <Badge variant="secondary">{t('intelligence.channels.notConfigured')}</Badge>
+        )}
+      </div>
+      <p className="text-sm text-gray-500">{help}</p>
+      <div className="flex flex-col gap-2">
+        {configured && !showForm && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={onShowForm} disabled={busy}>
+              {t('intelligence.channels.replace')}
+            </Button>
+            <Button variant="destructive" size="sm" onClick={onClear} disabled={busy}>
+              {t('intelligence.channels.clear')}
+            </Button>
+          </div>
+        )}
+        {!configured && !showForm && (
+          <Button size="sm" className="w-fit" onClick={onShowForm} disabled={busy}>
+            {t('intelligence.channels.configure')}
+          </Button>
+        )}
+        {showForm && (
+          <div className="flex gap-2 items-end">
+            <div className="flex-1 max-w-md">
+              <Input
+                id={inputId}
+                type="password"
+                placeholder={placeholder}
+                value={input}
+                onChange={(e) => onInputChange(e.target.value)}
+                autoComplete="off"
+              />
+            </div>
+            <Button size="sm" onClick={onSave} disabled={!input.trim() || busy}>
+              {t('common.save')}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+              {t('common.cancel')}
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
