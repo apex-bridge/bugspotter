@@ -100,16 +100,26 @@ export class FetchBackedSlackSender implements SlackSender {
       // missing, rate-limited). The body's `ok` flag is the source of
       // truth — without checking it, every `channel_not_found` would
       // be reported as a successful send.
-      let body: { ok?: boolean; error?: string };
+      let body: unknown;
       try {
-        body = (await response.json()) as { ok?: boolean; error?: string };
+        body = await response.json();
       } catch {
         logger.warn('SlackSender: response body was not JSON, treating as failure');
         return false;
       }
-      if (body.ok !== true) {
+      // `response.json()` can return `null` (valid JSON for an empty
+      // body), an array, or a primitive — none of which are shaped
+      // like a Slack response. Without this guard, `body.ok` on a
+      // `null` body would throw and be swallowed by the outer catch
+      // with a misleading "send threw" log line.
+      if (body === null || typeof body !== 'object') {
+        logger.warn('SlackSender: response body was not a JSON object, treating as failure');
+        return false;
+      }
+      const parsed = body as { ok?: unknown; error?: unknown };
+      if (parsed.ok !== true) {
         logger.warn('SlackSender: chat.postMessage reported failure', {
-          error: body.error,
+          error: typeof parsed.error === 'string' ? parsed.error : undefined,
         });
         return false;
       }

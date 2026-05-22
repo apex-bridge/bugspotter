@@ -102,6 +102,20 @@ describe('FetchBackedSlackSender', () => {
     expect(await sender.send({ token: 'xoxb-123-456-abc', channel: '#x', text: 'hi' })).toBe(false);
   });
 
+  // Defense-in-depth: `response.json()` can legally return `null`,
+  // an array, or a primitive (all valid JSON values). Without the
+  // type guard, `body.ok` on a `null` body would throw into the
+  // outer catch with a misleading "send threw" log.
+  it.each(['null', '[]', '42', '"a string"'])(
+    'handles a non-object JSON body as a failure: %s',
+    async (json) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(json, { status: 200 })));
+      expect(await sender.send({ token: 'xoxb-123-456-abc', channel: '#x', text: 'hi' })).toBe(
+        false
+      );
+    }
+  );
+
   // Defensive guard against malformed tokens. Slack bot tokens start
   // with `xoxb-` and use `[A-Za-z0-9-]` after the prefix; anything
   // else is rejected without touching the network. Without this, a
