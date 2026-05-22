@@ -21,7 +21,6 @@ import type {
   CapabilityServiceLookup,
 } from '../../../src/services/rules/dispatcher.js';
 import type { RuleEvalContext } from '../../../src/services/rules/types.js';
-import type { ActionSpec } from '../../../src/integrations/dedup-rule.schema.js';
 import type {
   CapabilityTarget,
   TicketIntegrationCapabilities,
@@ -248,26 +247,31 @@ describe('DefaultActionDispatcher', () => {
       ).toBe(false);
     });
 
-    it.each<ActionSpec>([
-      { type: 'notify.slack', channel: '#x', message: 'hi' },
-      { type: 'notify.webhook', url: 'https://example.com/hook' },
-    ])('returns false for not-yet-wired %s', (action) => {
-      // PR-D will flip these as the slack / webhook dispatchers
-      // land. The executor relies on this to skip rate-limit-
+    it('returns false for notify.slack when no sender is wired', () => {
+      // The dispatcher built in the parent `beforeEach` has no slack
+      // sender. The executor relies on this to skip rate-limit-
       // consuming fires that would do zero work.
-      expect(dispatcher.canDispatch(action)).toBe(false);
+      expect(dispatcher.canDispatch({ type: 'notify.slack', channel: '#x', message: 'hi' })).toBe(
+        false
+      );
+    });
+
+    it('returns false for notify.webhook when no sender is wired', () => {
+      expect(
+        dispatcher.canDispatch({ type: 'notify.webhook', url: 'https://example.com/hook' })
+      ).toBe(false);
     });
   });
 
-  describe('notify.slack / notify.webhook (not wired in PR-C2)', () => {
+  describe('notify.webhook (not wired in PR-C2)', () => {
     // Pinning false here means a future PR that adds real wiring also
     // has to update this test, which is the signal we want.
 
-    it.each<ActionSpec>([
-      { type: 'notify.slack', channel: '#regressions', message: 'hit' },
-      { type: 'notify.webhook', url: 'https://example.com/hook' },
-    ])('returns false for %s without touching the resolver or lookup', async (action) => {
-      const ok = await dispatcher.dispatch(makeContext(), action);
+    it('returns false for notify.webhook without touching the resolver or lookup', async () => {
+      const ok = await dispatcher.dispatch(makeContext(), {
+        type: 'notify.webhook',
+        url: 'https://example.com/hook',
+      });
       expect(ok).toBe(false);
       expect(resolver.resolve).not.toHaveBeenCalled();
       expect(lookup).not.toHaveBeenCalled();
@@ -1029,6 +1033,218 @@ describe('DefaultActionDispatcher', () => {
       expect(ok).toBe(false);
       expect(limiter).toHaveBeenCalledWith('https://hooks.example.com/x', 'org-1');
       expect(sender).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('notify.slack', () => {
+    function buildSlackDispatcher(sender: Mock, tokenResolver: Mock, limiter?: Mock) {
+      const d = new DefaultActionDispatcher({
+        resolver: resolver as unknown as CanonicalTicketResolver,
+        lookupService: lookup as CapabilityServiceLookup,
+        recipientRateLimiter: limiter
+          ? ({ check: limiter } as unknown as {
+              check: (recipient: string, organizationId: string | null) => Promise<boolean>;
+            })
+          : undefined,
+        slackSender: { send: sender } as unknown as {
+          send: (req: { token: string; channel: string; text: string }) => Promise<boolean>;
+        },
+        slackTokenResolver: tokenResolver as unknown as (
+          organizationId: string | null
+        ) => Promise<string | null>,
+      });
+      return { dispatcher: d, sender };
+    }
+
+    it('canDispatch returns true once a SlackSender is wired', () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      expect(d.canDispatch({ type: 'notify.slack', channel: '#x', message: 'hi' })).toBe(true);
+    });
+
+    it('canDispatch returns false when no sender is wired', () => {
+      expect(dispatcher.canDispatch({ type: 'notify.slack', channel: '#x', message: 'hi' })).toBe(
+        false
+      );
+    });
+
+    it('sends to a channel with the resolved token, channel, text', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-token-abc');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#regressions',
+        message: 'New duplicate: bug-123',
+      });
+
+      expect(ok).toBe(true);
+      expect(tokens).toHaveBeenCalledWith('org-1');
+      expect(sender).toHaveBeenCalledWith({
+        token: 'xoxb-token-abc',
+        channel: '#regressions',
+        text: 'New duplicate: bug-123',
+      });
+    });
+
+    // Admin pastes from a UI / config file with trailing whitespace.
+    // The schema's `superRefine` accepts it (only rejects if the
+    // trimmed string is empty) but doesn't normalize the stored
+    // value, so the dispatcher must trim defensively before the
+    // rate-limit key and the Slack API call.
+    it('trims surrounding whitespace from the channel before send', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '  #regressions  ',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(true);
+      expect(sender).toHaveBeenCalledWith({
+        token: 'xoxb-tok',
+        channel: '#regressions',
+        text: 'hi',
+      });
+    });
+
+    // Defense-in-depth against a legacy row that sneaks past the
+    // schema XOR with BOTH channel and user set. Picking one
+    // arbitrarily would risk leaking bug data to the target the
+    // admin didn't intend, so the dispatcher fails closed.
+    it('skips when both channel and user are set on the action', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      // Bypass the schema's XOR refinement by casting — simulates a
+      // row that was inserted via raw SQL or before the refinement
+      // landed. Production parses go through the schema and reject
+      // this shape; the test pins the runtime defense.
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#x',
+        user: 'U999',
+        message: 'hi',
+      } as unknown as Parameters<typeof d.dispatch>[1]);
+
+      expect(ok).toBe(false);
+      expect(tokens).not.toHaveBeenCalled();
+      expect(sender).not.toHaveBeenCalled();
+    });
+
+    // Schema enforces XOR between `channel` and `user`. When `user` is
+    // set, the sender's `channel` arg is the user id — Slack's
+    // chat.postMessage takes either in the same field.
+    it('routes a `user`-targeted action to the user id', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        user: 'U12345',
+        message: 'hello',
+      });
+
+      expect(ok).toBe(true);
+      expect(sender).toHaveBeenCalledWith({
+        token: 'xoxb-tok',
+        channel: 'U12345',
+        text: 'hello',
+      });
+    });
+
+    it('skips when no bot token is configured for the org', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue(null);
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#x',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+      expect(sender).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the sender reports a failure', async () => {
+      const sender = vi.fn().mockResolvedValue(false);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#x',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+    });
+
+    it('fails closed when the token resolver throws', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockRejectedValue(new Error('db gone'));
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#x',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+      expect(sender).not.toHaveBeenCalled();
+    });
+
+    it('consults the recipient rate limiter with the channel and skips when denied', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const limiter = vi.fn().mockResolvedValue(false);
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens, limiter);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#target',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(false);
+      expect(limiter).toHaveBeenCalledWith('#target', 'org-1');
+      expect(sender).not.toHaveBeenCalled();
+    });
+
+    it('sends when the recipient rate limiter allows', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const limiter = vi.fn().mockResolvedValue(true);
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens, limiter);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '#target',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(true);
+      expect(limiter).toHaveBeenCalledWith('#target', 'org-1');
+      expect(sender).toHaveBeenCalledTimes(1);
     });
   });
 });

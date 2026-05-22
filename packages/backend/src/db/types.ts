@@ -743,6 +743,15 @@ export interface OrganizationSettings {
    * addition to the resolve can't quietly leak the encrypted blob.
    */
   telegram_bot_token?: string | null;
+  /**
+   * Encrypted Slack bot token (via CredentialEncryption — same
+   * shape as `telegram_bot_token`). Used by `notify.slack` dispatch.
+   * `undefined` / `null` = no Slack bot configured; dispatcher skips
+   * `notify.slack` cleanly. Never appears on the GET response
+   * because `resolveOrgIntelligenceSettings` explicitly enumerates
+   * the fields it carries through and this isn't one of them.
+   */
+  slack_bot_token?: string | null;
 }
 
 export interface Organization {

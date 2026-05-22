@@ -516,5 +516,69 @@ describe('IntelligenceKeyProvisioning', () => {
       });
       expect((resolved as unknown as Record<string, unknown>).telegram_bot_token).toBeUndefined();
     });
+
+    // Same shape as the telegram suite above. The slack token follows
+    // the same encrypt-on-store + clear-on-empty contract; mirroring
+    // the tests pins it as load-bearing.
+    it('encrypts slack_bot_token before persistence', async () => {
+      await provisioning.updateSettings('org-1', {
+        slack_bot_token: 'xoxb-1-2-abc',
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      expect(arg.slack_bot_token).toBe('enc:xoxb-1-2-abc');
+      expect(mockEncryption.encrypt).toHaveBeenCalledWith('xoxb-1-2-abc');
+    });
+
+    it('passes null slack_bot_token through to clear the setting', async () => {
+      await provisioning.updateSettings('org-1', {
+        slack_bot_token: null,
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      expect(arg.slack_bot_token).toBeNull();
+    });
+
+    it('treats an empty-string slack_bot_token as a clear (null)', async () => {
+      await provisioning.updateSettings('org-1', {
+        slack_bot_token: '',
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      expect(arg.slack_bot_token).toBeNull();
+    });
+
+    it('treats a whitespace-only slack_bot_token as a clear (null)', async () => {
+      await provisioning.updateSettings('org-1', {
+        slack_bot_token: '   ',
+      });
+
+      const arg = (mockDb.organizations!.updateSettings as ReturnType<typeof vi.fn>).mock
+        .calls[0][1];
+      expect(arg.slack_bot_token).toBeNull();
+    });
+
+    it('trims the slack_bot_token before encrypting', async () => {
+      await provisioning.updateSettings('org-1', {
+        slack_bot_token: '  xoxb-1-2-abc  ',
+      });
+
+      expect(mockEncryption.encrypt).toHaveBeenCalledWith('xoxb-1-2-abc');
+    });
+
+    it('does not include slack_bot_token in the resolved intelligence settings', async () => {
+      const { resolveOrgIntelligenceSettings } = await import(
+        '../../../src/services/intelligence/tenant-config.js'
+      );
+      const resolved = resolveOrgIntelligenceSettings({
+        intelligence_enabled: true,
+        intelligence_api_key: 'enc:secret',
+        slack_bot_token: 'enc:slack-tok',
+      });
+      expect((resolved as unknown as Record<string, unknown>).slack_bot_token).toBeUndefined();
+    });
   });
 });
