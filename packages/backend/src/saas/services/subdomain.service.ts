@@ -61,7 +61,7 @@ export const SIGNUP_ONLY_RESERVED: ReadonlySet<string> = new Set([
   'metrics',
 ]);
 
-export const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
+export const ALL_RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
   ...TENANT_RESERVED_SUBDOMAINS,
   ...SIGNUP_ONLY_RESERVED,
 ]);
@@ -116,7 +116,7 @@ export class SubdomainService {
         'ValidationError'
       );
     }
-    if (RESERVED_SUBDOMAINS.has(subdomain)) {
+    if (ALL_RESERVED_SUBDOMAINS.has(subdomain)) {
       throw new AppError('This subdomain is reserved', 400, 'ValidationError');
     }
   }
@@ -170,7 +170,7 @@ export class SubdomainService {
     }
 
     // Reserved base → fall through to suffixed attempts, which are not reserved.
-    const baseUsable = !RESERVED_SUBDOMAINS.has(base);
+    const baseUsable = !ALL_RESERVED_SUBDOMAINS.has(base);
 
     if (baseUsable && (await this.isAvailable(base))) {
       return base;
@@ -188,10 +188,10 @@ export class SubdomainService {
       }
       const candidate = `${trimmedBase}${suffix}`;
       // Defense against future reserved-list growth: if someone later adds
-      // a suffixed name like `api-2` to RESERVED_SUBDOMAINS, this loop
+      // a suffixed name like `api-2` to ALL_RESERVED_SUBDOMAINS, this loop
       // must not mint it. Today's list has no such entries so this is a
       // guard, not a reachable branch — but zero-cost to check.
-      if (RESERVED_SUBDOMAINS.has(candidate)) {
+      if (ALL_RESERVED_SUBDOMAINS.has(candidate)) {
         continue;
       }
       if (await this.isAvailable(candidate)) {

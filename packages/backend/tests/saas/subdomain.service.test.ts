@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   SubdomainService,
-  RESERVED_SUBDOMAINS as SERVICE_RESERVED_SUBDOMAINS,
+  ALL_RESERVED_SUBDOMAINS,
 } from '../../src/saas/services/subdomain.service.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 
@@ -140,8 +140,8 @@ describe('SubdomainService', () => {
       // Sanity guard: if the import resolves to an empty set (bad merge,
       // both contributing lists emptied), the for-loop would pass
       // silently. Fail loudly instead.
-      expect(SERVICE_RESERVED_SUBDOMAINS.size).toBeGreaterThan(0);
-      for (const reserved of SERVICE_RESERVED_SUBDOMAINS) {
+      expect(ALL_RESERVED_SUBDOMAINS.size).toBeGreaterThan(0);
+      for (const reserved of ALL_RESERVED_SUBDOMAINS) {
         expect(() => service.validateFormat(reserved)).toThrow();
       }
     });
