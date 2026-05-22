@@ -21,17 +21,13 @@ const MAX_AUTO_SUFFIX_ATTEMPTS = 50;
 const SUBDOMAIN_REGEX = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
 
 /**
- * Subdomains reserved for platform infrastructure. Blocking these at signup
- * prevents tenants from impersonating api/admin/support surfaces or
- * colliding with existing DNS records on *.kz.bugspotter.io.
- *
- * This set is a SUPERSET of the tenant resolution middleware's reserved
- * list — anything the middleware refuses to route to must also be blocked
- * at signup, otherwise a user could register an org whose admin UI the
- * router would never serve. Extras here cover environments, monitoring,
- * and platform-only names that the middleware doesn't need to know about.
+ * Subdomains reserved at signup but NOT in the tenant-resolution
+ * middleware's `RESERVED_SUBDOMAINS`. Environments, monitoring, and
+ * platform-only names the router doesn't need to know about but
+ * customers must not be able to register. Used only to build
+ * `ALL_RESERVED_SUBDOMAINS` below — module-local.
  */
-export const SIGNUP_ONLY_RESERVED: ReadonlySet<string> = new Set([
+const SIGNUP_ONLY_RESERVED: ReadonlySet<string> = new Set([
   // Platform infra
   'media',
   'uploads',
@@ -61,6 +57,16 @@ export const SIGNUP_ONLY_RESERVED: ReadonlySet<string> = new Set([
   'metrics',
 ]);
 
+/**
+ * Full reserved set enforced at signup: the union of the tenant
+ * middleware's router-blocked list (`RESERVED_SUBDOMAINS` in
+ * `middleware/tenant.ts`) and the signup-only extras above.
+ *
+ * Invariant: this is a SUPERSET of the middleware's reserved list.
+ * Anything the router refuses to serve must also be blocked at
+ * signup, otherwise a user could register an org whose admin UI
+ * the router would never reach.
+ */
 export const ALL_RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
   ...TENANT_RESERVED_SUBDOMAINS,
   ...SIGNUP_ONLY_RESERVED,
