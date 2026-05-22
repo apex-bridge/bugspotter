@@ -24,6 +24,7 @@ import { ChannelBackedEmailSender } from './email-sender.js';
 import { DedupRuleExecutor } from './executor.js';
 import { ThrottleBackedRateLimiter } from './rate-limiter.js';
 import { ThrottleBackedRecipientLimiter } from './recipient-rate-limiter.js';
+import { FetchBackedSlackSender } from './slack-sender.js';
 import { FetchBackedTelegramSender } from './telegram-sender.js';
 import { FetchBackedWebhookSender } from './webhook-sender.js';
 
@@ -168,6 +169,33 @@ export function buildDedupRuleExecutor(
   // Generic-webhook sender. Stateless — the URL is the credential,
   // and SSRF revalidation happens inside the sender.
   const webhookSender = new FetchBackedWebhookSender();
+  // Slack sender + token resolver. Mirrors the telegram wiring: the
+  // resolver fetches the encrypted bot token from
+  // `organizations.settings.slack_bot_token` and decrypts on demand.
+  // Returns null when no token is configured (most orgs at launch),
+  // for selfhosted bugs (no organization_id), or if decryption fails
+  // (treated as "not configured" — same fail-closed pattern the
+  // telegram resolver uses).
+  const slackSender = new FetchBackedSlackSender();
+  const slackTokenResolver = async (organizationId: string | null): Promise<string | null> => {
+    if (!organizationId) {
+      return null;
+    }
+    const org = await db.organizations.findById(organizationId);
+    const encrypted = org?.settings?.slack_bot_token;
+    if (!encrypted || typeof encrypted !== 'string') {
+      return null;
+    }
+    try {
+      return encryption.decrypt(encrypted);
+    } catch (err) {
+      logger.warn('Slack token resolver: decryption failed', {
+        organizationId,
+        errorType: err instanceof Error ? err.name : 'NonErrorThrown',
+      });
+      return null;
+    }
+  };
   const dispatcher = new DefaultActionDispatcher({
     resolver,
     lookupService: lookup,
@@ -178,6 +206,8 @@ export function buildDedupRuleExecutor(
     telegramSender,
     telegramTokenResolver,
     webhookSender,
+    slackSender,
+    slackTokenResolver,
   });
   const rateLimiter = new ThrottleBackedRateLimiter(throttle);
   const contextProvider = new DatabaseRuleContextProvider(db);
