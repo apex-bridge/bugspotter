@@ -19,8 +19,14 @@ const ACTIVE_STATUSES: Set<SubscriptionStatus> = new Set([
   SUBSCRIPTION_STATUS.PAST_DUE,
 ]);
 
-// Reserved subdomains that cannot be used for organizations
+// Reserved subdomains that cannot be used for organizations.
+// Both blocks the tenant-resolver middleware (so requests to e.g.
+// mcp.kz.bugspotter.io aren't treated as tenant lookups) and the signup
+// flow (so customers can't grab these slugs). Future product surfaces
+// — AI gateways, bots, integrations — are pre-reserved to avoid having
+// to reclaim them from existing tenants later.
 export const RESERVED_SUBDOMAINS = new Set([
+  // Existing platform surfaces
   'www',
   'admin',
   'api',
@@ -41,6 +47,13 @@ export const RESERVED_SUBDOMAINS = new Set([
   'signup',
   'demo',
   'payment',
+  // AI / agent surfaces (mcp.kz.bugspotter.io ships in v0.3 of bugspotter-mcp).
+  // Note: 2-letter names like "ai" are already implicitly blocked by the
+  // 3-char minimum-length rule in validateFormat(), so they don't need
+  // to be listed here.
+  'mcp',
+  'agents',
+  'bot',
 ]);
 
 // Route prefixes exempt from tenant resolution — these operate at

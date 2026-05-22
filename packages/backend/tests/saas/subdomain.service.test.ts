@@ -6,6 +6,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SubdomainService } from '../../src/saas/services/subdomain.service.js';
+import { RESERVED_SUBDOMAINS } from '../../src/saas/middleware/tenant.js';
 import type { DatabaseClient } from '../../src/db/client.js';
 
 vi.mock('../../src/logger.js', () => ({
@@ -124,7 +125,23 @@ describe('SubdomainService', () => {
       // superset of the tenant resolution middleware's reserved set.
       // Otherwise a user could register an org with a subdomain the
       // router will never serve — an unrecoverable broken state.
-      for (const reserved of ['dashboard', 'payment', 'ftp', 'api', 'admin']) {
+      //
+      // Iterate over the actual RESERVED_SUBDOMAINS set so additions to
+      // the middleware list are automatically test-covered.
+      for (const reserved of RESERVED_SUBDOMAINS) {
+        expect(() => service.validateFormat(reserved)).toThrow(/reserved/);
+      }
+    });
+
+    it('blocks AI / agent product surfaces (mcp, agents, bot)', () => {
+      // Explicit assertion that the names we reserved for the v0.3
+      // bugspotter-mcp hosted endpoint and adjacent future surfaces
+      // are rejected at signup. Drives intent — if these are ever
+      // removed from RESERVED_SUBDOMAINS, this test fails first.
+      //
+      // "ai" is 2 chars — implicitly blocked by the 3-char minimum
+      // length check, doesn't need an entry in RESERVED_SUBDOMAINS.
+      for (const reserved of ['mcp', 'agents', 'bot']) {
         expect(() => service.validateFormat(reserved)).toThrow(/reserved/);
       }
     });
