@@ -524,8 +524,15 @@ export class DefaultActionDispatcher implements ActionDispatcher {
     //  - both unset → no target, skip cleanly
     //  - both set → don't pick arbitrarily; the wrong choice would
     //    leak bug data to a target the admin didn't intend.
-    const hasChannel = !!channel && channel.length > 0;
-    const hasUser = !!user && user.length > 0;
+    //
+    // Trim before the presence check: the schema rejects whitespace-
+    // only values via `.trim() !== ''` but doesn't normalize the
+    // stored string, so `'#x '` (admin paste with trailing space)
+    // would otherwise reach Slack unchanged.
+    const channelTrimmed = channel?.trim() ?? '';
+    const userTrimmed = user?.trim() ?? '';
+    const hasChannel = channelTrimmed.length > 0;
+    const hasUser = userTrimmed.length > 0;
     if (hasChannel === hasUser) {
       logger.info('Skipping notify.slack: requires exactly one of channel/user', {
         bugReportId: context.bugReport.id,
@@ -534,7 +541,7 @@ export class DefaultActionDispatcher implements ActionDispatcher {
       });
       return false;
     }
-    const conversation = hasChannel ? channel! : user!;
+    const conversation = hasChannel ? channelTrimmed : userTrimmed;
     let token: string | null;
     try {
       token = await this.deps.slackTokenResolver(context.bugReport.organization_id);

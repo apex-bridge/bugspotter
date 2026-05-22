@@ -1090,6 +1090,31 @@ describe('DefaultActionDispatcher', () => {
       });
     });
 
+    // Admin pastes from a UI / config file with trailing whitespace.
+    // The schema's `superRefine` accepts it (only rejects if the
+    // trimmed string is empty) but doesn't normalize the stored
+    // value, so the dispatcher must trim defensively before the
+    // rate-limit key and the Slack API call.
+    it('trims surrounding whitespace from the channel before send', async () => {
+      const sender = vi.fn().mockResolvedValue(true);
+      const tokens = vi.fn().mockResolvedValue('xoxb-tok');
+      const { dispatcher: d } = buildSlackDispatcher(sender, tokens);
+      const ctx = makeContext({ bugReport: makeBug({ organization_id: 'org-1' }) });
+
+      const ok = await d.dispatch(ctx, {
+        type: 'notify.slack',
+        channel: '  #regressions  ',
+        message: 'hi',
+      });
+
+      expect(ok).toBe(true);
+      expect(sender).toHaveBeenCalledWith({
+        token: 'xoxb-tok',
+        channel: '#regressions',
+        text: 'hi',
+      });
+    });
+
     // Defense-in-depth against a legacy row that sneaks past the
     // schema XOR with BOTH channel and user set. Picking one
     // arbitrarily would risk leaking bug data to the target the
