@@ -87,6 +87,7 @@ export function bugReportRoutes(
         hasReplay,
         source,
         project_id: bodyProjectId,
+        deflected_to_canonical_id: deflectedToCanonicalId,
       } = request.body;
 
       // Resolve project from: authProject (single-key), body project_id, or sole allowed project
@@ -156,6 +157,25 @@ export function bugReportRoutes(
         });
       }
 
+      // Resolve deflection target if the SDK widget set one. The
+      // canonical must belong to the same project — without this
+      // check, a malicious client could deflect a new bug into
+      // another tenant's canonical and trigger downstream rule fires
+      // against unrelated data. Mirrors the cross-tenant scope check
+      // in the rule-engine's `TicketsTableResolver`.
+      let validatedDeflectionTarget: string | null = null;
+      if (deflectedToCanonicalId) {
+        const canonical = await db.bugReports.findById(deflectedToCanonicalId);
+        if (!canonical || canonical.project_id !== projectId) {
+          throw new AppError(
+            'deflected_to_canonical_id does not belong to this project',
+            400,
+            'BadRequest'
+          );
+        }
+        validatedDeflectionTarget = deflectedToCanonicalId;
+      }
+
       // Create bug report with quota leak protection
       // NOTE: Quota is reserved in middleware BEFORE this handler runs.
       // If creation fails, quota is leaked (no compensating decrement yet).
@@ -168,12 +188,22 @@ export function bugReportRoutes(
           description: description || null,
           priority: priority || BugPriority.MEDIUM,
           status: BugStatus.OPEN,
+          // When the user confirmed the deflection chip, set
+          // `duplicate_of` directly — bypasses the intelligence
+          // pre-file grace window because we already know the canonical.
+          duplicate_of: validatedDeflectionTarget,
           metadata: {
             console: report.console,
             network: report.network,
             metadata: report.metadata,
             source: source || 'api',
             apiKeyPrefix: request.apiKey?.key_prefix || null,
+            // Tags the deflection origin for analytics. Distinct from
+            // intelligence-pipeline-inferred dedup (which doesn't set
+            // this key) so we can measure widget-deflection rate.
+            ...(validatedDeflectionTarget
+              ? { deflection_source: 'sdk_user_confirmed' as const }
+              : {}),
           },
           screenshot_url: null,
           replay_url: null,

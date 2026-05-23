@@ -17,6 +17,7 @@ import { IntelligenceClient } from '../services/intelligence/intelligence-client
 import { IntelligenceClientFactory } from '../services/intelligence/tenant-config.js';
 import { getEncryptionService } from '../utils/encryption.js';
 import { intelligenceRoutes } from '../api/routes/intelligence.js';
+import { sdkSimilarRoutes } from '../api/routes/sdk-similar.js';
 import { getLogger } from '../logger.js';
 import type { IServiceContainer } from '../container/service-container.js';
 
@@ -54,6 +55,10 @@ export async function setupIntelligence(fastify: FastifyInstance): Promise<void>
       getEncryptionService()
     );
     intelligenceRoutes(fastify, client, container.db, clientFactory);
+    // SDK-facing similarity endpoint — separate from the admin routes
+    // because it uses ingest-key auth and degrades to empty matches
+    // on intelligence outage instead of 503-ing the widget.
+    sdkSimilarRoutes(fastify, client, container.db, clientFactory);
     logger.info('Intelligence plugin: enabled and routes registered');
   } else {
     logger.warn(
