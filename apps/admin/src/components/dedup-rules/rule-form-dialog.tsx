@@ -408,6 +408,12 @@ function TriggerEditor({ value, onChange }: TriggerEditorProps) {
           </option>
         ))}
       </Select>
+      {/*
+        Per-selection hint — orients a new admin without forcing them
+        to read all four trigger descriptions at once. i18n key per
+        trigger type, looked up by `value.type`.
+      */}
+      <p className="text-xs text-gray-500">{t(`dedupRules.form.triggerHints.${value.type}`)}</p>
       {value.type === 'cluster_growing' && (
         <div className="grid grid-cols-2 gap-2 pt-2">
           <Input
@@ -640,6 +646,14 @@ function ActionsEditor({ value, onChange, onActionValidityChange }: ActionsEdito
               <Trash2 className="h-4 w-4 text-red-600" />
             </Button>
           </div>
+          {/*
+            Per-action hint mirrors the trigger hint pattern. Uses
+            the same key-slug shape (dots → underscores) as the
+            action-label lookup above.
+          */}
+          <p className="text-xs text-gray-500">
+            {t(`dedupRules.form.actionHints.${a.type.replace(/\./g, '_')}`)}
+          </p>
           <ActionFields
             action={a}
             onChange={(next) => {
@@ -869,22 +883,33 @@ function RateLimitEditor({ value, onChange }: RateLimitEditorProps) {
         </Label>
       </div>
       {enabled && (
-        <div className="grid grid-cols-2 gap-2 pt-2">
-          <Input
-            type="number"
-            min={1}
-            value={value.count}
-            onChange={(e) => onChange({ ...value, count: Number(e.target.value) || 1 })}
-            placeholder={t('dedupRules.form.rateLimitCount')}
-            aria-label={t('dedupRules.form.rateLimitCount')}
-          />
-          <Input
-            value={value.window}
-            onChange={(e) => onChange({ ...value, window: e.target.value })}
-            placeholder={t('dedupRules.form.windowPlaceholder')}
-            aria-label={t('dedupRules.form.rateLimitWindow')}
-          />
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-2 pt-2">
+            <Input
+              type="number"
+              min={1}
+              value={value.count}
+              onChange={(e) => onChange({ ...value, count: Number(e.target.value) || 1 })}
+              placeholder={t('dedupRules.form.rateLimitCount')}
+              aria-label={t('dedupRules.form.rateLimitCount')}
+            />
+            <Input
+              value={value.window}
+              onChange={(e) => onChange({ ...value, window: e.target.value })}
+              placeholder={t('dedupRules.form.windowPlaceholder')}
+              aria-label={t('dedupRules.form.rateLimitWindow')}
+            />
+          </div>
+          {/*
+            Dynamic hint reads back the configured values so admins see
+            their numbers in plain language ("at most N fires per
+            canonical per W window"). Without this, "1 / 60m" is
+            ambiguous — could be per-rule, per-org, per-recipient.
+          */}
+          <p className="text-xs text-gray-500">
+            {t('dedupRules.form.rateLimitHint', { count: value.count, window: value.window })}
+          </p>
+        </>
       )}
     </div>
   );

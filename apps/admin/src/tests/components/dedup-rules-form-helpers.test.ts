@@ -19,6 +19,10 @@ import {
   parseConditionValue,
   displayConditionValue,
 } from '../../components/dedup-rules/rule-form-dialog';
+import { TRIGGER_TYPES, ACTION_TYPES } from '../../services/dedup-rules-service';
+import enLocale from '../../i18n/locales/en.json';
+import ruLocale from '../../i18n/locales/ru.json';
+import kkLocale from '../../i18n/locales/kk.json';
 
 describe('parseConditionValue', () => {
   describe('string field + scalar op (canonical.status / eq)', () => {
@@ -128,4 +132,54 @@ describe('round-trip: display(parse(raw))', () => {
     const parsed = parseConditionValue('hits_in_window', 'eq', '42');
     expect(displayConditionValue(parsed)).toBe('42');
   });
+});
+
+/**
+ * The form looks up hint text via dynamic keys derived from the
+ * selected variant: `triggerHints.${type}` for triggers and
+ * `actionHints.${type.replace(/\./g, '_')}` for actions. If a schema
+ * variant is ever added without the matching i18n key, the form
+ * silently renders the raw key string to admins.
+ *
+ * This guard iterates `TRIGGER_TYPES` and `ACTION_TYPES` (the same
+ * arrays the form imports from the service) and asserts every member
+ * has a non-empty hint in every shipped locale. New trigger / action
+ * lands → CI fails until en/ru/kk all carry the hint.
+ */
+describe('rule-form hint i18n coverage', () => {
+  const locales = { en: enLocale, ru: ruLocale, kk: kkLocale } as const;
+
+  type HintBag = Record<string, string>;
+  function hintsAt(localeJson: unknown, leaf: 'triggerHints' | 'actionHints'): HintBag {
+    const root = localeJson as { dedupRules: { form: Record<string, HintBag> } };
+    return root.dedupRules.form[leaf];
+  }
+
+  for (const [name, json] of Object.entries(locales)) {
+    describe(`${name} locale`, () => {
+      it.each([...TRIGGER_TYPES])('has a triggerHints entry for %s', (type) => {
+        const bag = hintsAt(json, 'triggerHints');
+        expect(bag[type]).toBeTruthy();
+        expect(typeof bag[type]).toBe('string');
+      });
+
+      it.each([...ACTION_TYPES])('has an actionHints entry for %s', (type) => {
+        const key = type.replace(/\./g, '_');
+        const bag = hintsAt(json, 'actionHints');
+        expect(bag[key]).toBeTruthy();
+        expect(typeof bag[key]).toBe('string');
+      });
+
+      // The plural rate-limit hint is a third dynamic-key pattern —
+      // i18next picks `_one` vs `_other` based on the runtime `count`.
+      // Both forms must exist per locale; a locale that ships only
+      // one form would render the raw key for the missing branch.
+      it.each(['rateLimitHint_one', 'rateLimitHint_other'])('has %s', (key) => {
+        const root = json as { dedupRules: { form: Record<string, unknown> } };
+        const value = root.dedupRules.form[key];
+        expect(value).toBeTruthy();
+        expect(typeof value).toBe('string');
+      });
+    });
+  }
 });
