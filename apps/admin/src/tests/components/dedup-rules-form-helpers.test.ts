@@ -169,6 +169,17 @@ describe('rule-form hint i18n coverage', () => {
         expect(bag[key]).toBeTruthy();
         expect(typeof bag[key]).toBe('string');
       });
+
+      // The plural rate-limit hint is a third dynamic-key pattern —
+      // i18next picks `_one` vs `_other` based on the runtime `count`.
+      // Both forms must exist per locale; a locale that ships only
+      // one form would render the raw key for the missing branch.
+      it.each(['rateLimitHint_one', 'rateLimitHint_other'])('has %s', (key) => {
+        const root = json as { dedupRules: { form: Record<string, unknown> } };
+        const value = root.dedupRules.form[key];
+        expect(value).toBeTruthy();
+        expect(typeof value).toBe('string');
+      });
     });
   }
 });
