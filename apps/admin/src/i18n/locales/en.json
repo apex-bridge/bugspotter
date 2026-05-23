@@ -707,7 +707,22 @@
       "telegramChatId": "Telegram chat id",
       "telegramChatIdPlaceholder": "@channel_username or -1001234567890",
       "telegramMessagePlaceholder": "Message body...",
-      "telegramMessage": "Telegram message body"
+      "telegramMessage": "Telegram message body",
+      "triggerHints": {
+        "duplicate_detected": "Fires when the intelligence service flags a new bug as a duplicate of an existing canonical.",
+        "outbox_about_to_skip": "Fires when the outbox is about to suppress a ticket-creation row because the canonical already has one — last chance to comment or bump severity.",
+        "cluster_growing": "Fires when the hit count for a canonical crosses the threshold within the window.",
+        "schedule": "Fires on a cron schedule. Note: scheduler is not yet active — this trigger parses but does not fire today."
+      },
+      "actionHints": {
+        "ticket_add_comment": "Posts a comment to the canonical's external ticket (Jira / Linear) via the integration plugin.",
+        "ticket_transition": "Transitions the canonical's external ticket to the chosen status.",
+        "notify_email": "Sends a templated email. `reporter` resolves to the SDK-supplied `metadata.user.email` (SaaS: verified against org membership). `closer` / `all_reporters` are not wired yet. Literal addresses (e.g. `ops@example.com`) send directly.",
+        "notify_slack": "Posts via Slack chat.postMessage. Requires a configured xoxb- bot token in the org's Notification channels.",
+        "notify_webhook": "POSTs JSON to a public HTTPS endpoint. SSRF-validated; no per-org credential needed.",
+        "notify_telegram": "Posts via Telegram sendMessage. Requires a configured BotFather token in the org's Notification channels."
+      },
+      "rateLimitHint": "At most {{count}} fires per canonical bug within a {{window}} window. Suppressed firings are not retried."
     }
   },
   "notifications": {
