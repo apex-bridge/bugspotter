@@ -401,6 +401,105 @@ describe('Bug Report Routes', () => {
         expect(json.message).toBe('Project not found.');
       });
     });
+
+    describe('deflection (SDK widget confirmed canonical)', () => {
+      it('sets duplicate_of when deflected_to_canonical_id points to a same-project bug', async () => {
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Existing canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Same bug, new reporter',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const created = response.json().data;
+        expect(created.duplicate_of).toBe(canonical.id);
+        // The deflection-source tag must land in metadata so analytics
+        // can distinguish widget-driven dedup from pipeline-inferred.
+        const stored = await db.bugReports.findById(created.id);
+        expect(stored?.metadata).toMatchObject({
+          deflection_source: 'sdk_user_confirmed',
+        });
+      });
+
+      it('rejects deflected_to_canonical_id that points to another project (cross-tenant scope)', async () => {
+        // Seed a canonical in a SECOND project the API key is NOT
+        // scoped to. The route must reject — without this guard, an
+        // attacker could deflect a fresh bug into a foreign canonical
+        // and pollute downstream rule fires.
+        const otherProject = await db.projects.create({
+          name: `Other project ${Date.now()}`,
+          settings: {},
+        });
+        const otherCanonical = await db.bugReports.create({
+          project_id: otherProject.id,
+          title: 'Foreign canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Trying to deflect into foreign project',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: otherCanonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json().message).toContain('deflected_to_canonical_id');
+      });
+
+      it('rejects deflected_to_canonical_id that points to a non-existent bug', async () => {
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Deflecting into thin air',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: '00000000-0000-0000-0000-000000000000',
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+      });
+
+      it('omits deflection metadata when the field is absent', async () => {
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Normal submission, no deflection',
+            report: { console: [], network: [], metadata: {} },
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const created = response.json().data;
+        expect(created.duplicate_of).toBeNull();
+        const stored = await db.bugReports.findById(created.id);
+        // Tag must NOT appear when the user didn't confirm a chip.
+        expect(stored?.metadata).not.toHaveProperty('deflection_source');
+      });
+    });
   });
 
   describe('GET /api/v1/reports', () => {
