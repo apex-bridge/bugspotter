@@ -25,13 +25,19 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { useOrgFilter } from '../../hooks/use-org-filter';
-import { bugReportService, userService, projectService } from '../../services/api';
+import {
+  bugReportService,
+  userService,
+  projectService,
+  analyticsService,
+} from '../../services/api';
 import { apiKeyService } from '../../services/api-key-service';
 import { organizationService } from '../../services/organization-service';
 import BugReportsPage from '../../pages/bug-reports';
 import ApiKeysPage from '../../pages/api-keys';
 import UsersPage from '../../pages/users';
 import ProjectsPage from '../../pages/projects';
+import DashboardPage from '../../pages/dashboard';
 
 // ---- Service mocks. Each test resets the relevant spy. -------------------
 //
@@ -45,6 +51,11 @@ import ProjectsPage from '../../pages/projects';
 vi.mock('../../services/api', () => ({
   bugReportService: { getAll: vi.fn(), delete: vi.fn() },
   userService: { getAll: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  analyticsService: {
+    getDashboard: vi.fn(),
+    getReportTrend: vi.fn(),
+    getProjectStats: vi.fn(),
+  },
   projectService: {
     getAll: vi.fn(),
     create: vi.fn(),
@@ -177,6 +188,16 @@ beforeEach(() => {
     pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
   } as never);
   vi.mocked(projectService.getAll).mockResolvedValue([] as never);
+  vi.mocked(analyticsService.getDashboard).mockResolvedValue({
+    bug_reports: {
+      by_status: { open: 0, in_progress: 0, resolved: 0, closed: 0, total: 0 },
+      by_priority: { low: 0, medium: 0, high: 0, critical: 0 },
+    },
+    projects: { total: 0, total_reports: 0, avg_reports_per_project: 0 },
+    users: { total: 0 },
+    time_series: [],
+    top_projects: [],
+  } as never);
   vi.mocked(organizationService.list).mockResolvedValue({
     data: [
       { id: 'acme', name: 'Acme', subdomain: 'acme' } as never,
@@ -344,5 +365,43 @@ describe('projects.tsx auto-seed gate', () => {
     // Empty string = the placeholder "Select an organization" option.
     // Crucially NOT 'ghost' — that would mean the gate is broken.
     expect(select.value).toBe('');
+  });
+});
+
+describe('dashboard.tsx — analyticsService.getDashboard receives the org filter', () => {
+  // Unlike the four list pages above, dashboard.tsx has no in-page state
+  // (no pagination, no filters) so the only thing to assert is that the
+  // service call carries the orgId from useOrgFilter, and re-fires when
+  // the URL param changes. Without the wiring, the dashboard would stay
+  // on the cross-org aggregate regardless of sidebar selection.
+
+  it('passes the URL ?organizationId= through to analyticsService.getDashboard', async () => {
+    renderWithOrgFilterControls(<DashboardPage />, ['/dashboard?organizationId=acme']);
+
+    await waitFor(() => expect(analyticsService.getDashboard).toHaveBeenCalled());
+    const lastCall = vi.mocked(analyticsService.getDashboard).mock.calls.at(-1)!;
+    expect(lastCall[0]).toBe('acme');
+  });
+
+  it('refetches with the new org id when the filter changes', async () => {
+    const { setOrg } = renderWithOrgFilterControls(<DashboardPage />, [
+      '/dashboard?organizationId=acme',
+    ]);
+    await waitFor(() => expect(analyticsService.getDashboard).toHaveBeenCalled());
+    vi.mocked(analyticsService.getDashboard).mockClear();
+
+    setOrg('initech');
+
+    await waitFor(() => expect(analyticsService.getDashboard).toHaveBeenCalled());
+    const lastCall = vi.mocked(analyticsService.getDashboard).mock.calls.at(-1)!;
+    expect(lastCall[0]).toBe('initech');
+  });
+
+  it('passes null when no org filter is set (cross-org view for platform admin)', async () => {
+    renderWithOrgFilterControls(<DashboardPage />, ['/dashboard']);
+
+    await waitFor(() => expect(analyticsService.getDashboard).toHaveBeenCalled());
+    const lastCall = vi.mocked(analyticsService.getDashboard).mock.calls.at(-1)!;
+    expect(lastCall[0]).toBeNull();
   });
 });

@@ -24,8 +24,10 @@ export interface AnalyticsScope {
  * Resolution priority:
  * 1. Self-hosted mode → null (no filter, all data)
  * 2. SaaS mode with request.organizationId (from tenant middleware) → [orgId]
- * 3. SaaS mode, no org context → aggregate across user's org memberships
- * 4. SaaS mode, no org context, no memberships → throw 403
+ * 3. SaaS mode, platform admin with ?organization_id= query param → [orgId]
+ * 4. SaaS mode, platform admin without query param → null (cross-org)
+ * 5. SaaS mode, no org context → aggregate across user's org memberships
+ * 6. SaaS mode, no org context, no memberships → throw 403
  */
 export async function resolveAnalyticsScope(
   request: FastifyRequest,
@@ -43,9 +45,15 @@ export async function resolveAnalyticsScope(
     return { organizationIds: [request.organizationId] };
   }
 
-  // Platform admin on hub domain: full analytics access (no org filter)
+  // Platform admin on hub domain.
+  // Honor ?organization_id= to narrow the cross-org view to a single tenant —
+  // matches the convention used by /api/v1/projects and the other list
+  // endpoints (see projects.ts). Without the param, fall through to the
+  // full cross-org aggregate.
+  // Param is only consulted for platform admins; regular users never reach it.
   if (isPlatformAdmin(request)) {
-    return { organizationIds: null };
+    const orgScope = (request.query as { organization_id?: string } | undefined)?.organization_id;
+    return { organizationIds: orgScope ? [orgScope] : null };
   }
 
   // SaaS mode but no org context (hub domain / no subdomain)

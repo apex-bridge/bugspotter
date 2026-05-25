@@ -1,14 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { analyticsService } from '../services/api';
+import { useOrgFilter } from '../hooks/use-org-filter';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Activity, FolderKanban, Users, AlertCircle } from 'lucide-react';
 
 export default function DashboardPage() {
   const { t } = useTranslation();
+  // Platform-admin sidebar filter narrows cross-org dashboard to a single tenant.
+  // Backend ignores the param for non-admins; this is just plumbing.
+  const { selectedOrgId: adminOrgScope } = useOrgFilter();
   const { data, isLoading, error } = useQuery({
-    queryKey: ['analytics-dashboard'],
-    queryFn: () => analyticsService.getDashboard(),
+    queryKey: ['analytics-dashboard', adminOrgScope],
+    queryFn: () => analyticsService.getDashboard(adminOrgScope),
     refetchInterval: 60000, // Refresh every minute
     retry: 1, // Only retry once
   });

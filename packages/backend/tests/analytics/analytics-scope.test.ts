@@ -115,6 +115,68 @@ describe('resolveAnalyticsScope', () => {
     expect(scope.organizationIds).toEqual(['org-tenant']);
   });
 
+  it('should narrow to ?organization_id= for SaaS platform admin on hub domain', async () => {
+    process.env.DEPLOYMENT_MODE = 'saas';
+    resetDeploymentConfig();
+
+    const request = {
+      authUser: { id: 'admin-1', role: 'admin' },
+      query: { organization_id: 'org-target' },
+    } as unknown as FastifyRequest;
+
+    const mockDb = {
+      organizationMembers: {
+        findByUserId: async () => {
+          throw new Error('should not be called');
+        },
+      },
+    } as never;
+
+    const scope = await resolveAnalyticsScope(request, mockDb);
+    expect(scope.organizationIds).toEqual(['org-target']);
+  });
+
+  it('should let subdomain context win over ?organization_id= for platform admin', async () => {
+    process.env.DEPLOYMENT_MODE = 'saas';
+    resetDeploymentConfig();
+
+    // A platform admin already on acme.kz.bugspotter.io cannot widen / cross
+    // to a different org via the query param.
+    const request = {
+      authUser: { id: 'admin-1', role: 'admin' },
+      organizationId: 'org-subdomain',
+      query: { organization_id: 'org-other' },
+    } as unknown as FastifyRequest;
+
+    const db = {} as never;
+
+    const scope = await resolveAnalyticsScope(request, db);
+    expect(scope.organizationIds).toEqual(['org-subdomain']);
+  });
+
+  it('should ignore ?organization_id= for non-admin users (security boundary)', async () => {
+    process.env.DEPLOYMENT_MODE = 'saas';
+    resetDeploymentConfig();
+
+    // Non-admin user attempts to scope to an org they don't administer.
+    // The query param branch is only reached for platform admins; everyone
+    // else falls through to the memberships aggregation.
+    const request = {
+      authUser: { id: 'user-1' },
+      query: { organization_id: 'org-foreign' },
+    } as unknown as FastifyRequest;
+
+    const mockDb = {
+      organizationMembers: {
+        findByUserId: async () => [{ organization_id: 'org-a', role: 'admin' }],
+      },
+    } as never;
+
+    const scope = await resolveAnalyticsScope(request, mockDb);
+    expect(scope.organizationIds).toEqual(['org-a']);
+    expect(scope.organizationIds).not.toContain('org-foreign');
+  });
+
   it('should throw 401 when SaaS mode, no org context, no auth user', async () => {
     process.env.DEPLOYMENT_MODE = 'saas';
     resetDeploymentConfig();

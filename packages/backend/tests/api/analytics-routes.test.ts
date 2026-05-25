@@ -205,4 +205,46 @@ describe('Analytics Routes — response body shape', () => {
       expect(data[0].total_reports).toBe(4);
     });
   });
+
+  // Schema-level guard for the platform-admin org-filter feature.
+  // The end-to-end scope-resolution behavior (which orgs get queried for
+  // which user shape) lives in tests/analytics/analytics-scope.test.ts —
+  // here we just verify the flat-route schemas accept the query param
+  // instead of rejecting it with a 400 / silently stripping it.
+
+  describe('?organization_id= query param on flat routes', () => {
+    const targetOrgId = '11111111-1111-4111-8111-111111111111';
+
+    it('GET /api/v1/analytics/dashboard accepts ?organization_id=<uuid>', async () => {
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/analytics/dashboard?organization_id=${targetOrgId}`,
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('GET /api/v1/analytics/reports/trend accepts both days and organization_id', async () => {
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/analytics/reports/trend?days=7&organization_id=${targetOrgId}`,
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('GET /api/v1/analytics/projects/stats accepts ?organization_id=<uuid>', async () => {
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/analytics/projects/stats?organization_id=${targetOrgId}`,
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('rejects a non-UUID organization_id with 400', async () => {
+      const res = await server.inject({
+        method: 'GET',
+        url: '/api/v1/analytics/dashboard?organization_id=not-a-uuid',
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
 });
