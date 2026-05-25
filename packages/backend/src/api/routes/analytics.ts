@@ -35,6 +35,33 @@ const orgIdParams = {
   },
 } as const;
 
+// `organization_id` is honored for platform admins only — see
+// resolveAnalyticsScope for the security boundary. Declared in the
+// schema so Fastify exposes it as typed query and doesn't silently
+// strip it under `removeAdditional`.
+const orgIdQuery = {
+  organization_id: { type: 'string', format: 'uuid' },
+} as const;
+
+const flatDashboardQuerystring = {
+  type: 'object',
+  properties: { ...orgIdQuery },
+} as const;
+
+const flatTrendQuerystring = {
+  type: 'object',
+  properties: {
+    days: { type: 'integer', minimum: 1, maximum: 365, default: 30 },
+    ...orgIdQuery,
+  },
+} as const;
+
+const flatProjectStatsQuerystring = {
+  type: 'object',
+  properties: { ...orgIdQuery },
+} as const;
+
+// Org-param routes don't accept the query — the URL `:id` is the scope.
 const trendQuerystring = {
   type: 'object',
   properties: {
@@ -53,11 +80,15 @@ const analyticsSchemas = {
   projectStats: {
     params: orgIdParams,
   },
-  flatDashboard: {},
-  flatTrend: {
-    querystring: trendQuerystring,
+  flatDashboard: {
+    querystring: flatDashboardQuerystring,
   },
-  flatProjectStats: {},
+  flatTrend: {
+    querystring: flatTrendQuerystring,
+  },
+  flatProjectStats: {
+    querystring: flatProjectStatsQuerystring,
+  },
 };
 
 export function analyticsRoutes(
@@ -70,7 +101,7 @@ export function analyticsRoutes(
   // ==========================================================================
 
   // GET /api/v1/analytics/dashboard
-  fastify.get(
+  fastify.get<{ Querystring: { organization_id?: string } }>(
     '/api/v1/analytics/dashboard',
     {
       preHandler: [requireUser, requireAnalyticsAccess(db)],
@@ -88,7 +119,7 @@ export function analyticsRoutes(
   );
 
   // GET /api/v1/analytics/reports/trend
-  fastify.get<{ Querystring: { days?: number } }>(
+  fastify.get<{ Querystring: { days?: number; organization_id?: string } }>(
     '/api/v1/analytics/reports/trend',
     {
       preHandler: [requireUser, requireAnalyticsAccess(db)],
@@ -107,7 +138,7 @@ export function analyticsRoutes(
   );
 
   // GET /api/v1/analytics/projects/stats
-  fastify.get(
+  fastify.get<{ Querystring: { organization_id?: string } }>(
     '/api/v1/analytics/projects/stats',
     {
       preHandler: [requireUser, requireAnalyticsAccess(db)],
