@@ -22,27 +22,11 @@ import type { AnalyticsService } from '../../analytics/analytics-service.js';
 import { resolveAnalyticsScope } from '../../analytics/analytics-scope.js';
 import { requireAnalyticsAccess } from '../../analytics/analytics-auth.js';
 
-// Shared response shapes
-const objectDataResponse = {
-  200: {
-    type: 'object',
-    properties: {
-      success: { type: 'boolean' },
-      data: { type: 'object' },
-    },
-  },
-} as const;
-
-const arrayDataResponse = {
-  200: {
-    type: 'object',
-    properties: {
-      success: { type: 'boolean' },
-      data: { type: 'array', items: { type: 'object' } },
-    },
-  },
-} as const;
-
+// Request validation schemas only — no response schemas.
+// fast-json-stringify strips properties not declared in a response schema,
+// so a `data: { type: 'object' }` (no properties) silently serializes to `{}`.
+// Match the project convention used elsewhere (admin-organizations, etc.)
+// and skip the response schema; the handlers' return shape is the contract.
 const orgIdParams = {
   type: 'object',
   required: ['id'],
@@ -61,27 +45,19 @@ const trendQuerystring = {
 const analyticsSchemas = {
   dashboard: {
     params: orgIdParams,
-    response: objectDataResponse,
   },
   trend: {
     params: orgIdParams,
     querystring: trendQuerystring,
-    response: objectDataResponse,
   },
   projectStats: {
     params: orgIdParams,
-    response: arrayDataResponse,
   },
-  flatDashboard: {
-    response: objectDataResponse,
-  },
+  flatDashboard: {},
   flatTrend: {
     querystring: trendQuerystring,
-    response: objectDataResponse,
   },
-  flatProjectStats: {
-    response: arrayDataResponse,
-  },
+  flatProjectStats: {},
 };
 
 export function analyticsRoutes(
