@@ -88,6 +88,43 @@ const sdkSimilarSchema = {
       limit: { type: 'integer', minimum: 1, maximum: SDK_MAX_LIMIT },
     },
   },
+  // Strict response schema — fast-json-stringify will strip any
+  // field not declared here, so if the map projection is ever
+  // accidentally changed to spread a full intelligence result,
+  // description / resolution / timestamps still can't leak through
+  // an ingest-key-authed endpoint. Defense-in-depth on top of the
+  // explicit projection in the handler.
+  response: {
+    200: {
+      type: 'object',
+      required: ['success', 'data'],
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          required: ['matches'],
+          additionalProperties: false,
+          properties: {
+            matches: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['canonical_id', 'title', 'status', 'similarity'],
+                additionalProperties: false,
+                properties: {
+                  canonical_id: { type: 'string' },
+                  title: { type: 'string' },
+                  status: { type: 'string' },
+                  similarity: { type: 'number' },
+                },
+              },
+            },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
 } as const;
 
 /**
@@ -101,13 +138,15 @@ async function resolveClientSoft(
   clientFactory: IntelligenceClientFactory | undefined,
   globalClient: IntelligenceClient
 ): Promise<IntelligenceClient | null> {
-  // Multi-tenant mode: strictly per-org, never fall back to the
-  // global client. globalClient uses platform-wide credentials —
-  // serving a tenant request from it would cross isolation.
-  if (clientFactory) {
-    if (!organizationId) {
-      return null;
-    }
+  // Per-org call only when BOTH a factory and an org id are present.
+  // intelligence.plugin.ts constructs clientFactory unconditionally
+  // (whenever the DB is available), so in self-hosted mode the
+  // factory exists but project.organization_id is legitimately null —
+  // we must fall through to globalClient there or the SDK probe is
+  // dead on self-hosted. In SaaS mode the schema invariant keeps
+  // organization_id non-null on every project, so this branch
+  // doesn't sacrifice tenant isolation in practice.
+  if (organizationId && clientFactory) {
     try {
       return await clientFactory.getClientForOrg(organizationId);
     } catch (error) {
@@ -118,8 +157,6 @@ async function resolveClientSoft(
       return null;
     }
   }
-  // Single-tenant / self-hosted: no factory → globalClient is the
-  // only client and IS the tenant's.
   return globalClient;
 }
 
