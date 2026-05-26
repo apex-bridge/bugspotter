@@ -157,31 +157,33 @@ export function bugReportRoutes(
         });
       }
 
-      // Resolve deflection target if the SDK widget set one. The
-      // canonical must belong to the same project — without this
-      // check, a malicious client could deflect a new bug into
-      // another tenant's canonical and trigger downstream rule fires
-      // against unrelated data. Mirrors the cross-tenant scope check
-      // in the rule-engine's `TicketsTableResolver`.
-      let validatedDeflectionTarget: string | null = null;
-      if (deflectedToCanonicalId) {
-        const canonical = await db.bugReports.findById(deflectedToCanonicalId);
-        if (!canonical || canonical.project_id !== projectId) {
-          throw new AppError(
-            'deflected_to_canonical_id does not belong to this project',
-            400,
-            'BadRequest'
-          );
-        }
-        validatedDeflectionTarget = deflectedToCanonicalId;
-      }
-
       // Create bug report with quota leak protection
       // NOTE: Quota is reserved in middleware BEFORE this handler runs.
       // If creation fails, quota is leaked (no compensating decrement yet).
       // TODO: Implement UsageRecordRepository.decrement() and release quota on error.
       let bugReport;
       try {
+        // Resolve deflection target if the SDK widget set one. Lives
+        // INSIDE the try block so a validation 400 still triggers the
+        // releaseQuota path below — otherwise the quota reserved by
+        // `requireQuota` middleware would leak on every bad deflect.
+        // The canonical must belong to the same project (cross-tenant
+        // scope), and must not be soft-deleted (a tombstoned canonical
+        // is not a valid duplicate target — UI / rule engine assume
+        // duplicate_of points to a live row).
+        let validatedDeflectionTarget: string | null = null;
+        if (deflectedToCanonicalId) {
+          const canonical = await db.bugReports.findById(deflectedToCanonicalId);
+          if (!canonical || canonical.project_id !== projectId || canonical.deleted_at) {
+            throw new AppError(
+              'deflected_to_canonical_id is not a valid deflection target for this project',
+              400,
+              'BadRequest'
+            );
+          }
+          validatedDeflectionTarget = deflectedToCanonicalId;
+        }
+
         bugReport = await db.bugReports.create({
           project_id: projectId,
           title,
@@ -201,8 +203,15 @@ export function bugReportRoutes(
             // Tags the deflection origin for analytics. Distinct from
             // intelligence-pipeline-inferred dedup (which doesn't set
             // this key) so we can measure widget-deflection rate.
+            // Sourced from `source` so SDK widget vs extension popup
+            // can be measured separately.
             ...(validatedDeflectionTarget
-              ? { deflection_source: 'sdk_user_confirmed' as const }
+              ? {
+                  deflection_source:
+                    source === 'extension'
+                      ? ('extension_user_confirmed' as const)
+                      : ('sdk_user_confirmed' as const),
+                }
               : {}),
           },
           screenshot_url: null,

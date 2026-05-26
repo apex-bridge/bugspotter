@@ -481,6 +481,62 @@ describe('Bug Report Routes', () => {
         expect(response.statusCode).toBe(400);
       });
 
+      it('rejects deflected_to_canonical_id pointing to a soft-deleted bug', async () => {
+        // findById doesn't filter tombstoned rows, so a soft-deleted
+        // canonical would otherwise sneak through and end up as a
+        // duplicate_of pointer the UI / rule engine can't reason about.
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Will be deleted',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+        await db.bugReports.softDelete([canonical.id]);
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Deflecting into a tombstone',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json().message).toContain('deflected_to_canonical_id');
+      });
+
+      it('tags deflection_source as extension_user_confirmed when source is extension', async () => {
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Existing canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Same bug from the extension popup',
+            source: 'extension',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const stored = await db.bugReports.findById(response.json().data.id);
+        expect(stored?.metadata).toMatchObject({
+          deflection_source: 'extension_user_confirmed',
+        });
+      });
+
       it('omits deflection metadata when the field is absent', async () => {
         const response = await server.inject({
           method: 'POST',

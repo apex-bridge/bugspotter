@@ -94,7 +94,13 @@ async function resolveClientSoft(
   clientFactory: IntelligenceClientFactory | undefined,
   globalClient: IntelligenceClient
 ): Promise<IntelligenceClient | null> {
-  if (clientFactory && organizationId) {
+  // Multi-tenant mode: strictly per-org, never fall back to the
+  // global client. globalClient uses platform-wide credentials —
+  // serving a tenant request from it would cross isolation.
+  if (clientFactory) {
+    if (!organizationId) {
+      return null;
+    }
     try {
       return await clientFactory.getClientForOrg(organizationId);
     } catch (error) {
@@ -105,6 +111,8 @@ async function resolveClientSoft(
       return null;
     }
   }
+  // Single-tenant / self-hosted: no factory → globalClient is the
+  // only client and IS the tenant's.
   return globalClient;
 }
 
@@ -172,6 +180,7 @@ export function sdkSimilarRoutes(
           projectId: project.id,
           organizationId: project.organization_id,
           errorType: error instanceof Error ? error.name : 'NonErrorThrown',
+          error: error instanceof Error ? error.message : String(error),
         });
       }
 
