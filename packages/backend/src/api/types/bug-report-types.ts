@@ -73,6 +73,14 @@ export interface CreateReportBody {
   // Optimized flow - SDK tells us what files it has
   hasScreenshot?: boolean;
   hasReplay?: boolean;
+  /**
+   * Set by the SDK widget when the user confirmed "yes, this is the
+   * same as #X" on a deflection chip. Written directly to
+   * `bug_reports.duplicate_of`; validated against the project scope
+   * in the handler (same defense-in-depth as the rule-engine's
+   * canonical resolver).
+   */
+  deflected_to_canonical_id?: string | null;
 }
 
 /**
