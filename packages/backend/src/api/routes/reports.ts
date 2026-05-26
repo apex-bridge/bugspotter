@@ -173,7 +173,7 @@ export function bugReportRoutes(
         // duplicate_of points to a live row).
         let validatedDeflectionTarget: string | null = null;
         if (deflectedToCanonicalId) {
-          const canonical = await db.bugReports.findById(deflectedToCanonicalId);
+          let canonical = await db.bugReports.findById(deflectedToCanonicalId);
           if (!canonical || canonical.project_id !== projectId || canonical.deleted_at) {
             throw new AppError(
               'deflected_to_canonical_id is not a valid deflection target for this project',
@@ -181,7 +181,30 @@ export function bugReportRoutes(
               'BadRequest'
             );
           }
-          validatedDeflectionTarget = deflectedToCanonicalId;
+          // Collapse to the root canonical if the chosen target is
+          // itself a duplicate — keeps `duplicate_of` flat so UI /
+          // reporting that asks "what's a dup of Y" sees every leaf
+          // pointing directly at Y. Capped + cycle-guarded so bad
+          // data can't infinite-loop the request.
+          const visited = new Set<string>([canonical.id]);
+          const MAX_CHAIN_DEPTH = 5;
+          let depth = 0;
+          while (canonical.duplicate_of && depth < MAX_CHAIN_DEPTH) {
+            if (visited.has(canonical.duplicate_of)) {
+              // Cycle in the data — stop here, use the current node.
+              break;
+            }
+            const root = await db.bugReports.findById(canonical.duplicate_of);
+            if (!root || root.project_id !== projectId || root.deleted_at) {
+              // Broken chain — the duplicate_of pointer leads
+              // somewhere invalid. Use the last good node we held.
+              break;
+            }
+            visited.add(root.id);
+            canonical = root;
+            depth++;
+          }
+          validatedDeflectionTarget = canonical.id;
         }
 
         // Persisted source — one value, written to metadata.source AND

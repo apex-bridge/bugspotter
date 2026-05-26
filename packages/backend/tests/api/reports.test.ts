@@ -571,6 +571,44 @@ describe('Bug Report Routes', () => {
         });
       });
 
+      it('collapses to root canonical when the chosen target is itself a duplicate', async () => {
+        // root ← mid ← (new bug). Intelligence search can surface
+        // `mid` even though it's already a duplicate; deflecting to
+        // `mid` must flatten to `root` so reporting that walks
+        // duplicate_of only one hop still finds the new bug.
+        const root = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Root canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+        const mid = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Already-duplicate intermediate',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+          duplicate_of: root.id,
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Deflecting to a duplicate',
+            source: 'sdk',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: mid.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        // Must land on root, not on mid.
+        expect(response.json().data.duplicate_of).toBe(root.id);
+      });
+
       it('omits deflection metadata when the field is absent', async () => {
         const response = await server.inject({
           method: 'POST',
