@@ -76,6 +76,14 @@ export const createBugReportSchema = {
       // Flags to request presigned URLs for file uploads
       hasScreenshot: { type: 'boolean', default: false },
       hasReplay: { type: 'boolean', default: false },
+      // Set by the SDK widget when the user confirmed "yes, this is
+      // the same as #X" on a deflection chip. Backend writes this
+      // straight into `bug_reports.duplicate_of`, bypassing the
+      // intelligence pipeline's pre-file dedup grace. The canonical
+      // id must point to a bug in the same project — enforced in the
+      // handler. Tags `metadata.deflection_source = "sdk_user_confirmed"`
+      // for analytics.
+      deflected_to_canonical_id: { type: 'string', format: 'uuid', nullable: true },
     },
     additionalProperties: false,
   },

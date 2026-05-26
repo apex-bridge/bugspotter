@@ -87,6 +87,7 @@ export function bugReportRoutes(
         hasReplay,
         source,
         project_id: bodyProjectId,
+        deflected_to_canonical_id: deflectedToCanonicalId,
       } = request.body;
 
       // Resolve project from: authProject (single-key), body project_id, or sole allowed project
@@ -162,18 +163,82 @@ export function bugReportRoutes(
       // TODO: Implement UsageRecordRepository.decrement() and release quota on error.
       let bugReport;
       try {
+        // Resolve deflection target if the SDK widget set one. Lives
+        // INSIDE the try block so a validation 400 still triggers the
+        // releaseQuota path below — otherwise the quota reserved by
+        // `requireQuota` middleware would leak on every bad deflect.
+        // The canonical must belong to the same project (cross-tenant
+        // scope), and must not be soft-deleted (a tombstoned canonical
+        // is not a valid duplicate target — UI / rule engine assume
+        // duplicate_of points to a live row).
+        let validatedDeflectionTarget: string | null = null;
+        if (deflectedToCanonicalId) {
+          let canonical = await db.bugReports.findById(deflectedToCanonicalId);
+          if (!canonical || canonical.project_id !== projectId || canonical.deleted_at) {
+            throw new AppError(
+              'deflected_to_canonical_id is not a valid deflection target for this project',
+              400,
+              'BadRequest'
+            );
+          }
+          // Collapse to the root canonical if the chosen target is
+          // itself a duplicate — keeps `duplicate_of` flat so UI /
+          // reporting that asks "what's a dup of Y" sees every leaf
+          // pointing directly at Y. Capped + cycle-guarded so bad
+          // data can't infinite-loop the request.
+          const visited = new Set<string>([canonical.id]);
+          const MAX_CHAIN_DEPTH = 5;
+          let depth = 0;
+          while (canonical.duplicate_of && depth < MAX_CHAIN_DEPTH) {
+            if (visited.has(canonical.duplicate_of)) {
+              // Cycle in the data — stop here, use the current node.
+              break;
+            }
+            const root = await db.bugReports.findById(canonical.duplicate_of);
+            if (!root || root.project_id !== projectId || root.deleted_at) {
+              // Broken chain — the duplicate_of pointer leads
+              // somewhere invalid. Use the last good node we held.
+              break;
+            }
+            visited.add(root.id);
+            canonical = root;
+            depth++;
+          }
+          validatedDeflectionTarget = canonical.id;
+        }
+
+        // Persisted source — one value, written to metadata.source AND
+        // (when present) used to derive deflection_source so the two
+        // fields never disagree. Without this, a direct API call with
+        // a deflection target but no `source` would land as
+        // `source: 'api'` + `deflection_source: 'sdk_user_confirmed'`.
+        const persistedSource = source || 'api';
+
         bugReport = await db.bugReports.create({
           project_id: projectId,
           title,
           description: description || null,
           priority: priority || BugPriority.MEDIUM,
           status: BugStatus.OPEN,
+          // When the user confirmed the deflection chip, set
+          // `duplicate_of` directly — bypasses the intelligence
+          // pre-file grace window because we already know the canonical.
+          duplicate_of: validatedDeflectionTarget,
           metadata: {
             console: report.console,
             network: report.network,
             metadata: report.metadata,
-            source: source || 'api',
+            source: persistedSource,
             apiKeyPrefix: request.apiKey?.key_prefix || null,
+            // Tags the deflection origin for analytics. Distinct from
+            // intelligence-pipeline-inferred dedup (which doesn't set
+            // this key) so we can measure widget-deflection rate per
+            // source (sdk widget vs extension popup vs direct API).
+            ...(validatedDeflectionTarget
+              ? {
+                  deflection_source: `${persistedSource}_user_confirmed` as const,
+                }
+              : {}),
           },
           screenshot_url: null,
           replay_url: null,
