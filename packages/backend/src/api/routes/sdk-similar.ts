@@ -42,6 +42,12 @@ const logger = getLogger();
 // setting in a follow-up.
 const SDK_SIMILARITY_FLOOR = 0.6;
 
+// Embedding model produces noisy false positives below this length —
+// matches the widget's own client-side floor. Treated as a soft-fail
+// (empty matches) rather than 400 to stay consistent with the file's
+// "probe never errors to the widget" contract.
+const MIN_TITLE_LENGTH = 5;
+
 // Hard ceiling on response size. Lower than admin search's 50 — the
 // widget renders these inline and three is the max a user will
 // realistically scan before submitting.
@@ -69,9 +75,10 @@ const sdkSimilarSchema = {
     properties: {
       title: {
         type: 'string',
-        // Match the widget's own 5-char minimum check — anything shorter
-        // produces noisy false positives from the embedding model.
-        minLength: 5,
+        // No minLength here — the 5-char floor is enforced as a soft
+        // fail in the handler (returns 200 + {matches: []}) to honor
+        // the file's "probe never errors to the widget" contract.
+        // maxLength is kept as real abuse protection.
         maxLength: 500,
       },
       // Description accepted but ignored in v1 — title-only similarity
@@ -139,6 +146,15 @@ export function sdkSimilarRoutes(
       // TS happy and protects against a future middleware re-order.
       if (!project) {
         throw new AppError('Project context required', 400, 'BadRequest');
+      }
+
+      // Short / whitespace-only titles produce only noise from the
+      // embedding model. Soft-fail to empty matches rather than 400
+      // so the widget's network panel stays clean and so direct API
+      // callers get the same shape on every "no useful matches"
+      // outcome.
+      if (title.trim().length < MIN_TITLE_LENGTH) {
+        return sendSuccess(reply, { matches: [] });
       }
 
       const client = await resolveClientSoft(project.organization_id, clientFactory, globalClient);

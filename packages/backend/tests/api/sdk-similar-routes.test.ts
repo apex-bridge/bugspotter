@@ -287,13 +287,27 @@ describe('SDK similar endpoint', () => {
   });
 
   describe('input validation', () => {
-    it('rejects a title shorter than 5 characters', async () => {
+    it('soft-fails (200 + empty matches) for a title shorter than 5 chars', async () => {
+      // Matches the file's "probe never errors to the widget" contract:
+      // short / whitespace-only titles produce empty matches, not 400.
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/sdk/similar',
         payload: { title: 'hi' },
       });
-      expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.matches).toEqual([]);
+      expect(globalClient.search).not.toHaveBeenCalled();
+    });
+
+    it('soft-fails (200 + empty matches) for a whitespace-only title', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/sdk/similar',
+        payload: { title: '          ' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.matches).toEqual([]);
       expect(globalClient.search).not.toHaveBeenCalled();
     });
   });
