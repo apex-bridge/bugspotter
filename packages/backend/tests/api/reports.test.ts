@@ -401,6 +401,233 @@ describe('Bug Report Routes', () => {
         expect(json.message).toBe('Project not found.');
       });
     });
+
+    describe('deflection (SDK widget confirmed canonical)', () => {
+      it('sets duplicate_of when deflected_to_canonical_id points to a same-project bug', async () => {
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Existing canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Same bug, new reporter',
+            source: 'sdk',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const created = response.json().data;
+        expect(created.duplicate_of).toBe(canonical.id);
+        // metadata.source and metadata.deflection_source are both
+        // derived from the same normalized value so they can never
+        // disagree about who confirmed the deflection.
+        const stored = await db.bugReports.findById(created.id);
+        expect(stored?.metadata).toMatchObject({
+          source: 'sdk',
+          deflection_source: 'sdk_user_confirmed',
+        });
+      });
+
+      it('keeps source and deflection_source aligned when source is omitted (defaults to api)', async () => {
+        // Regression guard: previously source defaulted to 'api' while
+        // deflection_source hardcoded 'sdk_user_confirmed' — contradictory
+        // attribution. Now both derive from the same normalized value.
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Existing canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'API-direct deflection',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const stored = await db.bugReports.findById(response.json().data.id);
+        expect(stored?.metadata).toMatchObject({
+          source: 'api',
+          deflection_source: 'api_user_confirmed',
+        });
+      });
+
+      it('rejects deflected_to_canonical_id that points to another project (cross-tenant scope)', async () => {
+        // Seed a canonical in a SECOND project the API key is NOT
+        // scoped to. The route must reject — without this guard, an
+        // attacker could deflect a fresh bug into a foreign canonical
+        // and pollute downstream rule fires.
+        const otherProject = await db.projects.create({
+          name: `Other project ${Date.now()}`,
+          settings: {},
+        });
+        const otherCanonical = await db.bugReports.create({
+          project_id: otherProject.id,
+          title: 'Foreign canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Trying to deflect into foreign project',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: otherCanonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json().message).toContain('deflected_to_canonical_id');
+      });
+
+      it('rejects deflected_to_canonical_id that points to a non-existent bug', async () => {
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Deflecting into thin air',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: '00000000-0000-0000-0000-000000000000',
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+      });
+
+      it('rejects deflected_to_canonical_id pointing to a soft-deleted bug', async () => {
+        // findById doesn't filter tombstoned rows, so a soft-deleted
+        // canonical would otherwise sneak through and end up as a
+        // duplicate_of pointer the UI / rule engine can't reason about.
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Will be deleted',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+        await db.bugReports.softDelete([canonical.id]);
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Deflecting into a tombstone',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json().message).toContain('deflected_to_canonical_id');
+      });
+
+      it('tags deflection_source from the source field when source is extension', async () => {
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Existing canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Same bug from the extension popup',
+            source: 'extension',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const stored = await db.bugReports.findById(response.json().data.id);
+        expect(stored?.metadata).toMatchObject({
+          deflection_source: 'extension_user_confirmed',
+        });
+      });
+
+      it('collapses to root canonical when the chosen target is itself a duplicate', async () => {
+        // root ← mid ← (new bug). Intelligence search can surface
+        // `mid` even though it's already a duplicate; deflecting to
+        // `mid` must flatten to `root` so reporting that walks
+        // duplicate_of only one hop still finds the new bug.
+        const root = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Root canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+        const mid = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Already-duplicate intermediate',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+          duplicate_of: root.id,
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Deflecting to a duplicate',
+            source: 'sdk',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: mid.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        // Must land on root, not on mid.
+        expect(response.json().data.duplicate_of).toBe(root.id);
+      });
+
+      it('omits deflection metadata when the field is absent', async () => {
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'Normal submission, no deflection',
+            report: { console: [], network: [], metadata: {} },
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const created = response.json().data;
+        expect(created.duplicate_of).toBeNull();
+        const stored = await db.bugReports.findById(created.id);
+        // Tag must NOT appear when the user didn't confirm a chip.
+        expect(stored?.metadata).not.toHaveProperty('deflection_source');
+      });
+    });
   });
 
   describe('GET /api/v1/reports', () => {
