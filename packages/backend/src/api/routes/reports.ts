@@ -184,6 +184,13 @@ export function bugReportRoutes(
           validatedDeflectionTarget = deflectedToCanonicalId;
         }
 
+        // Persisted source — one value, written to metadata.source AND
+        // (when present) used to derive deflection_source so the two
+        // fields never disagree. Without this, a direct API call with
+        // a deflection target but no `source` would land as
+        // `source: 'api'` + `deflection_source: 'sdk_user_confirmed'`.
+        const persistedSource = source || 'api';
+
         bugReport = await db.bugReports.create({
           project_id: projectId,
           title,
@@ -198,19 +205,15 @@ export function bugReportRoutes(
             console: report.console,
             network: report.network,
             metadata: report.metadata,
-            source: source || 'api',
+            source: persistedSource,
             apiKeyPrefix: request.apiKey?.key_prefix || null,
             // Tags the deflection origin for analytics. Distinct from
             // intelligence-pipeline-inferred dedup (which doesn't set
-            // this key) so we can measure widget-deflection rate.
-            // Sourced from `source` so SDK widget vs extension popup
-            // can be measured separately.
+            // this key) so we can measure widget-deflection rate per
+            // source (sdk widget vs extension popup vs direct API).
             ...(validatedDeflectionTarget
               ? {
-                  deflection_source:
-                    source === 'extension'
-                      ? ('extension_user_confirmed' as const)
-                      : ('sdk_user_confirmed' as const),
+                  deflection_source: `${persistedSource}_user_confirmed` as const,
                 }
               : {}),
           },

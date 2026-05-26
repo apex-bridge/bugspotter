@@ -418,6 +418,7 @@ describe('Bug Report Routes', () => {
           headers: { 'x-api-key': testApiKey },
           payload: {
             title: 'Same bug, new reporter',
+            source: 'sdk',
             report: { console: [], network: [], metadata: {} },
             deflected_to_canonical_id: canonical.id,
           },
@@ -426,11 +427,44 @@ describe('Bug Report Routes', () => {
         expect(response.statusCode).toBe(201);
         const created = response.json().data;
         expect(created.duplicate_of).toBe(canonical.id);
-        // The deflection-source tag must land in metadata so analytics
-        // can distinguish widget-driven dedup from pipeline-inferred.
+        // metadata.source and metadata.deflection_source are both
+        // derived from the same normalized value so they can never
+        // disagree about who confirmed the deflection.
         const stored = await db.bugReports.findById(created.id);
         expect(stored?.metadata).toMatchObject({
+          source: 'sdk',
           deflection_source: 'sdk_user_confirmed',
+        });
+      });
+
+      it('keeps source and deflection_source aligned when source is omitted (defaults to api)', async () => {
+        // Regression guard: previously source defaulted to 'api' while
+        // deflection_source hardcoded 'sdk_user_confirmed' — contradictory
+        // attribution. Now both derive from the same normalized value.
+        const canonical = await db.bugReports.create({
+          project_id: testProjectId,
+          title: 'Existing canonical',
+          status: 'open',
+          priority: 'medium',
+          metadata: {},
+        });
+
+        const response = await server.inject({
+          method: 'POST',
+          url: '/api/v1/reports',
+          headers: { 'x-api-key': testApiKey },
+          payload: {
+            title: 'API-direct deflection',
+            report: { console: [], network: [], metadata: {} },
+            deflected_to_canonical_id: canonical.id,
+          },
+        });
+
+        expect(response.statusCode).toBe(201);
+        const stored = await db.bugReports.findById(response.json().data.id);
+        expect(stored?.metadata).toMatchObject({
+          source: 'api',
+          deflection_source: 'api_user_confirmed',
         });
       });
 
@@ -509,7 +543,7 @@ describe('Bug Report Routes', () => {
         expect(response.json().message).toContain('deflected_to_canonical_id');
       });
 
-      it('tags deflection_source as extension_user_confirmed when source is extension', async () => {
+      it('tags deflection_source from the source field when source is extension', async () => {
         const canonical = await db.bugReports.create({
           project_id: testProjectId,
           title: 'Existing canonical',
