@@ -5,7 +5,6 @@ import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { intelligenceService } from '../../services/intelligence-service';
 import { handleApiError } from '../../lib/api-client';
-import { useAuth } from '../../contexts/auth-context';
 import type { IntelligenceEventVerdict } from '../../types/intelligence';
 import { cn } from '../../lib/utils';
 
@@ -29,7 +28,6 @@ interface IntelligenceEventFeedbackProps {
  */
 export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEventFeedbackProps) {
   const { t } = useTranslation();
-  const { user } = useAuth();
   const [verdict, setVerdict] = useState<IntelligenceEventVerdict | null>(null);
 
   const mutation = useMutation({
@@ -38,7 +36,6 @@ export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEv
         project_id: projectId,
         event_id: eventId,
         verdict: newVerdict,
-        user_ref: user?.id ?? null,
       }),
     onSuccess: (_data, newVerdict) => {
       setVerdict(newVerdict);
@@ -65,6 +62,7 @@ export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEv
             : 'text-gray-400 hover:text-green-600 hover:bg-green-50'
         )}
         aria-label={t('intelligence.feedback.thumbsUp')}
+        aria-pressed={verdict === 'correct'}
       >
         <ThumbsUp className="w-3.5 h-3.5" aria-hidden="true" />
       </button>
@@ -79,6 +77,7 @@ export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEv
             : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
         )}
         aria-label={t('intelligence.feedback.thumbsDown')}
+        aria-pressed={verdict === 'incorrect'}
       >
         <ThumbsDown className="w-3.5 h-3.5" aria-hidden="true" />
       </button>

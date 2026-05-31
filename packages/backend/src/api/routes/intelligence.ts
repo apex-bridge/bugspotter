@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../middleware/auth.js';
 import { guard } from '../authorization/index.js';
 import { sendSuccess } from '../utils/response.js';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 import { AppError } from '../middleware/error.js';
 import type { IntelligenceClient } from '../../services/intelligence/intelligence-client.js';
 import { IntelligenceError } from '../../services/intelligence/intelligence-client.js';
@@ -102,7 +103,6 @@ const eventFeedbackSchema = {
     properties: {
       event_id: { type: 'string', format: 'uuid' },
       verdict: { type: 'string', enum: ['correct', 'incorrect', 'partial'] },
-      user_ref: { type: 'string', maxLength: 200, nullable: true },
       note: { type: 'string', maxLength: 2000, nullable: true },
     },
     additionalProperties: false,
@@ -348,13 +348,18 @@ export function intelligenceRoutes(
    * Path segment is `event-feedback` (not `feedback`) to avoid colliding
    * with the existing local /api/v1/intelligence/feedback that writes to
    * the local suggestion_feedback table (different scope).
+   *
+   * `user_ref` is NOT taken from the request body — it's derived server-
+   * side via `getAuditUserId(request)`. Taking it from the body would let
+   * an authenticated caller attribute feedback to an arbitrary user id and
+   * pollute the upstream accuracy stats. Anonymous (api-key) callers
+   * resolve to `null`; the upstream falls back to its <ANON> sentinel.
    */
   fastify.post<{
     Params: { projectId: string };
     Body: {
       event_id: string;
       verdict: 'correct' | 'incorrect' | 'partial';
-      user_ref?: string | null;
       note?: string | null;
     };
   }>(
@@ -370,13 +375,13 @@ export function intelligenceRoutes(
       ],
     },
     async (request, reply) => {
-      const { event_id, verdict, user_ref, note } = request.body;
+      const { event_id, verdict, note } = request.body;
       const client = await resolveClient(request, clientFactory, intelligenceClient);
       const result = await handleIntelligenceRequest(client, (c) =>
         c.submitEventFeedback({
           event_id,
           verdict,
-          user_ref: user_ref ?? null,
+          user_ref: getAuditUserId(request),
           note: note ?? null,
         })
       );

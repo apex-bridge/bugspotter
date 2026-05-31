@@ -125,12 +125,15 @@ export type IntelligenceEventVerdict = 'correct' | 'incorrect' | 'partial';
  * enrich / ask. Distinct from `SubmitFeedbackInput` which targets the local
  * suggestion_feedback table — this one writes to the upstream
  * `intelligence_feedback` table via the event-feedback proxy route.
+ *
+ * `user_ref` is intentionally NOT part of the wire shape: the backend derives
+ * it from the authenticated session via `getAuditUserId(request)` so a
+ * malicious caller can't spoof attribution to another user.
  */
 export interface SubmitEventFeedbackInput {
   project_id: string;
   event_id: string;
   verdict: IntelligenceEventVerdict;
-  user_ref?: string | null;
   note?: string | null;
 }
 

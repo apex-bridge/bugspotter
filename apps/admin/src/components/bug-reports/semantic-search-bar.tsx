@@ -128,7 +128,14 @@ export function SemanticSearchBar({ projectId, onResultSelect }: SemanticSearchB
             )}
             {results.mode === 'smart' && !results.cached && results.event_id && (
               <div className="ml-auto">
-                <IntelligenceEventFeedback eventId={results.event_id} projectId={projectId} />
+                {/* key={event_id} forces a remount so the local verdict state
+                    resets on each new search; without it, votes from a prior
+                    search would lock the buttons for the next one. */}
+                <IntelligenceEventFeedback
+                  key={results.event_id}
+                  eventId={results.event_id}
+                  projectId={projectId}
+                />
               </div>
             )}
           </div>
