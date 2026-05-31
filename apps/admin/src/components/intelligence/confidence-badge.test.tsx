@@ -83,4 +83,33 @@ describe('ConfidenceBadge', () => {
     const node = screen.getByText('Needs review').closest('[title]');
     expect(node?.getAttribute('title')).toContain('42%');
   });
+
+  // Gating must use the displayed rounded score, not the raw float — otherwise
+  // a value like 0.596 would show "Needs review" but the tooltip would read
+  // "60%", contradicting the band the badge claims to be in.
+  describe('boundary consistency (badge matches displayed percentage)', () => {
+    it('0.596 rounds to 60% and shows the muted band, not "Needs review"', () => {
+      render(<ConfidenceBadge confidence={0.596} />);
+      expect(screen.queryByText('Needs review')).not.toBeInTheDocument();
+      const node = screen.getByText('AI-suggested').closest('[title]');
+      expect(node?.getAttribute('title')).toContain('60%');
+    });
+
+    it('0.846 rounds to 85% and hides the badge, not "AI-suggested"', () => {
+      const { container } = render(<ConfidenceBadge confidence={0.846} />);
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('0.594 rounds to 59% and shows "Needs review"', () => {
+      render(<ConfidenceBadge confidence={0.594} />);
+      const node = screen.getByText('Needs review').closest('[title]');
+      expect(node?.getAttribute('title')).toContain('59%');
+    });
+
+    it('0.844 rounds to 84% and shows "AI-suggested"', () => {
+      render(<ConfidenceBadge confidence={0.844} />);
+      const node = screen.getByText('AI-suggested').closest('[title]');
+      expect(node?.getAttribute('title')).toContain('84%');
+    });
+  });
 });
