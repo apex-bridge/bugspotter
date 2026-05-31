@@ -1855,6 +1855,12 @@
       "thumbsDown": "Пайдасыз деп белгілеу",
       "submitted": "Пікір жіберілді"
     },
+    "confidence": {
+      "needsReview": "Тексеру қажет",
+      "needsReviewTooltip": "AI сенімділігі төмен ({{score}}%) — рейтингке сенімділік алу үшін тексеріңіз",
+      "aiSuggested": "AI ұсынысы",
+      "aiSuggestedTooltip": "AI сенімділігі орташа ({{score}}%)"
+    },
     "similarBugs": {
       "title": "Ұқсас багтар",
       "loading": "Ұқсас багтарды іздеу...",

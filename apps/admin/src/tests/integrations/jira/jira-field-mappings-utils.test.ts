@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parseArrayField, parsePriority } from './jira-field-mappings.utils';
+import {
+  parseArrayField,
+  parsePriority,
+} from '../../../integrations/jira/components/jira-field-mappings.utils';
 
 // Unit tests for parseArrayField and parsePriority utility functions
 describe('Jira Field Mapping Utilities', () => {

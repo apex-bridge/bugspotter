@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { RuleBuilder } from './rule-builder';
-import type { FilterCondition } from '../../types';
+import { RuleBuilder } from '../../../components/integrations/rule-builder';
+import type { FilterCondition } from '../../../types';
 
 vi.mock('react-i18next', async () => {
-  const en = (await import('../../i18n/locales/en.json')).default;
+  const en = (await import('../../../i18n/locales/en.json')).default;
 
   const getTranslation = (key: string): string | undefined => {
     const result = key

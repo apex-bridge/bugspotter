@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeCSVField, formatCSVField } from './export';
+import { sanitizeCSVField, formatCSVField } from '../../utils/export';
 
 describe('sanitizeCSVField', () => {
   describe('Quote Escaping', () => {

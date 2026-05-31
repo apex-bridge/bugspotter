@@ -164,6 +164,14 @@ export interface SearchResponse {
   mode: 'fast' | 'smart';
   query: string;
   cached: boolean;
+  /**
+   * intelligence_event id for the LLM rerank call (smart mode only;
+   * absent on cache hits or fast-mode searches). Pass back to the
+   * feedback endpoint to record whether the ranking was correct.
+   */
+  event_id?: string | null;
+  /** Overall confidence in the LLM-rerank ordering (smart mode only). */
+  confidence?: number | null;
 }
 
 export interface SearchInput {
