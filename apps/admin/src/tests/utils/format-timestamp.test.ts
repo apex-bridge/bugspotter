@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatTimestamp } from './format';
+import { formatTimestamp } from '../../utils/format';
 
 describe('formatTimestamp', () => {
   describe('Basic Formatting', () => {

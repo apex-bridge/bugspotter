@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ConfidenceBadge } from './confidence-badge';
+import { ConfidenceBadge } from '../../../components/intelligence/confidence-badge';
 
 vi.mock('react-i18next', async () => {
-  const en = (await import('../../i18n/locales/en.json')).default;
+  const en = (await import('../../../i18n/locales/en.json')).default;
 
   const getTranslation = (key: string): string | undefined => {
     const result = key
