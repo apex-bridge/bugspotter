@@ -26,7 +26,7 @@ interface ConfidenceBadgeProps {
 export function ConfidenceBadge({ confidence, className }: ConfidenceBadgeProps) {
   const { t } = useTranslation();
 
-  if (typeof confidence !== 'number' || Number.isNaN(confidence)) {
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) {
     return null;
   }
   const score = Math.round(confidence * 100);

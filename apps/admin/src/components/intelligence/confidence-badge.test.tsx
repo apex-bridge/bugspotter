@@ -48,6 +48,16 @@ describe('ConfidenceBadge', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('renders nothing when confidence is +Infinity', () => {
+    const { container } = render(<ConfidenceBadge confidence={Number.POSITIVE_INFINITY} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders nothing when confidence is -Infinity (would otherwise produce "-Infinity%" tooltip)', () => {
+    const { container } = render(<ConfidenceBadge confidence={Number.NEGATIVE_INFINITY} />);
+    expect(container.firstChild).toBeNull();
+  });
+
   it('renders nothing when confidence >= 0.85 (high)', () => {
     const { container } = render(<ConfidenceBadge confidence={0.85} />);
     expect(container.firstChild).toBeNull();
