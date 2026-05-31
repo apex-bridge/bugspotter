@@ -124,6 +124,14 @@ export interface SearchResponse {
   mode: 'fast' | 'smart';
   query: string;
   cached: boolean;
+  /**
+   * intelligence_event id for the rerank LLM call (smart mode only;
+   * absent on cache hits and fast mode). Pass back to
+   * POST /api/v1/intelligence/feedback when collecting verdicts.
+   */
+  event_id?: string | null;
+  /** Overall confidence in the LLM-rerank ordering (smart mode only). */
+  confidence?: number | null;
 }
 
 export interface ResolutionUpdateResponse {
@@ -137,6 +145,8 @@ export interface AskResponse {
   answer: string;
   provider: string;
   model: string;
+  /** intelligence_event id for this LLM call. */
+  event_id?: string | null;
 }
 
 export interface BugDetailResponse {
@@ -181,6 +191,8 @@ export interface EnrichBugResponse {
     root_cause: number;
     components: number;
   };
+  /** intelligence_event id for this enrichment LLM call. */
+  event_id?: string | null;
 }
 
 // ============================================================================

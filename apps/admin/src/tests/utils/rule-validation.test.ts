@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { VALIDATION_MESSAGES, validateRuleForm, type RuleFormValues } from './rule-validation';
-import type { ThrottleConfig } from '../types';
+import {
+  VALIDATION_MESSAGES,
+  validateRuleForm,
+  type RuleFormValues,
+} from '../../utils/rule-validation';
+import type { ThrottleConfig } from '../../types';
 
 describe('rule-validation', () => {
   describe('validateRuleForm', () => {

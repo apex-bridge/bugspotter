@@ -4,6 +4,7 @@ import { Search, Brain, Zap } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Badge } from '../ui/badge';
+import { ConfidenceBadge } from '../intelligence/confidence-badge';
 import { intelligenceService } from '../../services/intelligence-service';
 import type { SearchResponse } from '../../types/intelligence';
 
@@ -120,6 +121,9 @@ export function SemanticSearchBar({ projectId, onResultSelect }: SemanticSearchB
               <Badge variant="outline" className="text-xs">
                 {t('intelligence.search.cached')}
               </Badge>
+            )}
+            {results.mode === 'smart' && !results.cached && (
+              <ConfidenceBadge confidence={results.confidence} className="text-xs" />
             )}
           </div>
 
