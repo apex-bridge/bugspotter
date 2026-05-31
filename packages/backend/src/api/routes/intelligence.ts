@@ -94,6 +94,21 @@ const askSchema = {
   },
 } as const;
 
+const eventFeedbackSchema = {
+  params: projectIdParam,
+  body: {
+    type: 'object',
+    required: ['event_id', 'verdict'],
+    properties: {
+      event_id: { type: 'string', format: 'uuid' },
+      verdict: { type: 'string', enum: ['correct', 'incorrect', 'partial'] },
+      user_ref: { type: 'string', maxLength: 200, nullable: true },
+      note: { type: 'string', maxLength: 2000, nullable: true },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
 // ============================================================================
 // Route Registration
 // ============================================================================
@@ -314,6 +329,55 @@ export function intelligenceRoutes(
           context: context ?? null,
           temperature: temperature ?? 0.7,
           max_tokens: max_tokens ?? 500,
+        })
+      );
+      return sendSuccess(reply, result);
+    }
+  );
+
+  /**
+   * POST /api/v1/intelligence/projects/:projectId/event-feedback
+   *
+   * Record a user verdict on a prior intelligence_event (LLM call) returned
+   * by a project-scoped search. Path is scoped by projectId so we can reuse
+   * the same project guard + per-org client resolution as the search route.
+   * The upstream intelligence service additionally rejects any event whose
+   * tenant_id doesn't match the caller's API key — that's our second-layer
+   * authorization check.
+   *
+   * Path segment is `event-feedback` (not `feedback`) to avoid colliding
+   * with the existing local /api/v1/intelligence/feedback that writes to
+   * the local suggestion_feedback table (different scope).
+   */
+  fastify.post<{
+    Params: { projectId: string };
+    Body: {
+      event_id: string;
+      verdict: 'correct' | 'incorrect' | 'partial';
+      user_ref?: string | null;
+      note?: string | null;
+    };
+  }>(
+    '/api/v1/intelligence/projects/:projectId/event-feedback',
+    {
+      schema: eventFeedbackSchema,
+      preHandler: [
+        guard(db, {
+          auth: 'userOrApiKey',
+          resource: { type: 'project', paramName: 'projectId' },
+          action: 'read',
+        }),
+      ],
+    },
+    async (request, reply) => {
+      const { event_id, verdict, user_ref, note } = request.body;
+      const client = await resolveClient(request, clientFactory, intelligenceClient);
+      const result = await handleIntelligenceRequest(client, (c) =>
+        c.submitEventFeedback({
+          event_id,
+          verdict,
+          user_ref: user_ref ?? null,
+          note: note ?? null,
         })
       );
       return sendSuccess(reply, result);

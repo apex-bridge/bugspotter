@@ -17,6 +17,8 @@ import type {
   MitigationResponse,
   SearchRequest,
   SearchResponse,
+  SubmitEventFeedbackRequest,
+  SubmitEventFeedbackResponse,
   UpdateResolutionRequest,
   ResolutionUpdateResponse,
   AskRequest,
@@ -161,6 +163,22 @@ export class IntelligenceClient {
    */
   async ask(request: AskRequest): Promise<AskResponse> {
     return this.request<AskResponse>('POST', '/api/v1/ask', request);
+  }
+
+  /**
+   * Record a user verdict on a previous intelligence_event.
+   * Distinct from the local suggestion-feedback flow — this lands in the
+   * upstream `intelligence_feedback` table and powers the observability
+   * /accuracy endpoint.
+   */
+  async submitEventFeedback(
+    request: SubmitEventFeedbackRequest
+  ): Promise<SubmitEventFeedbackResponse> {
+    return this.request<SubmitEventFeedbackResponse>(
+      'POST',
+      '/api/v1/intelligence/feedback',
+      request
+    );
   }
 
   // ==========================================================================

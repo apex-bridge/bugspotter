@@ -118,6 +118,26 @@ export interface SubmitFeedbackResult {
   created: boolean;
 }
 
+export type IntelligenceEventVerdict = 'correct' | 'incorrect' | 'partial';
+
+/**
+ * Verdict on a prior intelligence_event (LLM call) returned by smart search /
+ * enrich / ask. Distinct from `SubmitFeedbackInput` which targets the local
+ * suggestion_feedback table — this one writes to the upstream
+ * `intelligence_feedback` table via the event-feedback proxy route.
+ */
+export interface SubmitEventFeedbackInput {
+  project_id: string;
+  event_id: string;
+  verdict: IntelligenceEventVerdict;
+  user_ref?: string | null;
+  note?: string | null;
+}
+
+export interface SubmitEventFeedbackResult {
+  feedback_id: string;
+}
+
 export interface FeedbackStats {
   total_feedback: number;
   positive_count: number;
