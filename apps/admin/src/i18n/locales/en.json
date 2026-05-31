@@ -1855,6 +1855,12 @@
       "thumbsDown": "Mark as not helpful",
       "submitted": "Feedback submitted"
     },
+    "confidence": {
+      "needsReview": "Needs review",
+      "needsReviewTooltip": "Low AI confidence ({{score}}%) — verify the ranking before relying on it",
+      "aiSuggested": "AI-suggested",
+      "aiSuggestedTooltip": "Moderate AI confidence ({{score}}%)"
+    },
     "similarBugs": {
       "title": "Similar Bugs",
       "loading": "Finding similar bugs...",
