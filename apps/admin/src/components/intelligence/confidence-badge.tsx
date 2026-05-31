@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Sparkles } from 'lucide-react';
 import { Badge } from '../ui/badge';
+import { cn } from '../../lib/utils';
 
 /**
  * Three-state visual cue for an LLM ranking's overall confidence.
@@ -38,7 +39,7 @@ export function ConfidenceBadge({ confidence, className }: ConfidenceBadgeProps)
     return (
       <Badge
         variant="outline"
-        className={`gap-1 border-amber-300 bg-amber-50 text-amber-900 ${className ?? ''}`}
+        className={cn('gap-1 border-amber-300 bg-amber-50 text-amber-900', className)}
         title={t('intelligence.confidence.needsReviewTooltip', { score })}
       >
         <AlertTriangle className="h-3 w-3" aria-hidden="true" />
@@ -49,7 +50,7 @@ export function ConfidenceBadge({ confidence, className }: ConfidenceBadgeProps)
   return (
     <Badge
       variant="outline"
-      className={`gap-1 text-gray-600 ${className ?? ''}`}
+      className={cn('gap-1 text-gray-600', className)}
       title={t('intelligence.confidence.aiSuggestedTooltip', { score })}
     >
       <Sparkles className="h-3 w-3" aria-hidden="true" />

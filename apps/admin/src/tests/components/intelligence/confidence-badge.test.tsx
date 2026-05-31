@@ -122,4 +122,24 @@ describe('ConfidenceBadge', () => {
       expect(node?.getAttribute('title')).toContain('84%');
     });
   });
+
+  describe('className merging via cn()', () => {
+    // The badge uses cn() (tailwind-merge + clsx) so a consumer-provided
+    // tailwind class beats the default one for the same utility category —
+    // a naive string-concat would leave both classes present and let CSS
+    // ordering pick a winner non-deterministically.
+    it('consumer className overrides the muted-band default text color', () => {
+      render(<ConfidenceBadge confidence={0.7} className="text-blue-500" />);
+      const node = screen.getByText('AI-suggested').closest('[title]') as HTMLElement;
+      expect(node.className).toContain('text-blue-500');
+      expect(node.className).not.toContain('text-gray-600');
+    });
+
+    it('consumer className overrides the needs-review band default bg color', () => {
+      render(<ConfidenceBadge confidence={0.3} className="bg-purple-100" />);
+      const node = screen.getByText('Needs review').closest('[title]') as HTMLElement;
+      expect(node.className).toContain('bg-purple-100');
+      expect(node.className).not.toContain('bg-amber-50');
+    });
+  });
 });
