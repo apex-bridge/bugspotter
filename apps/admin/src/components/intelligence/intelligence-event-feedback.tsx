@@ -59,7 +59,7 @@ export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEv
           'p-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
           verdict === 'correct'
             ? 'text-green-600 bg-green-50'
-            : 'text-gray-400 hover:text-green-600 hover:bg-green-50'
+            : 'text-gray-400 enabled:hover:text-green-600 enabled:hover:bg-green-50'
         )}
         aria-label={t('intelligence.feedback.thumbsUp')}
         aria-pressed={verdict === 'correct'}
@@ -74,7 +74,7 @@ export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEv
           'p-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
           verdict === 'incorrect'
             ? 'text-red-600 bg-red-50'
-            : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
+            : 'text-gray-400 enabled:hover:text-red-600 enabled:hover:bg-red-50'
         )}
         aria-label={t('intelligence.feedback.thumbsDown')}
         aria-pressed={verdict === 'incorrect'}
