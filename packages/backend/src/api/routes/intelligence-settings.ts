@@ -8,6 +8,11 @@
  *   POST   /api/v1/organizations/:id/intelligence/key/generate  — generate + auto-provision key (admin)
  *   DELETE /api/v1/organizations/:id/intelligence/key           — revoke API key (admin)
  *
+ * Observability proxies (admin):
+ *   GET    /api/v1/organizations/:id/intelligence/observability/summary
+ *   GET    /api/v1/organizations/:id/intelligence/observability/events
+ *   GET    /api/v1/organizations/:id/intelligence/observability/accuracy
+ *
  * Member-readable status route:
  *   GET    /api/v1/organizations/:id/intelligence/status        — { intelligence_enabled }
  *     Used by the bug-report-detail UI to gate enrichment / similar-bugs
@@ -19,6 +24,7 @@ import type { DatabaseClient } from '../../db/client.js';
 
 import { guard } from '../authorization/index.js';
 import { sendSuccess, sendNoContent } from '../utils/response.js';
+import { AppError } from '../middleware/error.js';
 import { successResponseSchema } from '../schemas/common-schema.js';
 import { getEncryptionService } from '../../utils/encryption.js';
 import { IntelligenceKeyProvisioning } from '../../services/intelligence/key-provisioning.js';
@@ -303,6 +309,119 @@ export function intelligenceSettingsRoutes(fastify: FastifyInstance, db: Databas
       await provisioning.revokeKey(id);
 
       return sendNoContent(reply);
+    }
+  );
+
+  // ==========================================================================
+  // Observability proxies
+  //
+  // Each of these forwards a query-string-only GET to the upstream
+  // /admin/observability/* endpoints via the org's provisioned API key.
+  // The upstream service enforces tenant isolation by the key itself, so
+  // no tenant_id is forwarded from the client.
+  //
+  // 503 when the org has no provisioned intelligence key, mirroring the
+  // resolveClient pattern in routes/intelligence.ts.
+  // ==========================================================================
+
+  async function resolveOrgClient(orgId: string) {
+    const client = await clientFactory.getClientForOrg(orgId);
+    if (!client) {
+      throw new AppError(
+        'Intelligence is not configured for this organization',
+        503,
+        'ServiceUnavailable'
+      );
+    }
+    return client;
+  }
+
+  // GET /api/v1/organizations/:id/intelligence/observability/summary
+  fastify.get<{
+    Params: { id: string };
+    Querystring: { from?: string; to?: string };
+  }>(
+    '/api/v1/organizations/:id/intelligence/observability/summary',
+    {
+      preHandler: adminPreHandler,
+      schema: {
+        params: orgIdParams,
+        querystring: {
+          type: 'object',
+          properties: {
+            from: { type: 'string', format: 'date-time' },
+            to: { type: 'string', format: 'date-time' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
+      const client = await resolveOrgClient(request.params.id);
+      const result = await client.getObservabilitySummary(request.query);
+      return sendSuccess(reply, result);
+    }
+  );
+
+  // GET /api/v1/organizations/:id/intelligence/observability/events
+  fastify.get<{
+    Params: { id: string };
+    Querystring: {
+      operation?: string;
+      status?: 'ok' | 'error';
+      limit?: number;
+      offset?: number;
+    };
+  }>(
+    '/api/v1/organizations/:id/intelligence/observability/events',
+    {
+      preHandler: adminPreHandler,
+      schema: {
+        params: orgIdParams,
+        querystring: {
+          type: 'object',
+          properties: {
+            operation: { type: 'string', maxLength: 100 },
+            status: { type: 'string', enum: ['ok', 'error'] },
+            limit: { type: 'integer', minimum: 1, maximum: 500 },
+            offset: { type: 'integer', minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
+      const client = await resolveOrgClient(request.params.id);
+      const result = await client.getObservabilityEvents(request.query);
+      return sendSuccess(reply, result);
+    }
+  );
+
+  // GET /api/v1/organizations/:id/intelligence/observability/accuracy
+  fastify.get<{
+    Params: { id: string };
+    Querystring: { operation?: string; from?: string; to?: string };
+  }>(
+    '/api/v1/organizations/:id/intelligence/observability/accuracy',
+    {
+      preHandler: adminPreHandler,
+      schema: {
+        params: orgIdParams,
+        querystring: {
+          type: 'object',
+          properties: {
+            operation: { type: 'string', maxLength: 100 },
+            from: { type: 'string', format: 'date-time' },
+            to: { type: 'string', format: 'date-time' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
+      const client = await resolveOrgClient(request.params.id);
+      const result = await client.getObservabilityAccuracy(request.query);
+      return sendSuccess(reply, result);
     }
   );
 }

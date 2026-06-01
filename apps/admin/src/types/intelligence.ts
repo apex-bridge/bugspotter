@@ -141,6 +141,85 @@ export interface SubmitEventFeedbackResult {
   feedback_id: string;
 }
 
+// ============================================================================
+// Observability (admin)
+// ============================================================================
+
+export interface ObservabilityOpStat {
+  operation: string;
+  calls: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  cost_micros_usd: number;
+}
+
+export interface ObservabilitySummary {
+  tenant_id: string | null;
+  from_ts: string | null;
+  to_ts: string | null;
+  calls: number;
+  cost_micros_usd: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  /** 0..1 fraction of calls with status=error in the window. */
+  error_rate: number;
+  by_operation: ObservabilityOpStat[];
+}
+
+export interface ObservabilityEvent {
+  id: string;
+  tenant_id: string;
+  operation: string;
+  bug_id: string | null;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cost_micros_usd: number | null;
+  latency_ms: number;
+  confidence: number | null;
+  status: string;
+  error_kind: string | null;
+  cached: boolean;
+  created_at: string;
+}
+
+export interface ObservabilityEventsPage {
+  events: ObservabilityEvent[];
+  limit: number;
+  offset: number;
+}
+
+export interface ObservabilityAccuracy {
+  tenant_id: string | null;
+  operation: string | null;
+  feedback_count: number;
+  correct: number;
+  incorrect: number;
+  partial: number;
+  /** correct / (correct + incorrect); null when denominator is 0. */
+  precision: number | null;
+}
+
+export interface ObservabilitySummaryQuery {
+  from?: string;
+  to?: string;
+}
+
+export interface ObservabilityEventsQuery {
+  operation?: string;
+  status?: 'ok' | 'error';
+  limit?: number;
+  offset?: number;
+}
+
+export interface ObservabilityAccuracyQuery {
+  operation?: string;
+  from?: string;
+  to?: string;
+}
+
 export interface FeedbackStats {
   total_feedback: number;
   positive_count: number;

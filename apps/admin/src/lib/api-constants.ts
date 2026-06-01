@@ -308,6 +308,12 @@ export const API_ENDPOINTS = {
     search: (projectId: string) => `${API_VERSION}/intelligence/projects/${projectId}/search`,
     eventFeedback: (projectId: string) =>
       `${API_VERSION}/intelligence/projects/${projectId}/event-feedback`,
+    observabilitySummary: (orgId: string) =>
+      `${API_VERSION}/organizations/${orgId}/intelligence/observability/summary`,
+    observabilityEvents: (orgId: string) =>
+      `${API_VERSION}/organizations/${orgId}/intelligence/observability/events`,
+    observabilityAccuracy: (orgId: string) =>
+      `${API_VERSION}/organizations/${orgId}/intelligence/observability/accuracy`,
   },
 
   // Dedup-rule engine (Phase 0.5). Project-scoped, human-admin-only —

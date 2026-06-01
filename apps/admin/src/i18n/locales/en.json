@@ -1849,6 +1849,48 @@
       "noData": "No deflection data yet",
       "selectProject": "Select a project"
     },
+    "observability": {
+      "title": "AI Observability",
+      "description": "Per-call audit of LLM activity for this organization, plus the feedback-derived precision metric.",
+      "linkTitle": "View AI Observability dashboard",
+      "linkDescription": "Calls, cost, latency percentiles, and ranking accuracy from upstream intelligence.",
+      "linkCta": "Open →",
+      "notConfigured": {
+        "title": "Observability is unavailable",
+        "body": "This organization has no intelligence API key provisioned, so no upstream observability data is available."
+      },
+      "summary": {
+        "heading": "Last window",
+        "calls": "Calls",
+        "cost": "Cost",
+        "p50": "p50",
+        "p95": "p95",
+        "p50Hint": "p50 {{value}}",
+        "errorRate": "Error rate",
+        "colOperation": "Operation",
+        "loadFailed": "Could not load summary."
+      },
+      "accuracy": {
+        "heading": "Ranking accuracy",
+        "precision": "Precision",
+        "feedbackCount": "Verdicts",
+        "correct": "Correct",
+        "incorrect": "Incorrect",
+        "empty": "No verdicts recorded yet — once users click the 👍 / 👎 on smart-search results, precision will appear here.",
+        "loadFailed": "Could not load accuracy."
+      },
+      "events": {
+        "heading": "Recent events",
+        "colTime": "When",
+        "colOperation": "Operation",
+        "colModel": "Model",
+        "colLatency": "Latency",
+        "colCost": "Cost",
+        "colStatus": "Status",
+        "empty": "No LLM calls recorded in this window.",
+        "loadFailed": "Could not load events."
+      }
+    },
     "feedback": {
       "helpful": "Helpful?",
       "thumbsUp": "Mark as helpful",

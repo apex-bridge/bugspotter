@@ -13,5 +13,10 @@ export default function OrgIntelligencePage() {
     return null;
   }
 
-  return <IntelligenceSettingsPanel orgId={org.id} />;
+  return (
+    <IntelligenceSettingsPanel
+      orgId={org.id}
+      observabilityHref="/my-organization/intelligence/observability"
+    />
+  );
 }
