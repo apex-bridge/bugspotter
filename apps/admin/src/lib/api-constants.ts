@@ -306,6 +306,8 @@ export const API_ENDPOINTS = {
     mitigation: (projectId: string, bugId: string) =>
       `${API_VERSION}/intelligence/projects/${projectId}/bugs/${bugId}/mitigation`,
     search: (projectId: string) => `${API_VERSION}/intelligence/projects/${projectId}/search`,
+    eventFeedback: (projectId: string) =>
+      `${API_VERSION}/intelligence/projects/${projectId}/event-feedback`,
   },
 
   // Dedup-rule engine (Phase 0.5). Project-scoped, human-admin-only —

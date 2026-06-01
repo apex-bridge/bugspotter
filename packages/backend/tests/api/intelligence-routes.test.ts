@@ -75,6 +75,9 @@ function createMockClient(overrides = {}) {
       provider: 'ollama',
       model: 'llama3.1:8b',
     }),
+    submitEventFeedback: vi.fn().mockResolvedValue({
+      feedback_id: 'fb-1',
+    }),
     ...overrides,
   };
 }
@@ -240,6 +243,78 @@ describe('Intelligence Routes - Per-Org Client Resolution', () => {
 
       expect(res.statusCode).toBe(503);
       expect(globalClient.ask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('event-feedback endpoint', () => {
+    const EVENT_ID = '11111111-2222-4333-8444-555555555555';
+
+    it('uses per-org client when available', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/event-feedback`,
+        payload: { event_id: EVENT_ID, verdict: 'correct' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(clientFactory.getClientForOrg).toHaveBeenCalledWith(MOCK_ORG_ID);
+      expect(orgClient.submitEventFeedback).toHaveBeenCalled();
+      expect(globalClient.submitEventFeedback).not.toHaveBeenCalled();
+    });
+
+    it('forwards server-derived user_ref (null in this unauth harness) on a clean payload — deterministic success-path check that the handler always sources user_ref via getAuditUserId', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/event-feedback`,
+        payload: { event_id: EVENT_ID, verdict: 'incorrect', note: 'looks wrong' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(orgClient.submitEventFeedback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_id: EVENT_ID,
+          verdict: 'incorrect',
+          user_ref: null,
+          note: 'looks wrong',
+        })
+      );
+    });
+
+    it('derives user_ref server-side and IGNORES any body-supplied user_ref — even if a caller spoofs the field, the upstream sees only the value from getAuditUserId(request)', async () => {
+      // With no JWT / api-key user authenticated in this test harness,
+      // getAuditUserId(request) returns null. The body-supplied user_ref must
+      // NEVER reach the upstream, regardless of whether the framework strips
+      // unknown fields silently or rejects them with 400 — the contract is
+      // about the value that lands at the upstream, not about the HTTP code.
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/event-feedback`,
+        payload: {
+          event_id: EVENT_ID,
+          verdict: 'incorrect',
+          note: 'looks wrong',
+          user_ref: 'attacker-supplied-victim-id',
+        },
+      });
+
+      // Whichever the framework chose (200 with strip OR 400 reject), the
+      // attacker value must never reach the upstream.
+      if (res.statusCode === 200) {
+        expect(orgClient.submitEventFeedback).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event_id: EVENT_ID,
+            verdict: 'incorrect',
+            user_ref: null,
+            note: 'looks wrong',
+          })
+        );
+        // Defensive: explicitly verify the spoofed value never showed up.
+        const call = orgClient.submitEventFeedback.mock.calls[0][0];
+        expect(call.user_ref).not.toBe('attacker-supplied-victim-id');
+      } else {
+        expect(res.statusCode).toBe(400);
+        expect(orgClient.submitEventFeedback).not.toHaveBeenCalled();
+      }
     });
   });
 });

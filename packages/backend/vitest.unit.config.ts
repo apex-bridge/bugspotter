@@ -47,6 +47,8 @@ export default defineConfig({
       'tests/api/routes/rbac-regression.test.ts',
       'tests/api/routes/signup.route.test.ts',
       'tests/api/routes/dedup-rules.route.test.ts',
+      // Intelligence proxy routes (mocked IntelligenceClient + mocked DB)
+      'tests/api/intelligence-routes.test.ts',
       'tests/api/services/**/*.test.ts',
       'tests/cache/**/*.test.ts',
       // Only include pure unit tests from tests/db/ (no database required)
