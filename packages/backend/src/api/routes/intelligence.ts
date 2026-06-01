@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../middleware/auth.js';
 import { guard } from '../authorization/index.js';
 import { sendSuccess } from '../utils/response.js';
+import { getAuditUserId } from '../utils/audit-attribution.js';
 import { AppError } from '../middleware/error.js';
 import type { IntelligenceClient } from '../../services/intelligence/intelligence-client.js';
 import { IntelligenceError } from '../../services/intelligence/intelligence-client.js';
@@ -89,6 +90,20 @@ const askSchema = {
       context: { type: 'array', items: { type: 'string' }, nullable: true },
       temperature: { type: 'number', minimum: 0, maximum: 2 },
       max_tokens: { type: 'integer', minimum: 1, maximum: 4096 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+const eventFeedbackSchema = {
+  params: projectIdParam,
+  body: {
+    type: 'object',
+    required: ['event_id', 'verdict'],
+    properties: {
+      event_id: { type: 'string', format: 'uuid' },
+      verdict: { type: 'string', enum: ['correct', 'incorrect', 'partial'] },
+      note: { type: 'string', maxLength: 2000, nullable: true },
     },
     additionalProperties: false,
   },
@@ -314,6 +329,60 @@ export function intelligenceRoutes(
           context: context ?? null,
           temperature: temperature ?? 0.7,
           max_tokens: max_tokens ?? 500,
+        })
+      );
+      return sendSuccess(reply, result);
+    }
+  );
+
+  /**
+   * POST /api/v1/intelligence/projects/:projectId/event-feedback
+   *
+   * Record a user verdict on a prior intelligence_event (LLM call) returned
+   * by a project-scoped search. Path is scoped by projectId so we can reuse
+   * the same project guard + per-org client resolution as the search route.
+   * The upstream intelligence service additionally rejects any event whose
+   * tenant_id doesn't match the caller's API key — that's our second-layer
+   * authorization check.
+   *
+   * Path segment is `event-feedback` (not `feedback`) to avoid colliding
+   * with the existing local /api/v1/intelligence/feedback that writes to
+   * the local suggestion_feedback table (different scope).
+   *
+   * `user_ref` is NOT taken from the request body — it's derived server-
+   * side via `getAuditUserId(request)`. Taking it from the body would let
+   * an authenticated caller attribute feedback to an arbitrary user id and
+   * pollute the upstream accuracy stats. Anonymous (api-key) callers
+   * resolve to `null`; the upstream falls back to its <ANON> sentinel.
+   */
+  fastify.post<{
+    Params: { projectId: string };
+    Body: {
+      event_id: string;
+      verdict: 'correct' | 'incorrect' | 'partial';
+      note?: string | null;
+    };
+  }>(
+    '/api/v1/intelligence/projects/:projectId/event-feedback',
+    {
+      schema: eventFeedbackSchema,
+      preHandler: [
+        guard(db, {
+          auth: 'userOrApiKey',
+          resource: { type: 'project', paramName: 'projectId' },
+          action: 'read',
+        }),
+      ],
+    },
+    async (request, reply) => {
+      const { event_id, verdict, note } = request.body;
+      const client = await resolveClient(request, clientFactory, intelligenceClient);
+      const result = await handleIntelligenceRequest(client, (c) =>
+        c.submitEventFeedback({
+          event_id,
+          verdict,
+          user_ref: getAuditUserId(request),
+          note: note ?? null,
         })
       );
       return sendSuccess(reply, result);

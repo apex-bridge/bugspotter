@@ -205,6 +205,23 @@ export interface SubmitFeedbackToServiceRequest {
   suggestion_type: 'similar_bug' | 'mitigation' | 'duplicate';
 }
 
+/**
+ * Verdict on an intelligence_event recorded by the upstream observability
+ * pipeline. Distinct from `SubmitFeedbackToServiceRequest` which targets
+ * the local `suggestion_feedback` table — this one is keyed by `event_id`
+ * and lands in the upstream `intelligence_feedback` table.
+ */
+export interface SubmitEventFeedbackRequest {
+  event_id: string;
+  verdict: 'correct' | 'incorrect' | 'partial';
+  user_ref?: string | null;
+  note?: string | null;
+}
+
+export interface SubmitEventFeedbackResponse {
+  feedback_id: string;
+}
+
 // ============================================================================
 // Intelligence Job Data (for BullMQ queue)
 // ============================================================================

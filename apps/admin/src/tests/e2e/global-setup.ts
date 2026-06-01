@@ -150,8 +150,18 @@ export default async function globalSetup() {
         }),
 
       // MinIO container
+      //
+      // Expose ONLY 9000 (S3 API). The console (9001) used to be exposed
+      // too, but nothing consumes it — `getMappedPort(9000)` below is the
+      // only port read out of the container. With 9001 exposed,
+      // testcontainers blocks `start()` on BOTH port-binds, so a slow
+      // console init time turns into a 60s globalSetup timeout under
+      // GH Actions load (observed: same image goes from 9s to >60s on
+      // adjacent runs). Dropping the unused port halves the wait surface
+      // — MinIO still binds the console internally, we just don't wait
+      // for it from the host.
       new GenericContainer('minio/minio:RELEASE.2024-10-13T13-34-11Z')
-        .withExposedPorts(9000, 9001)
+        .withExposedPorts(9000)
         .withEnvironment({
           MINIO_ROOT_USER: 'bugspotter-e2e-admin',
           MINIO_ROOT_PASSWORD: 'bugspotter-e2e-secret-key',

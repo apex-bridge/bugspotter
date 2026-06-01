@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Badge } from '../ui/badge';
 import { ConfidenceBadge } from '../intelligence/confidence-badge';
+import { IntelligenceEventFeedback } from '../intelligence/intelligence-event-feedback';
 import { intelligenceService } from '../../services/intelligence-service';
 import type { SearchResponse } from '../../types/intelligence';
 
@@ -124,6 +125,18 @@ export function SemanticSearchBar({ projectId, onResultSelect }: SemanticSearchB
             )}
             {results.mode === 'smart' && !results.cached && (
               <ConfidenceBadge confidence={results.confidence} className="text-xs" />
+            )}
+            {results.mode === 'smart' && !results.cached && results.event_id && (
+              <div className="ml-auto">
+                {/* key={event_id} forces a remount so the local verdict state
+                    resets on each new search; without it, votes from a prior
+                    search would lock the buttons for the next one. */}
+                <IntelligenceEventFeedback
+                  key={results.event_id}
+                  eventId={results.event_id}
+                  projectId={projectId}
+                />
+              </div>
             )}
           </div>
 

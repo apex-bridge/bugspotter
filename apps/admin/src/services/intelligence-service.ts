@@ -13,6 +13,8 @@ import type {
   DeflectionStats,
   SubmitFeedbackInput,
   SubmitFeedbackResult,
+  SubmitEventFeedbackInput,
+  SubmitEventFeedbackResult,
   FeedbackRecord,
   FeedbackStats,
   SimilarBugsResponse,
@@ -133,6 +135,20 @@ export const intelligenceService = {
 
   search: async (projectId: string, input: SearchInput): Promise<SearchResponse> => {
     const response = await api.post(API_ENDPOINTS.intelligence.search(projectId), input);
+    return response.data.data;
+  },
+
+  /**
+   * Record a verdict on a prior LLM call (intelligence_event). Distinct from
+   * `submitFeedback` above — that one targets the local suggestion_feedback
+   * table; this one writes to the upstream intelligence_feedback via the
+   * event-feedback proxy and is keyed by `event_id`.
+   */
+  submitEventFeedback: async (
+    input: SubmitEventFeedbackInput
+  ): Promise<SubmitEventFeedbackResult> => {
+    const { project_id, ...body } = input;
+    const response = await api.post(API_ENDPOINTS.intelligence.eventFeedback(project_id), body);
     return response.data.data;
   },
 };
