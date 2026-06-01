@@ -19,6 +19,12 @@ import type {
   SearchResponse,
   SubmitEventFeedbackRequest,
   SubmitEventFeedbackResponse,
+  ObservabilitySummaryQuery,
+  ObservabilitySummaryResponse,
+  ObservabilityEventsQuery,
+  ObservabilityEventsResponse,
+  ObservabilityAccuracyQuery,
+  ObservabilityAccuracyResponse,
   UpdateResolutionRequest,
   ResolutionUpdateResponse,
   AskRequest,
@@ -178,6 +184,76 @@ export class IntelligenceClient {
       'POST',
       '/api/v1/intelligence/feedback',
       request
+    );
+  }
+
+  // ==========================================================================
+  // Observability (admin)
+  //
+  // Upstream scopes by caller's tenant API key — no tenant_id param is sent
+  // or accepted. Each method maps a typed query object to URL params.
+  // ==========================================================================
+
+  async getObservabilitySummary(
+    query: ObservabilitySummaryQuery = {}
+  ): Promise<ObservabilitySummaryResponse> {
+    const params: Record<string, string> = {};
+    if (query.from !== undefined) {
+      params.from = query.from;
+    }
+    if (query.to !== undefined) {
+      params.to = query.to;
+    }
+    return this.request<ObservabilitySummaryResponse>(
+      'GET',
+      '/api/v1/admin/observability/summary',
+      undefined,
+      { params }
+    );
+  }
+
+  async getObservabilityEvents(
+    query: ObservabilityEventsQuery = {}
+  ): Promise<ObservabilityEventsResponse> {
+    const params: Record<string, string> = {};
+    if (query.operation !== undefined) {
+      params.operation = query.operation;
+    }
+    if (query.status !== undefined) {
+      params.status = query.status;
+    }
+    if (query.limit !== undefined) {
+      params.limit = String(query.limit);
+    }
+    if (query.offset !== undefined) {
+      params.offset = String(query.offset);
+    }
+    return this.request<ObservabilityEventsResponse>(
+      'GET',
+      '/api/v1/admin/observability/events',
+      undefined,
+      { params }
+    );
+  }
+
+  async getObservabilityAccuracy(
+    query: ObservabilityAccuracyQuery = {}
+  ): Promise<ObservabilityAccuracyResponse> {
+    const params: Record<string, string> = {};
+    if (query.operation !== undefined) {
+      params.operation = query.operation;
+    }
+    if (query.from !== undefined) {
+      params.from = query.from;
+    }
+    if (query.to !== undefined) {
+      params.to = query.to;
+    }
+    return this.request<ObservabilityAccuracyResponse>(
+      'GET',
+      '/api/v1/admin/observability/accuracy',
+      undefined,
+      { params }
     );
   }
 
