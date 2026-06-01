@@ -262,6 +262,24 @@ describe('Intelligence Routes - Per-Org Client Resolution', () => {
       expect(globalClient.submitEventFeedback).not.toHaveBeenCalled();
     });
 
+    it('forwards server-derived user_ref (null in this unauth harness) on a clean payload — deterministic success-path check that the handler always sources user_ref via getAuditUserId', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/event-feedback`,
+        payload: { event_id: EVENT_ID, verdict: 'incorrect', note: 'looks wrong' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(orgClient.submitEventFeedback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_id: EVENT_ID,
+          verdict: 'incorrect',
+          user_ref: null,
+          note: 'looks wrong',
+        })
+      );
+    });
+
     it('derives user_ref server-side and IGNORES any body-supplied user_ref — even if a caller spoofs the field, the upstream sees only the value from getAuditUserId(request)', async () => {
       // With no JWT / api-key user authenticated in this test harness,
       // getAuditUserId(request) returns null. The body-supplied user_ref must
