@@ -85,10 +85,8 @@ describe('IntelligenceEventFeedback', () => {
     // Belt-and-suspenders: the call payload must not carry user_ref. The
     // backend derives it from getAuditUserId(request) so the body should
     // never advertise it as a client-controllable field.
-    const args = vi.mocked(intelligenceService.submitEventFeedback).mock.calls[0][0] as Record<
-      string,
-      unknown
-    >;
+    const args = vi.mocked(intelligenceService.submitEventFeedback).mock
+      .calls[0][0] as unknown as Record<string, unknown>;
     expect(args).not.toHaveProperty('user_ref');
   });
 
