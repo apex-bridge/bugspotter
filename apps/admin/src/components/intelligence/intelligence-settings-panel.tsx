@@ -76,9 +76,22 @@ interface IntelligenceSettingsPanelProps {
   orgId: string;
   /** When true, hides the page title/description header */
   hideHeader?: boolean;
+  /**
+   * URL the "View AI Observability dashboard" card should link to.
+   * Self-service callers pass `/my-organization/intelligence/observability`.
+   * Platform-admin callers can omit this — the dashboard route is currently
+   * org-scoped to the current user only, so the card is hidden when no
+   * caller-appropriate target exists, rather than navigating away from the
+   * inspected org.
+   */
+  observabilityHref?: string;
 }
 
-export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSettingsPanelProps) {
+export function IntelligenceSettingsPanel({
+  orgId,
+  hideHeader,
+  observabilityHref,
+}: IntelligenceSettingsPanelProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
 
@@ -608,28 +621,32 @@ export function IntelligenceSettingsPanel({ orgId, hideHeader }: IntelligenceSet
         </div>
       </SettingsSection>
 
-      {/* Observability link — opens the dedicated dashboard page */}
-      <Link
-        to="/my-organization/intelligence/observability"
-        className="block border rounded-lg p-4 bg-white hover:bg-gray-50 transition-colors"
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <Gauge className="w-5 h-5 text-purple-600 mt-0.5" aria-hidden="true" />
-            <div>
-              <p className="text-sm font-medium text-gray-900">
-                {t('intelligence.observability.linkTitle')}
-              </p>
-              <p className="text-xs text-gray-600 mt-0.5">
-                {t('intelligence.observability.linkDescription')}
-              </p>
+      {/* Observability link — only when a caller-appropriate target exists.
+          Self-service passes the my-organization URL; platform-admin omits
+          the prop so we don't navigate away from the inspected org. */}
+      {observabilityHref ? (
+        <Link
+          to={observabilityHref}
+          className="block border rounded-lg p-4 bg-white hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <Gauge className="w-5 h-5 text-purple-600 mt-0.5" aria-hidden="true" />
+              <div>
+                <p className="text-sm font-medium text-gray-900">
+                  {t('intelligence.observability.linkTitle')}
+                </p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  {t('intelligence.observability.linkDescription')}
+                </p>
+              </div>
             </div>
+            <span className="text-sm text-purple-700 font-medium shrink-0">
+              {t('intelligence.observability.linkCta')}
+            </span>
           </div>
-          <span className="text-sm text-purple-700 font-medium shrink-0">
-            {t('intelligence.observability.linkCta')}
-          </span>
-        </div>
-      </Link>
+        </Link>
+      ) : null}
 
       {/* Deflection Stats */}
       <DeflectionStatsCard orgId={orgId} />

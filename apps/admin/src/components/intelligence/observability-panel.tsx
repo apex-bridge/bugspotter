@@ -91,7 +91,9 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
                 <KpiTile
                   label={t('intelligence.observability.summary.p95')}
                   value={formatLatencyMs(summaryQuery.data.p95_ms)}
-                  hint={`p50 ${formatLatencyMs(summaryQuery.data.p50_ms)}`}
+                  hint={t('intelligence.observability.summary.p50Hint', {
+                    value: formatLatencyMs(summaryQuery.data.p50_ms),
+                  })}
                 />
                 <KpiTile
                   label={t('intelligence.observability.summary.errorRate')}
