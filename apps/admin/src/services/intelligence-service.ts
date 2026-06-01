@@ -21,6 +21,12 @@ import type {
   MitigationResponse,
   SearchInput,
   SearchResponse,
+  ObservabilitySummary,
+  ObservabilitySummaryQuery,
+  ObservabilityEventsPage,
+  ObservabilityEventsQuery,
+  ObservabilityAccuracy,
+  ObservabilityAccuracyQuery,
 } from '../types/intelligence';
 
 export const intelligenceService = {
@@ -149,6 +155,36 @@ export const intelligenceService = {
   ): Promise<SubmitEventFeedbackResult> => {
     const { project_id, ...body } = input;
     const response = await api.post(API_ENDPOINTS.intelligence.eventFeedback(project_id), body);
+    return response.data.data;
+  },
+
+  getObservabilitySummary: async (
+    orgId: string,
+    query: ObservabilitySummaryQuery = {}
+  ): Promise<ObservabilitySummary> => {
+    const response = await api.get(API_ENDPOINTS.intelligence.observabilitySummary(orgId), {
+      params: query,
+    });
+    return response.data.data;
+  },
+
+  getObservabilityEvents: async (
+    orgId: string,
+    query: ObservabilityEventsQuery = {}
+  ): Promise<ObservabilityEventsPage> => {
+    const response = await api.get(API_ENDPOINTS.intelligence.observabilityEvents(orgId), {
+      params: query,
+    });
+    return response.data.data;
+  },
+
+  getObservabilityAccuracy: async (
+    orgId: string,
+    query: ObservabilityAccuracyQuery = {}
+  ): Promise<ObservabilityAccuracy> => {
+    const response = await api.get(API_ENDPOINTS.intelligence.observabilityAccuracy(orgId), {
+      params: query,
+    });
     return response.data.data;
   },
 };

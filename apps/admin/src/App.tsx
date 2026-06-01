@@ -48,6 +48,7 @@ import OrgInvoicesPage from './pages/organization/org-invoices';
 import OrgInvoiceDetailPage from './pages/organization/org-invoice-detail';
 import OrgLegalDetailsPage from './pages/organization/org-legal-details';
 import OrgIntelligencePage from './pages/organization/org-intelligence';
+import OrgObservabilityPage from './pages/organization/org-observability';
 import AcceptInvitationPage from './pages/invitations/accept';
 import OrganizationRequestsPage from './pages/platform/organization-requests';
 import OrgRetentionPage from './pages/platform/org-retention';
@@ -312,6 +313,14 @@ function App() {
                     element={
                       <OrgRoute>
                         <OrgIntelligencePage />
+                      </OrgRoute>
+                    }
+                  />
+                  <Route
+                    path="my-organization/intelligence/observability"
+                    element={
+                      <OrgRoute>
+                        <OrgObservabilityPage />
                       </OrgRoute>
                     }
                   />
