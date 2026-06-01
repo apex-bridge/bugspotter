@@ -56,10 +56,14 @@ export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEv
         onClick={() => mutation.mutate('correct')}
         disabled={isSubmitting || verdict !== null}
         className={cn(
-          'p-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+          'p-1 rounded transition-colors disabled:cursor-not-allowed',
           verdict === 'correct'
             ? 'text-green-600 bg-green-50'
-            : 'text-gray-400 enabled:hover:text-green-600 enabled:hover:bg-green-50'
+            : 'text-gray-400 enabled:hover:text-green-600 enabled:hover:bg-green-50',
+          // Dim only when this button is NOT the chosen one — keeps the
+          // selected verdict prominent after the vote lands. During an
+          // in-flight submission both are dimmed (still ambiguous).
+          (isSubmitting || (verdict !== null && verdict !== 'correct')) && 'opacity-50'
         )}
         aria-label={t('intelligence.feedback.thumbsUp')}
         aria-pressed={verdict === 'correct'}
@@ -71,10 +75,11 @@ export function IntelligenceEventFeedback({ eventId, projectId }: IntelligenceEv
         onClick={() => mutation.mutate('incorrect')}
         disabled={isSubmitting || verdict !== null}
         className={cn(
-          'p-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+          'p-1 rounded transition-colors disabled:cursor-not-allowed',
           verdict === 'incorrect'
             ? 'text-red-600 bg-red-50'
-            : 'text-gray-400 enabled:hover:text-red-600 enabled:hover:bg-red-50'
+            : 'text-gray-400 enabled:hover:text-red-600 enabled:hover:bg-red-50',
+          (isSubmitting || (verdict !== null && verdict !== 'incorrect')) && 'opacity-50'
         )}
         aria-label={t('intelligence.feedback.thumbsDown')}
         aria-pressed={verdict === 'incorrect'}
