@@ -44,6 +44,13 @@ Report which provider is being used so the user has context.
 
 **Never** print full secret keys back to the user.
 
+### Step 4 — Source-side tooling (`yc` CLI)
+
+The object-count parity check (below) reads the source bucket via the Yandex Cloud CLI.
+
+- Verify it is installed and authenticated first: `yc --version` and `yc config list` (or `yc iam create-token`).
+- **If `yc` is missing or unauthenticated** → skip the parity check and report it as "not verified (yc unavailable)" rather than failing; the freshness check still stands. Fallback: read object count from the YC console or the Object Storage REST API.
+
 ## Procedure
 
 Check three backup sources in order. For each, report Status (OK / STALE / MISSING / CORRUPT), latest file, age, size.
@@ -80,7 +87,7 @@ aws s3 ls s3://${BACKUP_S3_BUCKET}/storage/ \
 Validate:
 
 - **Freshness:** rclone sync runs hourly → newest object should be ≤2h old
-- **Object-count parity:** backup count should be ≥99% of source. Get source count:
+- **Object-count parity:** backup count should be ≥99% of source. Requires `yc` (see Step 4); skip if unavailable. Get source count:
   ```bash
   yc storage bucket get bugspotter-storage-kz --format json | jq '{size_bytes, object_count}'
   ```
