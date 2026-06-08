@@ -6,7 +6,7 @@ SaaS bug-reporting platform. pnpm + TypeScript, Docker-native dev loop.
 
 - `packages/` — backend (Fastify), billing, types, utils, message-broker, payment-service
 - `apps/` — admin (React/Vite), demo (showcase)
-- `docker-compose*.yml` — dev stack; `./dev.sh start` brings everything up including Postgres + Redis + MinIO. `./dev.sh help` lists the other subcommands.
+- `docker-compose*.yml` — dev stack; `./dev.sh start` brings everything up including Postgres + Redis + MinIO. `./dev.sh help` lists the other subcommands. (`./dev.sh` is a bash script — on Windows run it from git-bash or WSL, not PowerShell.)
 - **Dozzle** (optional live log viewer) is behind the `monitoring` profile — NOT started by `./dev.sh start`. Bring it up with `docker compose --profile monitoring up -d dozzle`; then `http://localhost:9999`.
 
 ## Deployment modes
@@ -21,13 +21,23 @@ Flags that depend on mode are declared in `packages/backend/src/config.ts`.
 ## Common commands
 
 ```bash
-./dev.sh start                                   # bring up the stack
-pnpm --filter @bugspotter/backend dev            # API on :3000
+./dev.sh start                                   # bring up the full stack
+pnpm --filter @bugspotter/backend dev            # API on :3000 (single service, no full stack)
 pnpm --filter @bugspotter/backend typecheck      # src-only typecheck
 pnpm --filter @bugspotter/backend test:unit      # no docker needed
 pnpm --filter @bugspotter/backend migrate        # run DB migrations
 pnpm --filter @bugspotter/admin dev              # admin UI on :5173
 ```
+
+## Conventions
+
+- **Branch off `main`** for any new work or follow-up fix — squash-merged source branches still exist but are dead, don't build on them.
+- **Run `test:unit` before pushing** behavior changes — a passing `typecheck`/build is not sufficient.
+- **Prefer purely-additive slices**; verify deploy state before assuming. Avoid regressions over cleverness.
+
+## Skills
+
+`.claude/skills/` holds repo-specific Claude Code skills (procedural runbooks loaded on demand). Currently: `bs-backup-health` (read-only prod backup freshness/DR check). Invoke via the skill name or its trigger phrases.
 
 ## Where things live
 
