@@ -1543,13 +1543,13 @@
         fs.appendChild(chip(STATUS_LABEL[s], state.status, s, s === 'progress' ? ' warnk' : ''))
       );
       const fr = document.getElementById('f-repo');
-      allRepos.forEach((r) => fr.appendChild(chip(r, state.repo, r)));
+      allRepos.filter((r) => r !== 'all').forEach((r) => fr.appendChild(chip(r, state.repo, r)));
       const fa = document.getElementById('f-area');
       allAreas.forEach((a) => fa.appendChild(chip(a, state.area, a)));
 
       function matches(a) {
         if (state.status.size && !state.status.has(a.status)) return false;
-        if (state.repo.size && !a.repos.some((r) => state.repo.has(r))) return false;
+        if (state.repo.size && !a.repos.some((r) => state.repo.has(r) || r === 'all')) return false;
         if (state.area.size && !a.areas.some((r) => state.area.has(r))) return false;
         if (state.q) {
           const h = (
