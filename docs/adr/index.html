@@ -1,0 +1,1716 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BugSpotter — Architecture Decision Records</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel2: #1d212b;
+        --bd: #2a2f3a;
+        --tx: #e6e9ef;
+        --mut: #9aa3b2;
+        --acc: #5b9dff;
+        --acc2: #7c5cff;
+        --ok: #3ecf8e;
+        --warn: #f5a623;
+        --bad: #ff6b6b;
+        --plan: #8aa0c7;
+        --chip: #222735;
+      }
+      [data-theme='light'] {
+        --bg: #f5f6f8;
+        --panel: #ffffff;
+        --panel2: #f0f2f5;
+        --bd: #d9dde3;
+        --tx: #1a1d23;
+        --mut: #5a6472;
+        --acc: #2266dd;
+        --acc2: #6a3cff;
+        --chip: #eaeef5;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: var(--bg);
+        color: var(--tx);
+        font:
+          15px/1.55 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: var(--acc);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        height: 100vh;
+      }
+      /* sidebar */
+      .side {
+        background: var(--panel);
+        border-right: 1px solid var(--bd);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .brand {
+        padding: 18px 18px 12px;
+        border-bottom: 1px solid var(--bd);
+      }
+      .brand h1 {
+        font-size: 16px;
+        margin: 0 0 2px;
+        letter-spacing: 0.2px;
+      }
+      .brand .sub {
+        color: var(--mut);
+        font-size: 12px;
+      }
+      .stats {
+        display: flex;
+        gap: 14px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+      }
+      .stat {
+        font-size: 11px;
+        color: var(--mut);
+      }
+      .stat b {
+        color: var(--tx);
+        font-size: 14px;
+        display: block;
+      }
+      .search {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--bd);
+      }
+      .search input {
+        width: 100%;
+        padding: 9px 11px;
+        border-radius: 8px;
+        border: 1px solid var(--bd);
+        background: var(--panel2);
+        color: var(--tx);
+        font-size: 13px;
+        outline: none;
+      }
+      .search input:focus {
+        border-color: var(--acc);
+      }
+      .filters {
+        padding: 10px 14px 4px;
+        border-bottom: 1px solid var(--bd);
+      }
+      .frow {
+        margin-bottom: 8px;
+      }
+      .frow .lbl {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: var(--mut);
+        margin-bottom: 5px;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .chip {
+        font-size: 11px;
+        padding: 3px 9px;
+        border-radius: 20px;
+        background: var(--chip);
+        border: 1px solid transparent;
+        color: var(--mut);
+        cursor: pointer;
+        user-select: none;
+      }
+      .chip:hover {
+        color: var(--tx);
+      }
+      .chip.on {
+        background: var(--acc);
+        color: #fff;
+        border-color: var(--acc);
+      }
+      .chip.on.warnk {
+        background: var(--warn);
+        border-color: var(--warn);
+        color: #1a1d23;
+      }
+      .list {
+        overflow: auto;
+        flex: 1;
+        padding: 6px 8px 30px;
+      }
+      .era {
+        margin: 12px 6px 4px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+        color: var(--acc2);
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .era span {
+        color: var(--mut);
+        font-weight: 400;
+      }
+      .item {
+        padding: 8px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        display: flex;
+        gap: 9px;
+        align-items: flex-start;
+      }
+      .item:hover {
+        background: var(--panel2);
+      }
+      .item.active {
+        background: var(--panel2);
+        box-shadow: inset 3px 0 0 var(--acc);
+      }
+      .item .num {
+        font-variant-numeric: tabular-nums;
+        color: var(--mut);
+        font-size: 12px;
+        min-width: 30px;
+        padding-top: 1px;
+      }
+      .item .ti {
+        font-size: 13px;
+        line-height: 1.35;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-top: 5px;
+        flex: 0 0 auto;
+      }
+      .dot.accepted {
+        background: var(--ok);
+      }
+      .dot.progress {
+        background: var(--warn);
+      }
+      .dot.planned {
+        background: var(--plan);
+      }
+      .dot.superseded {
+        background: var(--bad);
+      }
+      /* main */
+      .main {
+        overflow: auto;
+        min-height: 0;
+      }
+      .topbar {
+        position: sticky;
+        top: 0;
+        background: rgba(15, 17, 21, 0.82);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--bd);
+        padding: 10px 26px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 5;
+      }
+      [data-theme='light'] .topbar {
+        background: rgba(255, 255, 255, 0.82);
+      }
+      .topbar .crumbs {
+        font-size: 12px;
+        color: var(--mut);
+        flex: 1;
+      }
+      .btn {
+        font-size: 12px;
+        padding: 6px 11px;
+        border-radius: 7px;
+        border: 1px solid var(--bd);
+        background: var(--panel2);
+        color: var(--tx);
+        cursor: pointer;
+      }
+      .btn:hover {
+        border-color: var(--acc);
+      }
+      .wrap {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 26px 26px 80px;
+      }
+      .doc h2 {
+        font-size: 25px;
+        margin: 6px 0 4px;
+        line-height: 1.2;
+      }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin: 14px 0 22px;
+      }
+      .badge {
+        font-size: 11px;
+        padding: 3px 10px;
+        border-radius: 6px;
+        background: var(--chip);
+        color: var(--mut);
+        border: 1px solid var(--bd);
+      }
+      .badge.st-accepted {
+        color: var(--ok);
+        border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+      }
+      .badge.st-progress {
+        color: var(--warn);
+        border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+      }
+      .badge.st-planned {
+        color: var(--plan);
+        border-color: color-mix(in srgb, var(--plan) 40%, transparent);
+      }
+      .badge.repo {
+        color: var(--acc);
+      }
+      .sec {
+        margin: 22px 0;
+      }
+      .sec h3 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--acc2);
+        margin: 0 0 8px;
+        border-bottom: 1px solid var(--bd);
+        padding-bottom: 6px;
+      }
+      .sec p {
+        margin: 0 0 8px;
+      }
+      ul.cons {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      ul.cons li {
+        padding: 6px 0 6px 26px;
+        position: relative;
+        border-bottom: 1px dashed var(--bd);
+      }
+      ul.cons li:last-child {
+        border-bottom: 0;
+      }
+      ul.cons li:before {
+        position: absolute;
+        left: 4px;
+        top: 6px;
+        font-size: 13px;
+      }
+      ul.cons.pos li:before {
+        content: '+';
+        color: var(--ok);
+        font-weight: 700;
+      }
+      ul.cons.neg li:before {
+        content: '−';
+        color: var(--warn);
+        font-weight: 700;
+      }
+      ul.cons.alt li:before {
+        content: '✕';
+        color: var(--bad);
+        font-size: 11px;
+        top: 8px;
+      }
+      .related a {
+        display: inline-block;
+        font-size: 12px;
+        background: var(--chip);
+        padding: 4px 10px;
+        border-radius: 6px;
+        margin: 0 6px 6px 0;
+        border: 1px solid var(--bd);
+      }
+      code {
+        background: var(--chip);
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 0.88em;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .empty {
+        color: var(--mut);
+        text-align: center;
+        padding: 60px 20px;
+      }
+      .kbd {
+        font-size: 11px;
+        color: var(--mut);
+      }
+      .seqbar {
+        display: flex;
+        gap: 2px;
+        margin: 10px 0 0;
+        flex-wrap: wrap;
+      }
+      .seqbar i {
+        width: 10px;
+        height: 18px;
+        border-radius: 2px;
+        background: var(--chip);
+        cursor: pointer;
+        display: inline-block;
+      }
+      .seqbar i:hover {
+        outline: 1px solid var(--acc);
+      }
+      @media (max-width: 820px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+        .side {
+          display: none;
+        }
+        .side.show {
+          display: flex;
+          position: fixed;
+          inset: 0;
+          z-index: 20;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="side" id="side">
+        <div class="brand">
+          <h1>BugSpotter ADRs</h1>
+          <div class="sub">Cross-repo architecture decision records</div>
+          <div class="stats">
+            <div class="stat"><b id="st-total">40</b>decisions</div>
+            <div class="stat"><b id="st-eras">6</b>eras</div>
+            <div class="stat"><b id="st-repos">7</b>repos</div>
+            <div class="stat"><b id="st-shown">40</b>shown</div>
+          </div>
+          <div class="seqbar" id="seqbar" title="Sequence — click a block to jump"></div>
+        </div>
+        <div class="search">
+          <input id="q" placeholder="Search decisions, areas, repos…  (/)" autocomplete="off" />
+        </div>
+        <div class="filters">
+          <div class="frow">
+            <div class="lbl">Status</div>
+            <div class="chips" id="f-status"></div>
+          </div>
+          <div class="frow">
+            <div class="lbl">Repo</div>
+            <div class="chips" id="f-repo"></div>
+          </div>
+          <div class="frow">
+            <div class="lbl">Area</div>
+            <div class="chips" id="f-area"></div>
+          </div>
+        </div>
+        <div class="list" id="list"></div>
+      </aside>
+      <main class="main">
+        <div class="topbar">
+          <button class="btn" id="menuBtn" style="display: none">☰</button>
+          <div class="crumbs" id="crumbs">Select a decision</div>
+          <span class="kbd">j / k to navigate</span>
+          <button class="btn" id="theme">◐ Theme</button>
+        </div>
+        <div class="wrap"><div id="doc"></div></div>
+      </main>
+    </div>
+    <script>
+      const ERAS = [
+        ['Foundations', 'Era 1'],
+        ['Backend platform', 'Era 2'],
+        ['Capture clients', 'Era 3'],
+        ['Intelligence / AI', 'Era 4'],
+        ['Signup / landing', 'Era 5'],
+        ['MCP agent surface', 'Era 6'],
+      ];
+      // status: accepted | progress | planned | superseded
+      const ADR = [
+        {
+          n: 1,
+          era: 0,
+          status: 'accepted',
+          title: 'pnpm + TypeScript workspace monorepo',
+          areas: ['build'],
+          repos: ['public'],
+          date: 'Foundational',
+          context:
+            'Backend, billing, broker, payment, shared types/utils and the admin UI evolve together and share TypeScript types. They need atomic cross-package changes, one dependency graph and one CI.',
+          decision:
+            'A pnpm workspace monorepo (<code>pnpm@9.14.4</code>, Node 22): <code>packages/*</code> (backend, backend-mock, billing, message-broker, payment-service, types, utils) and <code>apps/*</code> (admin, demo). Cross-package work via <code>pnpm --filter</code>.',
+          pos: [
+            'Shared <code>@bugspotter/types</code>/<code>utils</code>/<code>common</code> keep contracts in one place.',
+            'One install, lockfile and CI workflow.',
+            'Atomic cross-package refactors in one PR.',
+          ],
+          neg: [
+            'SDK and extension are deliberately separate repos (different cadence & license), so some shared logic must be published, not imported across the boundary.',
+            'CI must understand the workspace layout.',
+          ],
+          alts: [
+            'Polyrepo for every package — loses atomic cross-package changes. Rejected for the server platform; only the independently-shipped clients were split out.',
+          ],
+          rel: [3],
+        },
+        {
+          n: 2,
+          era: 0,
+          status: 'accepted',
+          title: 'Fastify / TypeScript backend as the API core',
+          areas: ['backend'],
+          repos: ['public'],
+          date: 'Foundational',
+          context:
+            'The platform needs an HTTP API for SDK ingest, the dashboard, billing and integrations, plus a worker — type-safe against shared <code>@bugspotter/types</code>.',
+          decision:
+            'API and worker are a TypeScript Fastify app in <code>packages/backend</code>; the worker shares the codebase via separate entry points rather than a separate service.',
+          pos: [
+            'Schema-based validation/serialization fits Fastify; JSON Schema reused at the edge.',
+            'One codebase for API + worker simplifies type sharing and deployment.',
+            '<code>test:unit</code> runs without Docker.',
+          ],
+          neg: [
+            'API and worker share a dependency surface though they scale differently; separation is by process, not package.',
+          ],
+          alts: [
+            'Express-vs-Fastify rationale is not recorded in docs; logged here so the stack choice is traceable.',
+          ],
+          rel: [6],
+        },
+        {
+          n: 3,
+          era: 0,
+          status: 'accepted',
+          title: 'Dual licensing — FSL-1.1-Apache-2.0 platform, MIT SDK',
+          areas: ['licensing'],
+          repos: ['all'],
+          date: 'Converts to Apache-2.0 on 2028-04-09',
+          context:
+            'Commercial sustainability (block a competing SaaS) while still allowing self-hosting and inspection — and the embeddable SDK must carry zero licensing friction inside third-party apps.',
+          decision:
+            'Two licenses by component. Platform: <b>FSL-1.1-Apache-2.0</b> (source-available, no competing-SaaS use, auto-converts to Apache-2.0 on 2028-04-09). SDK <code>@bugspotter/sdk</code>: <b>MIT</b>.',
+          pos: [
+            'Self-hosting, internal use and contributions allowed today; the Apache future date removes any forced re-licensing later.',
+            'SDK has no adoption friction.',
+          ],
+          neg: [
+            'Two license regimes to track; contributor terms differ by repo.',
+            '"Open-source platform" is inaccurate until 2028 — only the SDK is OSI-open; public copy must say "source-available".',
+          ],
+          alts: [
+            'MIT everywhere — permits a competing managed service. Rejected.',
+            'Fully proprietary — locks out self-hosting/community. Rejected.',
+            'Pure Apache now — gives up competing-SaaS protection during the commercial window. Deferred to 2028 via FSL.',
+          ],
+          rel: [],
+        },
+        {
+          n: 4,
+          era: 0,
+          status: 'accepted',
+          title: 'Single codebase, runtime DEPLOYMENT_MODE (saas / selfhosted)',
+          areas: ['deployment'],
+          repos: ['public'],
+          date: 'Foundational',
+          context:
+            'The product ships as multi-tenant SaaS on <code>*.kz.bugspotter.io</code> and as a single-tenant self-hostable build. Two forks would diverge fast.',
+          decision:
+            'One codebase gated by <code>DEPLOYMENT_MODE</code>: <code>saas</code> (multi-tenancy, billing, quotas, signup, tenant middleware) vs <code>selfhosted</code> (single tenant, none of those). Flags live in <code>config.ts</code>; SaaS-only code under <code>src/saas/</code>. The SaaS schema is a purely additive bolt-on.',
+          pos: [
+            'One build/test matrix; features toggled, not forked.',
+            'Self-hosted runs a strict subset of the schema.',
+          ],
+          neg: [
+            'Config flags must stay synchronized; a missing gate can leak SaaS behavior into self-hosted (covered by config tests).',
+          ],
+          alts: ['A separate self-hosted fork — implicitly rejected for runtime gating.'],
+          rel: [9],
+        },
+        {
+          n: 5,
+          era: 0,
+          status: 'accepted',
+          title: 'Core data plane — Postgres 16 + Redis 7 + S3/MinIO',
+          areas: ['data', 'infra'],
+          repos: ['public', 'deploy'],
+          date: 'Foundational',
+          context:
+            'Needs durable relational state, a job queue + cache, file storage for screenshots/replays, and vector similarity for the AI tier — on customer infra with no vendor lock-in.',
+          decision:
+            'PostgreSQL 16 (with pgvector), Redis 7 (BullMQ + cache), MinIO (S3-compatible object store, local-disk or external-S3 backed).',
+          pos: [
+            'pgvector keeps vectors in the same ACID store — no separate vector DB.',
+            'S3-compatibility means no lock-in.',
+            'Standard, battle-tested components.',
+          ],
+          neg: [
+            'Three persistent volumes to back up, each with its own strategy.',
+            'Postgres needs tuning (<code>shm_size</code>) to avoid OOM.',
+          ],
+          alts: [
+            'MongoDB — loses transactions. Rejected.',
+            'Dedicated vector DB — extra ops surface. Rejected.',
+            'RabbitMQ — more complex than needed. Rejected.',
+          ],
+          rel: [11, 27],
+        },
+        {
+          n: 6,
+          era: 0,
+          status: 'accepted',
+          title: 'Docker Compose single-host orchestration (not Kubernetes)',
+          areas: ['infra', 'deployment'],
+          repos: ['deploy', 'public'],
+          date: 'Foundational',
+          context:
+            'Deployed as SaaS on VMs and self-hosted by teams from one person to small enterprises — operators need something auditable without a platform team.',
+          decision:
+            'Docker Compose v2 is the orchestration/IaC. A base compose file has production-safe defaults; an auto-loaded override binds infra to <code>127.0.0.1</code> for dev. A root Dockerfile can also build a unified supervisord image (API+worker+nginx) for PaaS. Kubernetes is out of scope for now.',
+          pos: [
+            'One YAML per deployment shape; easy to inspect.',
+            'Upgrades are <code>docker compose pull && up -d</code>.',
+            'Unified-image option covers Railway/Render/Fly.',
+          ],
+          neg: [
+            'Horizontal scaling needs sidecar/reverse-proxy; stateful services single-replica unless backed up.',
+            'Dev vs prod is a two-file model operators must understand.',
+          ],
+          alts: [
+            'Kubernetes — over-specified for single-host; deferred to a possible stage-2.',
+            'systemd / Terraform / Pulumi — fragile or heavyweight. Rejected.',
+          ],
+          rel: [5],
+        },
+        {
+          n: 7,
+          era: 1,
+          status: 'accepted',
+          title: 'Polyglot — separate Python intelligence service over HTTP + circuit breaker',
+          areas: ['architecture', 'integration'],
+          repos: ['public', 'intelligence'],
+          date: 'Foundational to AI tier',
+          context:
+            'Dedup/enrichment need ML; the backend is TypeScript but the ML ecosystem is Python-native. Coupling ML into Node would force language compromises and tie failure domains together.',
+          decision:
+            'A separate Python FastAPI service (<code>bugspotter-intelligence</code>) decoupled via HTTP + a circuit breaker. The backend degrades gracefully when intelligence is down.',
+          pos: [
+            'Independent scaling and language choice for ML; failure isolation.',
+            'The AI tier is optional (deploy <code>--profile intelligence</code>).',
+          ],
+          neg: [
+            'The <code>DedupRule</code> schema is defined as Zod (TS) and Pydantic (Py) and must not drift across repos.',
+            'Network latency on dedup calls; an extra service to run.',
+          ],
+          alts: [
+            'Embedding ML in the Node backend — implicitly rejected for language and failure-isolation reasons.',
+          ],
+          rel: [31],
+        },
+        {
+          n: 8,
+          era: 1,
+          status: 'accepted',
+          title: 'Triple auth — JWT user / API key ingest / share-token',
+          areas: ['auth'],
+          repos: ['public'],
+          date: 'PR-105/107 audit fix',
+          context:
+            "Three callers authenticate differently: dashboard users (JWT), SDK ingest (API key), and public replay sharing (anonymous, scoped). One artifact can't serve all three.",
+          decision:
+            'Three orthogonal artifacts, applied by middleware in precedence share-token → API key → JWT: <code>authUser</code>, <code>apiKey</code> (X-API-Key), <code>authShareToken</code> (query param). Auth is separated from authorization; API keys have platform-permission bypass rules; lock-in tests document the bypass.',
+          pos: [
+            'Fine-grained scoping (single-project keys); anonymous sharing without exposing identity.',
+            'Precedence rules explicit and tested.',
+          ],
+          neg: [
+            'All three fields can coexist; JWT+API-key together needs a single-project-key constraint for safe audit attribution (the PR-105/107 fix).',
+          ],
+          alts: ['Not recorded in docs.'],
+          rel: [9],
+        },
+        {
+          n: 9,
+          era: 1,
+          status: 'accepted',
+          title: 'Multi-tenancy via API-key → tenant_id isolation',
+          areas: ['auth', 'data'],
+          repos: ['public', 'intelligence'],
+          date: 'Intelligence Phase 2',
+          context:
+            "Every customer's data must be strictly isolated in SaaS, but machine callers are already authenticated by API key.",
+          decision:
+            'Resolve API key → <code>tenant_id</code> and filter every query by it; tenant context injected via DI/middleware for testability. <code>tenant_id</code> is nullable for backwards compatibility. No global super-admin scope (per-tenant admin only) to prevent BOLA.',
+          pos: [
+            'Reuses API-key auth; uniform isolation.',
+            'New tables get <code>tenant_id</code> by convention.',
+          ],
+          neg: [
+            'Every new query must filter by <code>tenant_id</code> — a miss is a cross-tenant leak.',
+            'Nullable <code>tenant_id</code> needs careful read handling for legacy rows.',
+          ],
+          alts: [
+            'Schema-per-tenant / database-per-tenant — operational cost for many small tenants. Not adopted.',
+          ],
+          rel: [8, 10],
+        },
+        {
+          n: 10,
+          era: 1,
+          status: 'progress',
+          title: 'Unified RBAC with legacy permissions coexistence',
+          areas: ['auth'],
+          repos: ['public'],
+          date: 'Migration 015; legacy drop pending',
+          context:
+            'Evolving from legacy <code>users.role</code> + <code>permissions</code> toward modern RBAC, but a big-bang schema change is risky on a live system.',
+          decision:
+            'Three coexisting RBAC layers, migrating incrementally: platform (<code>users.security</code> JSONB), org (membership), project (<code>project_members.role</code> + <code>project_roles</code>). Legacy <code>role</code>/<code>permissions</code> stay load-bearing with helper fallbacks. The legacy-column drop is not yet written.',
+          pos: ['Incremental migration with no breaking change.'],
+          neg: [
+            'Three RBAC mechanisms in production — real complexity for new engineers.',
+            'Deprecation unfinished; this ADR will be superseded once the legacy column is dropped.',
+          ],
+          alts: [
+            'Immediate full migration — breaking, risky. Rejected.',
+            'Stay on legacy — no forward progress. Rejected.',
+          ],
+          rel: [9],
+        },
+        {
+          n: 11,
+          era: 1,
+          status: 'accepted',
+          title: 'BullMQ per-type job queues with per-type concurrency',
+          areas: ['infra'],
+          repos: ['public', 'deploy'],
+          date: 'Foundational; tuning ongoing',
+          context:
+            'Async work has very different costs: screenshots/replays are heavy (Playwright/CPU); integrations/notifications are light I/O. A shared queue lets a slow replay block a fast notification.',
+          decision:
+            'BullMQ on Redis, one queue per job type, with per-type concurrency via env (no redeploy): screenshot 5, replay 3, integration 10, notification 5, intelligence 1 (CPU-bound LLM, kept at 1).',
+          pos: [
+            'Fault isolation and fair scheduling per type; tune to the host without code changes.',
+            'Simplified worker health checks.',
+          ],
+          neg: [
+            'Operators must tune concurrency; over-provisioning OOMs, under-provisioning backs up queues.',
+            'Redis memory must account for backlogs.',
+          ],
+          alts: [
+            'Single shared queue — head-of-line blocking. Rejected.',
+            'Separate worker process per type — deployment complexity. Rejected.',
+          ],
+          rel: [5],
+        },
+        {
+          n: 12,
+          era: 1,
+          status: 'accepted',
+          title: 'Transactional outbox for external ticket filing',
+          areas: ['data', 'integration'],
+          repos: ['public'],
+          date: 'Migrations 001, 021',
+          context:
+            'Creating a bug and filing an external ticket must not produce duplicates on retry, but filing is async and can fail. Inline filing couples ingest to third-party uptime.',
+          decision:
+            'File via a <code>ticket_creation_outbox</code> table; a row is inserted in the same transaction as the bug report; a worker polls and advances a state machine. An <code>idempotency_key</code> prevents duplicates; a dedup grace window (migration 021) lets intelligence mark duplicates before filing.',
+          pos: [
+            'Decouples ingest from filing; exactly-once for external systems.',
+            'Retries are safe; grace window avoids filing soon-to-be-merged duplicates.',
+          ],
+          neg: ['Extra table, worker polling and state-machine logic to maintain.'],
+          alts: [
+            'Inline synchronous filing — tight coupling, cascading failures. Rejected.',
+            'Naive fire-and-forget async — duplicate tickets on retry. Rejected.',
+          ],
+          rel: [7],
+        },
+        {
+          n: 13,
+          era: 1,
+          status: 'accepted',
+          title: 'Integration plugin sandbox + SSRF-hardened HTTP',
+          areas: ['security', 'integration'],
+          repos: ['public'],
+          date: 'Foundational to integrations',
+          context:
+            'Customer-configured integrations (Jira, Linear, webhooks) are untrusted: a malicious/misconfigured URL could reach internal services or exfiltrate data (SSRF).',
+          decision:
+            'Route all plugin HTTP through <code>hardened-http.ts</code> + <code>ssrf-validator.ts</code> (block private IPs/localhost), running plugins in a <code>plugin-executor.ts</code> sandbox. HTTP policy enforced centrally.',
+          pos: [
+            'Prevents SSRF/credential-leak/internal access from one choke point.',
+            'New integrations inherit protections automatically.',
+          ],
+          neg: [
+            'All integration code must route through the hardened layer (slight latency).',
+            'Legitimate internal backends need an explicit SSRF allowlist entry.',
+          ],
+          alts: [
+            'Trust plugin targets — security risk. Rejected.',
+            'Per-integration whitelist — fragile, duplicated. Rejected.',
+          ],
+          rel: [],
+        },
+        {
+          n: 14,
+          era: 1,
+          status: 'accepted',
+          title: 'Per-organization data residency routing',
+          areas: ['data', 'compliance'],
+          repos: ['public'],
+          date: 'Foundational to SaaS',
+          context:
+            'Multi-tenant SaaS serves customers in different regulatory regions (KZ, RF, EU, US) with data-localization needs. A single global bucket is a compliance risk.',
+          decision:
+            'A <code>projects.data_residency_region</code> enum drives a storage-backend router (<code>regional-storage-router.ts</code>) selecting the S3 bucket per region — at the storage layer, transparent to app code. Violations are audit-logged; settings propagate via <code>organization_settings</code> JSONB.',
+          pos: [
+            'Compliance with regional laws without per-feature special-casing.',
+            'App code stays region-agnostic.',
+          ],
+          neg: [
+            'Must provision an S3 bucket per region.',
+            'Cross-region reads impossible by design (a constraint, not a bug).',
+          ],
+          alts: [
+            'Single global bucket — compliance risk. Rejected.',
+            'Customer-managed regions — operational burden. Rejected.',
+          ],
+          rel: [5],
+        },
+        {
+          n: 15,
+          era: 2,
+          status: 'accepted',
+          title: 'Dual capture — screenshot + rrweb session replay',
+          areas: ['capture'],
+          repos: ['sdk', 'extension'],
+          date: 'SDK v0.1.0; replay v0.2.0',
+          context:
+            'A bug report needs both visual proof (screenshot) and causal context (sequence of interactions). Each alone is incomplete.',
+          decision:
+            'Capture both: a mandatory screenshot (<code>html-to-image</code>, CSP-safe) plus an optional rrweb session replay (~15–30s buffer). Both compressed and uploaded via presigned URLs. rrweb is the industry-standard DOM recorder.',
+          pos: [
+            'Screenshot = point-in-time proof; replay = causality. Together, reproducible reports.',
+          ],
+          neg: [
+            '~500ms screenshot latency, rrweb memory overhead, two payloads.',
+            'Pulls in both <code>rrweb</code> and <code>html-to-image</code>.',
+          ],
+          alts: [
+            'Screenshot only — loses interaction context. Rejected.',
+            'Replay only — loses visual state. Rejected.',
+            'Video — bandwidth-prohibitive. Rejected.',
+          ],
+          rel: [16, 18],
+        },
+        {
+          n: 16,
+          era: 2,
+          status: 'accepted',
+          title: 'Presigned-URL direct-to-storage uploads',
+          areas: ['transport'],
+          repos: ['sdk', 'extension', 'public'],
+          date: 'SDK v0.1.0',
+          context:
+            'Screenshots (~500KB) and replays (~2MB) are large; proxying them through the API ties up server bandwidth and the extension service worker.',
+          decision:
+            'Three-request flow: POST <code>/reports</code> → bug id + presigned PUT URLs; client PUTs artifacts directly to S3 (parallel); POST confirm-upload per file. The report exists after step 1, so artifact upload failures are non-fatal.',
+          pos: [
+            '~40% fewer requests; file bytes bypass the API server.',
+            'Presigned URLs time-limited and scoped; HTTPS enforced.',
+            "Failed artifact upload doesn't lose the report.",
+          ],
+          neg: [
+            'Requires backend object storage + presigned generation.',
+            'Client handles gzip content-type and parallel blob uploads.',
+          ],
+          alts: [
+            'Single POST through the API — slower, bandwidth-heavy. Rejected.',
+            'Multipart upload — added complexity. Rejected.',
+          ],
+          rel: [15],
+        },
+        {
+          n: 17,
+          era: 2,
+          status: 'accepted',
+          title: 'Backend-controlled, cached replay quality settings',
+          areas: ['settings', 'capture'],
+          repos: ['sdk', 'public'],
+          date: 'SDK v0.3.0',
+          context:
+            "Different deployments/tiers want different replay fidelity. Hardcoding in the SDK means redeploying every customer's embedded SDK to change a setting.",
+          decision:
+            'On <code>init()</code> the SDK fetches <code>/api/v1/settings/replay</code> and caches it (5-min TTL). User config overrides; if unreachable, soft-fail to safe defaults. The endpoint returns 200 + defaults even on DB failure; per-API-key rate-limited (10/min).',
+          pos: [
+            'Admins tune quality per project with no SDK redeploy.',
+            'Caching cuts backend load; user overrides win.',
+          ],
+          neg: [
+            'One extra HTTP call during init (~50ms).',
+            'A misconfigured backend silently yields default fidelity.',
+          ],
+          alts: [
+            'Hardcoded SDK defaults — inflexible. Rejected.',
+            'Per-request negotiation — latency every capture. Rejected.',
+          ],
+          rel: [23],
+        },
+        {
+          n: 18,
+          era: 2,
+          status: 'accepted',
+          title: 'Cross-navigation replay persistence (IndexedDB / storage.session)',
+          areas: ['replay', 'storage'],
+          repos: ['sdk', 'extension'],
+          date: 'SDK v0.2.0',
+          context:
+            'Users often report a bug after a navigation/reload, but the interesting interactions were on the previous page. In-memory buffers are lost across navigations; the two clients run in different environments.',
+          decision:
+            'Persist the replay buffer across navigations, opt-in, per-environment: SDK flushes a circular buffer to IndexedDB on pagehide/visibilitychange and restores on init (opt-in via <code>dbName</code>; atomic read+clear). Extension keeps per-tab buffers in <code>chrome.storage.session</code> keyed by tabId, with a per-tab write queue. Both soft-fail and queue events emitted during restore.',
+          pos: [
+            'Captures pre-reload activity; replays survive full-page navigations.',
+            'IndexedDB (~100MB+) and storage.session (~10MB) beat the old localStorage 5MB cap.',
+          ],
+          neg: [
+            'Quota handling required: on overflow halve events while preserving the latest FullSnapshot anchor.',
+            'Two implementations of one concept, kept behind the same opt-in contract.',
+          ],
+          alts: [
+            'localStorage/sessionStorage — 5MB cap, unavailable to the worker. Rejected.',
+            'Server-side buffering — privacy concern. Rejected.',
+          ],
+          rel: [15, 24],
+        },
+        {
+          n: 19,
+          era: 2,
+          status: 'accepted',
+          title: 'Shared local-first PII sanitization via @bugspotter/common',
+          areas: ['capture', 'privacy'],
+          repos: ['sdk', 'extension'],
+          date: 'v0.1.0',
+          context:
+            'Captured data can contain PII/secrets. Regulated customers need a guarantee, and redaction must not diverge between SDK, extension and backend.',
+          decision:
+            'PII patterns live in shared <code>@bugspotter/common</code> and run locally before transmission: built-ins (email, phone, card, SSN/IIN, IP, key, token, password), presets (minimal, financial, kazakhstan, gdpr, pci), custom regex, <code>excludeSelectors</code>. The backend sanitizes again (defense-in-depth).',
+          pos: [
+            'One pattern library keeps client/server in sync; PII never leaves the device unredacted.',
+            'Defense-in-depth catches client gaps server-side.',
+          ],
+          neg: [
+            'Redacted tokens unrecoverable by design; rare false positives (user can exclude).',
+            'Capture blocks on sanitizer init; init failure disables capture on that page (fail-safe).',
+          ],
+          alts: [
+            'Backend-only — unredacted data crosses the wire. Rejected.',
+            'Duplicated per-client patterns — drift risk. Rejected.',
+          ],
+          rel: [22],
+        },
+        {
+          n: 20,
+          era: 2,
+          status: 'accepted',
+          title: 'Client offline queue with backoff retry',
+          areas: ['transport', 'storage'],
+          repos: ['sdk', 'extension'],
+          date: 'SDK v0.1.0 / v0.3.0',
+          context:
+            "Users go offline or hit transient failures. A report shouldn't be lost on page close, but unbounded retries waste resources and retrying auth/quota errors is pointless.",
+          decision:
+            'Persist failed reports (network errors only) and retry with jittered exponential backoff. SDK: localStorage queue (≤10), 1–30s, retry 502/503/504/429, never auth. Extension: chrome.storage.local with 7-day TTL, retried on worker startup; drops items >100KB / after 5 attempts / insecure / expired; strips sensitive headers and artifact flags before queuing.',
+          pos: [
+            'No report lost to a brief outage; backoff+jitter avoids thundering herd.',
+            'Auth/quota errors fail fast.',
+          ],
+          neg: [
+            'Queue competes for storage quota; overflow drops oldest.',
+            'Queued extension reports lose screenshot/replay artifacts (still useful for repro).',
+          ],
+          alts: [
+            'In-memory queue — lost on reload. Rejected.',
+            'Unbounded queue / fixed backoff — storage pressure / CPU spikes. Rejected.',
+          ],
+          rel: [16],
+        },
+        {
+          n: 21,
+          era: 2,
+          status: 'accepted',
+          title: 'Shadow DOM widget isolation',
+          areas: ['widget'],
+          repos: ['sdk', 'extension'],
+          date: 'SDK v0.1.0',
+          context:
+            'The widget (button, modal, annotation overlay) is injected into arbitrary customer pages. Host CSS/JS must not leak into the widget and vice-versa.',
+          decision:
+            'Render modal/overlay inside a Shadow DOM host with inline styles (CSP-safe). SDK modal uses open mode; extension overlay uses closed Shadow DOM. The floating button sits at top-level DOM with max z-index (2147483647).',
+          pos: [
+            'Style encapsulation both ways; works on any site without injected-<style> CSP violations.',
+            'Open mode still allows intentional host customization.',
+          ],
+          neg: [
+            'Very old browsers fall back to light DOM; <code>::part</code> customization limited.',
+            'Slightly slower initial render.',
+          ],
+          alts: [
+            'CSS namespacing — fragile, collisions. Rejected.',
+            'iframe — slow, cross-frame overhead. Rejected.',
+          ],
+          rel: [],
+        },
+        {
+          n: 22,
+          era: 2,
+          status: 'accepted',
+          title: 'Client-side duplicate-report dedup',
+          areas: ['capture', 'integration'],
+          repos: ['sdk', 'extension'],
+          date: 'SDK v0.3.0',
+          context:
+            'Users re-submit the same report in quick succession. Catching it only at the backend means the duplicate payload is already uploaded and the user sees a late error.',
+          decision:
+            'A shared <code>BugReportDeduplicator</code> (<code>@bugspotter/common</code>) hashes title+description(+error stacks) and blocks a re-submit within a configurable grace window, tracking in-progress and recently-completed reports. The backend keeps a fallback check.',
+          pos: [
+            'Stops accidental duplicates before upload; no PII in the hash; works offline.',
+            'In-progress tracking allows immediate legitimate retry.',
+          ],
+          neg: [
+            'Dedup state per-instance/per-worker (reset on eviction — acceptable).',
+            'A slightly changed description defeats the hash; user must edit to resubmit.',
+          ],
+          alts: [
+            'Server-only dedup — duplicate already uploaded. Rejected as sole mechanism.',
+            'UUID-based — overkill. Rejected.',
+          ],
+          rel: [19],
+        },
+        {
+          n: 23,
+          era: 2,
+          status: 'accepted',
+          title: 'Framework-agnostic async singleton SDK init()',
+          areas: ['build', 'sdk-api'],
+          repos: ['sdk'],
+          date: 'SDK v0.3.0',
+          context:
+            'The SDK must behave identically in React/Vue/Angular/Next/plain-JS/CDN. Init is async (fetches replay settings) and multiple inits would duplicate observers/interception/DOM hooks.',
+          decision:
+            'A static <code>async BugSpotter.init()</code> returning <code>Promise&lt;BugSpotter&gt;</code> that enforces a singleton: warns on re-init and coalesces concurrent inits (first wins). <code>destroy()</code> required before re-init.',
+          pos: [
+            'One instance prevents duplicate interception; framework-agnostic.',
+            'Async contract lets init fetch backend config cleanly.',
+          ],
+          neg: [
+            'Callers must await init and call destroy to reconfigure.',
+            'Implicit singleton adds coupling in tests.',
+          ],
+          alts: [
+            'Factory per call — duplicate interception & leaks. Rejected.',
+            "Synchronous init — can't fetch backend config. Rejected.",
+          ],
+          rel: [17],
+        },
+        {
+          n: 24,
+          era: 2,
+          status: 'accepted',
+          title: 'Browser extension on MV3 stateless service worker',
+          areas: ['extension-arch'],
+          repos: ['extension'],
+          date: 'Chrome MV3 migration',
+          context:
+            'Manifest V3 removed persistent background pages; the service worker can be evicted after ~30s, so any module-level state is lost across navigations and re-injections.',
+          decision:
+            'A fully stateless service worker: no module-level state; all persistent data in <code>chrome.storage</code> (session for transient per-tab buffers, local for the offline queue). Every handler reads from storage, not memory.',
+          pos: [
+            'Survives worker eviction, navigation and re-injection without data loss — MV3-compliant.',
+          ],
+          neg: [
+            'Async storage reads on every event add latency and require per-tab write-queue serialization to avoid read-modify-write races.',
+          ],
+          alts: [
+            'MV2 background page — deprecated by Chrome. Rejected (forced).',
+            'In-memory buffers — unsafe under eviction. Rejected.',
+          ],
+          rel: [18, 25],
+        },
+        {
+          n: 25,
+          era: 2,
+          status: 'accepted',
+          title: 'Main-world injection for CSP-proof console/network capture',
+          areas: ['capture'],
+          repos: ['extension'],
+          date: 'Console/network capture phase',
+          context:
+            'Capturing console/fetch/XHR needs page globals, but content scripts run in an isolated world; injecting a &lt;script&gt; is blocked by strict CSP on banking/finance sites.',
+          decision:
+            "Register a main-world script via <code>chrome.scripting.registerContentScripts</code> (<code>world:'MAIN'</code>, <code>runAt:'document_start'</code>) that patches console/fetch/XHR/error handlers and relays via <code>window.postMessage</code>. chrome.scripting bypasses page CSP; document_start captures before page scripts run.",
+          pos: [
+            'Works on CSP-strict sites; captures from the first page script.',
+            'postMessage bridges worlds without exposing extension internals.',
+          ],
+          neg: [
+            'Main-world script is plain JS (not TS/bundled), adding ~2KB.',
+            'Duplicate browser error events de-duplicated within ~2s windows.',
+          ],
+          alts: [
+            '&lt;script&gt; tag injection — blocked by CSP. Rejected.',
+            'PerformanceObserver — timing only. Rejected.',
+            'Debugger protocol — unavailable to extensions. Rejected.',
+          ],
+          rel: [24],
+        },
+        {
+          n: 26,
+          era: 3,
+          status: 'accepted',
+          title: 'Local BAAI/bge-m3 embeddings (self-hosted, multilingual)',
+          areas: ['embeddings'],
+          repos: ['intelligence'],
+          date: 'Intelligence Phase 1',
+          context:
+            'Semantic dedup needs embeddings for a multilingual market (EN/RU/KK). External embedding APIs add cost, latency and a data-egress/compliance concern incompatible with self-hosting.',
+          decision:
+            'BAAI/bge-m3 (1024-dim) via sentence-transformers, generated locally and pre-downloaded into the Docker image for predictable cold starts. OpenAI text-embedding-3-small remains a configurable cloud fallback.',
+          pos: ['High-quality multilingual embeddings; no API cost or egress; air-gappable.'],
+          neg: [
+            'Image ~3GB; ~268ms/embedding on CPU.',
+            'Dimension (1024) must match <code>migrations.py target_dim</code>; switching models means re-embedding.',
+          ],
+          alts: [
+            'OpenAI 3-small — kept as fallback, not default.',
+            'all-MiniLM-L6-v2 (384-dim) — lower quality, weaker multilingual. Rejected.',
+          ],
+          rel: [27, 28, 33],
+        },
+        {
+          n: 27,
+          era: 3,
+          status: 'accepted',
+          title: 'pgvector + IVFFlat for similarity search (no separate vector DB)',
+          areas: ['embeddings', 'data'],
+          repos: ['intelligence'],
+          date: 'Phase 1; retune Phase 7',
+          context:
+            'Dedup needs fast cosine search over thousands of embeddings, tenant-filtered. Postgres is already the primary store.',
+          decision:
+            'pgvector with an IVFFlat index on <code>bug_embeddings.embedding</code>, cosine (<code>&lt;=&gt;</code>), composite indexes including <code>tenant_id</code>. Runs on <code>pgvector/pgvector:pg16</code>.',
+          pos: [
+            'No separate vector DB; ACID; vectors co-located with relational data and tenant filters.',
+          ],
+          neg: [
+            'IVFFlat may need retuning at scale (explicit Phase 7 eval, incl. HNSW).',
+            'Requires pgvector in Postgres 16+.',
+          ],
+          alts: [
+            'Dedicated vector DB — extra ops & egress. Rejected.',
+            'HNSW — under Phase 7 evaluation; IVFFlat chosen first for simplicity.',
+          ],
+          rel: [5, 26],
+        },
+        {
+          n: 28,
+          era: 3,
+          status: 'accepted',
+          title: 'Tunable similarity thresholds (0.68 / 0.85), per-tenant',
+          areas: ['dedup'],
+          repos: ['intelligence'],
+          date: 'Phase 1',
+          context:
+            "Similarity must become a yes/no duplicate decision. The cut-off depends on the embedding space and a customer's tolerance for false merges, so it can't be a universal constant.",
+          decision:
+            'Two configurable thresholds defaulting to bge-m3-tuned values: <code>similarity_threshold=0.68</code> (related) and <code>duplicate_threshold=0.85</code> (auto-duplicate), tunable per-tenant. Responses expose <code>threshold_used</code>.',
+          pos: [
+            'Customers tune precision/recall post-deploy without code changes.',
+            '<code>threshold_used</code> makes decisions auditable.',
+          ],
+          neg: ['Thresholds are model-specific — a different embedding model requires re-tuning.'],
+          alts: ["Fixed thresholds — can't adapt to tolerance or model. Rejected."],
+          rel: [26],
+        },
+        {
+          n: 29,
+          era: 3,
+          status: 'accepted',
+          title: 'LLM provider abstraction; Ollama llama3.2:3b default',
+          areas: ['ml-model'],
+          repos: ['intelligence'],
+          date: 'Phase 1; cloud Phase 4+',
+          context:
+            'The AI tier needs LLM inference for rerank, rule parsing and Q&A. Self-hosted/air-gapped needs a local GPU-free option; production may prefer a hosted model. No vendor hard-wiring.',
+          decision:
+            'An abstract <code>LLMProvider</code> with a factory + registry (<code>register_provider</code>); every provider implements <code>generate()</code> and <code>generate_with_usage()</code> (token counts for observability). Ollama (<code>llama3.2:3b</code>) is the dev/self-hosted default (CPU-only); Claude Sonnet recommended for production.',
+          pos: [
+            'New providers register without touching the factory; uniform token usage.',
+            'Local default avoids GPU cost and enables air-gapped installs.',
+          ],
+          neg: [
+            'llama3.2:3b lower quality than GPT-4o/Sonnet; ~120s Ollama timeout.',
+            'Claude/OpenAI configured but not fully implemented (Phase 4).',
+          ],
+          alts: [
+            'Per-vendor conditional instantiation — scatters logic. Rejected.',
+            'Cloud-only LLM — breaks air-gapped. Rejected as default.',
+          ],
+          rel: [30, 32],
+        },
+        {
+          n: 30,
+          era: 3,
+          status: 'accepted',
+          title: 'Smart search — LLM rerank with timeout fallback',
+          areas: ['ml-model', 'search'],
+          repos: ['intelligence'],
+          date: 'Phase 3',
+          context:
+            "Pure vector search returns nearest neighbors that aren't always most relevant. LLM reranking improves quality but is slow and can hang, so it can't sit unguarded on the critical path.",
+          decision:
+            '<code>POST /search</code> with <code>mode=smart</code> retrieves top-20 via pgvector, has the LLM score relevance, returns top-5 reranked. A 10s timeout falls back to raw vector results. <code>mode=fast</code> skips reranking; limits are configurable.',
+          pos: [
+            'Better relevance without retraining; graceful degradation on timeout.',
+            'Callers pick cost/latency per query.',
+          ],
+          neg: [
+            'Smart mode adds latency (≤10s on timeout) and LLM cost.',
+            'Timeout must be tuned per deployment/model.',
+          ],
+          alts: ['Vector-only search — kept as fast mode; insufficient alone for relevance.'],
+          rel: [29],
+        },
+        {
+          n: 31,
+          era: 3,
+          status: 'accepted',
+          title: 'Natural-language dedup-rule parsing via few-shot JSON',
+          areas: ['prompt', 'dedup'],
+          repos: ['intelligence'],
+          date: 'Phase 0.5 / 4+',
+          context:
+            'Operators describe dedup rules in plain English, but the engine needs a validated structured <code>DedupRule</code> (triggers/conditions/actions).',
+          decision:
+            'A few-shot system prompt defines the ontology (B1/B2/B3 + ambiguous cases); low temperature (0.1) for determinism; available integrations injected as context; output extracted from markdown fences with a brace counter, then Pydantic-validated. Failures return a null draft + clarifications.',
+          pos: [
+            'Operators author in natural language; output is schema-validated before the engine.',
+            'Injecting real integrations prevents hallucinated targets.',
+          ],
+          neg: [
+            'UX depends on prompt quality; ambiguity yields clarification requests.',
+            'NL endpoint kept but full pipeline integration deferred — the executor is the load-bearing path.',
+          ],
+          alts: [
+            'Regex parsing — brittle. Rejected.',
+            'Chain-of-thought — verbose, less deterministic for JSON. Rejected.',
+          ],
+          rel: [7],
+        },
+        {
+          n: 32,
+          era: 3,
+          status: 'planned',
+          title: 'AI observability — intelligence_event + intelligence_feedback',
+          areas: ['observability'],
+          repos: ['intelligence'],
+          date: 'Phase 7 (rollout planned)',
+          context:
+            'Every LLM call needs auditing (tokens, latency, cost, confidence) and a way to measure decision quality per tenant — and multiple reviewers may disagree about correctness.',
+          decision:
+            'Two tables: <code>intelligence_event</code> (immutable per-call audit: tokens, latency, <code>cost_micros_usd</code>, status, confidence, 4KiB rationale, meta JSONB) and <code>intelligence_feedback</code> (correct/incorrect/partial verdicts with event_id FK + user_ref for consensus; tenant_id denormalized). Three call sites wrapped with <code>record_generate()</code>; admin endpoints require an admin key.',
+          pos: [
+            'Events stay immutable while feedback accumulates separately; reviewers disagree without mutating the audit.',
+            'Cost & accuracy measurable per tenant — basis for the eval/monitoring roadmap.',
+          ],
+          neg: ['Two new tables + write-path wrapping; meta JSONB intentionally un-GIN-indexed.'],
+          alts: [
+            'Single table with feedback columns — pollutes the immutable audit. Rejected.',
+            "No feedback — can't measure accuracy. Rejected.",
+          ],
+          rel: [29],
+        },
+        {
+          n: 33,
+          era: 3,
+          status: 'accepted',
+          title: 'Offline embedding-model caching in a multi-stage Docker image',
+          areas: ['infra'],
+          repos: ['intelligence'],
+          date: 'Phase 1',
+          context:
+            "Lazy-downloading bge-m3 on first request makes cold starts unpredictable and can race a worker timeout into OOM. Air-gapped deployments can't reach HuggingFace Hub at all.",
+          decision:
+            'A multi-stage build pre-downloads bge-m3 in the builder; runtime sets <code>TRANSFORMERS_OFFLINE=1</code> and <code>HF_HUB_OFFLINE=1</code>. Production runs as non-root on python:3.12-slim.',
+          pos: [
+            'Predictable startup (60s healthcheck); no first-request download; works air-gapped.',
+          ],
+          neg: [
+            'Image ~3GB (vs ~1GB).',
+            'Dockerfile model and <code>migrations.py target_dim</code> must be coordinated exactly.',
+          ],
+          alts: [
+            'Lazy loading — smaller image but unpredictable starts & OOM race. Rejected.',
+            'Separate model volume — extra provisioning. Rejected.',
+          ],
+          rel: [26],
+        },
+        {
+          n: 34,
+          era: 4,
+          status: 'accepted',
+          title: 'Astro static + islands for the landing site',
+          areas: ['framework'],
+          repos: ['landing'],
+          date: 'Landing phase 1',
+          context:
+            'The landing site is mostly marketing content in three languages that must load fast and rank well, with a few interactive forms. An SPA ships needless JS; plain HTML duplicates structure.',
+          decision:
+            "Astro 5 with <code>output:'static'</code> and the islands architecture: pre-rendered HTML, React hydrated only for interactive islands (forms) via <code>client:load</code>. Deployed static behind a CDN.",
+          pos: [
+            'Zero-JS marketing content; React downloaded only when a form island renders.',
+            'CDN-cacheable static output.',
+          ],
+          neg: [
+            'Every deploy regenerates all pages; server API routes must opt out of prerender.',
+            'Page-level i18n needs separate files per language.',
+          ],
+          alts: [
+            'Next.js SSR — server cost for mostly-static content. Rejected.',
+            'Pure React SPA — bloat, worse SEO. Rejected.',
+            'Hand-written HTML — duplication. Rejected.',
+          ],
+          rel: [35],
+        },
+        {
+          n: 35,
+          era: 4,
+          status: 'accepted',
+          title: 'Type-safe file-based i18n (props-only to React)',
+          areas: ['i18n'],
+          repos: ['landing'],
+          date: 'Landing phase 1',
+          context:
+            'Three languages (en, ru, kk) must stay in sync and be type-checked across Astro and React without coupling React to an i18n runtime (which complicates Playwright testing).',
+          decision:
+            'Translations in <code>src/i18n/{en,ru,kk}.ts</code> with a <code>TranslationKeys</code> type from en.ts. Astro resolves via <code>t(lang)</code>; React receives pre-resolved labels as props only — never importing the i18n runtime. Three page files per route share components.',
+          pos: [
+            'Compile-time key checking; React stays environment-agnostic and testable without i18n setup.',
+          ],
+          neg: [
+            'en/ru/kk files and the three page files kept in sync manually; all locales deploy together.',
+          ],
+          alts: [
+            'i18next/react-i18next — couples React to a runtime. Rejected.',
+            'Dynamic [lang] routing — more complex redirect/canonical handling. Rejected.',
+          ],
+          rel: [34],
+        },
+        {
+          n: 36,
+          era: 4,
+          status: 'accepted',
+          title: 'Self-service signup with URL-fragment token handoff',
+          areas: ['signup', 'integration'],
+          repos: ['landing', 'public'],
+          date: 'Landing phase 2',
+          context:
+            'Free-tier users sign up on the landing origin and must land authenticated in the admin dashboard (a different org-subdomain origin), without landing holding session state and without leaking the API key into logs/Referer.',
+          decision:
+            "The form POSTs to <code>/api/v1/auth/signup</code>, gets an access token + api_key, and builds a URL fragment <code>#handoff=&lt;base64url-json&gt;</code> at the org subdomain's /onboarding (cross-origin nav with credentials:include). The backend response is strictly validated and fields explicitly mapped; the subdomain validated against RFC-1123.",
+          pos: [
+            'Fragment never sent in Referer/logs; base64url preserves chars; UTF-8 supports Cyrillic/Kazakh names.',
+            'No landing-side session; explicit mapping blocks leaking future backend additions.',
+          ],
+          neg: [
+            'Handoff shape couples the landing encoder to the admin decoder.',
+            'Subdomain validation lives on landing; 15s fetch timeout; errors mapped by status (409/429).',
+          ],
+          alts: [
+            'Query param — leaks the key in Referer. Rejected.',
+            'Shared cookie / POST to admin — cross-origin coupling, exposes creds. Rejected.',
+          ],
+          rel: [4],
+        },
+        {
+          n: 37,
+          era: 5,
+          status: 'accepted',
+          title: 'Dual-mode MCP transport (stdio + HTTP)',
+          areas: ['mcp-transport'],
+          repos: ['mcp'],
+          date: 'MCP v0.3.0',
+          context:
+            "AI agents consume BugSpotter two ways: a per-user subprocess (Claude Code, Cursor, desktop), and a hosted multi-tenant endpoint. One transport can't serve both efficiently.",
+          decision:
+            'Two entry points from one codebase: <code>bugspotter-mcp</code> (stdio, per-user, key in env) and <code>bugspotter-mcp-http</code> (HTTP, multi-tenant, <code>Authorization: Bearer bgs_&lt;key&gt;</code>). HTTP sessions are stateful in-process with a 30-min TTL; clients echo an <code>Mcp-Session-Id</code> bound to their bearer (mismatch → 403).',
+          pos: [
+            'Stdio keeps the key local and is trivial for desktop clients; HTTP multiplexes many users on one process.',
+          ],
+          neg: [
+            'HTTP is stateful → sticky routing required at scale (route on Session-Id).',
+            'Operators choose the shape upfront; reverse proxies need a 600s read timeout and disabled buffering for long ask/SSE.',
+          ],
+          alts: [
+            'Single unified transport — precludes efficient multi-user hosting. Rejected.',
+            'Custom protocol — reinvents the MCP spec. Rejected.',
+          ],
+          rel: [38],
+        },
+        {
+          n: 38,
+          era: 5,
+          status: 'accepted',
+          title: 'Deliberate six-tool MCP surface',
+          areas: ['mcp-tools'],
+          repos: ['mcp'],
+          date: 'MCP v0.1.0',
+          context:
+            "No MCP server exists for a bug tracker (no precedent). Too much overloads the agent's choices and creates write-blast-radius liability; too little frustrates triage workflows.",
+          decision:
+            'Exactly six tools by triage frequency: <code>search_bugs</code>, <code>find_similar</code>, <code>ask</code> (discovery); <code>get_bug</code>, <code>list_bugs</code> (inspection); <code>update_bug_status</code> (the single write). Deliberate omissions: create_bug (blast radius), add_comment (no backend table yet), attach_session_replay (multi-step presigned), suggest_fix (async-polling).',
+          pos: [
+            'A small, workflow-aligned surface agents can reason about; one write bounds liability.',
+            'Behavioral logs reveal usage (over-drilling, under-using ask).',
+          ],
+          neg: [
+            'Tool descriptions must be precise — agents get validation errors on misread enums/fields.',
+            "Closure workflows needing create/comment aren't fully served yet (intentional).",
+          ],
+          alts: [
+            'Full CRUD — dangerous writes. Rejected.',
+            'Read-only — frustrates status closure. Rejected.',
+          ],
+          rel: [37, 39, 40],
+        },
+        {
+          n: 39,
+          era: 5,
+          status: 'accepted',
+          title: 'Ajv + JSON Schema validation (single source of truth)',
+          areas: ['mcp-tools'],
+          repos: ['mcp'],
+          date: 'MCP v0.1.0',
+          context:
+            "The MCP spec mandates each tool's inputSchema is JSON Schema on the wire. Arguments must be validated at dispatch without drifting from what the agent sees.",
+          decision:
+            'Validate with Ajv against the same JSON Schema published on the wire — one source of truth. No separate code-level (Zod) schema to keep in sync.',
+          pos: [
+            'The schema the agent sees is the schema that validates — no drift; tweaks immediately visible.',
+            'Ajv errors are format-exact, feeding precise behavioral logs.',
+          ],
+          neg: ['JSON Schema is more verbose to author by hand than Zod with inferred types.'],
+          alts: [
+            'Zod + codegen to JSON Schema — adds a build step and a sync failure mode. Rejected.',
+            'Manual validation — error-prone. Rejected.',
+            'TS types only — no runtime checks. Rejected.',
+          ],
+          rel: [38],
+        },
+        {
+          n: 40,
+          era: 5,
+          status: 'accepted',
+          title: 'Behavioral JSONL logging with scoped PII redaction',
+          areas: ['mcp-tools', 'observability'],
+          repos: ['mcp'],
+          date: 'MCP v0.1.0',
+          context:
+            'The MCP server doubles as a research artifact on how agents reason about a bug tracker. That needs logging every call without leaking PII pasted into free-text, and without a concurrency hazard under multi-user HTTP.',
+          decision:
+            'One JSONL record per dispatch, daily-rotated. PII redaction (emails, JWTs, cards) only on free-text args (search_bugs, ask) — not schema-enforced fields. Session id is <code>sha256(api_key)[:32]</code>, never the raw key. Result bodies not logged; <code>result_count</code> distinguishes null (not meaningful) from 0 (empty).',
+          pos: [
+            'Append-only JSONL is concurrency-safe under multi-user SaaS and trivially aggregated with jq.',
+            'Enables agent-behavior research while protecting pasted PII and result contents.',
+          ],
+          neg: [
+            'No result bodies means some analyses need the backend.',
+            'Redaction is intentionally partial (free-text only) — relies on the schema to keep PII out of structured fields.',
+          ],
+          alts: [
+            'Structured logs to an external backend — loses locality, adds a dependency. Rejected.',
+            'No logging — defeats the research goal. Rejected.',
+            'Universal redaction — wasteful on schema-enforced fields. Rejected.',
+          ],
+          rel: [38],
+        },
+      ];
+      const STATUS_LABEL = {
+        accepted: 'Accepted',
+        progress: 'In progress',
+        planned: 'Planned',
+        superseded: 'Superseded',
+      };
+      const pad = (n) => String(n).padStart(4, '0');
+      const slugOf = {
+        1: 'pnpm-typescript-monorepo',
+        2: 'fastify-typescript-backend',
+        3: 'dual-licensing-fsl-and-mit',
+        4: 'runtime-deployment-mode',
+        5: 'core-data-plane-postgres-redis-s3',
+        6: 'docker-compose-not-kubernetes',
+        7: 'polyglot-python-intelligence-service',
+        8: 'triple-auth-model',
+        9: 'multi-tenancy-api-key-tenant-isolation',
+        10: 'unified-rbac-legacy-coexistence',
+        11: 'bullmq-per-type-queues-concurrency',
+        12: 'transactional-outbox-ticket-filing',
+        13: 'integration-plugin-sandbox-ssrf',
+        14: 'per-org-data-residency-routing',
+        15: 'dual-capture-screenshot-and-replay',
+        16: 'presigned-url-direct-uploads',
+        17: 'backend-controlled-replay-settings',
+        18: 'cross-navigation-replay-persistence',
+        19: 'shared-pii-sanitization',
+        20: 'client-offline-queue-retry',
+        21: 'shadow-dom-widget-isolation',
+        22: 'client-side-duplicate-dedup',
+        23: 'framework-agnostic-async-singleton-init',
+        24: 'extension-mv3-stateless-service-worker',
+        25: 'main-world-injection-capture',
+        26: 'local-bge-m3-embeddings',
+        27: 'pgvector-ivfflat-similarity',
+        28: 'tunable-similarity-thresholds',
+        29: 'llm-provider-abstraction-ollama-default',
+        30: 'smart-search-llm-rerank-fallback',
+        31: 'nl-dedup-rule-parsing',
+        32: 'ai-observability-event-feedback-tables',
+        33: 'offline-model-caching-docker',
+        34: 'astro-static-islands-landing',
+        35: 'type-safe-file-based-i18n',
+        36: 'self-service-signup-fragment-handoff',
+        37: 'mcp-dual-mode-transport',
+        38: 'mcp-deliberate-six-tool-surface',
+        39: 'mcp-ajv-json-schema-validation',
+        40: 'mcp-behavioral-jsonl-logging',
+      };
+      const mdFile = (n) => pad(n) + '-' + slugOf[n] + '.md';
+
+      const state = { q: '', status: new Set(), repo: new Set(), area: new Set(), sel: null };
+      const allRepos = [...new Set(ADR.flatMap((a) => a.repos))].sort();
+      const allAreas = [...new Set(ADR.flatMap((a) => a.areas))].sort();
+      document.getElementById('st-total').textContent = ADR.length;
+      document.getElementById('st-repos').textContent = allRepos.filter((r) => r !== 'all').length;
+
+      function chip(text, set, val, cls) {
+        const c = document.createElement('span');
+        c.className = 'chip' + (cls || '');
+        c.textContent = text;
+        c.onclick = () => {
+          set.has(val) ? set.delete(val) : set.add(val);
+          c.classList.toggle('on');
+          render();
+        };
+        return c;
+      }
+      const fs = document.getElementById('f-status');
+      ['accepted', 'progress', 'planned'].forEach((s) =>
+        fs.appendChild(chip(STATUS_LABEL[s], state.status, s, s === 'progress' ? ' warnk' : ''))
+      );
+      const fr = document.getElementById('f-repo');
+      allRepos.forEach((r) => fr.appendChild(chip(r, state.repo, r)));
+      const fa = document.getElementById('f-area');
+      allAreas.forEach((a) => fa.appendChild(chip(a, state.area, a)));
+
+      function matches(a) {
+        if (state.status.size && !state.status.has(a.status)) return false;
+        if (state.repo.size && !a.repos.some((r) => state.repo.has(r))) return false;
+        if (state.area.size && !a.areas.some((r) => state.area.has(r))) return false;
+        if (state.q) {
+          const h = (
+            a.title +
+            ' ' +
+            a.areas.join(' ') +
+            ' ' +
+            a.repos.join(' ') +
+            ' ' +
+            a.context +
+            ' ' +
+            a.decision
+          ).toLowerCase();
+          if (!h.includes(state.q)) return false;
+        }
+        return true;
+      }
+      function render() {
+        const list = document.getElementById('list');
+        list.innerHTML = '';
+        let shown = 0;
+        ERAS.forEach((era, ei) => {
+          const items = ADR.filter((a) => a.era === ei && matches(a));
+          if (!items.length) return;
+          const h = document.createElement('div');
+          h.className = 'era';
+          h.innerHTML = `<span>${era[1]}</span> ${era[0]} <span>${items.length}</span>`;
+          list.appendChild(h);
+          items.forEach((a) => {
+            shown++;
+            const d = document.createElement('div');
+            d.className = 'item' + (state.sel === a.n ? ' active' : '');
+            d.innerHTML = `<span class="dot ${a.status}"></span><span class="num">${pad(a.n)}</span><span class="ti">${a.title}</span>`;
+            d.onclick = () => select(a.n);
+            list.appendChild(d);
+          });
+        });
+        document.getElementById('st-shown').textContent = shown;
+        if (!shown) {
+          list.innerHTML = '<div class="empty">No decisions match those filters.</div>';
+        }
+        drawSeq();
+      }
+      function drawSeq() {
+        const bar = document.getElementById('seqbar');
+        bar.innerHTML = '';
+        ADR.forEach((a) => {
+          const i = document.createElement('i');
+          const col = {
+            accepted: 'var(--ok)',
+            progress: 'var(--warn)',
+            planned: 'var(--plan)',
+            superseded: 'var(--bad)',
+          }[a.status];
+          if (matches(a)) i.style.background = col;
+          i.style.opacity = matches(a) ? 1 : 0.3;
+          i.title = pad(a.n) + ' · ' + a.title;
+          i.onclick = () => select(a.n);
+          bar.appendChild(i);
+        });
+      }
+      function consList(arr, cls) {
+        return `<ul class="cons ${cls}">` + arr.map((x) => `<li>${x}</li>`).join('') + `</ul>`;
+      }
+      function select(n) {
+        state.sel = n;
+        const a = ADR.find((x) => x.n === n);
+        document.querySelectorAll('.item').forEach((el) => el.classList.remove('active'));
+        render();
+        const doc = document.getElementById('doc');
+        document.getElementById('crumbs').innerHTML =
+          `${ERAS[a.era][1]} · ${ERAS[a.era][0]} &nbsp;›&nbsp; ADR-${pad(a.n)}`;
+        const rel = a.rel.length
+          ? `<div class="sec"><h3>Related decisions</h3><div class="related">` +
+            a.rel
+              .map((r) => {
+                const t = ADR.find((x) => x.n === r);
+                return t
+                  ? `<a href="#${r}" onclick="select(${r});return false">ADR-${pad(r)} · ${t.title}</a>`
+                  : '';
+              })
+              .join('') +
+            `</div></div>`
+          : '';
+        doc.innerHTML = `
+    <div class="doc">
+      <div style="color:var(--mut);font-size:13px">ADR-${pad(a.n)}</div>
+      <h2>${a.title}</h2>
+      <div class="meta">
+        <span class="badge st-${a.status}">${STATUS_LABEL[a.status]}</span>
+        ${a.repos.map((r) => `<span class="badge repo">${r}</span>`).join('')}
+        ${a.areas.map((r) => `<span class="badge">${r}</span>`).join('')}
+        <span class="badge">${a.date}</span>
+      </div>
+      <div class="sec"><h3>Context</h3><p>${a.context}</p></div>
+      <div class="sec"><h3>Decision</h3><p>${a.decision}</p></div>
+      <div class="sec"><h3>Consequences — positive</h3>${consList(a.pos, 'pos')}</div>
+      <div class="sec"><h3>Consequences — trade-offs</h3>${consList(a.neg, 'neg')}</div>
+      <div class="sec"><h3>Alternatives considered</h3>${consList(a.alts, 'alt')}</div>
+      ${rel}
+      <div class="sec"><a href="${mdFile(a.n)}">View source markdown · ${mdFile(a.n)}</a></div>
+    </div>`;
+        document.querySelector('.main').scrollTop = 0;
+        history.replaceState(null, '', '#' + a.n);
+      }
+      // keyboard nav
+      document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT') {
+          if (e.key === 'Escape') e.target.blur();
+          return;
+        }
+        if (e.key === '/') {
+          e.preventDefault();
+          document.getElementById('q').focus();
+          return;
+        }
+        const vis = ADR.filter(matches);
+        if (!vis.length) return;
+        let idx = vis.findIndex((a) => a.n === state.sel);
+        if (e.key === 'j') {
+          idx = Math.min(vis.length - 1, idx + 1);
+          select(vis[Math.max(0, idx)].n);
+        }
+        if (e.key === 'k') {
+          idx = idx <= 0 ? 0 : idx - 1;
+          select(vis[idx].n);
+        }
+      });
+      document.getElementById('q').addEventListener('input', (e) => {
+        state.q = e.target.value.trim().toLowerCase();
+        render();
+      });
+      document.getElementById('theme').onclick = () => {
+        const r = document.documentElement;
+        const cur = r.getAttribute('data-theme') === 'light' ? '' : 'light';
+        r.setAttribute('data-theme', cur);
+        try {
+          localStorage.setItem('adr-theme', cur);
+        } catch (e) {}
+      };
+      try {
+        const t = localStorage.getItem('adr-theme');
+        if (t) document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+      // menu (mobile)
+      const mb = document.getElementById('menuBtn');
+      function syncMenu() {
+        if (window.innerWidth <= 820) {
+          mb.style.display = '';
+        } else {
+          mb.style.display = 'none';
+          document.getElementById('side').classList.remove('show');
+        }
+      }
+      mb.onclick = () => document.getElementById('side').classList.toggle('show');
+      window.addEventListener('resize', syncMenu);
+      syncMenu();
+
+      render();
+      const start = parseInt(location.hash.replace('#', '')) || 1;
+      select(ADR.find((a) => a.n === start) ? start : 1);
+    </script>
+  </body>
+</html>
