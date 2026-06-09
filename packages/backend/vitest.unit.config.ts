@@ -58,6 +58,7 @@ export default defineConfig({
       'tests/db/pagination-builder.test.ts',
       'tests/db/base-repository-validation.test.ts',
       'tests/db/base-repository-date-filter.test.ts',
+      'tests/db/notification-rule.repository.atomicity.test.ts',
       'tests/db/retry.test.ts',
       'tests/db/user-repository-org-filter.test.ts',
       // Jira config tests (pure unit, mocked repository)
