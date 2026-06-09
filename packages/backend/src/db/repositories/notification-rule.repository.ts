@@ -138,20 +138,61 @@ export class NotificationRuleRepository extends BaseRepository<
   }
 
   /**
+   * Run multi-statement work atomically.
+   *
+   * These rule+channel operations issue several dependent writes (rule INSERT/UPDATE,
+   * channel-link DELETE, channel-link INSERT). On their own they would auto-commit
+   * each statement separately, so a failure in a later write leaves committed partial
+   * state — e.g. an update that deletes the old channel links then fails to insert the
+   * new ones leaves the rule delivering nowhere. They must run in one transaction.
+   *
+   * If this repository was constructed with a Pool we own the transaction here. If it
+   * was constructed with a PoolClient (i.e. we are already inside `db.transaction(...)`),
+   * the caller owns the transaction — run inline so we don't nest BEGIN/COMMIT.
+   */
+  private async runAtomic<R>(work: (repo: NotificationRuleRepository) => Promise<R>): Promise<R> {
+    // A PoolClient exposes `release`; a Pool does not. Presence of `release` means
+    // we're already inside a caller-managed transaction.
+    if (typeof (this.pool as Partial<PoolClient>).release === 'function') {
+      return work(this);
+    }
+
+    const client = await (this.pool as Pool).connect();
+    try {
+      await client.query('BEGIN');
+      const result = await work(new NotificationRuleRepository(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Rollback failure is secondary; surface the original error.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Create a new notification rule with channel associations
    */
   async createWithChannels(data: CreateRuleInput): Promise<NotificationRuleWithChannels> {
     const { channel_ids, ...ruleData } = data;
-    const rule = await super.create(ruleData);
 
-    if (channel_ids && channel_ids.length > 0) {
-      await this.setRuleChannels(rule.id, channel_ids);
-    }
+    return this.runAtomic(async (repo) => {
+      const rule = await repo.create(ruleData);
 
-    return {
-      ...rule,
-      channels: channel_ids || [],
-    };
+      if (channel_ids && channel_ids.length > 0) {
+        await repo.setRuleChannels(rule.id, channel_ids);
+      }
+
+      return {
+        ...rule,
+        channels: channel_ids || [],
+      };
+    });
   }
 
   /**
@@ -162,21 +203,24 @@ export class NotificationRuleRepository extends BaseRepository<
     data: UpdateRuleInput
   ): Promise<NotificationRuleWithChannels | null> {
     const { channel_ids, ...ruleData } = data;
-    const rule = await super.update(id, ruleData);
 
-    if (!rule) {
-      return null;
-    }
+    return this.runAtomic(async (repo) => {
+      const rule = await repo.update(id, ruleData);
 
-    if (channel_ids !== undefined) {
-      await this.setRuleChannels(id, channel_ids);
-    }
+      if (!rule) {
+        return null;
+      }
 
-    const channelIds = await this.getRuleChannels(id);
-    return {
-      ...rule,
-      channels: channelIds,
-    };
+      if (channel_ids !== undefined) {
+        await repo.setRuleChannels(id, channel_ids);
+      }
+
+      const channelIds = await repo.getRuleChannels(id);
+      return {
+        ...rule,
+        channels: channelIds,
+      };
+    });
   }
 
   /**
