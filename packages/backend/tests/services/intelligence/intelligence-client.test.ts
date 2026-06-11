@@ -235,4 +235,40 @@ describe('IntelligenceClient', () => {
       expect(state.state).toBe('closed');
     });
   });
+
+  describe('getServiceStatus', () => {
+    const STATUS = {
+      version: '0.1.0',
+      llm_provider: 'ollama',
+      llm_model: 'llama3.2:3b',
+      anthropic_key_configured: false,
+      openai_key_configured: false,
+      similarity_threshold: 0.68,
+      duplicate_threshold: 0.85,
+      embeddings: {
+        provider: 'local',
+        model: 'BAAI/bge-m3',
+        total: 10,
+        nulls: 0,
+        min_dim: 1024,
+        healthy: true,
+      },
+    };
+
+    it('GETs /api/v1/admin/status and returns the parsed status', async () => {
+      mockAxiosInstance.request.mockResolvedValue({ status: 200, data: STATUS });
+
+      const result = await client.getServiceStatus();
+
+      expect(result).toEqual(STATUS);
+      expect(mockAxiosInstance.request).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'GET', url: '/api/v1/admin/status' })
+      );
+    });
+
+    it('propagates an IntelligenceError on upstream failure', async () => {
+      mockAxiosInstance.request.mockRejectedValue(createAxiosError(503, 'unavailable'));
+      await expect(client.getServiceStatus()).rejects.toThrow(IntelligenceError);
+    });
+  });
 });

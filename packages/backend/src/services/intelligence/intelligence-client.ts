@@ -31,6 +31,7 @@ import type {
   AskResponse,
   BugDetailResponse,
   HealthResponse,
+  ServiceStatus,
 } from './types.js';
 
 const logger = getLogger();
@@ -255,6 +256,17 @@ export class IntelligenceClient {
       undefined,
       { params }
     );
+  }
+
+  // ==========================================================================
+  // Service status (platform-admin)
+  //
+  // Requires a MASTER-key client (the upstream gate is require_master_key);
+  // construct this client with adminBaseUrl + masterApiKey, not a per-org key.
+  // ==========================================================================
+
+  async getServiceStatus(): Promise<ServiceStatus> {
+    return this.request<ServiceStatus>('GET', '/api/v1/admin/status');
   }
 
   // ==========================================================================
