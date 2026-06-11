@@ -42,6 +42,9 @@ export function IntelligenceServiceStatus() {
     queryKey: ['intelligence-service-status'],
     queryFn: intelligenceService.getServiceStatus,
     retry: false,
+    // Refresh on the system-health page like the other cards. Config /
+    // embedding-health change slowly, so 30s is proportionate (vs the page's 10s).
+    refetchInterval: 30000,
   });
 
   // 503 = master channel not configured → a quiet note, not an error.
