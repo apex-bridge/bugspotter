@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { ObservabilityPanel } from '../../../components/intelligence/observability-panel';
@@ -142,5 +142,76 @@ describe('<ObservabilityPanel>', () => {
     });
     // Precision KPI must NOT show when there's no feedback — would mislead.
     expect(screen.queryByText('Precision')).not.toBeInTheDocument();
+  });
+
+  it('expands an event row to reveal the AI rationale, and hides the toggle when rationale is null', async () => {
+    vi.mocked(intelligenceService.getObservabilitySummary).mockResolvedValueOnce({
+      tenant_id: 'tenant-1',
+      from_ts: null,
+      to_ts: null,
+      calls: 2,
+      cost_micros_usd: 0,
+      p50_ms: 10,
+      p95_ms: 20,
+      error_rate: 0,
+      by_operation: [],
+    });
+    vi.mocked(intelligenceService.getObservabilityAccuracy).mockResolvedValueOnce({
+      tenant_id: 'tenant-1',
+      operation: null,
+      feedback_count: 0,
+      correct: 0,
+      incorrect: 0,
+      partial: 0,
+      precision: null,
+    });
+    const baseEvent = {
+      tenant_id: 'tenant-1',
+      bug_id: null,
+      provider: 'ollama',
+      prompt_version: 'v1',
+      tokens_in: null,
+      tokens_out: null,
+      cost_micros_usd: null,
+      latency_ms: 42,
+      confidence: null,
+      status: 'ok',
+      error_kind: null,
+      cached: false,
+      created_at: '2026-06-10T12:00:00Z',
+    };
+    vi.mocked(intelligenceService.getObservabilityEvents).mockResolvedValueOnce({
+      events: [
+        {
+          ...baseEvent,
+          id: 'evt-with',
+          operation: 'enrich',
+          model: 'llama3.2:3b',
+          rationale: 'Marked critical: payment flow blocked for all users.',
+        },
+        {
+          ...baseEvent,
+          id: 'evt-without',
+          operation: 'ask',
+          model: 'llama3.2:3b',
+          rationale: null,
+        },
+      ],
+      limit: 50,
+      offset: 0,
+    });
+
+    render(<ObservabilityPanel orgId={ORG_ID} />, { wrapper });
+
+    // Only the row that has a rationale gets a toggle; the null row has none.
+    const toggles = await screen.findAllByRole('button', { name: /AI rationale/ });
+    expect(toggles).toHaveLength(1);
+
+    // Rationale stays hidden until the row is expanded.
+    expect(screen.queryByText(/payment flow blocked for all users/i)).not.toBeInTheDocument();
+
+    fireEvent.click(toggles[0]);
+
+    expect(await screen.findByText(/payment flow blocked for all users/i)).toBeInTheDocument();
   });
 });

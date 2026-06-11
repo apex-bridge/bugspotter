@@ -6,11 +6,13 @@
  * table; no charts (no charting library in the repo) — KPIs are CSS grid only.
  */
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Brain, Gauge } from 'lucide-react';
+import { AlertTriangle, Brain, ChevronDown, ChevronRight, Gauge } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { intelligenceService } from '../../services/intelligence-service';
+import type { ObservabilityEvent } from '../../types/intelligence';
 import { formatCostUsd, formatLatencyMs, formatPercent } from './observability-formatters';
 
 interface ObservabilityPanelProps {
@@ -205,6 +207,11 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
                       <tr>
+                        <th className="w-8 px-2 py-2">
+                          <span className="sr-only">
+                            {t('intelligence.observability.events.rationale')}
+                          </span>
+                        </th>
                         <th className="text-left px-3 py-2 font-medium">
                           {t('intelligence.observability.events.colTime')}
                         </th>
@@ -227,26 +234,15 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
                     </thead>
                     <tbody className="divide-y">
                       {eventsQuery.data.events.map((e) => (
-                        <tr key={e.id}>
-                          <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
-                            {new Date(e.created_at).toLocaleString(locale)}
-                          </td>
-                          <td className="px-3 py-2 font-mono text-xs">{e.operation}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{e.model}</td>
-                          <td className="px-3 py-2 text-right">{formatLatencyMs(e.latency_ms)}</td>
-                          <td className="px-3 py-2 text-right">
-                            {formatCostUsd(e.cost_micros_usd, locale)}
-                          </td>
-                          <td className="px-3 py-2">
-                            <Badge
-                              variant={e.status === 'ok' ? 'secondary' : 'destructive'}
-                              className="text-xs"
-                            >
-                              {e.status}
-                              {e.error_kind ? ` · ${e.error_kind}` : ''}
-                            </Badge>
-                          </td>
-                        </tr>
+                        <ObservabilityEventRow
+                          key={e.id}
+                          event={e}
+                          locale={locale}
+                          rationaleLabel={t('intelligence.observability.events.rationale')}
+                          toggleLabel={t('intelligence.observability.events.rationaleToggle', {
+                            operation: e.operation,
+                          })}
+                        />
                       ))}
                     </tbody>
                   </table>
@@ -259,6 +255,78 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
         </>
       )}
     </div>
+  );
+}
+
+interface ObservabilityEventRowProps {
+  event: ObservabilityEvent;
+  locale: string;
+  /** Visible "AI rationale" heading on the expanded sub-row. */
+  rationaleLabel: string;
+  /** Per-row unique button label (e.g. "AI rationale for enrich") for screen readers. */
+  toggleLabel: string;
+}
+
+/**
+ * One events-table row that can expand to reveal the LLM's rationale. Owns its
+ * own expand state, so it resets naturally when the row unmounts (org switch,
+ * refetch) — no shared expanded-id set to go stale.
+ */
+function ObservabilityEventRow({
+  event,
+  locale,
+  rationaleLabel,
+  toggleLabel,
+}: ObservabilityEventRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const hasRationale = event.rationale != null && event.rationale.trim() !== '';
+
+  return (
+    <>
+      <tr>
+        <td className="px-2 py-2 align-top">
+          {hasRationale ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              aria-label={toggleLabel}
+              className="text-gray-500 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-primary rounded"
+            >
+              {expanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+          ) : null}
+        </td>
+        <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+          {new Date(event.created_at).toLocaleString(locale)}
+        </td>
+        <td className="px-3 py-2 font-mono text-xs">{event.operation}</td>
+        <td className="px-3 py-2 font-mono text-xs">{event.model}</td>
+        <td className="px-3 py-2 text-right">{formatLatencyMs(event.latency_ms)}</td>
+        <td className="px-3 py-2 text-right">{formatCostUsd(event.cost_micros_usd, locale)}</td>
+        <td className="px-3 py-2">
+          <Badge variant={event.status === 'ok' ? 'secondary' : 'destructive'} className="text-xs">
+            {event.status}
+            {event.error_kind ? ` · ${event.error_kind}` : ''}
+          </Badge>
+        </td>
+      </tr>
+      {hasRationale && expanded ? (
+        <tr className="bg-gray-50">
+          <td />
+          <td colSpan={6} className="px-3 py-2 text-xs text-gray-700 break-words">
+            <span className="font-medium text-gray-500 uppercase tracking-wide mr-2">
+              {rationaleLabel}
+            </span>
+            {event.rationale}
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
 

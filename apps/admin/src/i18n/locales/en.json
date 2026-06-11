@@ -1888,7 +1888,9 @@
         "colCost": "Cost",
         "colStatus": "Status",
         "empty": "No LLM calls recorded in this window.",
-        "loadFailed": "Could not load events."
+        "loadFailed": "Could not load events.",
+        "rationale": "AI rationale",
+        "rationaleToggle": "AI rationale for {{operation}}"
       }
     },
     "feedback": {
