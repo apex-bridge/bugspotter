@@ -263,8 +263,8 @@ export interface ObservabilityEvent {
   error_kind: string | null;
   cached: boolean;
   created_at: string;
-  /** One-sentence "why" the LLM chose this label; null for unwrapped/older calls. */
-  rationale: string | null;
+  /** One-sentence "why" the LLM chose this label; absent/null for unwrapped/older calls. */
+  rationale?: string | null;
 }
 
 export interface ObservabilityEventsResponse {
