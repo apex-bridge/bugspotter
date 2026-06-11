@@ -302,6 +302,33 @@ export interface ObservabilityAccuracyQuery {
 }
 
 // ============================================================================
+// Service status (platform-admin, master-key)
+// Mirrors the upstream ServiceStatusResponse from GET /api/v1/admin/status.
+// ============================================================================
+
+export interface IntelligenceEmbeddingHealth {
+  provider: string;
+  model: string | null;
+  total: number;
+  /** Rows with a NULL embedding — > 0 signals a dimension mismatch. */
+  nulls: number;
+  min_dim: number | null;
+  healthy: boolean;
+}
+
+export interface ServiceStatus {
+  version: string;
+  llm_provider: string;
+  llm_model: string | null;
+  /** Booleans only — the upstream never returns secret key values. */
+  anthropic_key_configured: boolean;
+  openai_key_configured: boolean;
+  similarity_threshold: number;
+  duplicate_threshold: number;
+  embeddings: IntelligenceEmbeddingHealth;
+}
+
+// ============================================================================
 // Intelligence Job Data (for BullMQ queue)
 // ============================================================================
 

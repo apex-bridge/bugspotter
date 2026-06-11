@@ -44,6 +44,7 @@ import { registerDedupRuleRoutes } from './routes/dedup-rules.js';
 import { registerAdminIntegrationRoutes } from './routes/admin-integrations.js';
 import { adminRoutes } from './routes/admin.js';
 import { adminJobsRoutes } from './routes/admin-jobs.js';
+import { adminIntelligenceRoutes } from './routes/admin-intelligence.js';
 import { adminOrganizationRoutes } from './routes/admin-organizations.js';
 import { invitationRoutes } from './routes/invitations.js';
 import { organizationRequestRoutes } from './routes/organization-requests.js';
@@ -460,6 +461,7 @@ export async function createServer(options: ServerOptions): Promise<FastifyInsta
   signupRoutes(fastify, db);
   await adminRoutes(fastify, db, options.pluginRegistry);
   await adminJobsRoutes(fastify);
+  await adminIntelligenceRoutes(fastify);
   await setupRoutes(fastify, db);
   userRoutes(fastify, db.users);
   apiKeyRoutes(fastify, db);
