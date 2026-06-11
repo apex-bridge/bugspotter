@@ -1893,6 +1893,27 @@
         "rationaleToggle": "Обоснование ИИ для {{operation}}"
       }
     },
+    "serviceStatus": {
+      "title": "Сервис ИИ",
+      "healthy": "Исправен",
+      "degraded": "Деградация",
+      "loading": "Загрузка...",
+      "notConfigured": "Сервис ИИ не настроен.",
+      "unavailable": "Не удалось загрузить статус сервиса ИИ.",
+      "provider": "Провайдер",
+      "model": "Модель",
+      "none": "Нет",
+      "anthropicKey": "Ключ Anthropic",
+      "openaiKey": "Ключ OpenAI",
+      "keyConfigured": "Настроен",
+      "keyMissing": "Не задан",
+      "similarityThreshold": "Порог похожести",
+      "duplicateThreshold": "Порог дубликатов",
+      "embeddings": "Модель эмбеддингов",
+      "embeddingRows": "Строк эмбеддингов",
+      "embeddingNulls": "{{nulls}} из {{total}} отсутствуют",
+      "version": "Версия"
+    },
     "feedback": {
       "helpful": "Полезно?",
       "thumbsUp": "Отметить как полезное",

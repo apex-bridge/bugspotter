@@ -9,6 +9,7 @@ import { HealthWorkers } from '../components/health/health-workers';
 import { HealthQueues } from '../components/health/health-queues';
 import { HealthPlugins } from '../components/health/health-plugins';
 import { HealthMetrics } from '../components/health/health-metrics';
+import { IntelligenceServiceStatus } from '../components/intelligence/intelligence-service-status';
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 // Type for translation function
@@ -253,6 +254,9 @@ export default function HealthPage() {
       </Card>
 
       <HealthServices services={health?.services} getStatusColor={getStatusColor} />
+
+      {/* AI/intelligence service status (operator view; self-fetches, quiet when off) */}
+      <IntelligenceServiceStatus />
 
       <HealthWorkers
         workers={health?.workers || []}
