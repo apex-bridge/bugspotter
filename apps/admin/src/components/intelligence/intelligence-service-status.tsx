@@ -42,9 +42,11 @@ export function IntelligenceServiceStatus() {
     queryKey: ['intelligence-service-status'],
     queryFn: intelligenceService.getServiceStatus,
     retry: false,
-    // Refresh on the system-health page like the other cards. Config /
-    // embedding-health change slowly, so 30s is proportionate (vs the page's 10s).
-    refetchInterval: 30000,
+    // Refresh on the system-health page like the other cards (30s — config /
+    // embedding-health change slowly, vs the page's 10s). Stop polling once it
+    // errors (e.g. 503 not-configured) so we don't re-hit it every 30s and
+    // spam server logs.
+    refetchInterval: (query) => (query.state.error ? false : 30000),
   });
 
   // 503 = master channel not configured → a quiet note, not an error.
