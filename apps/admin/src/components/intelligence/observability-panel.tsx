@@ -239,6 +239,9 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
                           event={e}
                           locale={locale}
                           rationaleLabel={t('intelligence.observability.events.rationale')}
+                          toggleLabel={t('intelligence.observability.events.rationaleToggle', {
+                            operation: e.operation,
+                          })}
                         />
                       ))}
                     </tbody>
@@ -258,7 +261,10 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
 interface ObservabilityEventRowProps {
   event: ObservabilityEvent;
   locale: string;
+  /** Visible "AI rationale" heading on the expanded sub-row. */
   rationaleLabel: string;
+  /** Per-row unique button label (e.g. "AI rationale for enrich") for screen readers. */
+  toggleLabel: string;
 }
 
 /**
@@ -266,7 +272,12 @@ interface ObservabilityEventRowProps {
  * own expand state, so it resets naturally when the row unmounts (org switch,
  * refetch) — no shared expanded-id set to go stale.
  */
-function ObservabilityEventRow({ event, locale, rationaleLabel }: ObservabilityEventRowProps) {
+function ObservabilityEventRow({
+  event,
+  locale,
+  rationaleLabel,
+  toggleLabel,
+}: ObservabilityEventRowProps) {
   const [expanded, setExpanded] = useState(false);
   const hasRationale = event.rationale != null && event.rationale.trim() !== '';
 
@@ -279,8 +290,8 @@ function ObservabilityEventRow({ event, locale, rationaleLabel }: ObservabilityE
               type="button"
               onClick={() => setExpanded((v) => !v)}
               aria-expanded={expanded}
-              aria-label={rationaleLabel}
-              className="text-gray-500 hover:text-gray-800"
+              aria-label={toggleLabel}
+              className="text-gray-500 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-primary rounded"
             >
               {expanded ? (
                 <ChevronDown className="h-4 w-4" />

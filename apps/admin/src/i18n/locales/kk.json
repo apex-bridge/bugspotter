@@ -1889,7 +1889,8 @@
         "colStatus": "Күйі",
         "empty": "Бұл терезеде LLM шақырулары жоқ.",
         "loadFailed": "Оқиғаларды жүктеу мүмкін болмады.",
-        "rationale": "ЖИ негіздемесі"
+        "rationale": "ЖИ негіздемесі",
+        "rationaleToggle": "{{operation}} үшін ЖИ негіздемесі"
       }
     },
     "feedback": {

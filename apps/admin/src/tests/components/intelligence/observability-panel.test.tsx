@@ -204,7 +204,7 @@ describe('<ObservabilityPanel>', () => {
     render(<ObservabilityPanel orgId={ORG_ID} />, { wrapper });
 
     // Only the row that has a rationale gets a toggle; the null row has none.
-    const toggles = await screen.findAllByRole('button', { name: 'AI rationale' });
+    const toggles = await screen.findAllByRole('button', { name: /AI rationale/ });
     expect(toggles).toHaveLength(1);
 
     // Rationale stays hidden until the row is expanded.
