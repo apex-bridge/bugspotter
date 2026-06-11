@@ -318,7 +318,7 @@ function ObservabilityEventRow({
       {hasRationale && expanded ? (
         <tr className="bg-gray-50">
           <td />
-          <td colSpan={6} className="px-3 py-2 text-xs text-gray-700">
+          <td colSpan={6} className="px-3 py-2 text-xs text-gray-700 break-words">
             <span className="font-medium text-gray-500 uppercase tracking-wide mr-2">
               {rationaleLabel}
             </span>
