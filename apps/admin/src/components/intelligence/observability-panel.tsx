@@ -6,9 +6,10 @@
  * table; no charts (no charting library in the repo) — KPIs are CSS grid only.
  */
 
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Brain, Gauge } from 'lucide-react';
+import { AlertTriangle, Brain, ChevronDown, ChevronRight, Gauge } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { intelligenceService } from '../../services/intelligence-service';
 import { formatCostUsd, formatLatencyMs, formatPercent } from './observability-formatters';
@@ -20,6 +21,19 @@ interface ObservabilityPanelProps {
 export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
+
+  // Which event rows have their rationale sub-row expanded.
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleExpanded = (id: string) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
 
   const summaryQuery = useQuery({
     queryKey: ['intelligence-observability-summary', orgId],
@@ -205,6 +219,11 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
                       <tr>
+                        <th className="w-8 px-2 py-2">
+                          <span className="sr-only">
+                            {t('intelligence.observability.events.rationale')}
+                          </span>
+                        </th>
                         <th className="text-left px-3 py-2 font-medium">
                           {t('intelligence.observability.events.colTime')}
                         </th>
@@ -226,28 +245,64 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {eventsQuery.data.events.map((e) => (
-                        <tr key={e.id}>
-                          <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
-                            {new Date(e.created_at).toLocaleString(locale)}
-                          </td>
-                          <td className="px-3 py-2 font-mono text-xs">{e.operation}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{e.model}</td>
-                          <td className="px-3 py-2 text-right">{formatLatencyMs(e.latency_ms)}</td>
-                          <td className="px-3 py-2 text-right">
-                            {formatCostUsd(e.cost_micros_usd, locale)}
-                          </td>
-                          <td className="px-3 py-2">
-                            <Badge
-                              variant={e.status === 'ok' ? 'secondary' : 'destructive'}
-                              className="text-xs"
-                            >
-                              {e.status}
-                              {e.error_kind ? ` · ${e.error_kind}` : ''}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
+                      {eventsQuery.data.events.map((e) => {
+                        const hasRationale = e.rationale != null && e.rationale.trim() !== '';
+                        const isExpanded = expandedIds.has(e.id);
+                        return (
+                          <Fragment key={e.id}>
+                            <tr>
+                              <td className="px-2 py-2 align-top">
+                                {hasRationale ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleExpanded(e.id)}
+                                    aria-expanded={isExpanded}
+                                    aria-label={t('intelligence.observability.events.rationale')}
+                                    className="text-gray-500 hover:text-gray-800"
+                                  >
+                                    {isExpanded ? (
+                                      <ChevronDown className="h-4 w-4" />
+                                    ) : (
+                                      <ChevronRight className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                                {new Date(e.created_at).toLocaleString(locale)}
+                              </td>
+                              <td className="px-3 py-2 font-mono text-xs">{e.operation}</td>
+                              <td className="px-3 py-2 font-mono text-xs">{e.model}</td>
+                              <td className="px-3 py-2 text-right">
+                                {formatLatencyMs(e.latency_ms)}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {formatCostUsd(e.cost_micros_usd, locale)}
+                              </td>
+                              <td className="px-3 py-2">
+                                <Badge
+                                  variant={e.status === 'ok' ? 'secondary' : 'destructive'}
+                                  className="text-xs"
+                                >
+                                  {e.status}
+                                  {e.error_kind ? ` · ${e.error_kind}` : ''}
+                                </Badge>
+                              </td>
+                            </tr>
+                            {hasRationale && isExpanded ? (
+                              <tr className="bg-gray-50">
+                                <td />
+                                <td colSpan={6} className="px-3 py-2 text-xs text-gray-700">
+                                  <span className="font-medium text-gray-500 uppercase tracking-wide mr-2">
+                                    {t('intelligence.observability.events.rationale')}
+                                  </span>
+                                  {e.rationale}
+                                </td>
+                              </tr>
+                            ) : null}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
