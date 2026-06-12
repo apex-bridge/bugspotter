@@ -1893,6 +1893,27 @@
         "rationaleToggle": "{{operation}} үшін ЖИ негіздемесі"
       }
     },
+    "serviceStatus": {
+      "title": "ЖИ қызметі",
+      "healthy": "Қалыпты",
+      "degraded": "Нашарлаған",
+      "loading": "Жүктелуде...",
+      "notConfigured": "ЖИ қызметі бапталмаған.",
+      "unavailable": "ЖИ қызметінің күйін жүктеу мүмкін болмады.",
+      "provider": "Провайдер",
+      "model": "Модель",
+      "none": "Жоқ",
+      "anthropicKey": "Anthropic кілті",
+      "openaiKey": "OpenAI кілті",
+      "keyConfigured": "Бапталған",
+      "keyMissing": "Орнатылмаған",
+      "similarityThreshold": "Ұқсастық шегі",
+      "duplicateThreshold": "Дубликат шегі",
+      "embeddings": "Эмбеддинг моделі",
+      "embeddingRows": "Эмбеддинг жолдары",
+      "embeddingNulls": "{{total}} ішінен {{nulls}} жоқ",
+      "version": "Нұсқа"
+    },
     "feedback": {
       "helpful": "Пайдалы ма?",
       "thumbsUp": "Пайдалы деп белгілеу",

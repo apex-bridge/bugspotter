@@ -14,6 +14,33 @@ export interface IntelligenceStatus {
   intelligence_enabled: boolean;
 }
 
+/** Embedding-pipeline health within the platform-admin service status. */
+export interface IntelligenceEmbeddingHealth {
+  provider: string;
+  model: string | null;
+  total: number;
+  /** Rows with a NULL embedding — > 0 signals a dimension mismatch. */
+  nulls: number;
+  min_dim: number | null;
+  healthy: boolean;
+}
+
+/**
+ * Operator (platform-admin) status of the intelligence service. Mirrors the
+ * backend ServiceStatus, which proxies the upstream GET /admin/status.
+ * Cloud-key fields are booleans only — secret values never cross the wire.
+ */
+export interface IntelligenceServiceStatus {
+  version: string;
+  llm_provider: string;
+  llm_model: string | null;
+  anthropic_key_configured: boolean;
+  openai_key_configured: boolean;
+  similarity_threshold: number;
+  duplicate_threshold: number;
+  embeddings: IntelligenceEmbeddingHealth;
+}
+
 export interface IntelligenceSettings {
   intelligence_enabled: boolean;
   intelligence_provider: string | null;

@@ -1893,6 +1893,27 @@
         "rationaleToggle": "AI rationale for {{operation}}"
       }
     },
+    "serviceStatus": {
+      "title": "AI service",
+      "healthy": "Healthy",
+      "degraded": "Degraded",
+      "loading": "Loading...",
+      "notConfigured": "AI service is not configured.",
+      "unavailable": "Could not load AI service status.",
+      "provider": "Provider",
+      "model": "Model",
+      "none": "None",
+      "anthropicKey": "Anthropic key",
+      "openaiKey": "OpenAI key",
+      "keyConfigured": "Configured",
+      "keyMissing": "Not set",
+      "similarityThreshold": "Similarity threshold",
+      "duplicateThreshold": "Duplicate threshold",
+      "embeddings": "Embedding model",
+      "embeddingRows": "Embedding rows",
+      "embeddingNulls": "{{nulls}} of {{total}} missing",
+      "version": "Version"
+    },
     "feedback": {
       "helpful": "Helpful?",
       "thumbsUp": "Mark as helpful",
