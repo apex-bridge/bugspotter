@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Brain, ChevronDown, ChevronRight, Tag } from 'lucide-react';
@@ -18,10 +18,14 @@ export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
   const rationalePanelId = `enrichment-rationale-${bugReportId}`;
 
   // The card stays mounted across bug navigation (its query is keyed on
-  // bugReportId), so reset the accordion when the bug changes.
-  useEffect(() => {
+  // bugReportId), so reset the accordion when the bug changes. Render-phase
+  // reset — React's recommended pattern for adjusting state on a prop change
+  // (no extra effect pass, no flash of the previous state on cached data).
+  const [prevBugReportId, setPrevBugReportId] = useState(bugReportId);
+  if (bugReportId !== prevBugReportId) {
+    setPrevBugReportId(bugReportId);
     setShowRationale(false);
-  }, [bugReportId]);
+  }
 
   const {
     data: enrichment,
