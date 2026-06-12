@@ -7,6 +7,7 @@ import { api, API_ENDPOINTS } from '../lib/api-client';
 import type {
   IntelligenceSettings,
   IntelligenceStatus,
+  IntelligenceServiceStatus,
   UpdateIntelligenceSettingsInput,
   ProvisionKeyResult,
   IntelligenceEnrichment,
@@ -40,6 +41,13 @@ export const intelligenceService = {
 
   getSettings: async (orgId: string): Promise<IntelligenceSettings> => {
     const response = await api.get(API_ENDPOINTS.intelligence.settings(orgId));
+    return response.data.data;
+  },
+
+  // Platform-admin (operator) service status — global, not org-scoped.
+  // 503 when the intelligence master channel isn't configured.
+  getServiceStatus: async (): Promise<IntelligenceServiceStatus> => {
+    const response = await api.get(API_ENDPOINTS.intelligence.serviceStatus());
     return response.data.data;
   },
 

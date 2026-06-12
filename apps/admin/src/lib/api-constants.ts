@@ -289,6 +289,8 @@ export const API_ENDPOINTS = {
   // Intelligence endpoints
   intelligence: {
     status: (orgId: string) => `${API_VERSION}/organizations/${orgId}/intelligence/status`,
+    // Platform-admin (operator) service status — global, not org-scoped.
+    serviceStatus: () => `${API_VERSION}/admin/intelligence/status`,
     settings: (orgId: string) => `${API_VERSION}/organizations/${orgId}/intelligence/settings`,
     provisionKey: (orgId: string) => `${API_VERSION}/organizations/${orgId}/intelligence/key`,
     generateKey: (orgId: string) =>
