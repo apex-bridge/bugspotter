@@ -109,7 +109,28 @@ describe('IntelligenceEnrichmentService', () => {
         0.78,
         0.88,
         0.72,
+        null,
+        null,
       ]);
+    });
+
+    it('persists rationale and event_id when present', async () => {
+      const db = createMockDb([{ rows: [{ id: 'enr-1', enrichment_version: 1 }] }]);
+      const service = new IntelligenceEnrichmentService(db as DatabaseClient);
+      const eventId = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+      const response = createEnrichResponse({
+        rationale: 'Marked critical: payment flow blocked for all users.',
+        event_id: eventId,
+      });
+
+      await service.saveEnrichment('bug-1', 'proj-1', 'org-1', response);
+
+      const [sql, params] = getQuery(db).mock.calls[0];
+      expect(sql).toContain('rationale');
+      expect(sql).toContain('event_id');
+      // rationale + event_id are params 14 and 15 (0-indexed 13 and 14).
+      expect(params[13]).toBe('Marked critical: payment flow blocked for all users.');
+      expect(params[14]).toBe(eventId);
     });
 
     it('passes null for organizationId when undefined', async () => {

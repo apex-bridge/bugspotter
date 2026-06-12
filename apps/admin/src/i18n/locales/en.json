@@ -1809,7 +1809,8 @@
       "enrichedAt": "Enriched on {{date}}",
       "notEnriched": "Not yet enriched",
       "enriching": "Enriching...",
-      "components": "Components"
+      "components": "Components",
+      "rationaleTitle": "Why AI decided this"
     },
     "analysis": {
       "title": "Analysis",

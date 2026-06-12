@@ -107,6 +107,10 @@ export interface IntelligenceEnrichment {
   confidence_root_cause: number;
   confidence_components: number;
   enrichment_version: number;
+  /** LLM one-sentence "why" for the chosen severity/category; null for older rows. */
+  rationale?: string | null;
+  /** Upstream intelligence_event id for this enrichment LLM call. */
+  event_id?: string | null;
   created_at: string;
   updated_at: string;
 }

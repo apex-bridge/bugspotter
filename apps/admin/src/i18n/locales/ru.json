@@ -1809,7 +1809,8 @@
       "enrichedAt": "Обогащён {{date}}",
       "notEnriched": "Ещё не обогащён",
       "enriching": "Обогащение...",
-      "components": "Компоненты"
+      "components": "Компоненты",
+      "rationaleTitle": "Почему ИИ так решил"
     },
     "analysis": {
       "title": "Анализ",

@@ -1809,7 +1809,8 @@
       "enrichedAt": "{{date}} байытылды",
       "notEnriched": "Әлі байытылмаған",
       "enriching": "Байыту...",
-      "components": "Компоненттер"
+      "components": "Компоненттер",
+      "rationaleTitle": "ЖИ неге осылай шешті"
     },
     "analysis": {
       "title": "Талдау",
