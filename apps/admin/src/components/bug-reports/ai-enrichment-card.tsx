@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Brain, ChevronDown, ChevronRight, Tag } from 'lucide-react';
@@ -16,6 +16,12 @@ export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
   const { t } = useTranslation();
   const [showRationale, setShowRationale] = useState(false);
   const rationalePanelId = `enrichment-rationale-${bugReportId}`;
+
+  // The card stays mounted across bug navigation (its query is keyed on
+  // bugReportId), so reset the accordion when the bug changes.
+  useEffect(() => {
+    setShowRationale(false);
+  }, [bugReportId]);
 
   const {
     data: enrichment,

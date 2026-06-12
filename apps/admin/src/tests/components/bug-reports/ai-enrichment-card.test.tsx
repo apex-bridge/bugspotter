@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { AIEnrichmentCard } from '../../../components/bug-reports/ai-enrichment-card';
@@ -93,5 +93,23 @@ describe('<AIEnrichmentCard> rationale accordion', () => {
 
     expect(await screen.findByText('AI Enrichment')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Why AI decided this/i })).not.toBeInTheDocument();
+  });
+
+  it('collapses the accordion when the card switches to a different bug', async () => {
+    vi.mocked(intelligenceService.getEnrichment).mockResolvedValue({
+      ...BASE,
+      rationale: 'Marked critical: payment flow blocked for all users.',
+    });
+
+    const { rerender } = render(<AIEnrichmentCard bugReportId="bug-1" />, { wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Why AI decided this/i }));
+    expect(screen.getByText(/payment flow blocked/i)).toBeInTheDocument();
+
+    // Switching bug reports (card stays mounted) resets the accordion.
+    rerender(<AIEnrichmentCard bugReportId="bug-2" />);
+    await waitFor(() => {
+      expect(screen.queryByText(/payment flow blocked/i)).not.toBeInTheDocument();
+    });
   });
 });
