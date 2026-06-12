@@ -193,6 +193,8 @@ export interface EnrichBugResponse {
   };
   /** intelligence_event id for this enrichment LLM call. */
   event_id?: string | null;
+  /** One-sentence "why" the LLM chose this severity/category; null/absent for older payloads. */
+  rationale?: string | null;
 }
 
 // ============================================================================
