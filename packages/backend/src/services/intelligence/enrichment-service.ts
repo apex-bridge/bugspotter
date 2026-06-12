@@ -32,6 +32,10 @@ export interface BugEnrichmentRow {
   confidence_root_cause: number;
   confidence_components: number;
   enrichment_version: number;
+  /** LLM one-sentence justification for the chosen severity/category. */
+  rationale: string | null;
+  /** Upstream intelligence_event id for this enrichment LLM call. */
+  event_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -61,8 +65,8 @@ export class IntelligenceEnrichmentService {
         (bug_report_id, project_id, organization_id, category, suggested_severity,
          tags, root_cause_summary, affected_components,
          confidence_category, confidence_severity, confidence_tags,
-         confidence_root_cause, confidence_components, enrichment_version)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1)
+         confidence_root_cause, confidence_components, rationale, event_id, enrichment_version)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 1)
       ON CONFLICT (bug_report_id) DO UPDATE SET
         category = EXCLUDED.category,
         suggested_severity = EXCLUDED.suggested_severity,
@@ -74,28 +78,32 @@ export class IntelligenceEnrichmentService {
         confidence_tags = EXCLUDED.confidence_tags,
         confidence_root_cause = EXCLUDED.confidence_root_cause,
         confidence_components = EXCLUDED.confidence_components,
+        rationale = EXCLUDED.rationale,
+        event_id = EXCLUDED.event_id,
         enrichment_version = ${TABLE}.enrichment_version + 1,
         updated_at = NOW()
       RETURNING *
     `;
 
-    const result = await this.db
-      .getPool()
-      .query(query, [
-        bugReportId,
-        projectId,
-        organizationId ?? null,
-        response.category,
-        response.suggested_severity,
-        response.tags,
-        response.root_cause_summary,
-        response.affected_components,
-        response.confidence.category,
-        response.confidence.severity,
-        response.confidence.tags,
-        response.confidence.root_cause,
-        response.confidence.components,
-      ]);
+    const result = await this.db.getPool().query(query, [
+      bugReportId,
+      projectId,
+      organizationId ?? null,
+      response.category,
+      response.suggested_severity,
+      response.tags,
+      response.root_cause_summary,
+      response.affected_components,
+      response.confidence.category,
+      response.confidence.severity,
+      response.confidence.tags,
+      response.confidence.root_cause,
+      response.confidence.components,
+      // Coerce empty/whitespace to null — an empty string in the UUID
+      // event_id column would throw, and an empty rationale should read as absent.
+      response.rationale?.trim() || null,
+      response.event_id?.trim() || null,
+    ]);
 
     const row = result.rows[0];
 

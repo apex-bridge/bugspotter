@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Brain, Tag } from 'lucide-react';
+import { Brain, ChevronDown, ChevronRight, Tag } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { intelligenceService } from '../../services/intelligence-service';
 import { formatDate } from '../../utils/format';
@@ -13,6 +14,18 @@ interface AIEnrichmentCardProps {
 // intelligence_enabled is true, so no self-gating is needed here.
 export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
   const { t } = useTranslation();
+  const [showRationale, setShowRationale] = useState(false);
+  const rationalePanelId = `enrichment-rationale-${bugReportId}`;
+
+  // The card stays mounted across bug navigation (its query is keyed on
+  // bugReportId), so reset the accordion when the bug changes. Render-phase
+  // reset — React's recommended pattern for adjusting state on a prop change
+  // (no extra effect pass, no flash of the previous state on cached data).
+  const [prevBugReportId, setPrevBugReportId] = useState(bugReportId);
+  if (bugReportId !== prevBugReportId) {
+    setPrevBugReportId(bugReportId);
+    setShowRationale(false);
+  }
 
   const {
     data: enrichment,
@@ -131,6 +144,31 @@ export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
                 </Badge>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Why AI decided this — collapsible rationale (hidden when absent) */}
+        {enrichment.rationale?.trim() && (
+          <div className="pt-2 border-t border-purple-100">
+            <button
+              type="button"
+              onClick={() => setShowRationale((v) => !v)}
+              aria-expanded={showRationale}
+              aria-controls={rationalePanelId}
+              className="flex items-center gap-1 text-xs font-medium text-purple-700 uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-primary rounded"
+            >
+              {showRationale ? (
+                <ChevronDown className="w-3 h-3" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="w-3 h-3" aria-hidden="true" />
+              )}
+              {t('intelligence.enrichment.rationaleTitle')}
+            </button>
+            {showRationale && (
+              <p id={rationalePanelId} className="text-sm text-gray-700 mt-1 break-words">
+                {enrichment.rationale}
+              </p>
+            )}
           </div>
         )}
       </div>
