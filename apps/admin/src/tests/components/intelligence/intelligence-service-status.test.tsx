@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { IntelligenceServiceStatus } from '../../../components/intelligence/intelligence-service-status';
+import {
+  IntelligenceServiceStatus,
+  statusRefetchInterval,
+} from '../../../components/intelligence/intelligence-service-status';
 import { intelligenceService } from '../../../services/intelligence-service';
 
 vi.mock('react-i18next', async () => {
@@ -105,5 +108,22 @@ describe('<IntelligenceServiceStatus>', () => {
       expect(screen.getByText('AI service is not configured.')).toBeInTheDocument();
     });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('statusRefetchInterval', () => {
+  it('polls every 30s when there is no error', () => {
+    expect(statusRefetchInterval(null)).toBe(30000);
+  });
+
+  it('stops polling on a 503 (not configured, permanent)', () => {
+    expect(statusRefetchInterval({ response: { status: 503 } })).toBe(false);
+  });
+
+  it('keeps polling on transient errors so the card self-heals', () => {
+    expect(statusRefetchInterval({ response: { status: 502 } })).toBe(30000);
+    expect(statusRefetchInterval({ response: { status: 504 } })).toBe(30000);
+    // Network error — no response object.
+    expect(statusRefetchInterval(new Error('ECONNREFUSED'))).toBe(30000);
   });
 });

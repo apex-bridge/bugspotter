@@ -15,6 +15,18 @@ import { intelligenceService } from '../../services/intelligence-service';
 
 type TFn = (key: string, options?: Record<string, unknown>) => string;
 
+const STATUS_REFETCH_MS = 30_000;
+
+/**
+ * Poll the status card every 30s. Stop permanently on a 503 (service not
+ * configured) so we don't re-hit it forever; keep polling on transient errors
+ * (502/504/network) so the card self-heals once the upstream recovers.
+ */
+export function statusRefetchInterval(error: unknown): number | false {
+  const status = (error as { response?: { status?: number } } | null)?.response?.status;
+  return status === 503 ? false : STATUS_REFETCH_MS;
+}
+
 function KeyBadge({ configured, t }: { configured: boolean; t: TFn }) {
   return (
     <Badge variant={configured ? 'secondary' : 'outline'} className="text-xs">
@@ -42,11 +54,9 @@ export function IntelligenceServiceStatus() {
     queryKey: ['intelligence-service-status'],
     queryFn: intelligenceService.getServiceStatus,
     retry: false,
-    // Refresh on the system-health page like the other cards (30s — config /
-    // embedding-health change slowly, vs the page's 10s). Stop polling once it
-    // errors (e.g. 503 not-configured) so we don't re-hit it every 30s and
-    // spam server logs.
-    refetchInterval: (query) => (query.state.error ? false : 30000),
+    // 30s refresh like the other health cards; only a 503 (not configured)
+    // stops it — see statusRefetchInterval.
+    refetchInterval: (query) => statusRefetchInterval(query.state.error),
   });
 
   // 503 = master channel not configured → a quiet note, not an error.
