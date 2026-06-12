@@ -85,25 +85,25 @@ export class IntelligenceEnrichmentService {
       RETURNING *
     `;
 
-    const result = await this.db
-      .getPool()
-      .query(query, [
-        bugReportId,
-        projectId,
-        organizationId ?? null,
-        response.category,
-        response.suggested_severity,
-        response.tags,
-        response.root_cause_summary,
-        response.affected_components,
-        response.confidence.category,
-        response.confidence.severity,
-        response.confidence.tags,
-        response.confidence.root_cause,
-        response.confidence.components,
-        response.rationale ?? null,
-        response.event_id ?? null,
-      ]);
+    const result = await this.db.getPool().query(query, [
+      bugReportId,
+      projectId,
+      organizationId ?? null,
+      response.category,
+      response.suggested_severity,
+      response.tags,
+      response.root_cause_summary,
+      response.affected_components,
+      response.confidence.category,
+      response.confidence.severity,
+      response.confidence.tags,
+      response.confidence.root_cause,
+      response.confidence.components,
+      // Coerce empty/whitespace to null — an empty string in the UUID
+      // event_id column would throw, and an empty rationale should read as absent.
+      response.rationale?.trim() || null,
+      response.event_id?.trim() || null,
+    ]);
 
     const row = result.rows[0];
 

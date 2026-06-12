@@ -15,6 +15,7 @@ interface AIEnrichmentCardProps {
 export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
   const { t } = useTranslation();
   const [showRationale, setShowRationale] = useState(false);
+  const rationalePanelId = `enrichment-rationale-${bugReportId}`;
 
   const {
     data: enrichment,
@@ -143,6 +144,7 @@ export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
               type="button"
               onClick={() => setShowRationale((v) => !v)}
               aria-expanded={showRationale}
+              aria-controls={rationalePanelId}
               className="flex items-center gap-1 text-xs font-medium text-purple-700 uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-primary rounded"
             >
               {showRationale ? (
@@ -153,7 +155,9 @@ export function AIEnrichmentCard({ bugReportId }: AIEnrichmentCardProps) {
               {t('intelligence.enrichment.rationaleTitle')}
             </button>
             {showRationale && (
-              <p className="text-sm text-gray-700 mt-1 break-words">{enrichment.rationale}</p>
+              <p id={rationalePanelId} className="text-sm text-gray-700 mt-1 break-words">
+                {enrichment.rationale}
+              </p>
             )}
           </div>
         )}
