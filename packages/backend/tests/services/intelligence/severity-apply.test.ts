@@ -92,6 +92,18 @@ describe('applyAiSeverityToPriority', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('fails safe (skips, no write) when confidence is missing — no silent bypass', async () => {
+    const { db, query } = createMockDb(1);
+    const malformed = { ...enrichment(), confidence: undefined } as unknown as EnrichBugResponse;
+    const result = await applyAiSeverityToPriority(db, {
+      ...PARAMS,
+      enrichment: malformed,
+      settings: settings(),
+    });
+    expect(result).toEqual({ applied: false, reason: 'below_threshold' });
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('skips an unrecognized severity value', async () => {
     const { db, query } = createMockDb(1);
     const result = await applyAiSeverityToPriority(db, {

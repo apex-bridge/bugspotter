@@ -57,12 +57,22 @@ export async function applyAiSeverityToPriority(
     return { applied: false, reason: 'disabled' };
   }
 
-  const confidence = enrichment.confidence.severity;
-  if (confidence < settings.intelligence_severity_apply_threshold) {
+  // Fail safe on the confidence gate. The values are typed numbers, but this
+  // consumer trusts an upstream response that isn't runtime-validated — and a
+  // missing confidence/threshold must NOT slip through, since `undefined < n`
+  // is false and would silently bypass the gate and auto-apply.
+  const confidence = enrichment.confidence?.severity;
+  const threshold = settings.intelligence_severity_apply_threshold;
+  if (
+    typeof confidence !== 'number' ||
+    !Number.isFinite(confidence) ||
+    typeof threshold !== 'number' ||
+    confidence < threshold
+  ) {
     return { applied: false, reason: 'below_threshold' };
   }
 
-  const priority = SEVERITY_TO_PRIORITY[enrichment.suggested_severity.toLowerCase()];
+  const priority = SEVERITY_TO_PRIORITY[enrichment.suggested_severity?.toLowerCase?.() ?? ''];
   if (!priority) {
     logger.warn('AI suggested_severity is not a known priority; skipping auto-apply', {
       bugReportId,
