@@ -46,6 +46,10 @@ export interface IntelligenceSettings {
   intelligence_provider: string | null;
   intelligence_auto_analyze: boolean;
   intelligence_auto_enrich: boolean;
+  /** Apply the AI suggested severity to the bug's priority (only while still default). Off by default. */
+  intelligence_auto_apply_severity: boolean;
+  /** Minimum severity-confidence (0..1) required to auto-apply. */
+  intelligence_severity_apply_threshold: number;
   intelligence_similarity_threshold: number;
   intelligence_dedup_enabled: boolean;
   intelligence_dedup_action: 'flag' | 'auto_close';
@@ -68,6 +72,8 @@ export interface UpdateIntelligenceSettingsInput {
   intelligence_provider?: string | null;
   intelligence_auto_analyze?: boolean;
   intelligence_auto_enrich?: boolean;
+  intelligence_auto_apply_severity?: boolean;
+  intelligence_severity_apply_threshold?: number | null;
   intelligence_similarity_threshold?: number | null;
   intelligence_dedup_enabled?: boolean;
   intelligence_dedup_action?: 'flag' | 'auto_close' | null;

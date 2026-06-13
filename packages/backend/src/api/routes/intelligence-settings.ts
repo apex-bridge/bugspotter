@@ -65,6 +65,8 @@ const updateSettingsBody = {
     intelligence_provider: { type: ['string', 'null'] },
     intelligence_auto_analyze: { type: 'boolean' },
     intelligence_auto_enrich: { type: 'boolean' },
+    intelligence_auto_apply_severity: { type: 'boolean' },
+    intelligence_severity_apply_threshold: { type: ['number', 'null'], minimum: 0, maximum: 1 },
     intelligence_similarity_threshold: { type: ['number', 'null'], minimum: 0, maximum: 1 },
     intelligence_dedup_enabled: { type: 'boolean' },
     intelligence_dedup_action: { type: ['string', 'null'], enum: ['flag', 'auto_close', null] },
@@ -133,6 +135,8 @@ interface UpdateSettingsBody {
   intelligence_provider?: string | null;
   intelligence_auto_analyze?: boolean;
   intelligence_auto_enrich?: boolean;
+  intelligence_auto_apply_severity?: boolean;
+  intelligence_severity_apply_threshold?: number | null;
   intelligence_similarity_threshold?: number | null;
   intelligence_dedup_enabled?: boolean;
   intelligence_dedup_action?: 'flag' | 'auto_close' | null;
