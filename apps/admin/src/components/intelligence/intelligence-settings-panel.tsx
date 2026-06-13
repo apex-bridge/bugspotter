@@ -226,9 +226,13 @@ export function IntelligenceSettingsPanel({
       const num = parseFloat(value);
       if (!isNaN(num) && num >= 0 && num <= 1) {
         updateMutation.mutate({ intelligence_severity_apply_threshold: num });
+      } else if (settings?.intelligence_severity_apply_threshold != null) {
+        // Invalid input — revert to the last saved value so the field never
+        // shows an unsaved (and unsavable) number.
+        setApplyThreshold(String(settings.intelligence_severity_apply_threshold));
       }
     },
-    [updateMutation]
+    [updateMutation, settings?.intelligence_severity_apply_threshold]
   );
 
   // Save / clear a per-channel bot token. Reuses `updateMutation` so
