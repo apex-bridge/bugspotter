@@ -10,6 +10,7 @@
  * is present. Self-hosted has no per-org flag, so auto-apply stays off there.
  */
 
+import type { BugPriority } from '@bugspotter/types';
 import { getLogger } from '../../logger.js';
 import type { DatabaseClient } from '../../db/client.js';
 import type { EnrichBugResponse } from './types.js';
@@ -20,7 +21,7 @@ const logger = getLogger();
 // AI `suggested_severity` vocabulary → `bug_reports.priority` values. An
 // unrecognized value is skipped (never written) so a surprise upstream label
 // can't land a bad priority.
-const SEVERITY_TO_PRIORITY: Record<string, string> = {
+const SEVERITY_TO_PRIORITY: Record<string, BugPriority> = {
   low: 'low',
   medium: 'medium',
   high: 'high',
@@ -28,11 +29,11 @@ const SEVERITY_TO_PRIORITY: Record<string, string> = {
 };
 
 // Only fill priority when the bug is still here — never overwrite human triage.
-const DEFAULT_PRIORITY = 'medium';
+const DEFAULT_PRIORITY: BugPriority = 'medium';
 
 export interface ApplySeverityResult {
   applied: boolean;
-  priority?: string;
+  priority?: BugPriority;
   /** Why it didn't apply — for logging/observability, not user-facing. */
   reason?:
     | 'disabled'
