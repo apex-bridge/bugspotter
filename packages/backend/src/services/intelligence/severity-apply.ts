@@ -95,18 +95,16 @@ export async function applyAiSeverityToPriority(
   }
 
   // Atomic guard: only set priority if it's still the default. A single
-  // conditional UPDATE avoids a read-then-write race. Tenant-scoped via the
-  // bug's project → org (bug_reports has no organization_id column), so a
-  // mismatched bugReportId/organizationId can never write across tenants.
+  // conditional UPDATE avoids a read-then-write race. Tenant-scoped on the
+  // indexed organization_id column, so a mismatched bugReportId/organizationId
+  // can never write across tenants.
   const result = await db.getPool().query(
     `UPDATE application.bug_reports
         SET priority = $1, updated_at = NOW()
       WHERE id = $2
         AND priority = $3
         AND deleted_at IS NULL
-        AND project_id IN (
-          SELECT id FROM application.projects WHERE organization_id = $4
-        )`,
+        AND organization_id = $4`,
     [priority, bugReportId, DEFAULT_PRIORITY, organizationId]
   );
 
