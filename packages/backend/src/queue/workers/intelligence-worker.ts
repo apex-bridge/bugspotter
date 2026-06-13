@@ -167,7 +167,7 @@ async function processIntelligenceJob(
   }
 
   if (type === 'enrich') {
-    return processEnrichJob(job, client, db, startTime);
+    return processEnrichJob(job, client, db, orgId, startTime);
   }
 
   if (type === 'mitigation') {
@@ -380,6 +380,7 @@ async function processEnrichJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
   client: IntelligenceClient,
   db: DatabaseClient,
+  resolvedOrgId: string | undefined,
   startTime: number
 ): Promise<IntelligenceJobResult> {
   const { bugReportId, projectId, organizationId } = job.data;
@@ -433,13 +434,15 @@ async function processEnrichJob(
   );
 
   // Step 3: optionally apply the AI severity to the bug's priority (SaaS,
-  // org-gated, opt-in). Non-fatal — a failure here must not fail enrichment.
-  if (organizationId) {
+  // org-gated, opt-in). Uses the resolved org (resolveClient derives it from
+  // the project when the job omits organizationId). Non-fatal — a failure here
+  // must not fail enrichment.
+  if (resolvedOrgId) {
     try {
-      const settings = await getOrgIntelligenceSettings(db, organizationId);
+      const settings = await getOrgIntelligenceSettings(db, resolvedOrgId);
       await applyAiSeverityToPriority(db, {
         bugReportId,
-        organizationId,
+        organizationId: resolvedOrgId,
         enrichment: enrichResponse,
         settings,
       });

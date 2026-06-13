@@ -72,6 +72,7 @@ export async function applyAiSeverityToPriority(
     typeof confidence !== 'number' ||
     !Number.isFinite(confidence) ||
     typeof threshold !== 'number' ||
+    !Number.isFinite(threshold) ||
     confidence < threshold
   ) {
     return { applied: false, reason: 'below_threshold' };

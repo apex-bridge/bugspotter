@@ -116,6 +116,17 @@ describe('applyAiSeverityToPriority', () => {
     expect(auditCreate).not.toHaveBeenCalled();
   });
 
+  it('fails safe (skips) when the threshold is NaN — no silent bypass', async () => {
+    const { db, query } = createMockDb(1);
+    const result = await applyAiSeverityToPriority(db, {
+      ...PARAMS,
+      enrichment: enrichment(),
+      settings: settings({ intelligence_severity_apply_threshold: NaN }),
+    });
+    expect(result).toEqual({ applied: false, reason: 'below_threshold' });
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('skips an unrecognized severity value', async () => {
     const { db, query } = createMockDb(1);
     const result = await applyAiSeverityToPriority(db, {
