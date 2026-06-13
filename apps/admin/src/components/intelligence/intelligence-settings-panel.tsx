@@ -69,6 +69,7 @@ type BooleanSettingsKey =
   | 'intelligence_enabled'
   | 'intelligence_auto_analyze'
   | 'intelligence_auto_enrich'
+  | 'intelligence_auto_apply_severity'
   | 'intelligence_dedup_enabled'
   | 'intelligence_self_service_enabled';
 
@@ -98,6 +99,7 @@ export function IntelligenceSettingsPanel({
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [showProvisionForm, setShowProvisionForm] = useState(false);
   const [threshold, setThreshold] = useState('0.75');
+  const [applyThreshold, setApplyThreshold] = useState('0.8');
   const [preFileDedupGraceSec, setPreFileDedupGraceSec] = useState('0');
   // Per-channel token inputs — local-only state, never persisted in
   // the query cache (the cache holds only the `*_configured` boolean
@@ -184,6 +186,12 @@ export function IntelligenceSettingsPanel({
     }
   }, [settings?.intelligence_similarity_threshold]);
 
+  useEffect(() => {
+    if (settings?.intelligence_severity_apply_threshold != null) {
+      setApplyThreshold(String(settings.intelligence_severity_apply_threshold));
+    }
+  }, [settings?.intelligence_severity_apply_threshold]);
+
   // Store as seconds in the input; convert back to ms on submit. The
   // null branch matters: if the setting is cleared server-side, the
   // local input must follow back to '0' rather than holding the user's
@@ -208,6 +216,16 @@ export function IntelligenceSettingsPanel({
       const num = parseFloat(value);
       if (!isNaN(num) && num >= 0 && num <= 1) {
         updateMutation.mutate({ intelligence_similarity_threshold: num });
+      }
+    },
+    [updateMutation]
+  );
+
+  const handleApplyThresholdBlur = useCallback(
+    (value: string) => {
+      const num = parseFloat(value);
+      if (!isNaN(num) && num >= 0 && num <= 1) {
+        updateMutation.mutate({ intelligence_severity_apply_threshold: num });
       }
     },
     [updateMutation]
@@ -348,6 +366,45 @@ export function IntelligenceSettingsPanel({
               </p>
             </div>
           </div>
+
+          <div className="flex items-center gap-3">
+            <Checkbox
+              id="auto-apply-severity"
+              checked={settings.intelligence_auto_apply_severity}
+              onCheckedChange={(checked) =>
+                handleToggle('intelligence_auto_apply_severity', checked === true)
+              }
+            />
+            <div>
+              <Label htmlFor="auto-apply-severity">
+                {t('intelligence.settings.autoApplySeverity')}
+              </Label>
+              <p className="text-sm text-gray-500">
+                {t('intelligence.settings.autoApplySeverityDescription')}
+              </p>
+            </div>
+          </div>
+
+          {settings.intelligence_auto_apply_severity && (
+            <div className="max-w-xs">
+              <Label htmlFor="severity-apply-threshold">
+                {t('intelligence.settings.severityApplyThreshold')}
+              </Label>
+              <p className="text-sm text-gray-500 mb-1">
+                {t('intelligence.settings.severityApplyThresholdDescription')}
+              </p>
+              <Input
+                id="severity-apply-threshold"
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                value={applyThreshold}
+                onChange={(e) => setApplyThreshold(e.target.value)}
+                onBlur={(e) => handleApplyThresholdBlur(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="max-w-xs">
             <Label htmlFor="similarity-threshold">
