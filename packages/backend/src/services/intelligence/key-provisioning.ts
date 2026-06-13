@@ -54,6 +54,8 @@ export type IntelligenceSettingsUpdate = Pick<
   | 'intelligence_provider'
   | 'intelligence_auto_analyze'
   | 'intelligence_auto_enrich'
+  | 'intelligence_auto_apply_severity'
+  | 'intelligence_severity_apply_threshold'
   | 'intelligence_similarity_threshold'
   | 'intelligence_dedup_enabled'
   | 'intelligence_dedup_action'

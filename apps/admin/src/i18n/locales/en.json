@@ -1775,6 +1775,10 @@
       "autoAnalyzeDescription": "Automatically analyze new bug reports for duplicates and similarity",
       "autoEnrich": "Auto-Enrich",
       "autoEnrichDescription": "Automatically enrich new bug reports with AI-generated summary, severity, and tags",
+      "autoApplySeverity": "Auto-apply AI severity",
+      "autoApplySeverityDescription": "Set a new bug's priority from the AI suggested severity when confident. Only applies while the bug is still at the default priority, so manual triage is never overridden.",
+      "severityApplyThreshold": "Auto-apply confidence threshold",
+      "severityApplyThresholdDescription": "Minimum AI severity confidence (0 to 1) required before auto-applying. Default 0.8.",
       "saved": "Intelligence settings saved",
       "saveFailed": "Failed to save intelligence settings"
     },
