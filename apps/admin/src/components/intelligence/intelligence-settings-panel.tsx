@@ -19,6 +19,7 @@ import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Input } from '../ui/input';
 import { DeflectionStatsCard } from './deflection-stats-card';
+import { parseThresholdInput } from './threshold-input';
 import type {
   IntelligenceSettings,
   ProvisionKeyResult,
@@ -223,8 +224,8 @@ export function IntelligenceSettingsPanel({
 
   const handleApplyThresholdBlur = useCallback(
     (value: string) => {
-      const num = parseFloat(value);
-      if (!isNaN(num) && num >= 0 && num <= 1) {
+      const num = parseThresholdInput(value);
+      if (num != null) {
         updateMutation.mutate({ intelligence_severity_apply_threshold: num });
       } else if (settings?.intelligence_severity_apply_threshold != null) {
         // Invalid input — revert to the last saved value so the field never
