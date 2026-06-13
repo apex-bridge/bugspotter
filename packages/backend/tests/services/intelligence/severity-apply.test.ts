@@ -55,7 +55,9 @@ describe('applyAiSeverityToPriority', () => {
     // Conditional UPDATE guards on the bug still being at the default 'medium'.
     const [sql, args] = query.mock.calls[0];
     expect(sql).toContain('UPDATE application.bug_reports');
-    expect(args).toEqual(['high', 'bug-1', 'medium']);
+    // Tenant-scoped: only bugs whose project belongs to the org.
+    expect(sql).toContain('organization_id = $4');
+    expect(args).toEqual(['high', 'bug-1', 'medium', 'org-1']);
     expect(auditCreate).toHaveBeenCalledTimes(1);
     expect(auditCreate.mock.calls[0][0]).toMatchObject({
       action: 'bug_report.priority.ai_applied',
