@@ -38,6 +38,14 @@ export interface OrgIntelligenceSettings {
   intelligence_api_key_provisioned_by: string | null;
   intelligence_auto_enrich: boolean;
   /**
+   * Apply the AI suggested severity to the bug's `priority` (only when the bug
+   * is still at the default 'medium', so human triage is never overwritten).
+   * Off by default.
+   */
+  intelligence_auto_apply_severity: boolean;
+  /** Minimum severity-confidence (0..1) required before auto-applying. */
+  intelligence_severity_apply_threshold: number;
+  /**
    * Whether the org has a Telegram bot token configured. Surfaces in
    * the GET response so the admin UI can render "configured" /
    * "not configured" without us ever returning the encrypted blob.
@@ -80,6 +88,8 @@ export const INTELLIGENCE_SETTINGS_DEFAULTS: OrgIntelligenceSettings = {
   intelligence_api_key_provisioned_at: null,
   intelligence_api_key_provisioned_by: null,
   intelligence_auto_enrich: true,
+  intelligence_auto_apply_severity: false,
+  intelligence_severity_apply_threshold: 0.8,
   telegram_bot_token_configured: false,
   slack_bot_token_configured: false,
 };
@@ -126,6 +136,12 @@ export function resolveOrgIntelligenceSettings(
       INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_api_key_provisioned_by,
     intelligence_auto_enrich:
       settings.intelligence_auto_enrich ?? INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_auto_enrich,
+    intelligence_auto_apply_severity:
+      settings.intelligence_auto_apply_severity ??
+      INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_auto_apply_severity,
+    intelligence_severity_apply_threshold:
+      settings.intelligence_severity_apply_threshold ??
+      INTELLIGENCE_SETTINGS_DEFAULTS.intelligence_severity_apply_threshold,
     // Compute booleans from the raw fields without surfacing the
     // ciphertext. `typeof === 'string'` + non-empty handles both the
     // "unset" (undefined / null) and the "cleared" (empty string) cases.
