@@ -29,6 +29,8 @@ import { IntelligenceError } from '../../services/intelligence/intelligence-clie
 import type { DatabaseClient } from '../../db/client.js';
 import type { IntelligenceClientFactory } from '../../services/intelligence/tenant-config.js';
 import { IntelligenceEnrichmentService } from '../../services/intelligence/enrichment-service.js';
+import { getOrgIntelligenceSettings } from '../../services/intelligence/tenant-config.js';
+import { applyAiSeverityToPriority } from '../../services/intelligence/severity-apply.js';
 import { IntelligenceMitigationService } from '../../services/intelligence/mitigation-service.js';
 import { IntelligenceDedupService } from '../../services/intelligence/dedup-service.js';
 import type { PluginRegistry } from '../../integrations/plugin-registry.js';
@@ -165,7 +167,7 @@ async function processIntelligenceJob(
   }
 
   if (type === 'enrich') {
-    return processEnrichJob(job, client, db, startTime);
+    return processEnrichJob(job, client, db, orgId, startTime);
   }
 
   if (type === 'mitigation') {
@@ -378,6 +380,7 @@ async function processEnrichJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
   client: IntelligenceClient,
   db: DatabaseClient,
+  resolvedOrgId: string | undefined,
   startTime: number
 ): Promise<IntelligenceJobResult> {
   const { bugReportId, projectId, organizationId } = job.data;
@@ -429,6 +432,28 @@ async function processEnrichJob(
     organizationId ?? undefined,
     enrichResponse
   );
+
+  // Step 3: optionally apply the AI severity to the bug's priority (SaaS,
+  // org-gated, opt-in). Uses the resolved org (resolveClient derives it from
+  // the project when the job omits organizationId). Non-fatal — a failure here
+  // must not fail enrichment.
+  if (resolvedOrgId) {
+    try {
+      const settings = await getOrgIntelligenceSettings(db, resolvedOrgId);
+      await applyAiSeverityToPriority(db, {
+        bugReportId,
+        organizationId: resolvedOrgId,
+        enrichment: enrichResponse,
+        settings,
+      });
+    } catch (err) {
+      logger.warn('AI severity auto-apply failed (non-fatal)', {
+        jobId: job.id,
+        bugReportId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   await progress.complete('Done');
 

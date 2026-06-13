@@ -721,6 +721,10 @@ export interface OrganizationSettings {
   intelligence_api_key_provisioned_at?: string | null;
   intelligence_api_key_provisioned_by?: string | null;
   intelligence_auto_enrich?: boolean;
+  /** Apply the AI suggested severity to the bug's priority (only when still the default 'medium'). Off by default. */
+  intelligence_auto_apply_severity?: boolean;
+  /** Minimum severity-confidence (0..1) required to auto-apply. */
+  intelligence_severity_apply_threshold?: number | null;
   /**
    * Per-org allowlist for literal `notify.email.to` values used by
    * dedup rules. `undefined` / empty = trust-the-admin (legacy
