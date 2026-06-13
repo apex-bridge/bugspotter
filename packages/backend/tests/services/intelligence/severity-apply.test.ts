@@ -104,6 +104,18 @@ describe('applyAiSeverityToPriority', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('skips when the suggested severity is already the default priority (no write/audit)', async () => {
+    const { db, query, auditCreate } = createMockDb(1);
+    const result = await applyAiSeverityToPriority(db, {
+      ...PARAMS,
+      enrichment: enrichment({ suggested_severity: 'medium' }),
+      settings: settings(),
+    });
+    expect(result).toEqual({ applied: false, reason: 'priority_already_default' });
+    expect(query).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
   it('skips an unrecognized severity value', async () => {
     const { db, query } = createMockDb(1);
     const result = await applyAiSeverityToPriority(db, {

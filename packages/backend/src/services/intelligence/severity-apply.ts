@@ -34,7 +34,12 @@ export interface ApplySeverityResult {
   applied: boolean;
   priority?: string;
   /** Why it didn't apply — for logging/observability, not user-facing. */
-  reason?: 'disabled' | 'below_threshold' | 'unknown_severity' | 'priority_not_default';
+  reason?:
+    | 'disabled'
+    | 'below_threshold'
+    | 'unknown_severity'
+    | 'priority_already_default'
+    | 'priority_not_default';
 }
 
 /**
@@ -79,6 +84,13 @@ export async function applyAiSeverityToPriority(
       suggestedSeverity: enrichment.suggested_severity,
     });
     return { applied: false, reason: 'unknown_severity' };
+  }
+
+  if (priority === DEFAULT_PRIORITY) {
+    // Suggested severity equals the default — applying is a no-op (we only ever
+    // write when the bug is still at the default), so skip the redundant UPDATE
+    // and the misleading medium→medium audit row.
+    return { applied: false, reason: 'priority_already_default' };
   }
 
   // Atomic guard: only set priority if it's still the default. A single
