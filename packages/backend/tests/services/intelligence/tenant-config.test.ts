@@ -123,6 +123,32 @@ describe('resolveOrgIntelligenceSettings', () => {
       expect(result.intelligence_pre_file_dedup_grace_ms).toBe(5 * 60 * 1000);
     });
   });
+
+  describe('intelligence_auto_apply_severity', () => {
+    it('defaults to OFF — never auto-applies unless explicitly enabled', () => {
+      expect(resolveOrgIntelligenceSettings({}).intelligence_auto_apply_severity).toBe(false);
+    });
+
+    it('threshold defaults to 0.8', () => {
+      expect(resolveOrgIntelligenceSettings({}).intelligence_severity_apply_threshold).toBe(0.8);
+    });
+
+    it('resolves a provided flag and threshold', () => {
+      const result = resolveOrgIntelligenceSettings({
+        intelligence_auto_apply_severity: true,
+        intelligence_severity_apply_threshold: 0.95,
+      });
+      expect(result.intelligence_auto_apply_severity).toBe(true);
+      expect(result.intelligence_severity_apply_threshold).toBe(0.95);
+    });
+
+    it('null threshold falls back to the default', () => {
+      const result = resolveOrgIntelligenceSettings({
+        intelligence_severity_apply_threshold: null,
+      });
+      expect(result.intelligence_severity_apply_threshold).toBe(0.8);
+    });
+  });
 });
 
 // ============================================================================
