@@ -5,6 +5,22 @@
  * functions can be unit-tested without rendering anything.
  */
 
+import type { ObservabilityDayStat } from '../../types/intelligence';
+
+/**
+ * Build a CSV (header + one row per day) for the per-day cost/usage export.
+ * Cost is emitted in dollars (micros / 1e6, 6dp) so the file is human-usable;
+ * tokens and calls are the raw counts.
+ */
+export function buildByDayCsv(rows: ObservabilityDayStat[]): string {
+  const header = 'day,calls,tokens_in,tokens_out,cost_usd';
+  const lines = rows.map(
+    (r) =>
+      `${r.day},${r.calls},${r.tokens_in},${r.tokens_out},${(r.cost_micros_usd / 1_000_000).toFixed(6)}`
+  );
+  return [header, ...lines].join('\n');
+}
+
 /** Upstream stores cost in micro-dollars. NULL means "unknown / not priced
  *  by the local pricing map" (Ollama etc.), distinct from $0. */
 export function formatCostUsd(micros: number | null | undefined, locale?: string): string {

@@ -190,6 +190,15 @@ export interface ObservabilityOpStat {
   cost_micros_usd: number;
 }
 
+export interface ObservabilityDayStat {
+  /** ISO date (YYYY-MM-DD). */
+  day: string;
+  calls: number;
+  cost_micros_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+}
+
 export interface ObservabilitySummary {
   tenant_id: string | null;
   from_ts: string | null;
@@ -201,6 +210,8 @@ export interface ObservabilitySummary {
   /** 0..1 fraction of calls with status=error in the window. */
   error_rate: number;
   by_operation: ObservabilityOpStat[];
+  /** Per-day cost + token rollup; optional — absent from older/cached upstream. */
+  by_day?: ObservabilityDayStat[];
 }
 
 export interface ObservabilityEvent {
