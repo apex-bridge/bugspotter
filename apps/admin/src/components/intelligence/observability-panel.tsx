@@ -27,7 +27,11 @@ function downloadByDayCsv(rows: ObservabilityDayStat[]): void {
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = 'ai-cost-by-day.csv';
+  // Attach to the DOM before click() — a detached anchor's click() is ignored
+  // in some browsers (older Firefox/Safari, sandboxed iframes).
+  document.body.appendChild(anchor);
   anchor.click();
+  anchor.remove();
   // Defer the revoke — revoking synchronously after click() can cancel the
   // download in Firefox/Safari before it starts (matches the health-export pattern).
   setTimeout(() => URL.revokeObjectURL(url), 100);
