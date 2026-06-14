@@ -28,7 +28,9 @@ function downloadByDayCsv(rows: ObservabilityDayStat[]): void {
   anchor.href = url;
   anchor.download = 'ai-cost-by-day.csv';
   anchor.click();
-  URL.revokeObjectURL(url);
+  // Defer the revoke — revoking synchronously after click() can cancel the
+  // download in Firefox/Safari before it starts (matches the health-export pattern).
+  setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 interface ObservabilityPanelProps {
