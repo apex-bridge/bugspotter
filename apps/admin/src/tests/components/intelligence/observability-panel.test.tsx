@@ -90,6 +90,50 @@ describe('<ObservabilityPanel>', () => {
     expect(screen.getByText('2.0%')).toBeInTheDocument();
   });
 
+  it('renders the per-day cost & usage breakdown (with CSV export) when by_day is present', async () => {
+    vi.mocked(intelligenceService.getObservabilitySummary).mockResolvedValueOnce({
+      tenant_id: 'tenant-1',
+      from_ts: null,
+      to_ts: null,
+      calls: 4,
+      cost_micros_usd: 1_200_000,
+      p50_ms: 100,
+      p95_ms: 200,
+      error_rate: 0,
+      by_operation: [],
+      by_day: [
+        {
+          day: '2026-06-13',
+          calls: 3,
+          cost_micros_usd: 1_200_000,
+          tokens_in: 500,
+          tokens_out: 200,
+        },
+      ],
+    });
+    vi.mocked(intelligenceService.getObservabilityAccuracy).mockResolvedValueOnce({
+      tenant_id: 'tenant-1',
+      operation: null,
+      feedback_count: 0,
+      correct: 0,
+      incorrect: 0,
+      partial: 0,
+      precision: null,
+    });
+    vi.mocked(intelligenceService.getObservabilityEvents).mockResolvedValueOnce({
+      events: [],
+      limit: 50,
+      offset: 0,
+    });
+
+    render(<ObservabilityPanel orgId={ORG_ID} />, { wrapper });
+
+    expect(await screen.findByText('Cost & usage by day')).toBeInTheDocument();
+    expect(screen.getByText('2026-06-13')).toBeInTheDocument();
+    expect(screen.getByText('500')).toBeInTheDocument(); // tokens_in
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeInTheDocument();
+  });
+
   it('shows the "not configured" alert when the summary endpoint returns 503', async () => {
     const err = Object.assign(new Error('not configured'), {
       response: { status: 503 },

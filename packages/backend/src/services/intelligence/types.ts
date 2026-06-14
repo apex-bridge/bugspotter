@@ -236,6 +236,15 @@ export interface ObservabilityOpStat {
   cost_micros_usd: number;
 }
 
+export interface ObservabilityDayStat {
+  /** ISO date (YYYY-MM-DD). */
+  day: string;
+  calls: number;
+  cost_micros_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+}
+
 export interface ObservabilitySummaryResponse {
   tenant_id: string | null;
   from_ts: string | null;
@@ -246,6 +255,8 @@ export interface ObservabilitySummaryResponse {
   p95_ms: number | null;
   error_rate: number;
   by_operation: ObservabilityOpStat[];
+  /** Per-day rollup; optional — absent from older/cached upstream responses. */
+  by_day?: ObservabilityDayStat[];
 }
 
 export interface ObservabilityEvent {

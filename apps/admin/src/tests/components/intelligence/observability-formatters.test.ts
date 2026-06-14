@@ -1,9 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildByDayCsv,
   formatCostUsd,
   formatLatencyMs,
   formatPercent,
 } from '../../../components/intelligence/observability-formatters';
+
+describe('buildByDayCsv', () => {
+  it('emits a header and one row per day, with cost in dollars', () => {
+    const csv = buildByDayCsv([
+      { day: '2026-06-13', calls: 3, cost_micros_usd: 1_200_000, tokens_in: 500, tokens_out: 200 },
+      { day: '2026-06-14', calls: 1, cost_micros_usd: 0, tokens_in: 40, tokens_out: 10 },
+    ]);
+    expect(csv).toBe(
+      'day,calls,tokens_in,tokens_out,cost_usd\n' +
+        '2026-06-13,3,500,200,1.200000\n' +
+        '2026-06-14,1,40,10,0.000000'
+    );
+  });
+
+  it('returns just the header for no rows', () => {
+    expect(buildByDayCsv([])).toBe('day,calls,tokens_in,tokens_out,cost_usd');
+  });
+});
 
 describe('formatCostUsd', () => {
   it('returns the em-dash sentinel for null / undefined / NaN', () => {

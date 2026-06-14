@@ -1873,6 +1873,11 @@
         "p50Hint": "p50 {{value}}",
         "errorRate": "Қателер үлесі",
         "colOperation": "Операция",
+        "byDayHeading": "Күн бойынша шығын мен қолданыс",
+        "exportCsv": "CSV экспорттау",
+        "colDay": "Күн",
+        "colTokensIn": "Кіріс токендер",
+        "colTokensOut": "Шығыс токендер",
         "loadFailed": "Жиынтықты жүктеу мүмкін болмады."
       },
       "accuracy": {

@@ -1873,6 +1873,11 @@
         "p50Hint": "p50 {{value}}",
         "errorRate": "Error rate",
         "colOperation": "Operation",
+        "byDayHeading": "Cost & usage by day",
+        "exportCsv": "Export CSV",
+        "colDay": "Day",
+        "colTokensIn": "Tokens in",
+        "colTokensOut": "Tokens out",
         "loadFailed": "Could not load summary."
       },
       "accuracy": {
