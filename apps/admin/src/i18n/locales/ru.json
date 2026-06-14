@@ -1873,6 +1873,11 @@
         "p50Hint": "p50 {{value}}",
         "errorRate": "Доля ошибок",
         "colOperation": "Операция",
+        "byDayHeading": "Стоимость и использование по дням",
+        "exportCsv": "Экспорт CSV",
+        "colDay": "День",
+        "colTokensIn": "Входные токены",
+        "colTokensOut": "Выходные токены",
         "loadFailed": "Не удалось загрузить сводку."
       },
       "accuracy": {

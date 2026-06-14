@@ -12,8 +12,24 @@ import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Brain, ChevronDown, ChevronRight, Gauge } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { intelligenceService } from '../../services/intelligence-service';
-import type { ObservabilityEvent } from '../../types/intelligence';
-import { formatCostUsd, formatLatencyMs, formatPercent } from './observability-formatters';
+import type { ObservabilityDayStat, ObservabilityEvent } from '../../types/intelligence';
+import {
+  buildByDayCsv,
+  formatCostUsd,
+  formatLatencyMs,
+  formatPercent,
+} from './observability-formatters';
+
+/** Trigger a client-side CSV download of the per-day cost/usage rollup. */
+function downloadByDayCsv(rows: ObservabilityDayStat[]): void {
+  const blob = new Blob([buildByDayCsv(rows)], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'ai-cost-by-day.csv';
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
 interface ObservabilityPanelProps {
   orgId: string;
@@ -143,6 +159,67 @@ export function ObservabilityPanel({ orgId }: ObservabilityPanelProps) {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {summaryQuery.data && (summaryQuery.data.by_day?.length ?? 0) > 0 && (
+              <div className="mt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-medium text-gray-700">
+                    {t('intelligence.observability.summary.byDayHeading')}
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => downloadByDayCsv(summaryQuery.data?.by_day ?? [])}
+                    className="text-xs text-primary hover:underline focus:outline-none focus:ring-2 focus:ring-primary rounded"
+                  >
+                    {t('intelligence.observability.summary.exportCsv')}
+                  </button>
+                </div>
+                <div className="border rounded-lg overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-medium">
+                          {t('intelligence.observability.summary.colDay')}
+                        </th>
+                        <th className="text-right px-3 py-2 font-medium">
+                          {t('intelligence.observability.summary.calls')}
+                        </th>
+                        <th className="text-right px-3 py-2 font-medium">
+                          {t('intelligence.observability.summary.colTokensIn')}
+                        </th>
+                        <th className="text-right px-3 py-2 font-medium">
+                          {t('intelligence.observability.summary.colTokensOut')}
+                        </th>
+                        <th className="text-right px-3 py-2 font-medium">
+                          {t('intelligence.observability.summary.cost')}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {(summaryQuery.data.by_day ?? []).map((row) => (
+                        <tr key={row.day}>
+                          <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                            {row.day}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {row.calls.toLocaleString(locale)}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {row.tokens_in.toLocaleString(locale)}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {row.tokens_out.toLocaleString(locale)}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {formatCostUsd(row.cost_micros_usd, locale)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </section>
