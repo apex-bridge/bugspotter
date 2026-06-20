@@ -938,7 +938,7 @@ services:
       OLLAMA_TIMEOUT: ${INTELLIGENCE_OLLAMA_TIMEOUT:-240}
       # Claude (optional, if using Claude instead of Ollama)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-20250514}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-6}
       # Embedding. The intelligence service migrates the bug_embeddings
       # column to vector(1024) on startup (see migrations.py). The active
       # embedding model MUST produce 1024-dim vectors — i.e. BAAI/bge-m3.
