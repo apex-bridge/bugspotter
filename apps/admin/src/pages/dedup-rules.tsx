@@ -108,8 +108,11 @@ export default function DedupRulesPage() {
   }, [deletingRuleId, deleteRule]);
 
   const handleBackNavigation = useCallback(() => {
-    navigate(`/projects/${projectId}`);
-  }, [projectId, navigate]);
+    // There is no /projects/:projectId detail route — navigating there was a
+    // silent no-op. Return to the projects list, matching the sibling pages
+    // (project-members, project-integrations).
+    navigate('/projects');
+  }, [navigate]);
 
   if (!projectId) {
     return (
