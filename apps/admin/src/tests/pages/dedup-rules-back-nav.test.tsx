@@ -79,17 +79,21 @@ vi.mock('../../components/dedup-rules/delete-dialog', () => ({
   DedupRuleDeleteDialog: () => null,
 }));
 
-function wrapper({ children }: { children: React.ReactNode }) {
+// Factory so the QueryClient is created once per test (in the closure), not on
+// every render of the wrapper component.
+function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return (
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/projects/${mockProjectId}/dedup-rules`]}>
-        <Routes>
-          <Route path="/projects/:projectId/dedup-rules" element={children} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>
-  );
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${mockProjectId}/dedup-rules`]}>
+          <Routes>
+            <Route path="/projects/:projectId/dedup-rules" element={children} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+  };
 }
 
 describe('DedupRulesPage — back navigation', () => {
@@ -98,7 +102,7 @@ describe('DedupRulesPage — back navigation', () => {
   });
 
   it('returns to the projects list (not a nonexistent project-detail route)', async () => {
-    render(<DedupRulesPage />, { wrapper });
+    render(<DedupRulesPage />, { wrapper: createWrapper() });
 
     const backButton = await screen.findByRole('button', {
       name: /dedupRules\.backToProject/i,
