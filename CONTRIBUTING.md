@@ -4,6 +4,19 @@ Thank you for your interest in contributing to BugSpotter! This document provide
 
 ## 🤝 How to Contribute
 
+## 📋 Task Tracking
+
+All work is tracked in the [BugSpotter Tasks](https://github.com/orgs/apex-bridge/projects/1) project board.
+
+New issues and PRs opened in any of the active repos are **automatically added** to the board via the `add-to-project.yml` workflow. Set the **Status** field to track progress:
+
+| Status | Meaning |
+|--------|---------|
+| Todo | Not started yet |
+| In Progress | Actively being worked on |
+| Done | Merged / closed |
+
+
 ### Reporting Bugs
 
 If you find a bug, please create an issue with:
@@ -309,6 +322,8 @@ Our GitHub Actions workflow (`ci.yml`) verifies:
 5. **Coverage** - Generates coverage reports for SDK and API
 
 **Important:** The CI workflow expects the standard pnpm workspace structure. If you change directory structure, update `.github/workflows/ci.yml` accordingly.
+
+New issues and PRs are also automatically added to the project board by `.github/workflows/add-to-project.yml`.
 
 ## 🎯 Development Workflow
 
