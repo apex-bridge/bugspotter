@@ -70,7 +70,6 @@ We love pull requests! Here's how to contribute code:
    ```
 
 4. **Make your changes**
-
    - Write clean, readable code
    - Follow existing code style
    - Add tests for new features
