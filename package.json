@@ -8,6 +8,7 @@
     "dev": "pnpm --filter \"./packages/*\" dev",
     "build": "pnpm --filter \"./packages/*\" build",
     "test": "pnpm --filter \"./packages/*\" test",
+    "test:unit": "pnpm --filter @bugspotter/backend test:unit",
     "format": "prettier --write \"**/*.{js,ts,json,md,html,css}\"",
     "format:check": "prettier --check \"**/*.{js,ts,json,md,html,css}\"",
     "lint": "eslint \"packages/*/src/**/*.{ts,js}\" \"apps/*/src/**/*.{ts,tsx,js}\" \"apps/*/tests/**/*.{mjs,ts,js}\"",
