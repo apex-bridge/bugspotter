@@ -70,6 +70,7 @@ We love pull requests! Here's how to contribute code:
    ```
 
 4. **Make your changes**
+
    - Write clean, readable code
    - Follow existing code style
    - Add tests for new features
@@ -173,18 +174,18 @@ pnpm test --coverage
 All new features should include tests:
 
 ```typescript
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from 'vitest';
 
-describe("MyFeature", () => {
-  it("should do something", () => {
+describe('MyFeature', () => {
+  it('should do something', () => {
     // Arrange
-    const input = "test";
+    const input = 'test';
 
     // Act
     const result = myFunction(input);
 
     // Assert
-    expect(result).toBe("expected");
+    expect(result).toBe('expected');
   });
 });
 ```
@@ -384,18 +385,18 @@ const bugSpotter = BugSpotter.init({
 
 // Check captured data
 const report = await bugSpotter.capture();
-console.log("Screenshot:", report.screenshot.substring(0, 50));
-console.log("Console logs:", report.console);
-console.log("Network:", report.network);
-console.log("Metadata:", report.metadata);
+console.log('Screenshot:', report.screenshot.substring(0, 50));
+console.log('Console logs:', report.console);
+console.log('Network:', report.network);
+console.log('Metadata:', report.metadata);
 ```
 
 ### Test Debugging
 
 ```typescript
 // Use .only to focus on one test
-it.only("should debug this test", () => {
-  console.log("Debug output");
+it.only('should debug this test', () => {
+  console.log('Debug output');
   expect(true).toBe(true);
 });
 ```
