@@ -10,12 +10,11 @@ All work is tracked in the [BugSpotter Tasks](https://github.com/orgs/apex-bridg
 
 New issues and PRs opened in any of the active repos are **automatically added** to the board via the `add-to-project.yml` workflow. Set the **Status** field to track progress:
 
-| Status | Meaning |
-|--------|---------|
-| Todo | Not started yet |
+| Status      | Meaning                  |
+| ----------- | ------------------------ |
+| Todo        | Not started yet          |
 | In Progress | Actively being worked on |
-| Done | Merged / closed |
-
+| Done        | Merged / closed          |
 
 ### Reporting Bugs
 
@@ -174,18 +173,18 @@ pnpm test --coverage
 All new features should include tests:
 
 ```typescript
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from "vitest";
 
-describe('MyFeature', () => {
-  it('should do something', () => {
+describe("MyFeature", () => {
+  it("should do something", () => {
     // Arrange
-    const input = 'test';
+    const input = "test";
 
     // Act
     const result = myFunction(input);
 
     // Assert
-    expect(result).toBe('expected');
+    expect(result).toBe("expected");
   });
 });
 ```
@@ -385,18 +384,18 @@ const bugSpotter = BugSpotter.init({
 
 // Check captured data
 const report = await bugSpotter.capture();
-console.log('Screenshot:', report.screenshot.substring(0, 50));
-console.log('Console logs:', report.console);
-console.log('Network:', report.network);
-console.log('Metadata:', report.metadata);
+console.log("Screenshot:", report.screenshot.substring(0, 50));
+console.log("Console logs:", report.console);
+console.log("Network:", report.network);
+console.log("Metadata:", report.metadata);
 ```
 
 ### Test Debugging
 
 ```typescript
 // Use .only to focus on one test
-it.only('should debug this test', () => {
-  console.log('Debug output');
+it.only("should debug this test", () => {
+  console.log("Debug output");
   expect(true).toBe(true);
 });
 ```
