@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-pnpm --filter "./packages/*" test
+pnpm test
