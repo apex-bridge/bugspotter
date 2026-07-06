@@ -68,6 +68,16 @@ test('missing --message argument exits 2', () => {
   }
 });
 
+test('unreadable --message file exits 1 with a clean error', () => {
+  try {
+    execFileSync('node', [SCRIPT, '--message', join(DIR, 'does-not-exist.txt')], { encoding: 'utf8' });
+    assert.fail('expected non-zero exit');
+  } catch (e) {
+    assert.equal(e.status, 1);
+    assert.match(`${e.stdout || ''}${e.stderr || ''}`, /cannot read/);
+  }
+});
+
 // Integration test for the --range path (the CI gate). Builds a throwaway
 // repo with a good commit and a malformed one, then checks the range.
 test('range mode catches a malformed trailer across commits', () => {

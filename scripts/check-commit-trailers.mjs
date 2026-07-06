@@ -86,7 +86,14 @@ function main() {
       console.error('usage: --message <file>');
       process.exit(2);
     }
-    problems.push(...validate('(staged)', readFileSync(file, 'utf8')));
+    let content;
+    try {
+      content = readFileSync(file, 'utf8');
+    } catch (e) {
+      console.error(`Error: cannot read commit message file "${file}": ${e.message}`);
+      process.exit(1);
+    }
+    problems.push(...validate('(staged)', content));
   } else if (ri !== -1) {
     const range = args[ri + 1];
     if (!range) {
