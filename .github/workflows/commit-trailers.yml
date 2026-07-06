@@ -32,6 +32,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Test the trailer checker
+        run: node --test scripts/check-commit-trailers.test.mjs
+
       - name: Validate attribution trailers
         run: >
           node scripts/check-commit-trailers.mjs
