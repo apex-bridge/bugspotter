@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 const IS_TRAILER = /^Assisted-by:/i;
-const IS_VALID = /^Assisted-by: .+ \((agent|human)\)$/;
+const IS_VALID = /^Assisted-by: \S.* \((agent|human)\)$/;
 const IS_COMMENT = /^\s*#/;
 
 // Drop comment lines so the local commit-msg path (editor template comments)
@@ -89,10 +89,16 @@ function main() {
       process.exit(2);
     }
     // execFileSync (no shell) - avoids any command-injection surface.
-    const shas = execFileSync('git', ['rev-list', range], { encoding: 'utf8' })
-      .trim()
-      .split(/\r?\n/)
-      .filter(Boolean);
+    let shas;
+    try {
+      shas = execFileSync('git', ['rev-list', range], { encoding: 'utf8' })
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean);
+    } catch (e) {
+      console.error(`Error: cannot resolve commit range "${range}": ${e.message}`);
+      process.exit(1);
+    }
     for (const sha of shas) {
       const body = execFileSync('git', ['show', '-s', '--format=%B', sha], { encoding: 'utf8' });
       problems.push(...validate(sha.slice(0, 8), body));

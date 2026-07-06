@@ -3,16 +3,18 @@
 // rot. The `misplaced` case relies on `git interpret-trailers` being available
 // (it is on CI runners and dev machines).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = fileURLToPath(new URL('./check-commit-trailers.mjs', import.meta.url));
 const DIR = mkdtempSync(join(tmpdir(), 'trailer-test-'));
+
+after(() => rmSync(DIR, { recursive: true, force: true }));
 
 // Run the checker against a commit-message body; return { code, out }.
 function run(body) {
