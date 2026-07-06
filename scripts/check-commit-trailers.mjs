@@ -93,20 +93,21 @@ function main() {
       console.error('usage: --range <base>..<head>');
       process.exit(2);
     }
-    // execFileSync (no shell) - avoids any command-injection surface.
-    let shas;
+    // One `git log` call (execFileSync, no shell) instead of a `git show`
+    // per commit: full hash + raw body per commit, NUL-delimited. git ends
+    // each commit's output with a newline, so hash entries after a split on
+    // NUL carry a leading newline - the sha.trim() below absorbs it.
+    let out;
     try {
-      shas = execFileSync('git', ['rev-list', range], { encoding: 'utf8' })
-        .trim()
-        .split(/\r?\n/)
-        .filter(Boolean);
+      out = execFileSync('git', ['log', '--format=%H%x00%B%x00', range], { encoding: 'utf8' });
     } catch (e) {
       console.error(`Error: cannot resolve commit range "${range}": ${e.message}`);
       process.exit(1);
     }
-    for (const sha of shas) {
-      const body = execFileSync('git', ['show', '-s', '--format=%B', sha], { encoding: 'utf8' });
-      problems.push(...validate(sha.slice(0, 8), body));
+    const parts = out.split('\0');
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      const sha = parts[i].trim();
+      if (sha) problems.push(...validate(sha.slice(0, 8), parts[i + 1]));
     }
   } else {
     console.error('usage: --message <file> | --range <base>..<head>');

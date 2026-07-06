@@ -67,3 +67,33 @@ test('missing --message argument exits 2', () => {
     assert.equal(e.status, 2);
   }
 });
+
+// Integration test for the --range path (the CI gate). Builds a throwaway
+// repo with a good commit and a malformed one, then checks the range.
+test('range mode catches a malformed trailer across commits', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'trailer-repo-'));
+  const git = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' });
+  try {
+    git('init', '-q');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 'Test');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo, 'a.txt'), '1');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'good\n\nAssisted-by: claude-opus-4-8 (agent)');
+    const base = git('rev-parse', 'HEAD').trim();
+    writeFileSync(join(repo, 'b.txt'), '2');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'bad\n\nAssisted-by: claude-opus-4-8'); // no (agent)
+    const head = git('rev-parse', 'HEAD').trim();
+    try {
+      execFileSync('node', [SCRIPT, '--range', `${base}..${head}`], { cwd: repo, encoding: 'utf8' });
+      assert.fail('expected non-zero exit');
+    } catch (e) {
+      assert.equal(e.status, 1);
+      assert.match(`${e.stdout || ''}${e.stderr || ''}`, /malformed/);
+    }
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
