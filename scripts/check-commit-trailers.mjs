@@ -91,7 +91,7 @@ function main() {
     // execFileSync (no shell) - avoids any command-injection surface.
     const shas = execFileSync('git', ['rev-list', range], { encoding: 'utf8' })
       .trim()
-      .split('\n')
+      .split(/\r?\n/)
       .filter(Boolean);
     for (const sha of shas) {
       const body = execFileSync('git', ['show', '-s', '--format=%B', sha], { encoding: 'utf8' });
