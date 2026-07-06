@@ -22,13 +22,48 @@ import { execFileSync } from 'node:child_process';
 
 const IS_TRAILER = /^Assisted-by:/i;
 const IS_VALID = /^Assisted-by: .+ \((agent|human)\)$/;
+const IS_COMMENT = /^\s*#/;
 
-function validate(sha, body) {
+// Drop comment lines so the local commit-msg path (editor template comments)
+// matches git's own cleanup before it looks for trailers.
+function stripComments(body) {
+  return body
+    .split(/\r?\n/)
+    .filter((l) => !IS_COMMENT.test(l))
+    .join('\n');
+}
+
+// Git's own view of the trailer block - authoritative for "will this be
+// recognized as a trailer at all?" (i.e. is it in the final, blank-line-
+// separated block). Returns null if git is unavailable, so we degrade to a
+// format-only scan rather than failing open.
+function gitTrailers(body) {
+  try {
+    return execFileSync('git', ['interpret-trailers', '--parse'], {
+      input: body,
+      encoding: 'utf8',
+    })
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function validate(sha, rawBody) {
+  const body = stripComments(rawBody);
+  const parsed = gitTrailers(body);
   const problems = [];
   for (const raw of body.split(/\r?\n/)) {
     const line = raw.trim();
-    if (IS_TRAILER.test(line) && !IS_VALID.test(line)) {
-      problems.push({ sha, line });
+    if (!IS_TRAILER.test(line)) continue;
+    const recognized =
+      parsed === null || parsed.some((p) => p.toLowerCase() === line.toLowerCase());
+    if (!recognized) {
+      problems.push({ sha, line, reason: 'misplaced - must be in the final block, separated by a blank line' });
+    } else if (!IS_VALID.test(line)) {
+      problems.push({ sha, line, reason: 'malformed - expected "Assisted-by: <tool-or-model> (agent)"' });
     }
   }
   return problems;
@@ -68,8 +103,8 @@ function main() {
   }
 
   if (problems.length) {
-    console.error('Malformed attribution trailer(s). Expected: "Assisted-by: <tool-or-model> (agent)"');
-    for (const p of problems) console.error(`  ${p.sha}: ${p.line}`);
+    console.error('Invalid commit attribution trailer(s):');
+    for (const p of problems) console.error(`  ${p.sha}: "${p.line}" -> ${p.reason}`);
     process.exit(1);
   }
   console.log('Commit attribution trailers OK.');
