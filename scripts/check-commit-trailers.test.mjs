@@ -44,6 +44,13 @@ test('misplaced trailer (not final block) fails with reason', () => {
   assert.match(r.out, /misplaced/);
 });
 
+test('double-spaced trailer reports malformed, not misplaced', () => {
+  const r = run('feat: x\n\nAssisted-by:  claude-opus-4-8 (agent)\n');
+  assert.equal(r.code, 1);
+  assert.match(r.out, /malformed/);
+  assert.doesNotMatch(r.out, /misplaced/);
+});
+
 test('editor comment lines are ignored', () => {
   assert.equal(run('feat: x\n\nAssisted-by: claude-opus-4-8 (agent)\n# a comment\n').code, 0);
 });

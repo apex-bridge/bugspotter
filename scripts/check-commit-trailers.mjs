@@ -58,12 +58,17 @@ function validate(sha, rawBody) {
   for (const raw of body.split(/\r?\n/)) {
     const line = raw.trim();
     if (!IS_TRAILER.test(line)) continue;
+    // Format first: a malformed trailer (e.g. double-spaced) must not be
+    // mislabeled "misplaced" just because git's normalized parse won't match
+    // it. Only a well-formed trailer is then checked for placement.
+    if (!IS_VALID.test(line)) {
+      problems.push({ sha, line, reason: 'malformed - expected "Assisted-by: <tool-or-model> (agent)"' });
+      continue;
+    }
     const recognized =
       parsed === null || parsed.some((p) => p.toLowerCase() === line.toLowerCase());
     if (!recognized) {
       problems.push({ sha, line, reason: 'misplaced - must be in the final block, separated by a blank line' });
-    } else if (!IS_VALID.test(line)) {
-      problems.push({ sha, line, reason: 'malformed - expected "Assisted-by: <tool-or-model> (agent)"' });
     }
   }
   return problems;
