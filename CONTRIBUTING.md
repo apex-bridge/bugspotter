@@ -415,6 +415,37 @@ it.only('should debug this test', () => {
 - [Conventional Commits](https://www.conventionalcommits.org/)
 - [Semantic Versioning](https://semver.org/)
 
+## 🏷️ Commit attribution trailer
+
+Agent-assisted commits carry a git trailer so we can measure agent-vs-human
+code outcomes honestly. When a commit's code was generated with an AI agent,
+add a trailer line:
+
+```
+Assisted-by: <tool-or-model> (agent)
+```
+
+For example: `Assisted-by: claude-opus-4-8 (agent)`. A human may optionally
+mark their own work with `(human)`; that is not required.
+
+Rules:
+
+- The trailer goes at the very end of the commit **message body**, as a
+  standard git trailer line (like `Co-Authored-By:`), separated from the
+  rest of the body by a blank line - not in the code diff. Trailers placed
+  anywhere but the final block are invisible to `git interpret-trailers`
+  and to the metrics parser.
+- It is validated by format only. The `commit-msg` hook and the
+  **Commit Trailers** CI check reject a malformed trailer, but they do
+  **not** force a trailer onto every commit - there is no deterministic
+  human-vs-agent signal to key on, so presence is a convention agents
+  follow, not a machine-enforced gate. That honest limit is the point: the
+  check guarantees the attribution data is _parseable_, not that it is
+  _complete_.
+- This trailer is the attribution key for the code-metrics layer
+  (agent-vs-human change-failure rate). It cannot be backfilled onto old
+  history, so start using it now.
+
 ## ❓ Questions?
 
 - Create a [GitHub Discussion](https://github.com/apex-bridge/bugspotter/discussions)
