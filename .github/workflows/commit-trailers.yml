@@ -8,6 +8,10 @@ name: Commit Trailers
 # only enforces that a present trailer is well-formed, so the code-metrics
 # attribution layer can parse it reliably. Fail-closed.
 #
+# Under squash-merge the squash commit message is composed from the PR body,
+# so this job ALSO validates the PR body's final-block trailer - that is
+# where the attribution key actually lands on `main` post-squash (#204).
+#
 # This is intentionally a standalone required-check candidate, separate
 # from the main `CI` aggregator. To make it a merge gate, add the
 # "Commit Trailers" status check to branch protection on `main`
@@ -35,7 +39,17 @@ jobs:
       - name: Test the trailer checker
         run: node --test scripts/check-commit-trailers.test.mjs
 
-      - name: Validate attribution trailers
+      - name: Validate attribution trailers (branch commits)
         run: >
           node scripts/check-commit-trailers.mjs
           --range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      - name: Validate PR-body trailer (post-squash attribution lands here)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # PR body via env, never inline ${{ }} into run: (injection). Under
+          # squash this becomes the commit message on main, so its trailer
+          # must be a parseable final-block trailer just like a commit's.
+          printf '%s' "$PR_BODY" > pr-body.txt
+          node scripts/check-commit-trailers.mjs --message pr-body.txt
