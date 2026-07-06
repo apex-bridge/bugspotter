@@ -430,8 +430,11 @@ mark their own work with `(human)`; that is not required.
 
 Rules:
 
-- The trailer goes in the commit **message body** (a trailer line, like
-  `Co-Authored-By:`), not the code diff.
+- The trailer goes at the very end of the commit **message body**, as a
+  standard git trailer line (like `Co-Authored-By:`), separated from the
+  rest of the body by a blank line - not in the code diff. Trailers placed
+  anywhere but the final block are invisible to `git interpret-trailers`
+  and to the metrics parser.
 - It is validated by format only. The `commit-msg` hook and the
   **Commit Trailers** CI check reject a malformed trailer, but they do
   **not** force a trailer onto every commit - there is no deterministic

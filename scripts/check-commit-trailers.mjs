@@ -18,7 +18,7 @@
 //   node scripts/check-commit-trailers.mjs --range <base>..<head>  # a commit range (CI)
 
 import { readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 const IS_TRAILER = /^Assisted-by:/i;
 const IS_VALID = /^Assisted-by: .+ \((agent|human)\)$/;
@@ -41,15 +41,25 @@ function main() {
   const problems = [];
 
   if (mi !== -1) {
-    problems.push(...validate('(staged)', readFileSync(args[mi + 1], 'utf8')));
+    const file = args[mi + 1];
+    if (!file) {
+      console.error('usage: --message <file>');
+      process.exit(2);
+    }
+    problems.push(...validate('(staged)', readFileSync(file, 'utf8')));
   } else if (ri !== -1) {
     const range = args[ri + 1];
-    const shas = execSync(`git rev-list ${range}`, { encoding: 'utf8' })
+    if (!range) {
+      console.error('usage: --range <base>..<head>');
+      process.exit(2);
+    }
+    // execFileSync (no shell) - avoids any command-injection surface.
+    const shas = execFileSync('git', ['rev-list', range], { encoding: 'utf8' })
       .trim()
       .split('\n')
       .filter(Boolean);
     for (const sha of shas) {
-      const body = execSync(`git show -s --format=%B ${sha}`, { encoding: 'utf8' });
+      const body = execFileSync('git', ['show', '-s', '--format=%B', sha], { encoding: 'utf8' });
       problems.push(...validate(sha.slice(0, 8), body));
     }
   } else {
