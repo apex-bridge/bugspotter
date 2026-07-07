@@ -55,6 +55,15 @@ test('editor comment lines are ignored', () => {
   assert.equal(run('feat: x\n\nAssisted-by: claude-opus-4-8 (agent)\n# a comment\n').code, 0);
 });
 
+test('bot auto-generated block after trailer passes (coderabbit pattern)', () => {
+  const body =
+    'feat: x\n\nAssisted-by: claude-opus-4-8 (agent)\n\n' +
+    '<!-- This is an auto-generated comment: release notes by coderabbit.ai -->\n' +
+    '## Summary by CodeRabbit\n\n* Chores\n  * something\n' +
+    '<!-- end of auto-generated comment: release notes by coderabbit.ai -->\n';
+  assert.equal(run(body).code, 0);
+});
+
 test('no trailer passes (presence is not forced)', () => {
   assert.equal(run('feat: x\n\njust a human commit\n').code, 0);
 });

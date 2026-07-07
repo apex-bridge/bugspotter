@@ -33,6 +33,19 @@ function stripComments(body) {
     .join('\n');
 }
 
+// Strip auto-generated bot sections appended to PR bodies (e.g. CodeRabbit PR
+// summary). These open with <!-- (This is an )auto-generated comment: ... -->
+// but the actual content sits between those markers as plain markdown — NOT
+// inside the HTML comment — so stripping just the comment tags is insufficient.
+// Cutting everything from the first such marker mirrors what the squash commit
+// message would actually contain: GitHub omits the HTML comment lines, but the
+// bot content between them can be absent by not being merged into main.
+// This keeps the Assisted-by trailer in the final block after bot edits.
+function stripBotBlocks(body) {
+  const idx = body.search(/<!--\s*(?:This is an )?auto-generated/i);
+  return idx === -1 ? body : body.slice(0, idx).trimEnd();
+}
+
 // Git's own view of the trailer block - authoritative for "will this be
 // recognized as a trailer at all?" (i.e. is it in the final, blank-line-
 // separated block). Returns null if git is unavailable, so we degrade to a
@@ -52,7 +65,7 @@ function gitTrailers(body) {
 }
 
 function validate(sha, rawBody) {
-  const body = stripComments(rawBody);
+  const body = stripComments(stripBotBlocks(rawBody));
   const parsed = gitTrailers(body);
   const problems = [];
   for (const raw of body.split(/\r?\n/)) {
