@@ -11,6 +11,6 @@ useDefault = true
 [allowlist]
 description = "Known non-secret CI/test placeholders"
 regexes = [
-  '''.*_for_testing_only.*''',
+  '''^(ci_jwt_secret_key_for_testing_only_not_production|ci_encryption_key_for_testing_only_32bytes)$''',
   '''bugspotter_ci_password''',
 ]
