@@ -11,7 +11,7 @@
 <!-- If this PR was AI-assisted, add an attribution trailer as the VERY LAST
      line of this description, with nothing after it:
 
-         Assisted-by: <model> (agent)
+         e.g., Assisted-by: <model> (agent)
 
      Under squash-merge the description becomes the commit message on `main`,
      so the trailer must be the final block for the code-metrics attribution
