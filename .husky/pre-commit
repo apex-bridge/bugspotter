@@ -4,5 +4,5 @@ npx lint-staged || exit 1
 # Secret-scan mirror (convenience; the CI "Secret Scan" job is the gate).
 # Skipped when gitleaks isn't installed locally - fresh worktrees won't have it.
 if command -v gitleaks >/dev/null 2>&1; then
-  gitleaks git -c .gitleaks.toml --staged --redact
+  gitleaks git -c .gitleaks.toml --staged --redact --verbose
 fi
