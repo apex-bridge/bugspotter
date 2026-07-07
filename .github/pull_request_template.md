@@ -9,7 +9,7 @@
 ---
 
 <!-- If this PR was AI-assisted, add an attribution trailer as the VERY LAST
-     line of this description, with nothing after it:
+     line of this description, preceded by a blank line, with nothing after it:
 
          e.g., Assisted-by: <model> (agent)
 
