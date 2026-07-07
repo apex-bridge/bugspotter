@@ -1,0 +1,11 @@
+language: en-US
+reviews:
+  profile: chill
+  # Disable PR-description edits. The high_level_summary feature rewrites the
+  # PR body, which pushes the Assisted-by attribution trailer out of the final
+  # block and breaks the commit-trailers gate. CodeRabbit still posts its
+  # walkthrough and inline comments as review comments.
+  high_level_summary: false
+  auto_review:
+    enabled: true
+    drafts: false
