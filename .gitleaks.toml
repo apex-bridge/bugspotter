@@ -1,0 +1,16 @@
+# Config for the fail-closed secret-scan guard (#201): the "Secret Scan" CI
+# workflow and the pre-commit mirror. Extends gitleaks' built-in ruleset and
+# allowlists known test/CI placeholder secrets so the gate flags real leaks,
+# not fixtures. Tune the allowlist as false positives surface.
+
+title = "BugSpotter gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret CI/test placeholders"
+regexes = [
+  '''^(ci_jwt_secret_key_for_testing_only_not_production|ci_encryption_key_for_testing_only_32bytes)$''',
+  '''bugspotter_ci_password''',
+]
