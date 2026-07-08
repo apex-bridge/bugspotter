@@ -8,9 +8,9 @@ title = "BugSpotter gitleaks config"
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Known non-secret CI/test placeholders"
 regexes = [
   '''^(ci_jwt_secret_key_for_testing_only_not_production|ci_encryption_key_for_testing_only_32bytes)$''',
-  '''bugspotter_ci_password''',
+  '''^bugspotter_ci_password$''',
 ]
