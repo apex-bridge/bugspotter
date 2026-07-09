@@ -1,6 +1,8 @@
 # Spec: <title>
 
-Linked issue: #NNN
+<!-- Keep in sync with .github/ISSUE_TEMPLATE/spec.yml — that template is the canonical source. -->
+
+Linked issue: Closes #NNN
 ADR: docs/adr/NNNN-slug.md (or "pending")
 
 ## Problem / motivation

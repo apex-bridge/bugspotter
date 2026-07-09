@@ -32,7 +32,8 @@ body:
       label: How (runnable steps)
       description: |
         Concrete commands or steps to implement + rollback for any irreversible actions.
-        Required for OWNER-gated or destructive steps.
+        Leave blank only for non-destructive, fully-reversible work. For OWNER-gated
+        or destructive steps this field is expected — the form cannot enforce it.
     validations:
       required: false
 
