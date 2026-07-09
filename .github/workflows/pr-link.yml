@@ -1,0 +1,37 @@
+name: PR Link
+
+# Tier-1 guard (#202): every PR body must reference a GitHub issue (#NNN)
+# or an ADR (ADR-NNNN). Prevents work landing on main without a traceable
+# intent thread. To gate merges, add "PR Link" to branch protection required
+# checks (rides on #199). The check is permissive on format (any #NNN or
+# ADR-NNNN in the body counts); Tier-2 drift-check (does the code match the
+# spec?) is a later, advisory-only phase.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-link:
+    name: PR Link
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body references an issue or ADR
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$PR_BODY" | grep -qE '(#[0-9]+|ADR-[0-9]{4})'; then
+            echo "OK: PR body references a GitHub issue (#NNN) or ADR (ADR-NNNN)."
+          else
+            echo "FAIL: PR body must reference a GitHub issue or ADR."
+            echo ""
+            echo "Add one of:"
+            echo "  Closes #NNN   Refs #NNN   Tracks #NNN   ADR-NNNN"
+            echo ""
+            echo "If there is no matching issue yet, open one first (use the Spec template)."
+            exit 1
+          fi

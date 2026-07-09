@@ -1,0 +1,46 @@
+name: Spec
+description: Technical spec for an SDLC work item (AI-SDLC pipeline)
+labels: ["needs-spec", "ai-sdlc"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem does this solve? Why now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and constraints
+      description: What is in scope, what is explicitly out, and what are the key constraints?
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete, checkable conditions that mark this done.
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: How (runnable steps)
+      description: |
+        Concrete commands or steps to implement + rollback for any irreversible actions.
+        Required for OWNER-gated or destructive steps.
+    validations:
+      required: false
+
+  - type: input
+    id: adr
+    attributes:
+      label: ADR
+      description: "Path or number if an ADR governs this decision (e.g. docs/adr/0042-agent-identity.md). Leave blank if not yet written."
+      placeholder: "docs/adr/NNNN-slug.md"
+    validations:
+      required: false
