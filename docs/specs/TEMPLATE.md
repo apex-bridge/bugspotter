@@ -7,7 +7,7 @@ ADR: docs/adr/NNNN-slug.md (or "pending")
 
 ## Problem / motivation
 
-## Scope
+## Scope and constraints
 
 In scope:
 
