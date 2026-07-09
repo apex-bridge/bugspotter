@@ -5,20 +5,23 @@ ADR: docs/adr/NNNN-slug.md (or "pending")
 
 ## Problem / motivation
 
-## Scope and constraints
+## Scope
 
-**In scope:**
--
+In scope:
 
-**Out of scope:**
--
+- <!-- item -->
 
-**Constraints:**
--
+Out of scope:
+
+- <!-- item -->
+
+Constraints:
+
+- <!-- item -->
 
 ## Acceptance criteria
 
-- [ ]
+- [ ] <!-- condition -->
 
 ## How (runnable steps)
 
