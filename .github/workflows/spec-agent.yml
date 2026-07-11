@@ -25,6 +25,7 @@ jobs:
     name: Draft spec
     if: github.event.label.name == 'needs-spec'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

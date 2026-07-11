@@ -26,6 +26,7 @@ jobs:
     name: Draft ADR
     if: github.event.label.name == 'needs-adr'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
