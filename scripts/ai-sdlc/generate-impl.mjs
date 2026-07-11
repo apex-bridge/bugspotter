@@ -15,8 +15,8 @@
 // Required env: ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY
 // Optional:     ISSUE_LABELS (comma-separated), SPEC_CONTENT, GITHUB_OUTPUT
 
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync, readdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
+import { dirname, resolve, relative, isAbsolute } from 'node:path';
 
 const {
   ANTHROPIC_API_KEY,
@@ -131,8 +131,9 @@ const res = await fetch('https://api.anthropic.com/v1/messages', {
 });
 
 if (!res.ok) {
-  let detail = '';
-  try { detail = JSON.stringify(await res.json(), null, 2); } catch { detail = await res.text().catch(() => ''); }
+  const text = await res.text().catch(() => '');
+  let detail = text;
+  try { detail = JSON.stringify(JSON.parse(text), null, 2); } catch { /* use raw text */ }
   console.error(`Claude API error (${res.status}):`, detail);
   process.exit(1);
 }
@@ -163,25 +164,33 @@ try {
   process.exit(1);
 }
 
-if (!Array.isArray(parsed.files) || parsed.files.length === 0) {
+if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) {
   console.error('No files in response:', JSON.stringify(parsed, null, 2));
   process.exit(1);
 }
 
 // Write files
 const writtenPaths = [];
+const repoRoot = process.cwd();
 for (const { path, content } of parsed.files) {
   if (!path || !content) continue;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content, 'utf8');
-  console.log(`Wrote ${path}`);
-  writtenPaths.push(path);
+  const resolvedPath = resolve(repoRoot, path);
+  const relPath = relative(repoRoot, resolvedPath);
+  if (relPath.startsWith('..') || isAbsolute(relPath)) {
+    console.error(`Path traversal detected and blocked: ${path}`);
+    continue;
+  }
+  mkdirSync(dirname(resolvedPath), { recursive: true });
+  writeFileSync(resolvedPath, content, 'utf8');
+  console.log(`Wrote ${relPath}`);
+  writtenPaths.push(relPath);
 }
 
 console.log(`\nSummary: ${parsed.summary}`);
 
 if (GITHUB_OUTPUT) {
+  const sanitizedSummary = (parsed.summary || '').replace(/[\r\n]+/g, ' ').trim();
   appendFileSync(GITHUB_OUTPUT, `files_written=${writtenPaths.join(',')}\n`);
   appendFileSync(GITHUB_OUTPUT, `model_used=${MODEL}\n`);
-  appendFileSync(GITHUB_OUTPUT, `impl_summary=${parsed.summary}\n`);
+  appendFileSync(GITHUB_OUTPUT, `impl_summary=${sanitizedSummary}\n`);
 }
