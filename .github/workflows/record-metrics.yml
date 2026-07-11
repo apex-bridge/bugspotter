@@ -1,0 +1,64 @@
+name: Record PR Metrics
+
+# Appends one JSONL row to bugspotter-metrics/data/prs.jsonl on every
+# squash-merge to main. Uses METRICS_REPO_TOKEN (PAT with repo scope on
+# apex-bridge/bugspotter-metrics) for checkout and push; the default
+# GITHUB_TOKEN is used to read PR details from this repo. Runs after
+# merge - not a gate, never blocks the PR. Tracks the metrics design in
+# core-intelligence-features/metrics-design.md.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+concurrency:
+  group: metrics-record-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    if: github.event.pull_request.merged == true
+    name: Record PR Metrics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout metrics repo (data/main)
+        uses: actions/checkout@v4
+        with:
+          repository: apex-bridge/bugspotter-metrics
+          ref: data/main
+          token: ${{ secrets.METRICS_REPO_TOKEN }}
+          path: metrics
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Record PR row
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd metrics
+          node scripts/record-pr.mjs \
+            --pr "$PR_NUMBER" \
+            --sha "$MERGE_SHA" \
+            --repo "$REPO"
+
+      - name: Commit and push metrics row
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cd metrics
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/prs.jsonl
+          git diff --cached --quiet || \
+            git commit -m "[metrics] record PR #${PR_NUMBER}" && \
+            git push
