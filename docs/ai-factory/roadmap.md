@@ -10,14 +10,15 @@ definition of done - proposed technical ADR.
 
 ---
 
-## R1 - Close the Flywheel (phase GROW -> EVOLVE) - priority: highest
+## R1 - Close the Flywheel (phase GROW → EVOLVE) - priority: highest
 
 **Why first.** This is the only genuinely open loop: feedback accumulates but does not feed back
 into quality. The main gap from term-mapping.
 
 - **Step:** nightly job `intelligence_feedback` -> per-tenant eval metric -> auto-adjust
   `similarity_threshold` (ADR-0028) within guardrails (min/max, step, audit) -> retrain candidate
-  flag. Move ADR-0032 from "rollout planned" to "implemented".
+  flag. (ADR-0032 status transition requires full rollout coverage: event/feedback persistence,
+  `record_generate()` instrumentation, and observability endpoints - not only threshold tuning.)
 - **Affected ADRs:** 0032 (status), 0028 (thresholds).
 - **Definition of done:** a verdict in `intelligence_feedback` measurably shifts the next per-tenant
   threshold, with an audit trail and rollback path; the `linked` gold signal is taken into account.
@@ -52,9 +53,10 @@ into quality. The main gap from term-mapping.
 
 - **Step:** document and test the end-to-end autonomous flow
   "new bug -> `find_similar` -> categorisation -> `update_bug_status`" across 6 tools (ADR-0038);
-  behavioral logs (ADR-0040) confirm the agent is not overreaching.
+  behavioural logs (ADR-0040) confirm the agent is not overreaching.
 - **Affected ADRs:** 0038, 0040.
-- **Definition of done:** flow is documented; logs confirm the agent stays within the surface boundary.
+- **Definition of done:** a passing end-to-end test covers all six ADR-0038 tools and includes
+  ADR-0040 boundary assertions; flow is documented; logs confirm the agent stays within the surface boundary.
 
 ## R6 - Spec-first ritual (Spec-Driven Development) - priority: medium-low
 
@@ -81,7 +83,7 @@ into quality. The main gap from term-mapping.
 
 | #   | Item                 | Phase              | Priority       | Affected ADRs |
 | --- | -------------------- | ------------------ | -------------- | ------------- |
-| R1  | Close the Flywheel   | GROW->EVOLVE       | highest        | 0032, 0028    |
+| R1  | Close the Flywheel   | GROW→EVOLVE        | highest        | 0032, 0028    |
 | R2  | Eval-gate in CI      | AI Factory / ROI   | high           | 0032 (+new)   |
 | R3  | Monitoring + alerts  | -                  | high           | 0032 (+new)   |
 | R4  | Estimate-vs-actual   | estimation         | medium         | 0032          |
