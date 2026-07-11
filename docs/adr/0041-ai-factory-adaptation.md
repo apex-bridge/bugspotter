@@ -60,15 +60,15 @@ the term.
 
 ### Term origins (external provenance anchor, per owner)
 
-| Term | Canonical origin |
-|---|---|
-| AI Factory | Andrew Ng / DeepLearning.AI, *AI Transformation Playbook* (landing.ai, 2019) |
-| Flywheel | Jim Collins, *Good to Great* (2001); Amazon virtuous cycle (Bezos, 2001); a16z data network effects |
-| Reusable Artefacts | DDD (Evans, 2003); IEEE 1517; MLOps (ml-ops.org, Google MLOps whitepaper) |
-| Spec-Driven Development | Design by Contract (Meyer, 1988); OpenAPI spec-first; Stripe Eng Blog |
-| Dual Obligation | GDPR art. 5/25 (2018); ACM/IEEE Code of Ethics; fiduciary duty |
-| SEED→PLANT→GROW→HARVEST→EVOLVE | Not a standard public framework; likely a proprietary methodology |
-| L3 delivery, AI/Run | Excluded by owner (no definitions available) |
+| Term                           | Canonical origin                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| AI Factory                     | Andrew Ng / DeepLearning.AI, _AI Transformation Playbook_ (landing.ai, 2019)                        |
+| Flywheel                       | Jim Collins, _Good to Great_ (2001); Amazon virtuous cycle (Bezos, 2001); a16z data network effects |
+| Reusable Artefacts             | DDD (Evans, 2003); IEEE 1517; MLOps (ml-ops.org, Google MLOps whitepaper)                           |
+| Spec-Driven Development        | Design by Contract (Meyer, 1988); OpenAPI spec-first; Stripe Eng Blog                               |
+| Dual Obligation                | GDPR art. 5/25 (2018); ACM/IEEE Code of Ethics; fiduciary duty                                      |
+| SEED→PLANT→GROW→HARVEST→EVOLVE | Not a standard public framework; likely a proprietary methodology                                   |
+| L3 delivery, AI/Run            | Excluded by owner (no definitions available)                                                        |
 
 ## Consequences
 

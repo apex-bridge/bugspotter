@@ -79,13 +79,13 @@ into quality. The main gap from term-mapping.
 
 ## Priority summary
 
-| # | Item | Phase | Priority | Affected ADRs |
-|---|---|---|---|---|
-| R1 | Close the Flywheel | GROW->EVOLVE | highest | 0032, 0028 |
-| R2 | Eval-gate in CI | AI Factory / ROI | high | 0032 (+new) |
-| R3 | Monitoring + alerts | - | high | 0032 (+new) |
-| R4 | Estimate-vs-actual | estimation | medium | 0032 |
-| R5 | E2E agentic workflow | HARVEST | medium | 0038, 0040 |
-| R6 | Spec-first ritual | Spec-Driven | medium-low | 0039 |
-| R7 | Reuse pipeline | Reusable artefacts | low | - |
-| R8 | Phase labels | SEED...EVOLVE | low (cosmetic) | - |
+| #   | Item                 | Phase              | Priority       | Affected ADRs |
+| --- | -------------------- | ------------------ | -------------- | ------------- |
+| R1  | Close the Flywheel   | GROW->EVOLVE       | highest        | 0032, 0028    |
+| R2  | Eval-gate in CI      | AI Factory / ROI   | high           | 0032 (+new)   |
+| R3  | Monitoring + alerts  | -                  | high           | 0032 (+new)   |
+| R4  | Estimate-vs-actual   | estimation         | medium         | 0032          |
+| R5  | E2E agentic workflow | HARVEST            | medium         | 0038, 0040    |
+| R6  | Spec-first ritual    | Spec-Driven        | medium-low     | 0039          |
+| R7  | Reuse pipeline       | Reusable artefacts | low            | -             |
+| R8  | Phase labels         | SEED...EVOLVE      | low (cosmetic) | -             |
