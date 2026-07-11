@@ -1,0 +1,42 @@
+name: PR Link
+
+# Tier-1 guard (#202): every PR body must reference a GitHub issue or ADR.
+# Accepted forms: "Closes #NNN", "Refs #NNN", "Fixes #NNN", "Tracks #NNN",
+# "Resolves #NNN", "References #NNN" (case-insensitive), or "ADR-NNNN".
+# A bare "#NNN" is NOT accepted — requires a keyword to avoid false-passes
+# from HTML comments or prose in the default PR template.
+# To gate merges, add "PR Link" to branch protection required checks (#199).
+# Tier-2 drift-check (does the code match the spec?) is a later, advisory phase.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main, develop]
+
+concurrency:
+  group: pr-link-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-link:
+    name: PR Link
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body references an issue or ADR
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$PR_BODY" | grep -qiE '(Closes|Refs|Fixes|Tracks|Resolves|References)\s+#[0-9]+|ADR-[0-9]{4}'; then
+            echo "OK: PR body references a GitHub issue or ADR."
+          else
+            echo "FAIL: PR body must reference a GitHub issue or ADR."
+            echo ""
+            echo "Add one of:"
+            echo "  Closes #NNN   Refs #NNN   Fixes #NNN   Tracks #NNN   ADR-NNNN"
+            echo ""
+            echo "If there is no matching issue yet, open one first (use the Spec template)."
+            exit 1
+          fi

@@ -1,0 +1,59 @@
+name: Commit Trailers
+
+# Deterministic (Tier-1) guard: validates the agent-attribution commit
+# trailer FORMAT on every commit in a PR. The convention lives in
+# CONTRIBUTING.md ("Commit attribution trailer").
+#
+# Presence of the trailer is convention-driven (agents add it) - this job
+# only enforces that a present trailer is well-formed, so the code-metrics
+# attribution layer can parse it reliably. Fail-closed.
+#
+# Under squash-merge the squash commit message is composed from the PR body,
+# so this job ALSO validates the PR body's final-block trailer - that is
+# where the attribution key actually lands on `main` post-squash (#204).
+#
+# This is intentionally a standalone required-check candidate, separate
+# from the main `CI` aggregator. To make it a merge gate, add the
+# "Commit Trailers" status check to branch protection on `main`
+# (rides on the gate armed in #199). Tracks #200.
+
+on:
+  pull_request:
+    # `edited` is required: the PR-body trailer becomes the squash commit
+    # message, so a body edit after CI goes green must re-validate or the
+    # gate is bypassable (stale-green rides through branch protection).
+    types: [opened, synchronize, reopened, edited]
+    branches: [main, develop]
+
+jobs:
+  commit-trailers:
+    name: Commit Trailers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for the range)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test the trailer checker
+        run: node --test scripts/check-commit-trailers.test.mjs
+
+      - name: Validate attribution trailers (branch commits)
+        run: >
+          node scripts/check-commit-trailers.mjs
+          --range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      - name: Validate PR-body trailer (post-squash attribution lands here)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # PR body via env, never inlined into run: as an actions expression
+          # squash this becomes the commit message on main, so its trailer
+          # must be a parseable final-block trailer just like a commit's.
+          printf '%s' "$PR_BODY" > pr-body.txt
+          node scripts/check-commit-trailers.mjs --message pr-body.txt
