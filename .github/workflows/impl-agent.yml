@@ -43,7 +43,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Fetch linked spec (if any)
+      - name: Fetch linked spec (required)
         id: spec
         env:
           GH_TOKEN: ${{ github.token }}
@@ -52,16 +52,20 @@ jobs:
           # Look for a merged spec PR that references this issue
           SPEC_PR=$(gh pr list --state merged --search "spec(#${ISSUE_NUMBER})" --json number,files --jq \
             '[.[] | select(.files[].path | startswith("docs/specs/")) | .number] | first // empty')
-          if [ -n "$SPEC_PR" ]; then
-            SPEC_FILE=$(gh pr view "$SPEC_PR" --json files --jq \
-              '.files[] | select(.path | startswith("docs/specs/")) | .path' | head -1)
-            if [ -n "$SPEC_FILE" ] && [ -f "$SPEC_FILE" ]; then
-              echo "spec_content<<EOF_SPEC" >> "$GITHUB_OUTPUT"
-              cat "$SPEC_FILE" >> "$GITHUB_OUTPUT"
-              echo "EOF_SPEC" >> "$GITHUB_OUTPUT"
-              echo "spec_file=$SPEC_FILE" >> "$GITHUB_OUTPUT"
-            fi
+          if [ -z "$SPEC_PR" ]; then
+            echo "::error::No merged spec PR found for issue #${ISSUE_NUMBER}. Ratify a spec (Gate 1) before running the impl agent."
+            exit 1
           fi
+          SPEC_FILE=$(gh pr view "$SPEC_PR" --json files --jq \
+            '.files[] | select(.path | startswith("docs/specs/")) | .path' | head -1)
+          if [ -z "$SPEC_FILE" ] || [ ! -f "$SPEC_FILE" ]; then
+            echo "::error::Spec file not found on disk for PR #${SPEC_PR}. Ensure the checkout includes the spec."
+            exit 1
+          fi
+          echo "spec_content<<EOF_SPEC" >> "$GITHUB_OUTPUT"
+          cat "$SPEC_FILE" >> "$GITHUB_OUTPUT"
+          echo "EOF_SPEC" >> "$GITHUB_OUTPUT"
+          echo "spec_file=$SPEC_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Generate scaffold
         id: gen
@@ -70,7 +74,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
           SPEC_CONTENT: ${{ steps.spec.outputs.spec_content }}
         run: node scripts/ai-sdlc/generate-impl.mjs
@@ -79,16 +82,19 @@ jobs:
         id: push
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
           FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
           MODEL_USED: ${{ steps.gen.outputs.model_used }}
         run: |
-          SLUG=$(echo "${{ github.event.issue.title }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40)
+          SLUG=$(printf '%s' "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40)
           BRANCH="impl/issue-${ISSUE_NUMBER}-${SLUG}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          # stage only generated files
-          echo "$FILES_WRITTEN" | tr ',' '\n' | xargs git add
+          # stage only generated files — use -- to prevent path-as-option injection
+          while IFS= read -r f; do
+            [ -n "$f" ] && git add -- "$f"
+          done < <(printf '%s' "$FILES_WRITTEN" | tr ',' '\n')
           MSG="$(printf 'impl(#%s): scaffold\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$MODEL_USED")"
           git commit -m "$MSG"
           git push origin "$BRANCH"

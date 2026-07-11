@@ -12,25 +12,38 @@
 //
 // Output: writes files listed in Claude's JSON response; outputs file list to GITHUB_OUTPUT.
 //
-// Required env: ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY
-// Optional:     ISSUE_LABELS (comma-separated), SPEC_CONTENT, GITHUB_OUTPUT
+// Required env: ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, SPEC_CONTENT
+// Optional:     ISSUE_LABELS (comma-separated), GITHUB_OUTPUT
 
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const {
   ANTHROPIC_API_KEY,
   ISSUE_NUMBER,
   ISSUE_TITLE,
-  ISSUE_BODY,
   ISSUE_LABELS = '',
   SPEC_CONTENT,
   GITHUB_OUTPUT,
 } = process.env;
 
-if (!ANTHROPIC_API_KEY) { console.error('Missing ANTHROPIC_API_KEY'); process.exit(1); }
-if (!ISSUE_NUMBER)      { console.error('Missing ISSUE_NUMBER');       process.exit(1); }
-if (!ISSUE_TITLE)       { console.error('Missing ISSUE_TITLE');        process.exit(1); }
+if (!ANTHROPIC_API_KEY) {
+  console.error('Missing ANTHROPIC_API_KEY');
+  process.exit(1);
+}
+if (!ISSUE_NUMBER) {
+  console.error('Missing ISSUE_NUMBER');
+  process.exit(1);
+}
+if (!ISSUE_TITLE) {
+  console.error('Missing ISSUE_TITLE');
+  process.exit(1);
+}
+if (!SPEC_CONTENT) {
+  console.error('Missing SPEC_CONTENT — ratify a spec (Gate 1) before running the impl agent.');
+  process.exit(1);
+}
 
 // Model router
 function selectModel(labels) {
@@ -70,9 +83,7 @@ const staticContext = [
   testExample     ? `# Example test (style reference)\n\`\`\`typescript\n${testExample}\n\`\`\`` : '',
 ].filter(Boolean).join('\n\n---\n\n');
 
-const specSection = SPEC_CONTENT
-  ? `# Ratified spec\n${SPEC_CONTENT}`
-  : `# Issue body (no spec linked)\n${ISSUE_BODY || '(empty)'}`;
+const specSection = `# Ratified spec\n${SPEC_CONTENT}`;
 
 const userPrompt = `\
 You are an implementation agent for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
@@ -189,8 +200,11 @@ for (const { path, content } of parsed.files) {
 console.log(`\nSummary: ${parsed.summary}`);
 
 if (GITHUB_OUTPUT) {
-  const sanitizedSummary = (parsed.summary || '').replace(/[\r\n]+/g, ' ').trim();
+  const delimiter = `IMPL_SUMMARY_${randomUUID()}`;
   appendFileSync(GITHUB_OUTPUT, `files_written=${writtenPaths.join(',')}\n`);
   appendFileSync(GITHUB_OUTPUT, `model_used=${MODEL}\n`);
-  appendFileSync(GITHUB_OUTPUT, `impl_summary=${sanitizedSummary}\n`);
+  appendFileSync(
+    GITHUB_OUTPUT,
+    `impl_summary<<${delimiter}\n${String(parsed.summary ?? '')}\n${delimiter}\n`,
+  );
 }
