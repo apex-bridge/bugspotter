@@ -7,7 +7,7 @@
 // Optional:          SPEC_CONTENT (contents of a linked spec, if any)
 //                    GITHUB_OUTPUT (set by Actions; falls back to stdout print)
 
-import { readFileSync, writeFileSync, readdirSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 
 const {
   ANTHROPIC_API_KEY,
@@ -23,6 +23,7 @@ if (!ISSUE_NUMBER)      { console.error('Missing ISSUE_NUMBER');       process.e
 if (!ISSUE_TITLE)       { console.error('Missing ISSUE_TITLE');        process.exit(1); }
 
 // Find next ADR number
+if (!existsSync('docs/adr')) mkdirSync('docs/adr', { recursive: true });
 const existing = readdirSync('docs/adr').filter((f) => /^\d{4}-/.test(f));
 const maxNum = existing.reduce((m, f) => Math.max(m, parseInt(f.slice(0, 4), 10)), 0);
 const nextNum = maxNum + 1;
@@ -102,12 +103,17 @@ const res = await fetch('https://api.anthropic.com/v1/messages', {
   }),
 });
 
-const data = await res.json();
 if (!res.ok) {
-  console.error('Claude API error:', JSON.stringify(data, null, 2));
+  let detail = '';
+  try { detail = JSON.stringify(await res.json(), null, 2); } catch { detail = await res.text().catch(() => ''); }
+  console.error(`Claude API error (${res.status}):`, detail);
   process.exit(1);
 }
-
+const data = await res.json();
+if (data?.content?.[0]?.type !== 'text') {
+  console.error('Unexpected API response shape:', JSON.stringify(data, null, 2));
+  process.exit(1);
+}
 const adrContent = data.content[0].text;
 
 writeFileSync(adrFile, adrContent, 'utf8');

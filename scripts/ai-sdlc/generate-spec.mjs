@@ -7,7 +7,6 @@
 // Optional:          GITHUB_OUTPUT (set by Actions; falls back to stdout print)
 
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
-import { existsSync } from 'node:fs';
 
 const { ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, GITHUB_OUTPUT } = process.env;
 
@@ -60,12 +59,17 @@ const res = await fetch('https://api.anthropic.com/v1/messages', {
   }),
 });
 
-const data = await res.json();
 if (!res.ok) {
-  console.error('Claude API error:', JSON.stringify(data, null, 2));
+  let detail = '';
+  try { detail = JSON.stringify(await res.json(), null, 2); } catch { detail = await res.text().catch(() => ''); }
+  console.error(`Claude API error (${res.status}):`, detail);
   process.exit(1);
 }
-
+const data = await res.json();
+if (data?.content?.[0]?.type !== 'text') {
+  console.error('Unexpected API response shape:', JSON.stringify(data, null, 2));
+  process.exit(1);
+}
 const specContent = data.content[0].text;
 
 mkdirSync('docs/specs', { recursive: true });

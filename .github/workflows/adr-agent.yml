@@ -75,9 +75,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add "$ADR_FILE"
-          MSG="docs(adr): ADR-${ADR_NUMBER} draft (${ADR_SLUG})
-
-Assisted-by: claude-sonnet-4-6 (agent)"
+          MSG="$(printf 'docs(adr): ADR-%s draft (%s)\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ADR_SLUG")"
           git commit -m "$MSG"
           git push origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
@@ -91,12 +89,7 @@ Assisted-by: claude-sonnet-4-6 (agent)"
           BRANCH: ${{ steps.push.outputs.branch }}
           ADR_NUMBER: ${{ steps.gen.outputs.adr_number }}
         run: |
-          PR_BODY="Agent-drafted ADR-${ADR_NUMBER} for issue #${ISSUE_NUMBER}.
-
-Review, promote Status to Accepted if correct, and merge to advance this issue to \`agent-working\`.
-
-Refs #${ISSUE_NUMBER}
-Assisted-by: claude-sonnet-4-6 (agent)"
+          PR_BODY="$(printf 'Agent-drafted ADR-%s for issue #%s.\n\nReview, promote Status to Accepted if correct, and merge to advance this issue to `agent-working`.\n\nRefs #%s\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
 
           PR_URL=$(gh pr create \
             --title "docs(adr): ADR-${ADR_NUMBER} ${ISSUE_TITLE}" \

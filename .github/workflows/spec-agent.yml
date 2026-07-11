@@ -53,9 +53,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add "$SPEC_FILE"
-          MSG="spec(#${ISSUE_NUMBER}): draft spec
-
-Assisted-by: claude-sonnet-4-6 (agent)"
+          MSG="$(printf 'spec(#%s): draft spec\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ISSUE_NUMBER")"
           git commit -m "$MSG"
           git push origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
@@ -69,12 +67,7 @@ Assisted-by: claude-sonnet-4-6 (agent)"
           BRANCH: ${{ steps.push.outputs.branch }}
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
         run: |
-          PR_BODY="Agent-drafted spec for issue #${ISSUE_NUMBER}.
-
-Review, fill gaps, and merge to advance this issue to \`needs-adr\` (if an ADR is warranted) or \`agent-working\` (if no ADR is needed).
-
-Refs #${ISSUE_NUMBER}
-Assisted-by: claude-sonnet-4-6 (agent)"
+          PR_BODY="$(printf 'Agent-drafted spec for issue #%s.\n\nReview, fill gaps, and merge to advance this issue to `needs-adr` (if an ADR is warranted) or `agent-working` (if no ADR is needed).\n\nRefs #%s\nAssisted-by: claude-sonnet-4-6 (agent)' "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
 
           PR_URL=$(gh pr create \
             --title "spec(#${ISSUE_NUMBER}): ${ISSUE_TITLE}" \
