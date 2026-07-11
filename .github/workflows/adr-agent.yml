@@ -1,0 +1,111 @@
+name: ADR Agent
+
+# Phase 1 agent: fires when a human applies the `needs-adr` label.
+# Calls Claude API to draft an ADR in docs/adr/ and opens a DRAFT PR.
+# Gate 2 (ADR ratification) is human-held: the agent cannot merge.
+#
+# If a linked spec PR exists, its content is passed to the agent for context.
+# Required secrets: ANTHROPIC_API_KEY
+# ADR: docs/adr/0042-agent-identity-scoped-app.md
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: adr-agent
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  draft-adr:
+    name: Draft ADR
+    if: github.event.label.name == 'needs-adr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Fetch linked spec (if any)
+        id: spec
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          # Look for a merged spec PR that references this issue
+          SPEC_PR=$(gh pr list --state merged --search "spec(#${ISSUE_NUMBER})" --json number,files --jq \
+            '[.[] | select(.files[].path | startswith("docs/specs/")) | .number] | first // empty')
+          if [ -n "$SPEC_PR" ]; then
+            SPEC_FILE=$(gh pr view "$SPEC_PR" --json files --jq \
+              '.files[] | select(.path | startswith("docs/specs/")) | .path' | head -1)
+            if [ -n "$SPEC_FILE" ] && [ -f "$SPEC_FILE" ]; then
+              DELIM="EOF_$(openssl rand -hex 8)"
+              { echo "spec_content<<$DELIM"; cat "$SPEC_FILE"; echo "$DELIM"; } >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Generate ADR
+        id: gen
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          SPEC_CONTENT: ${{ steps.spec.outputs.spec_content }}
+        run: node scripts/ai-sdlc/generate-adr.mjs
+
+      - name: Commit ADR to branch
+        id: push
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ADR_FILE: ${{ steps.gen.outputs.adr_file }}
+          ADR_SLUG: ${{ steps.gen.outputs.adr_slug }}
+          ADR_NUMBER: ${{ steps.gen.outputs.adr_number }}
+        run: |
+          BRANCH="adr/${ADR_NUMBER}-${ADR_SLUG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$ADR_FILE"
+          MSG="$(printf 'docs(adr): ADR-%s draft (%s)\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ADR_SLUG")"
+          git commit -m "$MSG"
+          git push origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open draft PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+          ADR_NUMBER: ${{ steps.gen.outputs.adr_number }}
+        run: |
+          PR_BODY="$(printf 'Agent-drafted ADR-%s for issue #%s.\n\nReview, promote Status to Accepted if correct, and merge to advance this issue to `agent-working`.\n\nRefs #%s\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
+
+          PR_URL=$(gh pr create \
+            --title "docs(adr): ADR-${ADR_NUMBER} ${ISSUE_TITLE}" \
+            --body "$PR_BODY" \
+            --draft \
+            --head "$BRANCH" \
+            --base main)
+
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          ADR_NUMBER: ${{ steps.gen.outputs.adr_number }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body \
+            "ADR-${ADR_NUMBER} drafted: $PR_URL. Review, promote Status to Accepted, and merge to advance to \`agent-working\`."
