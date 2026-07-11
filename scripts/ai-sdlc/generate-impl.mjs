@@ -166,8 +166,9 @@ if (usage.cache_creation_input_tokens || usage.cache_read_input_tokens) {
 // Parse JSON response
 let parsed;
 try {
-  // Strip accidental fences if the model wraps in ```json ... ```
-  const raw = data.content[0].text.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+  // Extract JSON — handle leading prose + fenced block, or bare JSON
+  const fenceMatch = data.content[0].text.match(/```json\s*([\s\S]*?)\s*```/i);
+  const raw = fenceMatch ? fenceMatch[1].trim() : data.content[0].text.trim();
   parsed = JSON.parse(raw);
 } catch (e) {
   console.error('Failed to parse JSON from Claude response:', e.message);
