@@ -1,0 +1,95 @@
+name: Spec Agent
+
+# Phase 1 agent: fires when a human applies the `needs-spec` label.
+# Calls Claude API to draft a spec from TEMPLATE.md and opens a DRAFT PR.
+# Gate 1 (spec approval) is human-held: the agent cannot merge.
+#
+# Required secrets: ANTHROPIC_API_KEY
+# ADR: docs/adr/0042-agent-identity-scoped-app.md
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: spec-agent-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  draft-spec:
+    name: Draft spec
+    if: github.event.label.name == 'needs-spec'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate spec
+        id: gen
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: node scripts/ai-sdlc/generate-spec.mjs
+
+      - name: Commit spec to branch
+        id: push
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
+          SPEC_SLUG: ${{ steps.gen.outputs.spec_slug }}
+        run: |
+          BRANCH="spec/issue-${ISSUE_NUMBER}-${SPEC_SLUG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$SPEC_FILE"
+          MSG="spec(#${ISSUE_NUMBER}): draft spec
+
+Assisted-by: claude-sonnet-4-6 (agent)"
+          git commit -m "$MSG"
+          git push origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open draft PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+          SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
+        run: |
+          PR_BODY="Agent-drafted spec for issue #${ISSUE_NUMBER}.
+
+Review, fill gaps, and merge to advance this issue to \`needs-adr\` (if an ADR is warranted) or \`agent-working\` (if no ADR is needed).
+
+Refs #${ISSUE_NUMBER}
+Assisted-by: claude-sonnet-4-6 (agent)"
+
+          PR_URL=$(gh pr create \
+            --title "spec(#${ISSUE_NUMBER}): ${ISSUE_TITLE}" \
+            --body "$PR_BODY" \
+            --draft \
+            --head "$BRANCH" \
+            --base main)
+
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body \
+            "Spec drafted: $PR_URL. Review and merge to advance to \`needs-adr\` or \`agent-working\`."
