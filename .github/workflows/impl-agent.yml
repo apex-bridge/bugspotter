@@ -110,7 +110,7 @@ jobs:
           MODEL_USED: ${{ steps.gen.outputs.model_used }}
           IMPL_SUMMARY: ${{ steps.gen.outputs.impl_summary }}
         run: |
-          PR_BODY="$(printf 'Agent-generated scaffold for issue #%s (model: %s).\n\n%s\n\nReview, fill in TODO sections, run tests, and merge when ready (Gate 3).\n\nRefs #%s\nAssisted-by: %s (agent)' \
+          PR_BODY="$(printf 'Agent-generated scaffold for issue #%s (model: %s).\n\n%s\n\nReview, fill in TODO sections, run tests, and merge when ready (Gate 3).\n\nRefs #%s\n\nAssisted-by: %s (agent)' \
             "$ISSUE_NUMBER" "$MODEL_USED" "$IMPL_SUMMARY" "$ISSUE_NUMBER" "$MODEL_USED")"
 
           PR_URL=$(gh pr create \
