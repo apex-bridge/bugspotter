@@ -106,7 +106,10 @@ const res = await fetch('https://api.anthropic.com/v1/messages', {
 
 if (!res.ok) {
   let detail = '';
-  try { detail = JSON.stringify(await res.json(), null, 2); } catch { detail = await res.text().catch(() => ''); }
+  try {
+    const raw = await res.text();
+    try { detail = JSON.stringify(JSON.parse(raw), null, 2); } catch { detail = raw; }
+  } catch { /* body unreadable */ }
   console.error(`Claude API error (${res.status}):`, detail);
   process.exit(1);
 }

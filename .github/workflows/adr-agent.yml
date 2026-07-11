@@ -13,7 +13,7 @@ on:
     types: [labeled]
 
 concurrency:
-  group: adr-agent-${{ github.event.issue.number }}
+  group: adr-agent
   cancel-in-progress: false
 
 permissions:
@@ -47,9 +47,8 @@ jobs:
             SPEC_FILE=$(gh pr view "$SPEC_PR" --json files --jq \
               '.files[] | select(.path | startswith("docs/specs/")) | .path' | head -1)
             if [ -n "$SPEC_FILE" ] && [ -f "$SPEC_FILE" ]; then
-              echo "spec_content<<EOF" >> "$GITHUB_OUTPUT"
-              cat "$SPEC_FILE" >> "$GITHUB_OUTPUT"
-              echo "EOF" >> "$GITHUB_OUTPUT"
+              DELIM="EOF_$(openssl rand -hex 8)"
+              { echo "spec_content<<$DELIM"; cat "$SPEC_FILE"; echo "$DELIM"; } >> "$GITHUB_OUTPUT"
             fi
           fi
 
