@@ -49,9 +49,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          # Look for a merged spec PR that references this issue
-          SPEC_PR=$(gh pr list --state merged --search "spec(#${ISSUE_NUMBER})" --json number,files --jq \
-            '[.[] | select(.files[].path | startswith("docs/specs/")) | .number] | first // empty')
+          # Look for a merged spec PR that closes this issue (exact match via closingIssuesReferences)
+          SPEC_PR=$(gh pr list --state merged --json number,files,closingIssuesReferences --jq \
+            --argjson issue "$ISSUE_NUMBER" \
+            '[.[] | select(.closingIssuesReferences[]? | .number == $issue) | select(.files[]?.path | startswith("docs/specs/")) | .number] | first // empty')
           if [ -z "$SPEC_PR" ]; then
             echo "::error::No merged spec PR found for issue #${ISSUE_NUMBER}. Ratify a spec (Gate 1) before running the impl agent."
             exit 1
@@ -62,9 +63,10 @@ jobs:
             echo "::error::Spec file not found on disk for PR #${SPEC_PR}. Ensure the checkout includes the spec."
             exit 1
           fi
-          echo "spec_content<<EOF_SPEC" >> "$GITHUB_OUTPUT"
+          DELIM="EOF_SPEC_$(openssl rand -hex 8)"
+          echo "spec_content<<${DELIM}" >> "$GITHUB_OUTPUT"
           cat "$SPEC_FILE" >> "$GITHUB_OUTPUT"
-          echo "EOF_SPEC" >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
           echo "spec_file=$SPEC_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Generate scaffold

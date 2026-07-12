@@ -54,8 +54,12 @@ const MODEL_LOW     = process.env.IMPL_MODEL_LOW     || 'claude-haiku-4-5-202510
 
 function selectModel(labels) {
   const set = new Set(labels.split(',').map((l) => l.trim().toLowerCase()));
-  if (set.has('complexity:high')) return MODEL_HIGH;
-  if (set.has('pii-sensitive'))   return MODEL_LOW;
+  if (set.has('complexity:high')) {
+    return MODEL_HIGH;
+  }
+  if (set.has('pii-sensitive')) {
+    return MODEL_LOW;
+  }
   return MODEL_DEFAULT;
 }
 const MODEL = selectModel(ISSUE_LABELS);
@@ -190,18 +194,42 @@ if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) {
 // Write files
 const writtenPaths = [];
 const repoRoot = process.cwd();
+const FORBIDDEN_PATH_PATTERNS = [
+  /^\.git(\/|$)/,
+  /^\.github\/workflows\//,
+  /(^|\/)package(-lock)?\.json$/,
+  /(^|\/)(pnpm-lock\.yaml|yarn\.lock)$/,
+];
+
+const seenPaths = new Set();
 for (const { path, content } of parsed.files) {
-  if (!path || !content) continue;
+  if (typeof path !== 'string' || typeof content !== 'string' || !path || !content) {
+    continue;
+  }
+  if (/[\x00-\x1f]/.test(path)) {
+    console.error(`Rejected path with control characters: ${JSON.stringify(path)}`);
+    continue;
+  }
   const resolvedPath = resolve(repoRoot, path);
   const relPath = relative(repoRoot, resolvedPath);
   if (relPath.startsWith('..') || isAbsolute(relPath)) {
     console.error(`Path traversal detected and blocked: ${path}`);
     continue;
   }
+  if (FORBIDDEN_PATH_PATTERNS.some((re) => re.test(relPath)) || seenPaths.has(relPath)) {
+    console.error(`Rejected forbidden/duplicate target path: ${relPath}`);
+    continue;
+  }
+  seenPaths.add(relPath);
   mkdirSync(dirname(resolvedPath), { recursive: true });
   writeFileSync(resolvedPath, content, 'utf8');
   console.log(`Wrote ${relPath}`);
   writtenPaths.push(relPath);
+}
+
+if (writtenPaths.length === 0) {
+  console.error('No valid files were written after validation - aborting.');
+  process.exit(1);
 }
 
 console.log(`\nSummary: ${parsed.summary}`);
