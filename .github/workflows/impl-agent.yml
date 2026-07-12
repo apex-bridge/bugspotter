@@ -1,0 +1,140 @@
+name: Impl Agent
+
+# Phase 2 agent: fires when a human applies the `agent-working` label after
+# ratifying the spec (Gate 1) and optionally an ADR (Gate 2).
+# Reads the linked spec, calls Claude API, opens a DRAFT PR with a scaffold.
+# Gate 3 (merge) is human-held: the agent cannot merge.
+#
+# Model router (label-based):
+#   complexity:high  -> claude-opus-4-8
+#   pii-sensitive    -> claude-haiku-4-5-20251001
+#   default          -> claude-sonnet-4-6
+#
+# Prompt caching: static context (CLAUDE.md + style examples) is marked
+# cache_control=ephemeral; repeated runs on the same day skip re-sending it.
+#
+# Required secrets: ANTHROPIC_API_KEY
+# ADR: docs/adr/0042-agent-identity-scoped-app.md
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: impl-agent-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  scaffold:
+    name: Generate implementation scaffold
+    if: github.event.label.name == 'agent-working'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Fetch linked spec (required)
+        id: spec
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          # Look for a merged spec PR that closes this issue (exact match via closingIssuesReferences)
+          SPEC_PR=$(gh pr list --state merged --json number,files,closingIssuesReferences --jq \
+            --argjson issue "$ISSUE_NUMBER" \
+            '[.[] | select(.closingIssuesReferences[]? | .number == $issue) | select(.files[]?.path | startswith("docs/specs/")) | .number] | first // empty')
+          if [ -z "$SPEC_PR" ]; then
+            echo "::error::No merged spec PR found for issue #${ISSUE_NUMBER}. Ratify a spec (Gate 1) before running the impl agent."
+            exit 1
+          fi
+          SPEC_FILE=$(gh pr view "$SPEC_PR" --json files --jq \
+            '.files[] | select(.path | startswith("docs/specs/")) | .path' | head -1)
+          if [ -z "$SPEC_FILE" ] || [ ! -f "$SPEC_FILE" ]; then
+            echo "::error::Spec file not found on disk for PR #${SPEC_PR}. Ensure the checkout includes the spec."
+            exit 1
+          fi
+          DELIM="EOF_SPEC_$(openssl rand -hex 8)"
+          echo "spec_content<<${DELIM}" >> "$GITHUB_OUTPUT"
+          cat "$SPEC_FILE" >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
+          echo "spec_file=$SPEC_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Generate scaffold
+        id: gen
+        timeout-minutes: 15
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+          SPEC_CONTENT: ${{ steps.spec.outputs.spec_content }}
+          # Model router overrides — set via GitHub repo variables (no code change needed).
+          # Unset = fall back to hardcoded defaults in generate-impl.mjs.
+          IMPL_MODEL_HIGH: ${{ vars.IMPL_MODEL_HIGH }}
+          IMPL_MODEL_DEFAULT: ${{ vars.IMPL_MODEL_DEFAULT }}
+          IMPL_MODEL_LOW: ${{ vars.IMPL_MODEL_LOW }}
+        run: node scripts/ai-sdlc/generate-impl.mjs
+
+      - name: Commit scaffold to branch
+        id: push
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
+          MODEL_USED: ${{ steps.gen.outputs.model_used }}
+        run: |
+          SLUG=$(printf '%s' "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40)
+          BRANCH="impl/issue-${ISSUE_NUMBER}-${SLUG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          # stage only generated files — use -- to prevent path-as-option injection
+          while IFS= read -r f; do
+            [ -n "$f" ] && git add -- "$f"
+          done < <(printf '%s' "$FILES_WRITTEN" | tr ',' '\n')
+          MSG="$(printf 'impl(#%s): scaffold\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$MODEL_USED")"
+          git commit -m "$MSG"
+          git push origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open draft PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+          MODEL_USED: ${{ steps.gen.outputs.model_used }}
+          IMPL_SUMMARY: ${{ steps.gen.outputs.impl_summary }}
+        run: |
+          PR_BODY="$(printf 'Agent-generated scaffold for issue #%s (model: %s).\n\n%s\n\nReview, fill in TODO sections, run tests, and merge when ready (Gate 3).\n\nRefs #%s\n\nAssisted-by: %s (agent)' \
+            "$ISSUE_NUMBER" "$MODEL_USED" "$IMPL_SUMMARY" "$ISSUE_NUMBER" "$MODEL_USED")"
+
+          PR_URL=$(gh pr create \
+            --title "impl(#${ISSUE_NUMBER}): ${ISSUE_TITLE}" \
+            --body "$PR_BODY" \
+            --draft \
+            --head "$BRANCH" \
+            --base main)
+
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          MODEL_USED: ${{ steps.gen.outputs.model_used }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body \
+            "Scaffold drafted (${MODEL_USED}): ${PR_URL}. Review TODO sections, run tests, and merge when ready."
