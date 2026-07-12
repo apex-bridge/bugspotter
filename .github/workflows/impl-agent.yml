@@ -85,6 +85,14 @@ jobs:
           IMPL_MODEL_LOW: ${{ vars.IMPL_MODEL_LOW }}
         run: node scripts/ai-sdlc/generate-impl.mjs
 
+      - name: Format generated files
+        env:
+          FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
+        run: |
+          printf '%s' "$FILES_WRITTEN" | tr ',' '\n' | while IFS= read -r f; do
+            [ -n "$f" ] && npx prettier@3.6.2 --write --ignore-unknown "$f"
+          done
+
       - name: Commit scaffold to branch
         id: push
         env:
@@ -97,14 +105,14 @@ jobs:
           BRANCH="impl/issue-${ISSUE_NUMBER}-${SLUG}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git checkout -B "$BRANCH"
           # stage only generated files — use -- to prevent path-as-option injection
           while IFS= read -r f; do
             [ -n "$f" ] && git add -- "$f"
           done < <(printf '%s' "$FILES_WRITTEN" | tr ',' '\n')
           MSG="$(printf 'impl(#%s): scaffold\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$MODEL_USED")"
           git commit -m "$MSG"
-          git push origin "$BRANCH"
+          git push --force-with-lease origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Open draft PR

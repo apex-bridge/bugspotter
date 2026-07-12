@@ -62,6 +62,11 @@ jobs:
           SPEC_CONTENT: ${{ steps.spec.outputs.spec_content }}
         run: node scripts/ai-sdlc/generate-adr.mjs
 
+      - name: Format generated files
+        env:
+          ADR_FILE: ${{ steps.gen.outputs.adr_file }}
+        run: npx prettier@3.6.2 --write "$ADR_FILE"
+
       - name: Commit ADR to branch
         id: push
         env:
@@ -73,11 +78,11 @@ jobs:
           BRANCH="adr/${ADR_NUMBER}-${ADR_SLUG}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git checkout -B "$BRANCH"
           git add "$ADR_FILE"
           MSG="$(printf 'docs(adr): ADR-%s draft (%s)\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ADR_SLUG")"
           git commit -m "$MSG"
-          git push origin "$BRANCH"
+          git push --force-with-lease origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Open draft PR
@@ -89,7 +94,7 @@ jobs:
           BRANCH: ${{ steps.push.outputs.branch }}
           ADR_NUMBER: ${{ steps.gen.outputs.adr_number }}
         run: |
-          PR_BODY="$(printf 'Agent-drafted ADR-%s for issue #%s.\n\nReview, promote Status to Accepted if correct, and merge to advance this issue to `agent-working`.\n\nRefs #%s\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
+          PR_BODY="$(printf 'Agent-drafted ADR-%s for issue #%s.\n\nReview, promote Status to Accepted if correct, and merge to advance this issue to `agent-working`.\n\nRefs #%s\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
 
           PR_URL=$(gh pr create \
             --title "docs(adr): ADR-${ADR_NUMBER} ${ISSUE_TITLE}" \
