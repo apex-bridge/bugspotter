@@ -61,6 +61,7 @@ jobs:
           git add "$SPEC_FILE"
           MSG="$(printf 'spec(#%s): draft spec\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ISSUE_NUMBER")"
           git commit -m "$MSG"
+          git fetch origin "$BRANCH" 2>/dev/null || true
           git push --force-with-lease origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 

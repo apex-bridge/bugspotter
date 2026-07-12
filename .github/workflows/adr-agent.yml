@@ -79,9 +79,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add "$ADR_FILE"
+          git add -- "$ADR_FILE"
           MSG="$(printf 'docs(adr): ADR-%s draft (%s)\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ADR_NUMBER" "$ADR_SLUG")"
           git commit -m "$MSG"
+          git fetch origin "$BRANCH" 2>/dev/null || true
           git push --force-with-lease origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 

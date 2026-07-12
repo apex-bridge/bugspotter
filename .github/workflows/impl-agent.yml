@@ -112,6 +112,7 @@ jobs:
           done < <(printf '%s' "$FILES_WRITTEN" | tr ',' '\n')
           MSG="$(printf 'impl(#%s): scaffold\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$MODEL_USED")"
           git commit -m "$MSG"
+          git fetch origin "$BRANCH" 2>/dev/null || true
           git push --force-with-lease origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
