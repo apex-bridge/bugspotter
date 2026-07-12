@@ -49,11 +49,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          # Look for a merged spec PR that closes this issue (exact match via closingIssuesReferences)
-          # gh --jq does not accept extra jq flags; pipe to standalone jq with --argjson
-          SPEC_PR=$(gh pr list --state merged --json number,files,closingIssuesReferences | \
-            jq --raw-output --argjson issue "$ISSUE_NUMBER" \
-            '[.[] | select(.closingIssuesReferences[]? | .number == $issue) | select(.files[]?.path | startswith("docs/specs/")) | .number] | first // empty')
+          # Look for a merged spec PR by title pattern — spec PRs use "spec(#NNN):" prefix.
+          # closingIssuesReferences only matches "Closes/Fixes" keywords; spec PRs use "Refs",
+          # so title search is more reliable.
+          SPEC_PR=$(gh pr list --state merged --search "spec(#${ISSUE_NUMBER}):" --json number,files --jq \
+            '[.[] | select(.files[]?.path | startswith("docs/specs/")) | .number] | first // empty')
           if [ -z "$SPEC_PR" ]; then
             echo "::error::No merged spec PR found for issue #${ISSUE_NUMBER}. Ratify a spec (Gate 1) before running the impl agent."
             exit 1
