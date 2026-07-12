@@ -45,12 +45,18 @@ if (!SPEC_CONTENT) {
   process.exit(1);
 }
 
-// Model router
+// Model router — label-based with per-tier overrides via GitHub repo variables.
+// Change without a code edit: set IMPL_MODEL_HIGH / IMPL_MODEL_DEFAULT / IMPL_MODEL_LOW
+// in Settings > Secrets and variables > Actions > Variables.
+const MODEL_HIGH    = process.env.IMPL_MODEL_HIGH    || 'claude-opus-4-8';
+const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || 'claude-sonnet-4-6';
+const MODEL_LOW     = process.env.IMPL_MODEL_LOW     || 'claude-haiku-4-5-20251001';
+
 function selectModel(labels) {
   const set = new Set(labels.split(',').map((l) => l.trim().toLowerCase()));
-  if (set.has('complexity:high')) return 'claude-opus-4-8';
-  if (set.has('pii-sensitive'))   return 'claude-haiku-4-5-20251001';
-  return 'claude-sonnet-4-6';
+  if (set.has('complexity:high')) return MODEL_HIGH;
+  if (set.has('pii-sensitive'))   return MODEL_LOW;
+  return MODEL_DEFAULT;
 }
 const MODEL = selectModel(ISSUE_LABELS);
 console.log(`Model router selected: ${MODEL} (labels: "${ISSUE_LABELS || 'none'}")`);

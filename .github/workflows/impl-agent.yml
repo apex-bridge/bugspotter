@@ -76,6 +76,11 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
           SPEC_CONTENT: ${{ steps.spec.outputs.spec_content }}
+          # Model router overrides — set via GitHub repo variables (no code change needed).
+          # Unset = fall back to hardcoded defaults in generate-impl.mjs.
+          IMPL_MODEL_HIGH: ${{ vars.IMPL_MODEL_HIGH }}
+          IMPL_MODEL_DEFAULT: ${{ vars.IMPL_MODEL_DEFAULT }}
+          IMPL_MODEL_LOW: ${{ vars.IMPL_MODEL_LOW }}
         run: node scripts/ai-sdlc/generate-impl.mjs
 
       - name: Commit scaffold to branch
