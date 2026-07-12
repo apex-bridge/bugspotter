@@ -128,3 +128,4 @@ EOF
 # use a preValidation hook to map schema errors on the querystring to 422:
 cat << 'EOF' > /tmp/422-patch.ts
 fastify.setErrorHandler((error,
+```
