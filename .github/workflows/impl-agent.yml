@@ -46,22 +46,14 @@ jobs:
       - name: Fetch linked spec (required)
         id: spec
         env:
-          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          # Look for a merged spec PR by title pattern — spec PRs use "spec(#NNN):" prefix.
-          # closingIssuesReferences only matches "Closes/Fixes" keywords; spec PRs use "Refs",
-          # so title search is more reliable.
-          SPEC_PR=$(gh pr list --state merged --search "spec(#${ISSUE_NUMBER}):" --json number,files --jq \
-            '[.[] | select(.files[]?.path | startswith("docs/specs/")) | .number] | first // empty')
-          if [ -z "$SPEC_PR" ]; then
-            echo "::error::No merged spec PR found for issue #${ISSUE_NUMBER}. Ratify a spec (Gate 1) before running the impl agent."
-            exit 1
-          fi
-          SPEC_FILE=$(gh pr view "$SPEC_PR" --json files --jq \
-            '.files[] | select(.path | startswith("docs/specs/")) | .path' | head -1)
+          # Spec file lives on main at docs/specs/0NNN-*.md (zero-padded 4 digits).
+          # The spec is already checked out — no API call needed.
+          PADDED=$(printf '%04d' "${ISSUE_NUMBER}")
+          SPEC_FILE=$(ls "docs/specs/${PADDED}-"*.md 2>/dev/null | head -1)
           if [ -z "$SPEC_FILE" ] || [ ! -f "$SPEC_FILE" ]; then
-            echo "::error::Spec file not found on disk for PR #${SPEC_PR}. Ensure the checkout includes the spec."
+            echo "::error::No spec file found at docs/specs/${PADDED}-*.md. Ratify a spec (Gate 1) before running the impl agent."
             exit 1
           fi
           DELIM="EOF_SPEC_$(openssl rand -hex 8)"
