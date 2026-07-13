@@ -51,7 +51,7 @@ jobs:
           # Spec file lives on main at docs/specs/0NNN-*.md (zero-padded 4 digits).
           # The spec is already checked out — no API call needed.
           PADDED=$(printf '%04d' "${ISSUE_NUMBER}")
-          SPEC_FILE=$(ls "docs/specs/${PADDED}-"*.md 2>/dev/null | head -1)
+          SPEC_FILE=$(ls "docs/specs/${PADDED}-"*.md 2>/dev/null | head -1) || true
           if [ -z "$SPEC_FILE" ] || [ ! -f "$SPEC_FILE" ]; then
             echo "::error::No spec file found at docs/specs/${PADDED}-*.md. Ratify a spec (Gate 1) before running the impl agent."
             exit 1
