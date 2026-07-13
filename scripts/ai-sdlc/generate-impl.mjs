@@ -146,7 +146,7 @@ const res = await fetch('https://api.anthropic.com/v1/messages', {
   },
   body: JSON.stringify({
     model: MODEL,
-    max_tokens: 8192,
+    max_tokens: 16384,
     messages,
   }),
 });
@@ -171,6 +171,12 @@ if (usage.cache_creation_input_tokens || usage.cache_read_input_tokens) {
   console.log(
     `Cache: created=${usage.cache_creation_input_tokens ?? 0} read=${usage.cache_read_input_tokens ?? 0} uncached=${usage.input_tokens ?? 0}`,
   );
+}
+
+// Fail fast if truncated — a partial JSON response will always cause a parse error downstream
+if (data.stop_reason === 'max_tokens') {
+  console.error(`Claude response truncated (stop_reason=max_tokens). Raise max_tokens in generate-impl.mjs.`);
+  process.exit(1);
 }
 
 // Parse JSON response
