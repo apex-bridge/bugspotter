@@ -39,9 +39,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'pnpm'
 
       - name: Fetch linked spec (required)
         id: spec
@@ -78,6 +83,9 @@ jobs:
           IMPL_MODEL_LOW: ${{ vars.IMPL_MODEL_LOW }}
         run: node scripts/ai-sdlc/generate-impl.mjs
 
+      - name: Install dependencies (required for ESLint)
+        run: pnpm install --frozen-lockfile
+
       - name: Format generated files
         env:
           FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
@@ -85,6 +93,16 @@ jobs:
           printf '%s' "$FILES_WRITTEN" | tr ',' '\n' | while IFS= read -r f; do
             [ -n "$f" ] && npx prettier@3.6.2 --write --ignore-unknown "$f"
           done
+
+      - name: Lint-fix generated TypeScript files
+        env:
+          FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
+        run: |
+          TS_FILES=$(printf '%s' "$FILES_WRITTEN" | tr ',' '\n' | grep -E '\.(ts|tsx|js|mjs)$' | tr '\n' ' ')
+          if [ -n "$TS_FILES" ]; then
+            # shellcheck disable=SC2086
+            pnpm exec eslint --fix $TS_FILES || true
+          fi
 
       - name: Commit scaffold to branch
         id: push
