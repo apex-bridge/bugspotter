@@ -33,7 +33,7 @@ interface BugParams {
 
 export default async function intelligenceRoutes(
   fastify: FastifyInstance,
-  options: { db: DatabaseClient }
+  _options: { db: DatabaseClient }
 ): Promise<void> {
   // TODO: resolve INTELLIGENCE_SERVICE_URL from your config module rather than env directly
   const intelligenceBaseUrl = process.env.INTELLIGENCE_SERVICE_URL ?? 'http://intelligence:8000';
