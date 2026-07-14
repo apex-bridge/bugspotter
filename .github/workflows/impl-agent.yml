@@ -98,11 +98,11 @@ jobs:
         env:
           FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
         run: |
-          TS_FILES=$(printf '%s' "$FILES_WRITTEN" | tr ',' '\n' | grep -E '\.(ts|tsx|js|mjs)$' | tr '\n' ' ')
-          if [ -n "$TS_FILES" ]; then
-            # shellcheck disable=SC2086
-            pnpm exec eslint --fix $TS_FILES || true
-          fi
+          printf '%s' "$FILES_WRITTEN" | tr ',' '\n' | while IFS= read -r f; do
+            if [[ "$f" =~ \.(ts|tsx|js|mjs)$ ]]; then
+              pnpm exec eslint --fix -- "$f" || true
+            fi
+          done
 
       - name: Commit scaffold to branch
         id: push
