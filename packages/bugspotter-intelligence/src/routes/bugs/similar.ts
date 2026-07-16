@@ -6,7 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { Type, type Static } from '@sinclair/typebox';
 import { getLogger } from '../../logger.js';
-import { resolveThreshold, registerThresholdErrorHandler } from '../../utils/threshold.js';
+import { resolveThreshold } from '../../utils/threshold.js';
 
 // TODO: import from your actual similarity service module
 // import { SimilarityService } from '../../services/similarity.service.js';
@@ -25,8 +25,6 @@ type Params = Static<typeof paramsSchema>;
 type Querystring = Static<typeof querystringSchema>;
 
 export default async function similarBugsRoute(fastify: FastifyInstance): Promise<void> {
-  registerThresholdErrorHandler(fastify);
-
   fastify.get<{ Params: Params; Querystring: Querystring }>(
     '/api/v1/bugs/:id/similar',
     {

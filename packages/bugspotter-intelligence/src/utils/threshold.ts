@@ -6,7 +6,6 @@
 
 // TODO: import AppError from your actual middleware once the package is wired up
 // import { AppError } from '../middleware/error.js';
-import type { FastifyInstance, FastifyError } from 'fastify';
 
 export const THRESHOLD_MIN = 0.5;
 export const THRESHOLD_MAX = 1.0;
@@ -48,44 +47,4 @@ export function resolveThreshold(rawQueryThreshold: number | undefined): number 
   }
 
   return rawQueryThreshold;
-}
-
-/** HTTP status code → reason phrase mapping for common 4xx/5xx codes. */
-function statusPhrase(code: number): string {
-  const phrases: Record<number, string> = {
-    400: 'Bad Request',
-    401: 'Unauthorized',
-    403: 'Forbidden',
-    404: 'Not Found',
-    409: 'Conflict',
-    422: 'Unprocessable Entity',
-    429: 'Too Many Requests',
-    500: 'Internal Server Error',
-    502: 'Bad Gateway',
-    503: 'Service Unavailable',
-  };
-  return phrases[code] ?? 'Internal Server Error';
-}
-
-/**
- * Register a scoped error handler that maps querystring validation errors and
- * AppError-shaped errors to structured JSON, with correct status/reason phrases.
- * Call once per route plugin.
- */
-export function registerThresholdErrorHandler(fastify: FastifyInstance): void {
-  fastify.setErrorHandler((error: FastifyError & { statusCode?: number }, _request, reply) => {
-    if (error.validation && error.validationContext === 'querystring') {
-      return reply.status(422).send({
-        statusCode: 422,
-        error: 'Unprocessable Entity',
-        message: error.message,
-      });
-    }
-    const code = error.statusCode ?? 500;
-    return reply.status(code).send({
-      statusCode: code,
-      error: statusPhrase(code),
-      message: error.message,
-    });
-  });
 }
