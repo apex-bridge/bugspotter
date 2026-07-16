@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { resolveThreshold, THRESHOLD_MIN, THRESHOLD_MAX } from './threshold.js';
+import { resolveThreshold, THRESHOLD_MIN, THRESHOLD_MAX } from '../../src/utils/threshold.js';
 
 describe('resolveThreshold', () => {
   afterEach(() => {
