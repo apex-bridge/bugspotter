@@ -62,4 +62,37 @@ describe('resolveThreshold', () => {
       expect(resolveThreshold(0.9)).toBe(0.9);
     });
   });
+
+  describe('org default threshold (second fallback)', () => {
+    it('uses orgDefault when query param absent and orgDefault valid', () => {
+      expect(resolveThreshold(undefined, 0.75)).toBe(0.75);
+    });
+
+    it('accepts orgDefault boundary values', () => {
+      expect(resolveThreshold(undefined, THRESHOLD_MIN)).toBe(THRESHOLD_MIN);
+      expect(resolveThreshold(undefined, THRESHOLD_MAX)).toBe(THRESHOLD_MAX);
+    });
+
+    it('query param takes precedence over orgDefault', () => {
+      expect(resolveThreshold(0.8, 0.6)).toBe(0.8);
+    });
+
+    it('falls back to env when orgDefault is below min', () => {
+      process.env.SIMILARITY_THRESHOLD = '0.7';
+      expect(resolveThreshold(undefined, 0.3)).toBe(0.7);
+    });
+
+    it('falls back to env when orgDefault is above max', () => {
+      process.env.SIMILARITY_THRESHOLD = '0.7';
+      expect(resolveThreshold(undefined, 1.5)).toBe(0.7);
+    });
+
+    it('falls back to 0.85 when orgDefault is NaN and env missing', () => {
+      expect(resolveThreshold(undefined, NaN)).toBe(0.85);
+    });
+
+    it('falls back to 0.85 when orgDefault is undefined and env missing', () => {
+      expect(resolveThreshold(undefined, undefined)).toBe(0.85);
+    });
+  });
 });

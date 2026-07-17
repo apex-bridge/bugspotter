@@ -35,7 +35,10 @@ export default async function similarBugsRoute(fastify: FastifyInstance): Promis
     },
     async (request, reply) => {
       const { id: bugId } = request.params;
-      const threshold = resolveThreshold(request.query.threshold);
+
+      // TODO: load per-org threshold from intelligence_settings before calling resolveThreshold:
+      // const orgDefault = await orgSettingsService.getSimilarityThreshold(request.organizationId);
+      const threshold = resolveThreshold(request.query.threshold /*, orgDefault */);
 
       logger.debug({ bugId, threshold }, 'similar-bugs: computing with threshold');
 
