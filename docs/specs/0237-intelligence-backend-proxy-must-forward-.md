@@ -75,14 +75,21 @@ pnpm install
 # 3. Forward orgThreshold in IntelligenceClient
 # File: packages/backend/src/services/intelligence/intelligence-client.ts
 #
-# In getSimilarBugs, update the URLSearchParams construction:
+# In getSimilarBugs, update the params object construction:
 #
-#   const params = new URLSearchParams({
-#     ...(threshold !== undefined && { threshold: String(threshold) }),
-#     ...(limit !== undefined    && { limit:     String(limit)     }),
-#     ...(projectId !== undefined && { project_id: String(projectId) }),
-#     ...(orgThreshold !== undefined && { org_threshold: String(orgThreshold) }),
-#   });
+#   const params: Record<string, string> = {};
+#   if (options?.threshold !== undefined) {
+#     params.threshold = String(options.threshold);
+#   }
+#   if (options?.limit !== undefined) {
+#     params.limit = String(options.limit);
+#   }
+#   if (options?.projectId !== undefined) {
+#     params.project_id = options.projectId;
+#   }
+#   if (options?.orgThreshold !== undefined) {
+#     params.org_threshold = String(options.orgThreshold);
+#   }
 #
 # Update the method signature to accept orgThreshold:
 #   getSimilarBugs(
@@ -94,7 +101,7 @@ pnpm install
 # File: packages/bugspotter-intelligence/src/routes/bugs/similar.ts
 #
 # In the Fastify route schema, add to the querystring object:
-#   org_threshold: { type: 'number', minimum: 0, maximum: 1 }   // optional
+#   org_threshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1 }))
 #
 # In the handler, update the resolveThreshold call from:
 #   const effectiveThreshold = resolveThreshold(query.threshold, undefined);
@@ -123,5 +130,5 @@ pnpm --filter bugspotter-intelligence test
 # Test case C — env/hardcoded fallback:
 #   Call handler with neither threshold nor org_threshold;
 #   set SIMILARITY_THRESHOLD=0.6 in process.env;
-#   assert resolveThreshold returns 0
+#   assert resolveThreshold returns 0.6
 ```
