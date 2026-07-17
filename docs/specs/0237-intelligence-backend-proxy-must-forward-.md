@@ -13,7 +13,7 @@ ADR: pending
 
 In scope:
 
-- Reading `intelligence_similarity_threshold` from `intelligence_settings` via `clientFactory.getOrgSettings` inside the similar-bugs route handler in `packages/backend/src/api/routes/intelligence.ts`
+- Reading `intelligence_similarity_threshold` directly from the org's `settings` JSONB via `db.organizations.findById` inside the similar-bugs route handler in `packages/backend/src/api/routes/intelligence.ts` (raw read, not `getOrgIntelligenceSettings`, to preserve the `undefined` signal when no override is set)
 - Passing the resolved org threshold as `orgThreshold` to `IntelligenceClient.getSimilarBugs`
 - Forwarding `orgThreshold` as the `org_threshold` query param in the HTTP request made by `IntelligenceClient` to the intelligence service
 - Adding `org_threshold` to the querystring schema in `packages/bugspotter-intelligence/src/routes/bugs/similar.ts` and passing it as `orgDefault` to `resolveThreshold`
@@ -24,7 +24,7 @@ Out of scope:
 
 - Changes to the `resolveThreshold` function itself (already correct from #226)
 - UI surface for configuring `intelligence_similarity_threshold` (tracked separately)
-- Caching of org settings within the request lifecycle beyond what `clientFactory.getOrgSettings` already provides
+- Caching of org settings within the request lifecycle beyond what is already provided by the database queries or client caching
 - Altering the threshold-resolution logic for any endpoint other than `/similar`
 
 Constraints:
@@ -39,7 +39,7 @@ Constraints:
 
 - [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar?threshold=0.9` returns similar bugs computed with threshold 0.9 even when the org setting is 0.7, confirming client-supplied value wins
 - [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param) for an org whose `intelligence_similarity_threshold` is 0.7 causes the intelligence service to call `resolveThreshold(undefined, 0.7)` and compute results at 0.7, confirmed via integration test asserting the proxied request URL contains `org_threshold=0.7`
-- [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param) for an org with no `intelligence_similarity_threshold` row causes the intelligence service to call `resolveThreshold(undefined, undefined)` and fall back to `SIMILARITY_THRESHOLD` env var when set, confirmed by setting the env var to 0.6 and asserting results differ from the 0.85 hardcoded default
+- [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param) for an org with no `intelligence_similarity_threshold` value in its `settings` JSONB (key absent or null) causes the intelligence service to call `resolveThreshold(undefined, undefined)` and fall back to `SIMILARITY_THRESHOLD` env var when set, confirmed by setting the env var to 0.6 and asserting results differ from the 0.85 hardcoded default
 - [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param, no org setting, no `SIMILARITY_THRESHOLD` env var) falls back to the hardcoded default of 0.85 without error
 - [ ] When `clientFactory` is `null` or `request.project?.organization_id` is absent, the handler does not throw and behaves identically to the pre-fix behaviour (env/hardcoded fallback only)
 - [ ] The `org_threshold` query param is absent from the proxied URL when `orgThreshold` resolves to `undefined`, verified by a unit test asserting the constructed URL string
@@ -55,17 +55,19 @@ pnpm install
 # 2. Edit the similar-bugs route handler
 # File: packages/backend/src/api/routes/intelligence.ts
 #
-# Add import at top of file:
-#   import { getOrgIntelligenceSettings } from '../../services/intelligence/tenant-config.js';
-#
 # Inside the handler for GET /projects/:projectId/bugs/:id/similar,
 # after the existing `resolveClient` call, add:
 #
 #   const orgThreshold: number | undefined =
 #     db != null && request.project?.organization_id != null
-#       ? (await getOrgIntelligenceSettings(db, request.project.organization_id))
-#           ?.intelligence_similarity_threshold ?? undefined
+#       ? ((await db.organizations.findById(request.project.organization_id))
+#           ?.settings?.intelligence_similarity_threshold) ?? undefined
 #       : undefined;
+#
+# Note: reads the raw JSONB field rather than going through
+# getOrgIntelligenceSettings, which fills in a 0.75 default and would
+# collapse "org has no setting" into a number, making the env-var and
+# hardcoded-0.85 fallback paths unreachable.
 #
 # Then update the getSimilarBugs call from:
 #   c.getSimilarBugs(id, { threshold, limit, projectId })
@@ -93,8 +95,8 @@ pnpm install
 #
 # Update the method signature to accept orgThreshold:
 #   getSimilarBugs(
-#     id: string,
-#     opts: { threshold?: number; limit?: number; projectId?: string; orgThreshold?: number }
+#     bugId: string,
+#     options?: { threshold?: number; limit?: number; projectId?: string; orgThreshold?: number }
 #   ): Promise<SimilarBugsResponse>
 
 # 4. Add org_threshold to the intelligence service querystring schema
@@ -104,9 +106,9 @@ pnpm install
 #   org_threshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1 }))
 #
 # In the handler, update the resolveThreshold call from:
-#   const effectiveThreshold = resolveThreshold(query.threshold, undefined);
+#   const threshold = resolveThreshold(request.query.threshold);
 # to:
-#   const effectiveThreshold = resolveThreshold(query.threshold, query.org_threshold);
+#   const threshold = resolveThreshold(request.query.threshold, request.query.org_threshold);
 
 # 5. Build to confirm no TypeScript errors
 pnpm --filter backend build
@@ -131,4 +133,16 @@ pnpm --filter bugspotter-intelligence test
 #   Call handler with neither threshold nor org_threshold;
 #   set SIMILARITY_THRESHOLD=0.6 in process.env;
 #   assert resolveThreshold returns 0.6
+#
+# File: packages/backend/tests/api/intelligence-routes.test.ts
+#
+# Test case D — graceful no-org-context fallback (AC #5):
+#   Stub the similar-bugs handler with request.project absent (undefined) and
+#   db null; assert the handler does not throw, and the getSimilarBugs call
+#   receives orgThreshold: undefined (i.e. the option is omitted).
+#
+# Test case E — org_threshold absent from proxied URL when undefined (AC #6):
+#   Call getSimilarBugs(bugId, { threshold: 0.9 }) with no orgThreshold;
+#   spy on the underlying axios request; assert the constructed URL does not
+#   contain the query param 'org_threshold'.
 ```
