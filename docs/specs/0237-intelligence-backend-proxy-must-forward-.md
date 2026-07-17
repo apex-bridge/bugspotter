@@ -55,14 +55,16 @@ pnpm install
 # 2. Edit the similar-bugs route handler
 # File: packages/backend/src/api/routes/intelligence.ts
 #
+# Add import at top of file:
+#   import { getOrgIntelligenceSettings } from '../../services/intelligence/tenant-config.js';
+#
 # Inside the handler for GET /projects/:projectId/bugs/:id/similar,
 # after the existing `resolveClient` call, add:
 #
 #   const orgThreshold: number | undefined =
-#     clientFactory != null && request.project?.organization_id != null
-#       ? (
-#           await clientFactory.getOrgSettings(request.project.organization_id)
-#         )?.intelligence_similarity_threshold ?? undefined
+#     db != null && request.project?.organization_id != null
+#       ? (await getOrgIntelligenceSettings(db, request.project.organization_id))
+#           ?.intelligence_similarity_threshold ?? undefined
 #       : undefined;
 #
 # Then update the getSimilarBugs call from:
@@ -71,7 +73,7 @@ pnpm install
 #   c.getSimilarBugs(id, { threshold, limit, projectId, orgThreshold })
 
 # 3. Forward orgThreshold in IntelligenceClient
-# File: packages/backend/src/clients/IntelligenceClient.ts
+# File: packages/backend/src/services/intelligence/intelligence-client.ts
 #
 # In getSimilarBugs, update the URLSearchParams construction:
 #
@@ -108,7 +110,7 @@ pnpm --filter backend test
 pnpm --filter bugspotter-intelligence test
 
 # 7. Add unit tests for threshold precedence
-# File: packages/bugspotter-intelligence/src/routes/bugs/similar.test.ts
+# File: packages/bugspotter-intelligence/tests/routes/bugs/similar.test.ts
 #
 # Test case A — client threshold wins:
 #   Mock resolveThreshold; call handler with threshold=0.9 and org_threshold=0.7;
