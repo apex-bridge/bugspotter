@@ -43,8 +43,8 @@ const specFile = `docs/specs/${padded}-${slug}.md`;
 
 // Build a source-file tree so the agent can reference accurate paths and
 // spot which files exist before writing the spec. Each root gets its own
-// 60-entry budget so no single large package starves the others.
-const BUDGET_PER_ROOT = 60;
+// 80-entry budget so no single large package starves the others.
+const BUDGET_PER_ROOT = 80;
 
 function scanDir(dir, depth = 0, acc = []) {
   if (depth > 3 || acc.length >= BUDGET_PER_ROOT) return acc;
@@ -73,6 +73,11 @@ const sourceTree = [
   'packages/backend/tests',
   'packages/bugspotter-intelligence/src',
   'packages/bugspotter-intelligence/tests',
+  'packages/billing',
+  'packages/message-broker',
+  'packages/payment-service',
+  'packages/types',
+  'packages/utils',
   'apps',
 ]
   .flatMap((dir) => scanDir(dir))
@@ -95,7 +100,7 @@ ${ISSUE_BODY?.trim() || '(no description provided)'}
 
 Rules:
 - "Linked issue:" line must say "Refs #${ISSUE_NUMBER}"
-- "ADR:" line: write "pending" unless the issue text names a specific ADR
+- "ADR:" line: write "pending" if an ADR will be needed, "docs/adr/NNNN-slug.md" if the issue names one, or "n/a" if the change is purely additive with no architectural decision
 - "Files touched:" must list every file the spec edits or creates, using exact paths from the source tree above
 - In the Changes section, show ONLY new or changed lines — never reproduce the full existing file as if it were new code
 - Indicate insertion points precisely ("Append after <function/line>", "Replace <old> with <new>")

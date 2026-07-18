@@ -133,9 +133,11 @@ function sanitize(raw) {
       .replace(/\n?```$/, '')
       .trim();
   }
-  // Trim any leading preamble before the first section header.
-  const headerIdx = text.indexOf('## ');
-  if (headerIdx > 0) text = text.slice(headerIdx);
+  // Trim any leading preamble before the spec title line.
+  // Anchor to "# Spec:" so frontmatter (Linked issue, ADR, Files touched)
+  // is not stripped along with the preamble.
+  const titleIdx = text.indexOf('# Spec:');
+  if (titleIdx > 0) text = text.slice(titleIdx);
   const required = ['## Problem', '## Changes', '## Tests'];
   if (!required.every((h) => text.includes(h))) return null;
   return text;
