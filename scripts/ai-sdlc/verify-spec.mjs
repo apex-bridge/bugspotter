@@ -4,7 +4,9 @@
 // the PR is opened.
 //
 // Required env vars: ANTHROPIC_API_KEY, SPEC_FILE
-// Exits 0 always — verification failure patches the spec, not blocks the run.
+// Configuration errors (missing env vars) exit 1. All other failures
+// (missing spec file, API errors, bad model response) exit 0 so a
+// verification hiccup never blocks the CI run.
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
@@ -19,7 +21,13 @@ if (!SPEC_FILE) {
   process.exit(1);
 }
 
-const spec = readFileSync(SPEC_FILE, 'utf8');
+let spec;
+try {
+  spec = readFileSync(SPEC_FILE, 'utf8');
+} catch (err) {
+  console.warn(`Spec verifier: could not read spec file: ${err.message}`);
+  process.exit(0);
+}
 
 // Extract every packages/… or apps/… path mentioned in the spec.
 const pathPattern = /(?:packages|apps)\/[\w\-./@]+\.(?:ts|mjs|js|json|yml|yaml)(?![\w\-./@])/g;
@@ -133,10 +141,11 @@ function sanitize(raw) {
       .replace(/\n?```$/, '')
       .trim();
   }
-  // Trim any leading preamble before the spec title line.
-  // Anchor to "# Spec:" so frontmatter (Linked issue, ADR, Files touched)
-  // is not stripped along with the preamble.
+  // Require the spec title line — if the model dropped it entirely, reject.
+  // Trim any preamble that precedes it so frontmatter (Linked issue, ADR,
+  // Files touched) is not stripped along with stray prose.
   const titleIdx = text.indexOf('# Spec:');
+  if (titleIdx === -1) return null;
   if (titleIdx > 0) text = text.slice(titleIdx);
   const required = ['## Problem', '## Changes', '## Tests'];
   if (!required.every((h) => text.includes(h))) return null;

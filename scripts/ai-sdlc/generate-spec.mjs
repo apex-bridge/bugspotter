@@ -43,29 +43,36 @@ const specFile = `docs/specs/${padded}-${slug}.md`;
 
 // Build a source-file tree so the agent can reference accurate paths and
 // spot which files exist before writing the spec. Each root gets its own
-// 80-entry budget so no single large package starves the others.
+// 80-entry BFS budget so the scan spreads across the breadth of the tree
+// rather than exhausting the budget inside one deep subdirectory (e.g.
+// packages/backend/src/api has 137 entries — DFS would never reach
+// src/services with a per-root cap).
 const BUDGET_PER_ROOT = 80;
 
-function scanDir(dir, depth = 0, acc = []) {
-  if (depth > 3 || acc.length >= BUDGET_PER_ROOT) return acc;
-  let entries;
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return acc;
-  }
-  for (const name of entries) {
-    if (acc.length >= BUDGET_PER_ROOT) break;
-    if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
-    const full = join(dir, name).replace(/\\/g, '/');
-    acc.push(full);
+function scanDir(rootDir) {
+  const results = [];
+  const queue = [rootDir];
+  while (queue.length > 0 && results.length < BUDGET_PER_ROOT) {
+    const dir = queue.shift();
+    let entries;
     try {
-      if (statSync(full).isDirectory()) scanDir(full, depth + 1, acc);
+      entries = readdirSync(dir);
     } catch {
-      /* skip unreadable */
+      continue;
+    }
+    for (const name of entries) {
+      if (results.length >= BUDGET_PER_ROOT) break;
+      if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
+      const full = join(dir, name).replace(/\\/g, '/');
+      results.push(full);
+      try {
+        if (statSync(full).isDirectory()) queue.push(full);
+      } catch {
+        /* skip unreadable */
+      }
     }
   }
-  return acc;
+  return results;
 }
 
 const sourceTree = [
@@ -102,6 +109,7 @@ Rules:
 - "Linked issue:" line must say "Refs #${ISSUE_NUMBER}"
 - "ADR:" line: write "pending" if an ADR will be needed, "docs/adr/NNNN-slug.md" if the issue names one, or "n/a" if the change is purely additive with no architectural decision
 - "Files touched:" must list every file the spec edits or creates, using exact paths from the source tree above
+- "Blocking prerequisites:" must list any issue or PR number that must land before this work can be implemented (e.g. "#238 — adds the foo table"), or "none" if there are no dependencies
 - In the Changes section, show ONLY new or changed lines — never reproduce the full existing file as if it were new code
 - Indicate insertion points precisely ("Append after <function/line>", "Replace <old> with <new>")
 - Method names, function signatures, and type names must exist in the source tree above — do not invent them
