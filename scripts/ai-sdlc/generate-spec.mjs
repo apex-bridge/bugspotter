@@ -42,10 +42,12 @@ const padded = String(ISSUE_NUMBER).padStart(4, '0');
 const specFile = `docs/specs/${padded}-${slug}.md`;
 
 // Build a source-file tree so the agent can reference accurate paths and
-// spot which files exist before writing the spec. Capped at 300 entries to
-// keep prompt size bounded.
+// spot which files exist before writing the spec. Each root gets its own
+// 60-entry budget so no single large package starves the others.
+const BUDGET_PER_ROOT = 60;
+
 function scanDir(dir, depth = 0, acc = []) {
-  if (depth > 3 || acc.length >= 300) return acc;
+  if (depth > 3 || acc.length >= BUDGET_PER_ROOT) return acc;
   let entries;
   try {
     entries = readdirSync(dir);
@@ -53,7 +55,7 @@ function scanDir(dir, depth = 0, acc = []) {
     return acc;
   }
   for (const name of entries) {
-    if (acc.length >= 300) break;
+    if (acc.length >= BUDGET_PER_ROOT) break;
     if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
     const full = join(dir, name).replace(/\\/g, '/');
     acc.push(full);
@@ -66,13 +68,15 @@ function scanDir(dir, depth = 0, acc = []) {
   return acc;
 }
 
-const sourceTreeAcc = [];
-scanDir('packages/backend/src', 0, sourceTreeAcc);
-scanDir('packages/backend/tests', 0, sourceTreeAcc);
-scanDir('packages/bugspotter-intelligence/src', 0, sourceTreeAcc);
-scanDir('packages/bugspotter-intelligence/tests', 0, sourceTreeAcc);
-scanDir('apps', 0, sourceTreeAcc);
-const sourceTree = sourceTreeAcc.join('\n');
+const sourceTree = [
+  'packages/backend/src',
+  'packages/backend/tests',
+  'packages/bugspotter-intelligence/src',
+  'packages/bugspotter-intelligence/tests',
+  'apps',
+]
+  .flatMap((dir) => scanDir(dir))
+  .join('\n');
 
 const prompt = `\
 You are a spec writer for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).

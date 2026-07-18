@@ -26,8 +26,11 @@ const pathPattern = /(?:packages|apps)\/[\w\-./@]+\.(?:ts|mjs|js|json|yml|yaml)/
 const mentioned = [...new Set(spec.match(pathPattern) ?? [])];
 
 // Read files that actually exist (new files won't exist yet — skip them).
+// Cap at 15 files to keep the verify prompt bounded.
+const MAX_VERIFY_FILES = 15;
 const fileSections = mentioned
   .filter((p) => !p.includes('..') && existsSync(p))
+  .slice(0, MAX_VERIFY_FILES)
   .map((p) => {
     const content = readFileSync(p, 'utf8');
     // Cap at 300 lines to keep prompt size bounded.
@@ -120,11 +123,31 @@ try {
 }
 const result = data?.content?.[0]?.text?.trim() ?? '';
 
+// Strip outer markdown fences the model sometimes adds, then confirm the
+// required section headers survived before overwriting the spec.
+function sanitize(raw) {
+  let text = raw.trim();
+  if (text.startsWith('```')) {
+    text = text
+      .replace(/^```[a-z]*\n?/, '')
+      .replace(/\n?```$/, '')
+      .trim();
+  }
+  const required = ['## Problem', '## Changes', '## Tests'];
+  if (!required.every((h) => text.includes(h))) return null;
+  return text;
+}
+
 if (result === 'NO_CHANGES_NEEDED') {
   console.log('Spec verification passed — no factual errors found.');
 } else if (result) {
-  writeFileSync(SPEC_FILE, result, 'utf8');
-  console.log('Spec patched by verifier — factual errors corrected.');
+  const patched = sanitize(result);
+  if (patched) {
+    writeFileSync(SPEC_FILE, patched, 'utf8');
+    console.log('Spec patched by verifier — factual errors corrected.');
+  } else {
+    console.warn('Spec verifier response failed sanity check — skipping patch.');
+  }
 } else {
   console.warn('Spec verifier returned empty response — skipping patch.');
 }

@@ -1,7 +1,5 @@
 # Spec: <title>
 
-<!-- Keep in sync with .github/ISSUE_TEMPLATE/spec.yml — that template is the canonical source. -->
-
 Linked issue: Refs #NNN
 ADR: pending / docs/adr/NNNN-slug.md / n/a
 
