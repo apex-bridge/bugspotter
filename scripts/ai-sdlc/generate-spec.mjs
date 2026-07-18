@@ -6,7 +6,8 @@
 // Required env vars: ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY
 // Optional:          GITHUB_OUTPUT (set by Actions; falls back to stdout print)
 
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 const { ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, GITHUB_OUTPUT } = process.env;
 
@@ -25,13 +26,42 @@ const slug = ISSUE_TITLE
 const padded = String(ISSUE_NUMBER).padStart(4, '0');
 const specFile = `docs/specs/${padded}-${slug}.md`;
 
+// Build a source-file tree so the agent can reference accurate paths and
+// spot which files exist before writing the spec. Capped at 300 entries to
+// keep prompt size bounded.
+function scanDir(dir, depth = 0, acc = []) {
+  if (depth > 3 || acc.length > 300) return acc;
+  let entries;
+  try { entries = readdirSync(dir); } catch { return acc; }
+  for (const name of entries) {
+    if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
+    const full = join(dir, name).replace(/\\/g, '/');
+    acc.push(full);
+    try {
+      if (statSync(full).isDirectory()) scanDir(full, depth + 1, acc);
+    } catch { /* skip unreadable */ }
+  }
+  return acc;
+}
+
+const sourceTree = [
+  ...scanDir('packages/backend/src'),
+  ...scanDir('packages/backend/tests'),
+  ...scanDir('packages/bugspotter-intelligence/src'),
+  ...scanDir('packages/bugspotter-intelligence/tests'),
+  ...scanDir('apps'),
+].join('\n');
+
 const prompt = `\
 You are a spec writer for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
 
-Draft a spec document for GitHub issue #${ISSUE_NUMBER}. Follow the template below exactly — fill every section, keep the comment markers removed, replace placeholder text with concrete content.
+Draft a spec document for GitHub issue #${ISSUE_NUMBER}. Follow the template below exactly — fill every section, remove comment markers, replace placeholder text with concrete content.
 
 TEMPLATE:
 ${template}
+
+SOURCE FILE TREE (use this to write accurate file paths and verify files exist):
+${sourceTree}
 
 ISSUE #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
@@ -40,8 +70,13 @@ ${ISSUE_BODY?.trim() || '(no description provided)'}
 Rules:
 - "Linked issue:" line must say "Refs #${ISSUE_NUMBER}"
 - "ADR:" line: write "pending" unless the issue text names a specific ADR
+- "Files touched:" must list every file the spec edits or creates, using exact paths from the source tree above
+- In the Changes section, show ONLY new or changed lines — never reproduce the full existing file as if it were new code
+- Indicate insertion points precisely ("Append after <function/line>", "Replace <old> with <new>")
+- Method names, function signatures, and type names must exist in the source tree above — do not invent them
 - Acceptance criteria must be testable conditions, not vague goals
-- "How (runnable steps)" must be concrete bash/TypeScript snippets an implementor can run
+- In the Tests section, list any mock/fixture helper changes required BEFORE the new test cases (missing keys on mocks cause TypeErrors at runtime, not type errors at compile time)
+- Verification section must contain only runnable shell commands, no pseudocode
 - "Rollback:" must describe a concrete undo action for any irreversible step, or "n/a" if all steps are additive
 - Return ONLY the filled spec document — no preamble, no explanation, no markdown fences`;
 
@@ -52,10 +87,10 @@ const res = await fetch('https://api.anthropic.com/v1/messages', {
     'x-api-key': ANTHROPIC_API_KEY,
     'anthropic-version': '2023-06-01',
   },
-  signal: AbortSignal.timeout(60_000),
+  signal: AbortSignal.timeout(90_000),
   body: JSON.stringify({
     model: 'claude-sonnet-4-6',
-    max_tokens: 2048,
+    max_tokens: 4096,
     messages: [{ role: 'user', content: prompt }],
   }),
 });
