@@ -22,7 +22,7 @@ if (!SPEC_FILE) {
 const spec = readFileSync(SPEC_FILE, 'utf8');
 
 // Extract every packages/… or apps/… path mentioned in the spec.
-const pathPattern = /(?:packages|apps)\/[\w\-./@]+\.(?:ts|mjs|js|json|yml|yaml)/g;
+const pathPattern = /(?:packages|apps)\/[\w\-./@]+\.(?:ts|mjs|js|json|yml|yaml)(?![\w\-./@])/g;
 const mentioned = [...new Set(spec.match(pathPattern) ?? [])];
 
 // Read files that actually exist (new files won't exist yet — skip them).
@@ -133,6 +133,9 @@ function sanitize(raw) {
       .replace(/\n?```$/, '')
       .trim();
   }
+  // Trim any leading preamble before the first section header.
+  const headerIdx = text.indexOf('## ');
+  if (headerIdx > 0) text = text.slice(headerIdx);
   const required = ['## Problem', '## Changes', '## Tests'];
   if (!required.every((h) => text.includes(h))) return null;
   return text;
