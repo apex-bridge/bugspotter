@@ -66,6 +66,7 @@ ADR: pending / docs/adr/NNNN-slug.md / n/a
      For ES-module mocks: vi.mock() must be at top level; use vi.mocked() to configure return values. -->
 
 ```ts
+
 ```
 
 ## Verification
