@@ -22,7 +22,7 @@ if (!SPEC_FILE) {
 const spec = readFileSync(SPEC_FILE, 'utf8');
 
 // Extract every packages/… or apps/… path mentioned in the spec.
-const pathPattern = /(?:packages|apps)\/[\w\-./]+\.(?:ts|mjs|js|json|yml|yaml)/g;
+const pathPattern = /(?:packages|apps)\/[\w\-./@]+\.(?:ts|mjs|js|json|yml|yaml)/g;
 const mentioned = [...new Set(spec.match(pathPattern) ?? [])];
 
 // Read files that actually exist (new files won't exist yet — skip them).
@@ -111,7 +111,13 @@ if (!res.ok) {
   process.exit(0);
 }
 
-const data = await res.json();
+let data;
+try {
+  data = await res.json();
+} catch (err) {
+  console.warn(`Failed to parse spec verifier response: ${err.message}`);
+  process.exit(0);
+}
 const result = data?.content?.[0]?.text?.trim() ?? '';
 
 if (result === 'NO_CHANGES_NEEDED') {
