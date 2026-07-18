@@ -13,7 +13,7 @@ ADR: pending
 
 The following must land before this spec's "How" steps can run end-to-end:
 
-- **#238 — graduate `bugspotter-intelligence` scaffold**: the package currently has no `package.json`, `tsconfig.json`, or `vitest.config.ts`, and `@sinclair/typebox` (imported by `similar.ts`) is not in `pnpm-lock.yaml`. Steps 4–7 below (`pnpm --filter bugspotter-intelligence build/test`) will fail to even resolve the package until #238 is merged.
+- **#238 — graduate `bugspotter-intelligence` scaffold**: the package currently has no `package.json`, `tsconfig.json`, or `vitest.config.ts`, and `@sinclair/typebox` (imported by `similar.ts`) is not in `pnpm-lock.yaml`. Steps 5–7 below (`pnpm --filter @bugspotter/intelligence build/test`) will fail to even resolve the package until #238 is merged. Step 4 (file edits only) can be done before #238 lands.
 
 ## Scope and constraints
 
@@ -78,7 +78,9 @@ pnpm install --frozen-lockfile
 #   const orgThreshold: number | undefined =
 #     request.project?.organization_id != null
 #       ? ((await database.organizations.findById(request.project.organization_id))
-#           ?.settings?.intelligence_similarity_threshold) ?? undefined
+#           ?.settings.intelligence_similarity_threshold) ?? undefined
+#   // Note: ?.settings (not ?.settings?) — Organization.settings is non-nullable in the DB
+#   // type; the outer ?. handles the null findById result, not a missing settings field.
 #       : undefined;
 #
 # Note: reads the raw JSONB field rather than going through
@@ -94,39 +96,30 @@ pnpm install --frozen-lockfile
 # 3. Forward orgThreshold in IntelligenceClient
 # File: packages/backend/src/services/intelligence/intelligence-client.ts
 #
-# In getSimilarBugs, add orgThreshold to the params object:
+# The existing getSimilarBugs method already builds a params block with
+# threshold, limit, and project_id guards. Do NOT rewrite the existing
+# block — append ONE new guard after the last existing if-statement:
 #
-#   const params: Record<string, string> = {};
-#   if (options?.threshold !== undefined) {
-#     params.threshold = String(options.threshold);
-#   }
-#   if (options?.limit !== undefined) {
-#     params.limit = String(options.limit);
-#   }
-#   if (options?.projectId !== undefined) {
-#     params.project_id = options.projectId;
-#   }
 #   if (options?.orgThreshold !== undefined) {
 #     params.org_threshold = String(options.orgThreshold);
 #   }
 #
-# Update the method signature to accept orgThreshold:
-#   getSimilarBugs(
-#     bugId: string,
-#     options?: { threshold?: number; limit?: number; projectId?: string; orgThreshold?: number }
-#   ): Promise<SimilarBugsResponse>
+# Also extend the method signature's options type to include orgThreshold:
+#   options?: { threshold?: number; limit?: number; projectId?: string; orgThreshold?: number }
 
 # 4. Add org_threshold to the intelligence service querystring schema
 # File: packages/bugspotter-intelligence/src/routes/bugs/similar.ts
 #
 # In the Fastify route schema, add to the querystring object:
-#   org_threshold: Type.Optional(Type.Number({ minimum: 0.5, maximum: 1.0 }))
+#   org_threshold: Type.Optional(Type.Number())
 #
-# Note: minimum is 0.5 (not 0) to match resolveThreshold's THRESHOLD_MIN.
-# Values below 0.5 are silently ignored by resolveThreshold; accepting them
-# here would forward a value that is immediately discarded. The mismatch
-# with intelligence-settings.ts (which accepts [0, 1]) is a known gap
-# tracked as a follow-up.
+# Do NOT add minimum/maximum constraints here. The backend schema for
+# intelligence_similarity_threshold accepts [0, 1]. If this schema used
+# minimum: 0.5, a value like 0.3 sent by the backend would be rejected
+# with HTTP 400, which IntelligenceClient maps to a 502 for the caller —
+# worse than the current no-op. resolveThreshold already silently ignores
+# orgDefault values below THRESHOLD_MIN (0.5) and falls through to the
+# env/hardcoded fallback, which IS the correct "silent fallthrough" behavior.
 #
 # In the handler, update the resolveThreshold call from:
 #   const threshold = resolveThreshold(request.query.threshold);
@@ -146,32 +139,54 @@ pnpm --filter @bugspotter/intelligence test    # requires #238
 # File: packages/bugspotter-intelligence/tests/routes/bugs/similar.test.ts
 # (requires #238 for package resolution)
 #
+# Vitest ES-module mock pattern required for test cases A-D:
+#   import * as thresholdMod from '../../src/utils/threshold.js';
+#   vi.mock('../../src/utils/threshold.js');   // must be top-level, not inside describe
+#   // then inside each test:
+#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(<expected>);
+#   // assert with:
+#   expect(thresholdMod.resolveThreshold).toHaveBeenCalledWith(<args>);
+#
 # Test case A — client threshold wins (AC #1):
-#   vi.mock('../../src/utils/threshold.js'); spy on resolveThreshold.
-#   Call handler with threshold=0.9 and org_threshold=0.7.
-#   Assert resolveThreshold called with (0.9, 0.7) and spy returns 0.9.
+#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.9);
+#   Inject GET /api/v1/bugs/bug-1/similar?threshold=0.9&org_threshold=0.7.
+#   Assert resolveThreshold called with (0.9, 0.7) and returned 0.9.
 #
 # Test case B — org default used when no client threshold (AC #2):
-#   Call handler with org_threshold=0.7, no threshold.
-#   Assert resolveThreshold called with (undefined, 0.7) and spy returns 0.7.
+#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.7);
+#   Inject GET /api/v1/bugs/bug-1/similar?org_threshold=0.7.
+#   Assert resolveThreshold called with (undefined, 0.7).
 #
 # Test case C — env fallback (AC #3):
-#   process.env.SIMILARITY_THRESHOLD = '0.6'; no threshold, no org_threshold.
-#   Assert resolveThreshold called with (undefined, undefined) and spy returns 0.6.
-#   Note: assert on resolveThreshold's return value, NOT on result content
-#   (similar.ts returns a stub [] regardless of threshold until #238 wires the real service).
+#   process.env.SIMILARITY_THRESHOLD = '0.6';
+#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.6);
+#   Inject GET /api/v1/bugs/bug-1/similar (no threshold, no org_threshold).
+#   Assert resolveThreshold called with (undefined, undefined) and returned 0.6.
+#   Note: assert on resolveThreshold's return value via the mock, NOT on response
+#   body content (similar.ts returns stub [] regardless of threshold).
 #
 # Test case D — hardcoded fallback (AC #4):
-#   No threshold, no org_threshold, no SIMILARITY_THRESHOLD env var.
-#   Assert resolveThreshold returns 0.85.
+#   delete process.env.SIMILARITY_THRESHOLD;
+#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.85);
+#   Inject GET /api/v1/bugs/bug-1/similar (no params).
+#   Assert resolveThreshold called with (undefined, undefined) and returned 0.85.
 #
 # File: packages/backend/tests/api/intelligence-routes.test.ts
 #
 # Test case E — graceful no-org-context fallback (AC #5):
-#   Stub handler with request.project absent; assert getSimilarBugs
-#   receives orgThreshold: undefined (option omitted).
+#   The module-level guard mock always sets request.project.organization_id.
+#   To test the absent-org-id path, create a separate describe block with a
+#   fresh Fastify app using a stripped guard mock:
+#     vi.mock('../../src/api/authorization/index.js', () => ({
+#       guard: () => async (request: any) => {
+#         request.project = { id: 'proj-1', organization_id: null };
+#       },
+#     }));
+#   Then spy on getSimilarBugs and assert it receives orgThreshold: undefined.
 #
 # Test case F — org_threshold absent from proxied URL when undefined (AC #6):
-#   Call getSimilarBugs(bugId, { threshold: 0.9 }) with no orgThreshold.
-#   Spy on the underlying HTTP request; assert URL does not contain 'org_threshold'.
+#   Spy on IntelligenceClient.getSimilarBugs or the underlying axios request.
+#   Call the route with no threshold and no org setting (mock findById returns
+#   { settings: { intelligence_similarity_threshold: null } }).
+#   Assert the captured URL does not contain the string 'org_threshold'.
 ```
