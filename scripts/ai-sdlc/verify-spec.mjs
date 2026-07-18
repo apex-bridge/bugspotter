@@ -10,8 +10,14 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 const { ANTHROPIC_API_KEY, SPEC_FILE } = process.env;
 
-if (!ANTHROPIC_API_KEY) { console.error('Missing ANTHROPIC_API_KEY'); process.exit(1); }
-if (!SPEC_FILE)         { console.error('Missing SPEC_FILE');         process.exit(1); }
+if (!ANTHROPIC_API_KEY) {
+  console.error('Missing ANTHROPIC_API_KEY');
+  process.exit(1);
+}
+if (!SPEC_FILE) {
+  console.error('Missing SPEC_FILE');
+  process.exit(1);
+}
 
 const spec = readFileSync(SPEC_FILE, 'utf8');
 
@@ -21,8 +27,8 @@ const mentioned = [...new Set(spec.match(pathPattern) ?? [])];
 
 // Read files that actually exist (new files won't exist yet — skip them).
 const fileSections = mentioned
-  .filter(p => existsSync(p))
-  .map(p => {
+  .filter((p) => !p.includes('..') && existsSync(p))
+  .map((p) => {
     const content = readFileSync(p, 'utf8');
     // Cap at 300 lines to keep prompt size bounded.
     const lines = content.split('\n').slice(0, 300).join('\n');
@@ -63,29 +69,43 @@ If you find no factual errors, respond with exactly the word: NO_CHANGES_NEEDED
 
 Otherwise respond with the complete corrected spec document — no preamble, no explanation, no markdown fences around the whole document.`;
 
-console.log(`Verifying spec against ${mentioned.filter(p => existsSync(p)).length} source file(s)…`);
+console.log(
+  `Verifying spec against ${mentioned.filter((p) => existsSync(p)).length} source file(s)…`
+);
 
-const res = await fetch('https://api.anthropic.com/v1/messages', {
-  method: 'POST',
-  headers: {
-    'content-type': 'application/json',
-    'x-api-key': ANTHROPIC_API_KEY,
-    'anthropic-version': '2023-06-01',
-  },
-  signal: AbortSignal.timeout(120_000),
-  body: JSON.stringify({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
-    messages: [{ role: 'user', content: prompt }],
-  }),
-});
+let res;
+try {
+  res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    signal: AbortSignal.timeout(120_000),
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+} catch (err) {
+  console.warn(`Spec verifier fetch error: ${err.message}`);
+  process.exit(0);
+}
 
 if (!res.ok) {
   let detail = '';
   try {
     const raw = await res.text();
-    try { detail = JSON.stringify(JSON.parse(raw), null, 2); } catch { detail = raw; }
-  } catch { /* body unreadable */ }
+    try {
+      detail = JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+      detail = raw;
+    }
+  } catch {
+    /* body unreadable */
+  }
   // Verification failure is non-fatal — log and continue with unpatched spec.
   console.warn(`Spec verifier API error (${res.status}): ${detail}`);
   process.exit(0);

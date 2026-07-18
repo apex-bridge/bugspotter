@@ -6,19 +6,34 @@
 // Required env vars: ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY
 // Optional:          GITHUB_OUTPUT (set by Actions; falls back to stdout print)
 
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  appendFileSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 const { ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, GITHUB_OUTPUT } = process.env;
 
-if (!ANTHROPIC_API_KEY) { console.error('Missing ANTHROPIC_API_KEY'); process.exit(1); }
-if (!ISSUE_NUMBER)      { console.error('Missing ISSUE_NUMBER');      process.exit(1); }
-if (!ISSUE_TITLE)       { console.error('Missing ISSUE_TITLE');       process.exit(1); }
+if (!ANTHROPIC_API_KEY) {
+  console.error('Missing ANTHROPIC_API_KEY');
+  process.exit(1);
+}
+if (!ISSUE_NUMBER) {
+  console.error('Missing ISSUE_NUMBER');
+  process.exit(1);
+}
+if (!ISSUE_TITLE) {
+  console.error('Missing ISSUE_TITLE');
+  process.exit(1);
+}
 
 const template = readFileSync('docs/specs/TEMPLATE.md', 'utf8');
 
-const slug = ISSUE_TITLE
-  .toLowerCase()
+const slug = ISSUE_TITLE.toLowerCase()
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '')
   .slice(0, 40);
@@ -30,27 +45,34 @@ const specFile = `docs/specs/${padded}-${slug}.md`;
 // spot which files exist before writing the spec. Capped at 300 entries to
 // keep prompt size bounded.
 function scanDir(dir, depth = 0, acc = []) {
-  if (depth > 3 || acc.length > 300) return acc;
+  if (depth > 3 || acc.length >= 300) return acc;
   let entries;
-  try { entries = readdirSync(dir); } catch { return acc; }
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return acc;
+  }
   for (const name of entries) {
+    if (acc.length >= 300) break;
     if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
     const full = join(dir, name).replace(/\\/g, '/');
     acc.push(full);
     try {
       if (statSync(full).isDirectory()) scanDir(full, depth + 1, acc);
-    } catch { /* skip unreadable */ }
+    } catch {
+      /* skip unreadable */
+    }
   }
   return acc;
 }
 
-const sourceTree = [
-  ...scanDir('packages/backend/src'),
-  ...scanDir('packages/backend/tests'),
-  ...scanDir('packages/bugspotter-intelligence/src'),
-  ...scanDir('packages/bugspotter-intelligence/tests'),
-  ...scanDir('apps'),
-].join('\n');
+const sourceTreeAcc = [];
+scanDir('packages/backend/src', 0, sourceTreeAcc);
+scanDir('packages/backend/tests', 0, sourceTreeAcc);
+scanDir('packages/bugspotter-intelligence/src', 0, sourceTreeAcc);
+scanDir('packages/bugspotter-intelligence/tests', 0, sourceTreeAcc);
+scanDir('apps', 0, sourceTreeAcc);
+const sourceTree = sourceTreeAcc.join('\n');
 
 const prompt = `\
 You are a spec writer for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
@@ -99,8 +121,14 @@ if (!res.ok) {
   let detail = '';
   try {
     const raw = await res.text();
-    try { detail = JSON.stringify(JSON.parse(raw), null, 2); } catch { detail = raw; }
-  } catch { /* body unreadable */ }
+    try {
+      detail = JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+      detail = raw;
+    }
+  } catch {
+    /* body unreadable */
+  }
   console.error(`Claude API error (${res.status}):`, detail);
   process.exit(1);
 }
