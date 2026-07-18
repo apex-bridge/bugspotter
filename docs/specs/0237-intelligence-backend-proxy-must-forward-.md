@@ -37,7 +37,7 @@ Constraints:
 
 - `orgThreshold` must never override an explicitly supplied client `threshold`; `resolveThreshold` precedence order (client → org → env → hardcoded 0.85) must be preserved
 - The raw JSONB read must be used instead of `getOrgIntelligenceSettings`, which always fills in a 0.75 default and would collapse "org has no setting" into a number, making the env-var and hardcoded-0.85 fallback paths unreachable
-- The `db != null` guard in the route handler is unnecessary — `intelligenceRoutes` already early-returns when `db` is falsy before any project-scoped route is registered, so `db` is narrowed to non-null for the handler body. Omit it to avoid misleading readers.
+- TypeScript does not propagate control-flow narrowing of an optional parameter into a nested closure. Even though `intelligenceRoutes` early-returns when `db` is falsy, `db` is still typed as `DatabaseClient | undefined` inside the nested `async (request, reply) =>` handler — `tsc --strict` emits `TS18048: 'db' is possibly 'undefined'`. Bind it to a const immediately after the early-return guard: `const database = db;`. TypeScript narrows a const binding at the point of assignment and the narrowing holds inside the closure. Use `database` (not `db`) everywhere in the handler body.
 - The `org_threshold` query param sent to the intelligence service must be omitted entirely (not sent as an empty string) when no org setting exists, so that `resolveThreshold` correctly falls through to the env-var fallback
 - No new database migrations are required; `intelligence_settings` and `intelligence_similarity_threshold` already exist
 - Changes must not alter the public API contract of `GET /similar` as seen by external callers
@@ -50,7 +50,7 @@ Constraints:
 - [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param, no org setting, no `SIMILARITY_THRESHOLD` env var) — `resolveThreshold` returns 0.85 without error, verified by spy
 - [ ] When `request.project?.organization_id` is absent, the handler does not throw and `getSimilarBugs` receives `orgThreshold: undefined`
 - [ ] The `org_threshold` query param is absent from the proxied URL when `orgThreshold` is `undefined`, verified by a unit test asserting the constructed URL string
-- [ ] All existing tests in `packages/backend` and `packages/bugspotter-intelligence` continue to pass without modification
+- [ ] All existing test assertions and logic in `packages/backend` and `packages/bugspotter-intelligence` continue to pass. **Note:** `createMockDb()` in `packages/backend/tests/api/intelligence-routes.test.ts` must be updated to add an `organizations` key; without it `db.organizations.findById(...)` throws `TypeError` on any test that hits the similar-bugs handler with `request.project.organization_id` set. The required addition to the helper is: `organizations: { findById: vi.fn().mockResolvedValue({ settings: { intelligence_similarity_threshold: null } }) }`. This is a mock-fixture update, not a change to test assertions or logic.
 
 ## How (runnable steps)
 
@@ -64,21 +64,27 @@ pnpm install --frozen-lockfile
 # 2. Edit the similar-bugs route handler
 # File: packages/backend/src/api/routes/intelligence.ts
 #
+# After the existing `if (!db) { ... return; }` early-return guard,
+# add a const binding to capture the narrowed type for use in closures:
+#
+#   const database = db;   // narrows DatabaseClient | undefined → DatabaseClient
+#                          // tsc --strict does not propagate narrowing into
+#                          // nested async closures from a parameter; a const
+#                          // binding at this scope holds the narrowing.
+#
 # Inside the handler for GET /projects/:projectId/bugs/:id/similar,
 # after the existing `resolveClient` call, add:
 #
 #   const orgThreshold: number | undefined =
 #     request.project?.organization_id != null
-#       ? ((await db.organizations.findById(request.project.organization_id))
+#       ? ((await database.organizations.findById(request.project.organization_id))
 #           ?.settings?.intelligence_similarity_threshold) ?? undefined
 #       : undefined;
 #
 # Note: reads the raw JSONB field rather than going through
 # getOrgIntelligenceSettings, which fills in a 0.75 default and would
 # collapse "org has no setting" into a number, making the env-var and
-# hardcoded-0.85 fallback paths unreachable. The db != null guard is
-# omitted because intelligenceRoutes early-returns before any
-# project-scoped route is registered when db is falsy.
+# hardcoded-0.85 fallback paths unreachable.
 #
 # Then update the getSimilarBugs call from:
 #   c.getSimilarBugs(id, { threshold, limit, projectId })
