@@ -46,9 +46,10 @@ const fileSections = mentioned
     } catch {
       return null;
     }
-    // Cap at 300 lines to keep prompt size bounded.
-    const lines = content.split('\n').slice(0, 300).join('\n');
-    const truncated = content.split('\n').length > 300 ? '\n[… truncated at 300 lines]' : '';
+    // Cap at 1000 lines — 300 caused false positives when a referenced method
+    // appeared past the cutoff in a larger source file.
+    const lines = content.split('\n').slice(0, 1000).join('\n');
+    const truncated = content.split('\n').length > 1000 ? '\n[… truncated at 1000 lines]' : '';
     return `### ${p}\n\`\`\`ts\n${lines}${truncated}\n\`\`\``;
   })
   .filter(Boolean)
