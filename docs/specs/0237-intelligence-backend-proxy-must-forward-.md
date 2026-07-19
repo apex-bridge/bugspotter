@@ -174,14 +174,26 @@ pnpm --filter @bugspotter/intelligence test    # requires #238
 # File: packages/backend/tests/api/intelligence-routes.test.ts
 #
 # Test case E — graceful no-org-context fallback (AC #5):
-#   The module-level guard mock always sets request.project.organization_id.
-#   To test the absent-org-id path, create a separate describe block with a
-#   fresh Fastify app using a stripped guard mock:
+#   The module-level guard mock (intelligence-routes.test.ts line 28) always
+#   sets request.project.organization_id via a fixed factory. Do NOT add a
+#   second vi.mock('../../src/api/authorization/index.js', ...) call — vi.mock
+#   is hoisted to the top of the file regardless of nesting, so a duplicate
+#   mock for the same module path would override the guard for every test in
+#   the file (including A-D), not just the one it's declared near.
+#
+#   Instead, make the existing guard mock reconfigurable: back it with a
+#   vi.fn() default implementation that test case E overrides once via
+#   mockImplementationOnce:
+#     const mockGuardImpl = vi.fn((request: any) => {
+#       request.project = { id: request.params?.projectId, organization_id: MOCK_ORG_ID };
+#     });
 #     vi.mock('../../src/api/authorization/index.js', () => ({
-#       guard: () => async (request: any) => {
-#         request.project = { id: 'proj-1', organization_id: null };
-#       },
+#       guard: () => async (request: any) => mockGuardImpl(request),
 #     }));
+#   Then in test case E:
+#     mockGuardImpl.mockImplementationOnce((request: any) => {
+#       request.project = { id: 'proj-1', organization_id: null };
+#     });
 #   Then spy on getSimilarBugs and assert it receives orgThreshold: undefined.
 #
 # Test case F — org_threshold absent from proxied URL when undefined (AC #6):
