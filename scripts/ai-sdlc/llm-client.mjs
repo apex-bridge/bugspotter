@@ -70,7 +70,11 @@ async function callViaCli({ prompt, timeoutMs }) {
     const child = spawn(
       'claude',
       ['-p', '--output-format', 'json', '--model', CLI_MODEL, '--allowedTools='],
-      { stdio: ['pipe', 'pipe', 'pipe'], shell: true }
+      // shell only on Windows, where npm's global bin is a .cmd shim spawn()
+      // can't exec directly. On POSIX (CI runs on ubuntu-latest) spawning
+      // claude directly means SIGKILL on timeout kills the actual process
+      // instead of orphaning it under an intermediate shell.
+      { stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' }
     );
 
     let stdout = '';
@@ -80,6 +84,8 @@ async function callViaCli({ prompt, timeoutMs }) {
       reject(new Error(`claude CLI timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     child.stdout.on('data', (d) => {
       stdout += d;
     });
@@ -114,6 +120,7 @@ async function callViaCli({ prompt, timeoutMs }) {
       resolve({ text: data.result, stopReason: data.stop_reason });
     });
 
+    child.stdin.on('error', () => {});
     child.stdin.write(prompt);
     child.stdin.end();
   });
