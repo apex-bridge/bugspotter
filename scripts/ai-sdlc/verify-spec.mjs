@@ -150,6 +150,13 @@ const result = data?.content?.[0]?.text?.trim() ?? '';
 // are what truncation cuts first.
 function sanitize(raw) {
   let text = raw.trim();
+  // Discard conversational preamble preceding an opening code fence so that
+  // startsWith('```') fires correctly and the closing fence is also stripped.
+  const tickIdx = text.indexOf('```');
+  const titleIdxEarly = text.indexOf('# Spec:');
+  if (tickIdx !== -1 && (titleIdxEarly === -1 || tickIdx < titleIdxEarly)) {
+    text = text.slice(tickIdx);
+  }
   if (text.startsWith('```')) {
     text = text
       .replace(/^```[a-z]*\n?/, '')

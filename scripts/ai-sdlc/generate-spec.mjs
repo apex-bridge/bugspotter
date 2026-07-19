@@ -58,6 +58,9 @@ function scanDir(rootDir) {
   while (currentLevel.length > 0 && results.length < BUDGET_PER_ROOT * 5) {
     const nextLevel = [];
     for (const dir of currentLevel) {
+      if (results.length >= BUDGET_PER_ROOT * 5) {
+        break;
+      }
       let entries;
       try {
         entries = readdirSync(dir);
@@ -65,11 +68,18 @@ function scanDir(rootDir) {
         continue;
       }
       for (const name of entries) {
-        if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
+        if (results.length >= BUDGET_PER_ROOT * 5) {
+          break;
+        }
+        if (name.startsWith('.') || name === 'node_modules' || name === 'dist') {
+          continue;
+        }
         const full = join(dir, name).replace(/\\/g, '/');
         results.push(full);
         try {
-          if (statSync(full).isDirectory()) nextLevel.push(full);
+          if (statSync(full).isDirectory()) {
+            nextLevel.push(full);
+          }
         } catch {
           /* skip unreadable */
         }
