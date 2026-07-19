@@ -1,6 +1,9 @@
 name: Spec
 description: Technical spec for an SDLC work item (AI-SDLC pipeline)
-labels: ["needs-spec", "ai-sdlc"]
+# Note: this form collects the human's high-level intent. The AI-generated
+# spec document (docs/specs/TEMPLATE.md) has a different, more detailed
+# structure — the two intentionally differ.
+labels: ['needs-spec', 'ai-sdlc']
 body:
   - type: textarea
     id: problem
@@ -41,7 +44,23 @@ body:
     id: adr
     attributes:
       label: ADR
-      description: "Path or number if an ADR governs this decision (e.g. docs/adr/0042-agent-identity.md). Leave blank if not yet written."
-      placeholder: "docs/adr/NNNN-slug.md"
+      description: 'Path or number if an ADR governs this decision (e.g. docs/adr/0042-agent-identity.md). Leave blank if not yet written.'
+      placeholder: 'docs/adr/NNNN-slug.md'
+    validations:
+      required: false
+
+  - type: textarea
+    id: files_touched
+    attributes:
+      label: Files touched (optional)
+      description: 'List any files you expect this change to affect. The spec agent will use this as a hint — leave blank to let it infer.'
+    validations:
+      required: false
+
+  - type: textarea
+    id: blocking_prerequisites
+    attributes:
+      label: Blocking prerequisites (optional)
+      description: 'Any issues or PRs that must land before this work can be implemented (e.g. #238). Leave blank if none.'
     validations:
       required: false
