@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Calls Claude API to draft a spec document for a GitHub issue.
+// Calls Claude to draft a spec document for a GitHub issue.
 // Run from the repo root. Reads TEMPLATE.md; writes docs/specs/<file>.
 // Outputs spec_file and spec_slug to GITHUB_OUTPUT.
 //
-// Required env vars: ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY
+// Required env vars: ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, plus either
+//   ANTHROPIC_API_KEY (default) or CLAUDE_CODE_OAUTH_TOKEN (LLM_BACKEND=cli)
 // Optional:          GITHUB_OUTPUT (set by Actions; falls back to stdout print)
 
 import {
@@ -15,13 +16,11 @@ import {
   statSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { callClaude, requireLlmCredentials } from './llm-client.mjs';
 
-const { ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, GITHUB_OUTPUT } = process.env;
+const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, GITHUB_OUTPUT } = process.env;
 
-if (!ANTHROPIC_API_KEY) {
-  console.error('Missing ANTHROPIC_API_KEY');
-  process.exit(1);
-}
+requireLlmCredentials();
 if (!ISSUE_NUMBER) {
   console.error('Missing ISSUE_NUMBER');
   process.exit(1);
@@ -142,42 +141,13 @@ Rules:
 - "Rollback:" must describe a concrete undo action for any irreversible step, or "n/a" if all steps are additive
 - Return ONLY the filled spec document — no preamble, no explanation, no markdown fences`;
 
-const res = await fetch('https://api.anthropic.com/v1/messages', {
-  method: 'POST',
-  headers: {
-    'content-type': 'application/json',
-    'x-api-key': ANTHROPIC_API_KEY,
-    'anthropic-version': '2023-06-01',
-  },
-  signal: AbortSignal.timeout(90_000),
-  body: JSON.stringify({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
-    messages: [{ role: 'user', content: prompt }],
-  }),
-});
-
-if (!res.ok) {
-  let detail = '';
-  try {
-    const raw = await res.text();
-    try {
-      detail = JSON.stringify(JSON.parse(raw), null, 2);
-    } catch {
-      detail = raw;
-    }
-  } catch {
-    /* body unreadable */
-  }
-  console.error(`Claude API error (${res.status}):`, detail);
+let specContent;
+try {
+  ({ text: specContent } = await callClaude({ prompt, maxTokens: 4096, timeoutMs: 90_000 }));
+} catch (err) {
+  console.error(err.message);
   process.exit(1);
 }
-const data = await res.json();
-if (data?.content?.[0]?.type !== 'text') {
-  console.error('Unexpected API response shape:', JSON.stringify(data, null, 2));
-  process.exit(1);
-}
-const specContent = data.content[0].text;
 
 mkdirSync('docs/specs', { recursive: true });
 writeFileSync(specFile, specContent, 'utf8');
