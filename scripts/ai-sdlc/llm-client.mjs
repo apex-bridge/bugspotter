@@ -110,6 +110,10 @@ async function callViaCli({ prompt, timeoutMs }) {
         reject(new Error(`Failed to parse claude CLI JSON output: ${err.message}\n${stdout}`));
         return;
       }
+      if (!data || typeof data !== 'object') {
+        reject(new Error(`Unexpected claude CLI JSON output (not an object): ${stdout}`));
+        return;
+      }
       if (data.is_error) {
         reject(new Error(`claude CLI reported an error: ${JSON.stringify(data)}`));
         return;
