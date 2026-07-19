@@ -103,7 +103,7 @@ try {
     signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -136,10 +136,18 @@ try {
   console.warn(`Failed to parse spec verifier response: ${err.message}`);
   process.exit(0);
 }
+// Truncated responses pass header checks because the missing content is at
+// the tail — stop_reason is the authoritative signal (mirrors generate-impl.mjs).
+if (data.stop_reason === 'max_tokens') {
+  console.warn('Spec verifier response truncated (stop_reason=max_tokens) — skipping patch.');
+  process.exit(0);
+}
+
 const result = data?.content?.[0]?.text?.trim() ?? '';
 
-// Strip outer markdown fences the model sometimes adds, then confirm the
-// required section headers survived before overwriting the spec.
+// Strip outer markdown fences the model sometimes adds, then confirm all
+// required section headers survived — tail sections (Verification, Rollback)
+// are what truncation cuts first.
 function sanitize(raw) {
   let text = raw.trim();
   if (text.startsWith('```')) {
@@ -154,7 +162,15 @@ function sanitize(raw) {
   const titleIdx = text.indexOf('# Spec:');
   if (titleIdx === -1) return null;
   if (titleIdx > 0) text = text.slice(titleIdx);
-  const required = ['## Problem', '## Changes', '## Tests'];
+  const required = [
+    '## Problem',
+    '## Out of scope',
+    '## Constraints',
+    '## Acceptance criteria',
+    '## Changes',
+    '## Tests',
+    '## Verification',
+  ];
   if (!required.every((h) => text.includes(h))) return null;
   return text;
 }

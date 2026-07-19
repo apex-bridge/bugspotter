@@ -46,8 +46,10 @@ const specFile = `docs/specs/${padded}-${slug}.md`;
 // 80-entry budget using true level-order BFS: all entries at depth N are
 // collected before any entry at depth N+1 is visited, so a wide directory
 // (e.g. src/api with 137 entries) cannot exhaust the budget before
-// src/services/intelligence is ever reached. A 5x safety cap bounds total
-// fs work; the final slice(0, BUDGET_PER_ROOT) trims to the budget.
+// src/services/intelligence is ever reached. The while condition prevents
+// new levels from starting once results exceed 5× budget, but a wide final
+// level may push beyond that before the check runs — slice(0, BUDGET_PER_ROOT)
+// trims the result to the budget regardless.
 const BUDGET_PER_ROOT = 80;
 
 function scanDir(rootDir) {
