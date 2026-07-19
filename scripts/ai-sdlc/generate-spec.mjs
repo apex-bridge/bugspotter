@@ -44,13 +44,12 @@ const specFile = `docs/specs/${padded}-${slug}.md`;
 // Build a source-file tree so the agent can reference accurate paths and
 // spot which files exist before writing the spec. Each root gets its own
 // 80-entry budget using true level-order BFS: all entries at depth N are
-// collected before any entry at depth N+1 is visited, so a wide directory
-// (e.g. src/api with 137 entries) cannot exhaust the budget before
-// src/services/intelligence is ever reached. The while condition prevents
-// new levels from starting once results exceed 5× budget, but a wide final
-// level may push beyond that before the check runs — slice(0, BUDGET_PER_ROOT)
-// trims the result to the budget regardless.
+// collected before any entry at depth N+1 is visited. To prevent a wide
+// directory from crowding out peer directories within the same BFS level,
+// at most 15 entries per directory are added to results; directories are
+// still queued for BFS traversal regardless of the per-dir cap.
 const BUDGET_PER_ROOT = 80;
+const MAX_ENTRIES_PER_DIR = 15;
 
 function scanDir(rootDir) {
   const results = [];
@@ -67,6 +66,7 @@ function scanDir(rootDir) {
       } catch {
         continue;
       }
+      let addedFromDir = 0;
       for (const name of entries) {
         if (results.length >= BUDGET_PER_ROOT * 5) {
           break;
@@ -75,13 +75,18 @@ function scanDir(rootDir) {
           continue;
         }
         const full = join(dir, name).replace(/\\/g, '/');
-        results.push(full);
+        let isDir = false;
         try {
-          if (statSync(full).isDirectory()) {
-            nextLevel.push(full);
-          }
+          isDir = statSync(full).isDirectory();
         } catch {
-          /* skip unreadable */
+          continue;
+        }
+        if (isDir) {
+          nextLevel.push(full);
+        }
+        if (addedFromDir < MAX_ENTRIES_PER_DIR) {
+          results.push(full);
+          addedFromDir++;
         }
       }
     }
