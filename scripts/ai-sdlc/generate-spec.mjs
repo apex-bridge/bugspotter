@@ -43,36 +43,39 @@ const specFile = `docs/specs/${padded}-${slug}.md`;
 
 // Build a source-file tree so the agent can reference accurate paths and
 // spot which files exist before writing the spec. Each root gets its own
-// 80-entry BFS budget so the scan spreads across the breadth of the tree
-// rather than exhausting the budget inside one deep subdirectory (e.g.
-// packages/backend/src/api has 137 entries — DFS would never reach
-// src/services with a per-root cap).
+// 80-entry budget using true level-order BFS: all entries at depth N are
+// collected before any entry at depth N+1 is visited, so a wide directory
+// (e.g. src/api with 137 entries) cannot exhaust the budget before
+// src/services/intelligence is ever reached. A 5x safety cap bounds total
+// fs work; the final slice(0, BUDGET_PER_ROOT) trims to the budget.
 const BUDGET_PER_ROOT = 80;
 
 function scanDir(rootDir) {
   const results = [];
-  const queue = [rootDir];
-  while (queue.length > 0 && results.length < BUDGET_PER_ROOT) {
-    const dir = queue.shift();
-    let entries;
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const name of entries) {
-      if (results.length >= BUDGET_PER_ROOT) break;
-      if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
-      const full = join(dir, name).replace(/\\/g, '/');
-      results.push(full);
+  let currentLevel = [rootDir];
+  while (currentLevel.length > 0 && results.length < BUDGET_PER_ROOT * 5) {
+    const nextLevel = [];
+    for (const dir of currentLevel) {
+      let entries;
       try {
-        if (statSync(full).isDirectory()) queue.push(full);
+        entries = readdirSync(dir);
       } catch {
-        /* skip unreadable */
+        continue;
+      }
+      for (const name of entries) {
+        if (name.startsWith('.') || name === 'node_modules' || name === 'dist') continue;
+        const full = join(dir, name).replace(/\\/g, '/');
+        results.push(full);
+        try {
+          if (statSync(full).isDirectory()) nextLevel.push(full);
+        } catch {
+          /* skip unreadable */
+        }
       }
     }
+    currentLevel = nextLevel;
   }
-  return results;
+  return results.slice(0, BUDGET_PER_ROOT);
 }
 
 const sourceTree = [
@@ -80,11 +83,14 @@ const sourceTree = [
   'packages/backend/tests',
   'packages/bugspotter-intelligence/src',
   'packages/bugspotter-intelligence/tests',
-  'packages/billing',
-  'packages/message-broker',
-  'packages/payment-service',
-  'packages/types',
-  'packages/utils',
+  'packages/billing/src',
+  'packages/billing/tests',
+  'packages/message-broker/src',
+  'packages/message-broker/tests',
+  'packages/payment-service/src',
+  'packages/payment-service/tests',
+  'packages/types/src',
+  'packages/utils/src',
   'apps',
 ]
   .flatMap((dir) => scanDir(dir))

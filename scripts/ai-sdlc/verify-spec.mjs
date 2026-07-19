@@ -40,12 +40,18 @@ const fileSections = mentioned
   .filter((p) => !p.includes('..') && existsSync(p))
   .slice(0, MAX_VERIFY_FILES)
   .map((p) => {
-    const content = readFileSync(p, 'utf8');
+    let content;
+    try {
+      content = readFileSync(p, 'utf8');
+    } catch {
+      return null;
+    }
     // Cap at 300 lines to keep prompt size bounded.
     const lines = content.split('\n').slice(0, 300).join('\n');
     const truncated = content.split('\n').length > 300 ? '\n[… truncated at 300 lines]' : '';
     return `### ${p}\n\`\`\`ts\n${lines}${truncated}\n\`\`\``;
   })
+  .filter(Boolean)
   .join('\n\n');
 
 if (!fileSections) {

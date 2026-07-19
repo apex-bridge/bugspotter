@@ -1,5 +1,8 @@
 # Spec: <title>
 
+<!-- This is the AI-generated spec document. .github/ISSUE_TEMPLATE/spec.yml is
+     the human issue-filing form — different structure, different purpose. -->
+
 Linked issue: Refs #NNN
 ADR: pending / docs/adr/NNNN-slug.md / n/a
 
