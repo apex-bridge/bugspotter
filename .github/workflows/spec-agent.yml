@@ -42,6 +42,12 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: node scripts/ai-sdlc/generate-spec.mjs
 
+      - name: Verify and patch spec (adversarial factual check)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
+        run: node scripts/ai-sdlc/verify-spec.mjs
+
       - name: Format generated files
         env:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
