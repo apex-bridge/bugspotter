@@ -67,6 +67,15 @@ async function callViaApi({ prompt, maxTokens, timeoutMs }) {
 
 async function callViaCli({ prompt, timeoutMs }) {
   return new Promise((resolve, reject) => {
+    // ANTHROPIC_API_KEY (and ANTHROPIC_AUTH_TOKEN) outrank the OAuth token in
+    // Claude Code's own auth precedence, so a stale/low-balance key set
+    // anywhere in the parent environment silently overrides
+    // CLAUDE_CODE_OAUTH_TOKEN. Strip both from the child's env so the OAuth
+    // token is what actually authenticates this call.
+    const childEnv = { ...process.env };
+    delete childEnv.ANTHROPIC_API_KEY;
+    delete childEnv.ANTHROPIC_AUTH_TOKEN;
+
     const child = spawn(
       'claude',
       ['-p', '--output-format', 'json', '--model', CLI_MODEL, '--allowedTools='],
@@ -74,7 +83,7 @@ async function callViaCli({ prompt, timeoutMs }) {
       // can't exec directly. On POSIX (CI runs on ubuntu-latest) spawning
       // claude directly means SIGKILL on timeout kills the actual process
       // instead of orphaning it under an intermediate shell.
-      { stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' }
+      { stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32', env: childEnv }
     );
 
     let stdout = '';
@@ -100,7 +109,10 @@ async function callViaCli({ prompt, timeoutMs }) {
       clearTimeout(timer);
       if (code !== 0 || signal) {
         const reason = code !== null ? `code ${code}` : `signal ${signal}`;
-        reject(new Error(`claude CLI exited with ${reason}: ${stderr}`));
+        // The claude CLI's error detail (e.g. a billing/auth failure) lands
+        // in the JSON on stdout, not stderr — include both.
+        const detail = [stderr, stdout].filter(Boolean).join('\n');
+        reject(new Error(`claude CLI exited with ${reason}: ${detail}`));
         return;
       }
       let data;
