@@ -3,19 +3,18 @@
 // claims to touch, then calls Claude to find and fix factual errors before
 // the PR is opened.
 //
-// Required env vars: ANTHROPIC_API_KEY, SPEC_FILE
+// Required env vars: SPEC_FILE, plus either ANTHROPIC_API_KEY (default) or
+//   CLAUDE_CODE_OAUTH_TOKEN (LLM_BACKEND=cli)
 // Configuration errors (missing env vars) exit 1. All other failures
 // (missing spec file, API errors, bad model response) exit 0 so a
 // verification hiccup never blocks the CI run.
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { callClaude, requireLlmCredentials } from './llm-client.mjs';
 
-const { ANTHROPIC_API_KEY, SPEC_FILE } = process.env;
+const { SPEC_FILE } = process.env;
 
-if (!ANTHROPIC_API_KEY) {
-  console.error('Missing ANTHROPIC_API_KEY');
-  process.exit(1);
-}
+requireLlmCredentials();
 if (!SPEC_FILE) {
   console.error('Missing SPEC_FILE');
   process.exit(1);
@@ -91,59 +90,22 @@ console.log(
   `Verifying spec against ${mentioned.filter((p) => existsSync(p)).length} source file(s)…`
 );
 
-let res;
+let text, stopReason;
 try {
-  res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    signal: AbortSignal.timeout(120_000),
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
+  ({ text, stopReason } = await callClaude({ prompt, maxTokens: 8192, timeoutMs: 120_000 }));
 } catch (err) {
-  console.warn(`Spec verifier fetch error: ${err.message}`);
-  process.exit(0);
-}
-
-if (!res.ok) {
-  let detail = '';
-  try {
-    const raw = await res.text();
-    try {
-      detail = JSON.stringify(JSON.parse(raw), null, 2);
-    } catch {
-      detail = raw;
-    }
-  } catch {
-    /* body unreadable */
-  }
   // Verification failure is non-fatal — log and continue with unpatched spec.
-  console.warn(`Spec verifier API error (${res.status}): ${detail}`);
-  process.exit(0);
-}
-
-let data;
-try {
-  data = await res.json();
-} catch (err) {
-  console.warn(`Failed to parse spec verifier response: ${err.message}`);
+  console.warn(`Spec verifier error: ${err.message}`);
   process.exit(0);
 }
 // Truncated responses pass header checks because the missing content is at
 // the tail — stop_reason is the authoritative signal (mirrors generate-impl.mjs).
-if (data.stop_reason === 'max_tokens') {
+if (stopReason === 'max_tokens') {
   console.warn('Spec verifier response truncated (stop_reason=max_tokens) — skipping patch.');
   process.exit(0);
 }
 
-const result = data?.content?.[0]?.text?.trim() ?? '';
+const result = text?.trim() ?? '';
 
 // Strip outer markdown fences the model sometimes adds, then confirm all
 // required section headers survived — tail sections (Verification, Rollback)
