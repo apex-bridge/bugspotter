@@ -96,10 +96,11 @@ async function callViaCli({ prompt, timeoutMs }) {
       clearTimeout(timer);
       reject(err);
     });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`claude CLI exited with code ${code}: ${stderr}`));
+      if (code !== 0 || signal) {
+        const reason = code !== null ? `code ${code}` : `signal ${signal}`;
+        reject(new Error(`claude CLI exited with ${reason}: ${stderr}`));
         return;
       }
       let data;
