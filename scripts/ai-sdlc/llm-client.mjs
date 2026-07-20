@@ -8,6 +8,9 @@
 //   Team/Enterprise). Tools are disabled (--allowedTools "") so the call is a
 //   plain text completion, matching the API path's behavior — without this,
 //   Claude Code's normal agentic tool loop would try to explore/edit files.
+//   ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN are deliberately stripped from the
+//   CLI subprocess env (see callViaCli) since they outrank the OAuth token
+//   in Claude Code's auth precedence and would otherwise silently shadow it.
 
 import { spawn } from 'node:child_process';
 
