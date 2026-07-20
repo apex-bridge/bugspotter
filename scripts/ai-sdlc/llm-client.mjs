@@ -123,7 +123,7 @@ async function callViaCli({ prompt, timeoutMs }) {
         // The claude CLI's error detail (e.g. a billing/auth failure) lands
         // in the JSON on stdout, not stderr — include both.
         const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
-        reject(new Error(`claude CLI exited with ${reason}: ${detail}`));
+        reject(new Error(`claude CLI exited with ${reason}${detail ? `: ${detail}` : ''}`));
         return;
       }
       let data;
