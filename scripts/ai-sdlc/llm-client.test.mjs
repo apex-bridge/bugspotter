@@ -94,6 +94,38 @@ test('callViaCli strips ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN from the spawned 
   }
 });
 
+test('callViaCli strips differently-cased ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN keys too', async () => {
+  // { ...process.env } copies keys with whatever casing they happen to
+  // have; an exact-case delete would miss a variable set under different
+  // casing (e.g. inherited from a case-insensitive OS environment on
+  // Windows). Prove the strip is case-insensitive by planting lowercase
+  // variants and checking neither casing reaches the child.
+  process.env.anthropic_api_key = 'sk-ant-leaked-lowercase-key';
+  process.env.Anthropic_Auth_Token = 'leaked-mixed-case-token';
+  process.env.FAKE_CLAUDE_MODE = 'success';
+  process.env.FAKE_CLAUDE_ENV_DUMP = ENV_DUMP;
+
+  try {
+    await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+
+    const childEnv = JSON.parse(readFileSync(ENV_DUMP, 'utf8'));
+    assert.equal(
+      childEnv.anthropic_api_key,
+      undefined,
+      'lowercase anthropic_api_key must not reach the child'
+    );
+    assert.equal(
+      childEnv.Anthropic_Auth_Token,
+      undefined,
+      'mixed-case Anthropic_Auth_Token must not reach the child'
+    );
+    assert.equal(childEnv.CLAUDE_CODE_OAUTH_TOKEN, 'test-oauth-token');
+  } finally {
+    delete process.env.anthropic_api_key;
+    delete process.env.Anthropic_Auth_Token;
+  }
+});
+
 test('callViaCli error path includes stdout content (not just stderr) in the thrown error', async () => {
   process.env.FAKE_CLAUDE_MODE = 'error';
   process.env.FAKE_CLAUDE_ENV_DUMP = '';

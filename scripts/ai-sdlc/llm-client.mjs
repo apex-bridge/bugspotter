@@ -75,9 +75,17 @@ async function callViaCli({ prompt, timeoutMs }) {
     // anywhere in the parent environment silently overrides
     // CLAUDE_CODE_OAUTH_TOKEN. Strip both from the child's env so the OAuth
     // token is what actually authenticates this call.
+    // { ...process.env } yields a plain object with whatever key casing the
+    // OS reported; on Windows that copy is case-sensitive even though
+    // process.env itself is not, so an exact-case delete can miss a
+    // variable set with different casing. Strip case-insensitively.
     const childEnv = { ...process.env };
-    delete childEnv.ANTHROPIC_API_KEY;
-    delete childEnv.ANTHROPIC_AUTH_TOKEN;
+    for (const key of Object.keys(childEnv)) {
+      const upperKey = key.toUpperCase();
+      if (upperKey === 'ANTHROPIC_API_KEY' || upperKey === 'ANTHROPIC_AUTH_TOKEN') {
+        delete childEnv[key];
+      }
+    }
 
     const child = spawn(
       'claude',
