@@ -8,6 +8,9 @@
 //   Team/Enterprise). Tools are disabled (--allowedTools "") so the call is a
 //   plain text completion, matching the API path's behavior — without this,
 //   Claude Code's normal agentic tool loop would try to explore/edit files.
+//   ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN are deliberately stripped from the
+//   CLI subprocess env (see callViaCli) since they outrank the OAuth token
+//   in Claude Code's auth precedence and would otherwise silently shadow it.
 
 import { spawn } from 'node:child_process';
 
@@ -67,6 +70,23 @@ async function callViaApi({ prompt, maxTokens, timeoutMs }) {
 
 async function callViaCli({ prompt, timeoutMs }) {
   return new Promise((resolve, reject) => {
+    // ANTHROPIC_API_KEY (and ANTHROPIC_AUTH_TOKEN) outrank the OAuth token in
+    // Claude Code's own auth precedence, so a stale/low-balance key set
+    // anywhere in the parent environment silently overrides
+    // CLAUDE_CODE_OAUTH_TOKEN. Strip both from the child's env so the OAuth
+    // token is what actually authenticates this call.
+    // { ...process.env } yields a plain object with whatever key casing the
+    // OS reported; on Windows that copy is case-sensitive even though
+    // process.env itself is not, so an exact-case delete can miss a
+    // variable set with different casing. Strip case-insensitively.
+    const childEnv = { ...process.env };
+    for (const key of Object.keys(childEnv)) {
+      const upperKey = key.toUpperCase();
+      if (upperKey === 'ANTHROPIC_API_KEY' || upperKey === 'ANTHROPIC_AUTH_TOKEN') {
+        delete childEnv[key];
+      }
+    }
+
     const child = spawn(
       'claude',
       ['-p', '--output-format', 'json', '--model', CLI_MODEL, '--allowedTools='],
@@ -74,7 +94,7 @@ async function callViaCli({ prompt, timeoutMs }) {
       // can't exec directly. On POSIX (CI runs on ubuntu-latest) spawning
       // claude directly means SIGKILL on timeout kills the actual process
       // instead of orphaning it under an intermediate shell.
-      { stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' }
+      { stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32', env: childEnv }
     );
 
     let stdout = '';
@@ -100,7 +120,10 @@ async function callViaCli({ prompt, timeoutMs }) {
       clearTimeout(timer);
       if (code !== 0 || signal) {
         const reason = code !== null ? `code ${code}` : `signal ${signal}`;
-        reject(new Error(`claude CLI exited with ${reason}: ${stderr}`));
+        // The claude CLI's error detail (e.g. a billing/auth failure) lands
+        // in the JSON on stdout, not stderr — include both.
+        const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
+        reject(new Error(`claude CLI exited with ${reason}${detail ? `: ${detail}` : ''}`));
         return;
       }
       let data;
