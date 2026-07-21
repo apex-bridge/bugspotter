@@ -1,0 +1,137 @@
+// Tests for llm-client.mjs's CLI backend (callViaCli, via callClaude).
+// Zero-dependency: run with `node --test`.
+//
+// Rather than mocking node:child_process.spawn, this puts a fake `claude`
+// executable ahead of everything else on PATH, so callViaCli's real spawn()
+// call resolves to it. That exercises the actual code path end to end:
+// - proves ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are genuinely absent
+//   from the *actual* child process env (the fake binary dumps its own
+//   process.env to a file — not an env object we merely inspect on the
+//   parent side), while other vars (e.g. CLAUDE_CODE_OAUTH_TOKEN) survive.
+// - proves a non-zero exit's stdout content lands in the thrown Error
+//   message, not just stderr.
+//
+// Two entrypoints are written because callViaCli spawns with
+// shell: process.platform === 'win32' (see llm-client.mjs): POSIX execs
+// `claude` directly via its shebang, Windows resolves `claude.cmd` through
+// cmd.exe's PATHEXT search. Both delegate to the same CommonJS impl file
+// (the temp dir has no package.json, so a bare `claude` script defaults to
+// CommonJS as Node's entry-point module system).
+
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { writeFileSync, mkdtempSync, rmSync, chmodSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const DIR = mkdtempSync(join(tmpdir(), 'llm-client-test-'));
+const IMPL = join(DIR, 'fake-claude-impl.cjs');
+const ENV_DUMP = join(DIR, 'env-dump.json');
+
+writeFileSync(
+  IMPL,
+  [
+    "const fs = require('node:fs');",
+    'const dumpPath = process.env.FAKE_CLAUDE_ENV_DUMP;',
+    'if (dumpPath) fs.writeFileSync(dumpPath, JSON.stringify(process.env));',
+    "const mode = process.env.FAKE_CLAUDE_MODE || 'success';",
+    "if (mode === 'error') {",
+    "  process.stdout.write('FAKE_STDOUT_MARKER: upstream billing failure detail');",
+    '  process.exit(2);',
+    '}',
+    "process.stdout.write(JSON.stringify({ result: 'fake cli response', stop_reason: 'end_turn' }));",
+    'process.exit(0);',
+    '',
+  ].join('\n')
+);
+
+const POSIX_BIN = join(DIR, 'claude');
+writeFileSync(POSIX_BIN, `#!/usr/bin/env node\nrequire(${JSON.stringify(IMPL)});\n`);
+chmodSync(POSIX_BIN, 0o755);
+
+const WIN_BIN = join(DIR, 'claude.cmd');
+writeFileSync(WIN_BIN, `@echo off\r\nnode "${IMPL}" %*\r\n`);
+
+after(() => rmSync(DIR, { recursive: true, force: true }));
+
+// LLM_BACKEND is read at module-load time in llm-client.mjs, so it must be
+// set before the dynamic import below.
+process.env.LLM_BACKEND = 'cli';
+process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token';
+process.env.PATH = `${DIR}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`;
+
+const { callClaude } = await import('./llm-client.mjs');
+
+test('callViaCli strips ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN from the spawned child env, keeps other vars', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-leaked-key';
+  process.env.ANTHROPIC_AUTH_TOKEN = 'leaked-auth-token';
+  process.env.FAKE_CLAUDE_MODE = 'success';
+  process.env.FAKE_CLAUDE_ENV_DUMP = ENV_DUMP;
+
+  try {
+    const result = await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(result.text, 'fake cli response');
+    assert.equal(result.stopReason, 'end_turn');
+
+    const childEnv = JSON.parse(readFileSync(ENV_DUMP, 'utf8'));
+    assert.equal(
+      childEnv.ANTHROPIC_API_KEY,
+      undefined,
+      'ANTHROPIC_API_KEY must not reach the child'
+    );
+    assert.equal(
+      childEnv.ANTHROPIC_AUTH_TOKEN,
+      undefined,
+      'ANTHROPIC_AUTH_TOKEN must not reach the child'
+    );
+    // Not vacuous: other env vars, including the OAuth token the CLI
+    // actually needs, must still be passed through.
+    assert.equal(childEnv.CLAUDE_CODE_OAUTH_TOKEN, 'test-oauth-token');
+    assert.equal(childEnv.FAKE_CLAUDE_MODE, 'success');
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+  }
+});
+
+test('callViaCli strips differently-cased ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN keys too', async () => {
+  // { ...process.env } copies keys with whatever casing they happen to
+  // have; an exact-case delete would miss a variable set under different
+  // casing (e.g. inherited from a case-insensitive OS environment on
+  // Windows). Prove the strip is case-insensitive by planting lowercase
+  // variants and checking neither casing reaches the child.
+  process.env.anthropic_api_key = 'sk-ant-leaked-lowercase-key';
+  process.env.Anthropic_Auth_Token = 'leaked-mixed-case-token';
+  process.env.FAKE_CLAUDE_MODE = 'success';
+  process.env.FAKE_CLAUDE_ENV_DUMP = ENV_DUMP;
+
+  try {
+    await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+
+    const childEnv = JSON.parse(readFileSync(ENV_DUMP, 'utf8'));
+    assert.equal(
+      childEnv.anthropic_api_key,
+      undefined,
+      'lowercase anthropic_api_key must not reach the child'
+    );
+    assert.equal(
+      childEnv.Anthropic_Auth_Token,
+      undefined,
+      'mixed-case Anthropic_Auth_Token must not reach the child'
+    );
+    assert.equal(childEnv.CLAUDE_CODE_OAUTH_TOKEN, 'test-oauth-token');
+  } finally {
+    delete process.env.anthropic_api_key;
+    delete process.env.Anthropic_Auth_Token;
+  }
+});
+
+test('callViaCli error path includes stdout content (not just stderr) in the thrown error', async () => {
+  process.env.FAKE_CLAUDE_MODE = 'error';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+
+  await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }), (err) => {
+    assert.match(err.message, /FAKE_STDOUT_MARKER: upstream billing failure detail/);
+    return true;
+  });
+});
