@@ -1,5 +1,0 @@
-Temporary file to defeat claude-review.yml's paths-ignore (which excludes .github/**)
-so this PR's own pull_request-triggered auto-review runs against this branch's fixed
-workflow file, as live verification for issue #247 / PR #248.
-
-Will be removed before merge.
