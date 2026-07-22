@@ -93,10 +93,14 @@ jobs:
       - name: Run Claude review
         uses: anthropics/claude-code-action@v1
         with:
-          # Pass both auth modes — the action picks whichever secret is set.
-          # ANTHROPIC_API_KEY is raw API billing; CLAUDE_CODE_OAUTH_TOKEN is
-          # what `/install-github-app` populates and uses App billing.
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Only pass the OAuth token. The action does NOT arbitrate between
+          # anthropic_api_key and claude_code_oauth_token when both are set -
+          # it maps both straight into env vars unconditionally, and the
+          # underlying `claude` CLI's own auth precedence (ANTHROPIC_API_KEY
+          # over the OAuth token) then silently picks whichever one is
+          # ANTHROPIC_API_KEY. If that secret is dead or out of credit, the
+          # review fails instantly with no visible error. Configure exactly
+          # one of the two secrets for this repo, never both.
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             Review PR #${{ github.event.pull_request.number || github.event.issue.number }}. Focus on real-impact issues:
