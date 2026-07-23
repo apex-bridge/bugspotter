@@ -27,6 +27,7 @@ import { join } from 'node:path';
 const DIR = mkdtempSync(join(tmpdir(), 'llm-client-test-'));
 const IMPL = join(DIR, 'fake-claude-impl.cjs');
 const ENV_DUMP = join(DIR, 'env-dump.json');
+const ARGV_DUMP = join(DIR, 'argv-dump.json');
 
 writeFileSync(
   IMPL,
@@ -34,6 +35,14 @@ writeFileSync(
     "const fs = require('node:fs');",
     'const dumpPath = process.env.FAKE_CLAUDE_ENV_DUMP;',
     'if (dumpPath) fs.writeFileSync(dumpPath, JSON.stringify(process.env));',
+    'const argvDumpPath = process.env.FAKE_CLAUDE_ARGV_DUMP;',
+    // process.argv[0] is the node executable, [1] is the entry script —
+    // IMPL on Windows (claude.cmd invokes `node IMPL`), but the POSIX_BIN
+    // wrapper on POSIX (its shebang makes it the entry; requiring IMPL from
+    // there doesn't change argv). Either way, slice off [0] and [1] so the
+    // dump holds only the args callViaCli passed to `claude` itself
+    // (['-p', '--output-format', ...]).
+    'if (argvDumpPath) fs.writeFileSync(argvDumpPath, JSON.stringify(process.argv.slice(2)));',
     "const mode = process.env.FAKE_CLAUDE_MODE || 'success';",
     "if (mode === 'error') {",
     "  process.stdout.write('FAKE_STDOUT_MARKER: upstream billing failure detail');",
@@ -123,6 +132,40 @@ test('callViaCli strips differently-cased ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN
   } finally {
     delete process.env.anthropic_api_key;
     delete process.env.Anthropic_Auth_Token;
+  }
+});
+
+test('callViaCli invokes claude with --tools= and --strict-mcp-config, not --allowedTools=', async () => {
+  process.env.FAKE_CLAUDE_MODE = 'success';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  process.env.FAKE_CLAUDE_ARGV_DUMP = ARGV_DUMP;
+
+  try {
+    await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+
+    const argv = JSON.parse(readFileSync(ARGV_DUMP, 'utf8'));
+    // Single-token '--tools=' (not a separate '' array element): on Windows,
+    // spawn() with shell: true stringifies argv into one command line and a
+    // bare '' element gets silently dropped from it (confirmed empirically),
+    // which would leave --tools swallowing --strict-mcp-config as its value
+    // instead of disabling tools. A single token has nothing to elide.
+    assert.deepEqual(argv, [
+      '-p',
+      '--output-format',
+      'json',
+      '--model',
+      'claude-sonnet-4-6',
+      '--tools=',
+      '--strict-mcp-config',
+    ]);
+    // The old, broken flag must be gone: --allowedTools only pre-approves
+    // tools for the permission prompt, it does not disable tool availability.
+    assert.ok(
+      !argv.some((a) => a.startsWith('--allowedTools')),
+      'must not pass --allowedTools (does not disable tool availability)'
+    );
+  } finally {
+    delete process.env.FAKE_CLAUDE_ARGV_DUMP;
   }
 });
 

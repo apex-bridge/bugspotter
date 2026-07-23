@@ -5,9 +5,19 @@
 // LLM_BACKEND=cli — routes through the Claude Code CLI so usage draws from a
 //   Claude subscription instead of metered API billing, needs
 //   CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, requires Pro/Max/
-//   Team/Enterprise). Tools are disabled (--allowedTools "") so the call is a
-//   plain text completion, matching the API path's behavior — without this,
-//   Claude Code's normal agentic tool loop would try to explore/edit files.
+//   Team/Enterprise). Tools are disabled with --tools= (plus
+//   --strict-mcp-config to also block MCP tools) so the call is a plain text
+//   completion, matching the API path's behavior — without this, Claude
+//   Code's normal agentic tool loop would try to explore/edit files.
+//   --allowedTools "" does NOT achieve this: it only pre-approves which
+//   tools skip the permission prompt, it does not control tool
+//   *availability* — read-only tools (Read, Grep, Glob, read-only Bash)
+//   still run unprompted regardless of the allow-list, so a CLI call made
+//   with --allowedTools "" silently runs a full multi-turn exploration loop
+//   instead of a single-shot completion (confirmed empirically: 50 turns,
+//   5m30s, vs. 1-2 turns, well under a minute, with --tools=). See
+//   callViaCli below for why --tools= (one token) is used instead of the
+//   two-token ['--tools', ''] form the CLI's own --help implies.
 //   ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN are deliberately stripped from the
 //   CLI subprocess env (see callViaCli) since they outrank the OAuth token
 //   in Claude Code's auth precedence and would otherwise silently shadow it.
@@ -89,7 +99,18 @@ async function callViaCli({ prompt, timeoutMs }) {
 
     const child = spawn(
       'claude',
-      ['-p', '--output-format', 'json', '--model', CLI_MODEL, '--allowedTools='],
+      // --tools takes a following value ('claude -p --help': "--tools
+      // <tools...>"), so the natural form is a separate '' array element.
+      // But on Windows, spawn() with shell: true stringifies the args array
+      // into a single command line for cmd.exe, and a bare '' element gets
+      // silently elided from that command line (confirmed empirically) —
+      // the same class of bug that forced --allowedTools='' (a single
+      // token) instead of ['--allowedTools', ''] originally. '--tools='
+      // (one token, value baked in) sidesteps that: nothing to elide.
+      // Confirmed empirically on both Windows (shell: true) and POSIX
+      // (shell: false, tested under WSL) that '--tools=' parses correctly
+      // and disables tools, so one token form is used unconditionally.
+      ['-p', '--output-format', 'json', '--model', CLI_MODEL, '--tools=', '--strict-mcp-config'],
       // shell only on Windows, where npm's global bin is a .cmd shim spawn()
       // can't exec directly. On POSIX (CI runs on ubuntu-latest) spawning
       // claude directly means SIGKILL on timeout kills the actual process

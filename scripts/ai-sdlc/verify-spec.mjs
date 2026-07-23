@@ -92,7 +92,13 @@ console.log(
 
 let text, stopReason;
 try {
-  ({ text, stopReason } = await callClaude({ prompt, maxTokens: 8192, timeoutMs: 120_000 }));
+  // 420s: this prompt (spec + up to 15 source files) is larger than
+  // generate-spec's, so it needs more than generate-spec's 180s. Measured
+  // empirically on the CLI backend with a ~60K-char verify prompt (spec +
+  // 4 source files): 283.9s to complete via callClaude's fixed --tools=
+  // path (single turn, real corrected output, not a truncation). 420s
+  // keeps roughly 1.5x margin over that measurement rather than guessing.
+  ({ text, stopReason } = await callClaude({ prompt, maxTokens: 8192, timeoutMs: 420_000 }));
 } catch (err) {
   // Verification failure is non-fatal — log and continue with unpatched spec.
   console.warn(`Spec verifier error: ${err.message}`);
@@ -129,8 +135,12 @@ function sanitize(raw) {
   // Trim any preamble that precedes it so frontmatter (Linked issue, ADR,
   // Files touched) is not stripped along with stray prose.
   const titleIdx = text.indexOf('# Spec:');
-  if (titleIdx === -1) return null;
-  if (titleIdx > 0) text = text.slice(titleIdx);
+  if (titleIdx === -1) {
+    return null;
+  }
+  if (titleIdx > 0) {
+    text = text.slice(titleIdx);
+  }
   const required = [
     '## Problem',
     '## Out of scope',
@@ -140,7 +150,9 @@ function sanitize(raw) {
     '## Tests',
     '## Verification',
   ];
-  if (!required.every((h) => text.includes(h))) return null;
+  if (!required.every((h) => text.includes(h))) {
+    return null;
+  }
   return text;
 }
 
