@@ -36,9 +36,12 @@ writeFileSync(
     'const dumpPath = process.env.FAKE_CLAUDE_ENV_DUMP;',
     'if (dumpPath) fs.writeFileSync(dumpPath, JSON.stringify(process.env));',
     'const argvDumpPath = process.env.FAKE_CLAUDE_ARGV_DUMP;',
-    // process.argv[0] is the node executable, [1] is this script (IMPL) —
-    // slice those off so the dump holds only the args callViaCli passed to
-    // `claude` itself (['-p', '--output-format', ...]).
+    // process.argv[0] is the node executable, [1] is the entry script —
+    // IMPL on Windows (claude.cmd invokes `node IMPL`), but the POSIX_BIN
+    // wrapper on POSIX (its shebang makes it the entry; requiring IMPL from
+    // there doesn't change argv). Either way, slice off [0] and [1] so the
+    // dump holds only the args callViaCli passed to `claude` itself
+    // (['-p', '--output-format', ...]).
     'if (argvDumpPath) fs.writeFileSync(argvDumpPath, JSON.stringify(process.argv.slice(2)));',
     "const mode = process.env.FAKE_CLAUDE_MODE || 'success';",
     "if (mode === 'error') {",
