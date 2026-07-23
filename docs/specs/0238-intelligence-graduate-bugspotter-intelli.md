@@ -365,7 +365,16 @@ it('returns 403 when the bug belongs to a different tenant', async () => {
     const mockResponse = {
       bug_id: 'bug-123',
       is_duplicate: false,
-      similar_bugs: [{ id: 'bug-456', score: 0.91 }],
+      similar_bugs: [
+        {
+          bug_id: 'bug-456',
+          title: 'Login button unresponsive on Safari',
+          description: null,
+          status: 'open',
+          resolution: null,
+          similarity: 0.91,
+        },
+      ],
       threshold_used: 0.8,
     };
     const app = buildApp(
