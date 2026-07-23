@@ -137,29 +137,33 @@ test('callViaCli invokes claude with --tools= and --strict-mcp-config, not --all
   process.env.FAKE_CLAUDE_ENV_DUMP = '';
   process.env.FAKE_CLAUDE_ARGV_DUMP = ARGV_DUMP;
 
-  await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+  try {
+    await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
 
-  const argv = JSON.parse(readFileSync(ARGV_DUMP, 'utf8'));
-  // Single-token '--tools=' (not a separate '' array element): on Windows,
-  // spawn() with shell: true stringifies argv into one command line and a
-  // bare '' element gets silently dropped from it (confirmed empirically),
-  // which would leave --tools swallowing --strict-mcp-config as its value
-  // instead of disabling tools. A single token has nothing to elide.
-  assert.deepEqual(argv, [
-    '-p',
-    '--output-format',
-    'json',
-    '--model',
-    'claude-sonnet-4-6',
-    '--tools=',
-    '--strict-mcp-config',
-  ]);
-  // The old, broken flag must be gone: --allowedTools only pre-approves
-  // tools for the permission prompt, it does not disable tool availability.
-  assert.ok(
-    !argv.some((a) => a.startsWith('--allowedTools')),
-    'must not pass --allowedTools (does not disable tool availability)'
-  );
+    const argv = JSON.parse(readFileSync(ARGV_DUMP, 'utf8'));
+    // Single-token '--tools=' (not a separate '' array element): on Windows,
+    // spawn() with shell: true stringifies argv into one command line and a
+    // bare '' element gets silently dropped from it (confirmed empirically),
+    // which would leave --tools swallowing --strict-mcp-config as its value
+    // instead of disabling tools. A single token has nothing to elide.
+    assert.deepEqual(argv, [
+      '-p',
+      '--output-format',
+      'json',
+      '--model',
+      'claude-sonnet-4-6',
+      '--tools=',
+      '--strict-mcp-config',
+    ]);
+    // The old, broken flag must be gone: --allowedTools only pre-approves
+    // tools for the permission prompt, it does not disable tool availability.
+    assert.ok(
+      !argv.some((a) => a.startsWith('--allowedTools')),
+      'must not pass --allowedTools (does not disable tool availability)'
+    );
+  } finally {
+    delete process.env.FAKE_CLAUDE_ARGV_DUMP;
+  }
 });
 
 test('callViaCli error path includes stdout content (not just stderr) in the thrown error', async () => {
