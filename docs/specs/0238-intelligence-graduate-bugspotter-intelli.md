@@ -36,19 +36,20 @@ ADR: n/a
 
 1. `@sinclair/typebox` must be declared as a direct dependency in `package.json` and `pnpm install` must be re-run to update `pnpm-lock.yaml` before routes can be type-checked or built; this step is a hard prerequisite for all subsequent steps.
 2. `tsconfig.json` must extend the workspace root config (`"../../tsconfig.json"`) to inherit `strict: true` and the workspace `moduleResolution` setting.
-3. The auth preHandler must verify that the bug ID in the URL parameter belongs to the authenticated caller's tenant before delegating to the service; omitting the ownership check is a security regression, not a simplification.
+3. The auth preHandler must verify that the bug ID in the URL parameter belongs to the authenticated caller's tenant before delegating to the service; omitting the ownership check is a security regression, not a simplification. The tenant identifier must be derived from a verified credential (via a decorated `authService.verifyToken(token)`, mirrored the same way `similarityService`/`mitigationService` are consumed, not implemented, in this package) — never compared directly against the raw bearer token string, which is a credential, not a tenant id.
 4. `AppError` must be defined in a package-local `src/errors.ts`; the intelligence package must not import from `packages/backend` to avoid introducing a workspace circular reference.
 5. All unit tests must pass without a live database, Redis, or external HTTP; every I/O boundary must be mocked using `vi.fn()`.
 6. `vitest.config.ts` must set `include: ['tests/**/*.test.ts']` so both existing files under `tests/utils/` and the new route test files are discovered automatically without manual listing.
+7. Route paths and response shapes exposed by this package must match the contract already consumed by `packages/backend/src/services/intelligence/intelligence-client.ts` and `types.ts` — the similar-bugs route is `GET /api/v1/bugs/:id/similar` returning a `SimilarBugsResponse` (`bug_id`, `is_duplicate`, `similar_bugs`, `threshold_used`), not a new `{ results }` shape mounted under a `/bugs` prefix.
 
 ## Acceptance criteria
 
 - [ ] `pnpm --filter @bugspotter/intelligence test` exits 0 in CI — verified by all test cases in `threshold.test.ts`, `similar.test.ts`, and `mitigations.test.ts`.
-- [ ] GET `/bugs/:id/similar` without an `Authorization` header returns HTTP 401 — verified by test case A in `similar.test.ts`.
-- [ ] GET `/bugs/:id/mitigations` without an `Authorization` header returns HTTP 401 — verified by test case A in `mitigations.test.ts`.
-- [ ] GET `/bugs/:id/similar` for a bug whose `tenantId` does not match the caller's token returns HTTP 403 — verified by test case B in `similar.test.ts`.
-- [ ] GET `/bugs/:id/similar` with a valid token and matching tenant returns a non-empty array when the service returns results — verified by test case C in `similar.test.ts`.
-- [ ] GET `/bugs/:id/mitigations` with a valid token and matching tenant returns a non-empty array when the service returns results — verified by test case B in `mitigations.test.ts`.
+- [ ] GET `/api/v1/bugs/:id/similar` without an `Authorization` header returns HTTP 401 — verified by test case A in `similar.test.ts`.
+- [ ] GET `/api/v1/bugs/:id/mitigations` without an `Authorization` header returns HTTP 401 — verified by test case A in `mitigations.test.ts`.
+- [ ] GET `/api/v1/bugs/:id/similar` for a bug whose `tenantId` does not match the tenant derived from the verified credential returns HTTP 403 — verified by test case B in `similar.test.ts`.
+- [ ] GET `/api/v1/bugs/:id/similar` with a valid credential and matching tenant returns the `SimilarBugsResponse` produced by the service — verified by test case C in `similar.test.ts`.
+- [ ] GET `/api/v1/bugs/:id/mitigations` with a valid credential and matching tenant returns the `MitigationResponse` produced by the service — verified by test case B in `mitigations.test.ts`.
 - [ ] `threshold.ts` throws an instance of `AppError` (not base `Error`) for out-of-range inputs — verified by the updated assertions in `threshold.test.ts`.
 - [ ] Zero `TODO` comments remain in any file under `packages/bugspotter-intelligence/`.
 
@@ -95,7 +96,7 @@ New file — extends workspace root, scopes compilation to `src/`.
 
 ### `packages/bugspotter-intelligence/vitest.config.ts`
 
-New file — mirrors the `packages/utils` vitest config pattern, scoped to `tests/`.
+New file — mirrors the `packages/utils` vitest config pattern (`globals: true`, `environment: 'node'`, v8 coverage), scoped to `tests/`.
 
 ```ts
 import { defineConfig } from 'vitest/config';
@@ -103,19 +104,27 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
+    globals: true,
+    environment: 'node',
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'json'],
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts'],
+    },
   },
 });
 ```
 
 ### `packages/bugspotter-intelligence/src/errors.ts`
 
-New file — package-local structured error class so routes and utilities can throw HTTP-aware errors without importing from `packages/backend`.
+New file — package-local structured error class so routes and utilities can throw HTTP-aware errors without importing from `packages/backend`. Signature matches the existing `AppError` at `packages/backend/src/api/middleware/error.ts:13` (`message` first, `statusCode` second) so the two stay drop-in compatible.
 
 ```ts
 export class AppError extends Error {
   constructor(
-    public readonly statusCode: number,
-    message: string
+    message: string,
+    public readonly statusCode: number = 500
   ) {
     super(message);
     this.name = 'AppError';
@@ -125,7 +134,7 @@ export class AppError extends Error {
 
 ### `packages/bugspotter-intelligence/src/utils/threshold.ts`
 
-Add `AppError` import and replace both `throw new Error(...)` / TODO blocks with `throw new AppError(422, ...)`.
+Add `AppError` import and replace both `throw new Error(...)` / TODO blocks with `throw new AppError(<message>, 422)`.
 
 ```ts
 // Prepend before all existing imports:
@@ -134,17 +143,17 @@ import { AppError } from '../errors.js';
 // Replace first TODO site — old form:
 //   throw new Error('<message>'); // TODO: use AppError
 // New form:
-throw new AppError(422, '<existing message text>');
+throw new AppError('<existing message text>', 422);
 
 // Replace second TODO site — old form:
 //   throw new Error('<message>'); // TODO: use AppError
 // New form:
-throw new AppError(422, '<existing message text>');
+throw new AppError('<existing message text>', 422);
 ```
 
 ### `packages/bugspotter-intelligence/src/routes/bugs/similar.ts`
 
-Add `AppError` import, add a `preHandler` that enforces authentication and tenant ownership, and replace the `results = []` stub with a real service call.
+Add `AppError` import, add a `preHandler` that enforces authentication and tenant ownership, and replace the `results = []` stub with a real service call. The route keeps its existing literal path (`/api/v1/bugs/:id/similar`) and the response shape stays `SimilarBugsResponse` — both match what `packages/backend/src/services/intelligence/intelligence-client.ts` (`getSimilarBugs`, line 111-117) already calls and expects; a `/:id/similar` route mounted under a `/bugs` prefix and a `{ results }` envelope would be incompatible with that consumer.
 
 ```ts
 // Append after existing imports:
@@ -152,34 +161,45 @@ import { AppError } from '../../errors.js';
 
 // Replace the existing bare route registration with:
 fastify.get(
-  '/:id/similar',
+  '/api/v1/bugs/:id/similar',
   {
     preHandler: async (request) => {
-      const token = request.headers.authorization?.replace('Bearer ', '');
+      const authHeader = request.headers.authorization;
+      const token = authHeader?.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length)
+        : undefined;
       if (!token) {
-        throw new AppError(401, 'Unauthorized');
+        throw new AppError('Unauthorized', 401);
+      }
+      let tenantId: string;
+      try {
+        ({ tenantId } = request.server.authService.verifyToken(token));
+      } catch {
+        throw new AppError('Unauthorized', 401);
       }
       const bug = await request.server.similarityService.getBugById(
         (request.params as { id: string }).id
       );
-      if (!bug || bug.tenantId !== token) {
-        throw new AppError(403, 'Forbidden');
+      if (!bug || bug.tenantId !== tenantId) {
+        throw new AppError('Forbidden', 403);
       }
     },
   },
   async (request, reply) => {
     // Replace: const results = [];
-    const results = await request.server.similarityService.findSimilar(
+    // findSimilar already returns a SimilarBugsResponse-shaped object
+    // (bug_id, is_duplicate, similar_bugs, threshold_used) — forward it as-is.
+    const response = await request.server.similarityService.findSimilar(
       (request.params as { id: string }).id
     );
-    return reply.send({ results });
+    return reply.send(response);
   }
 );
 ```
 
 ### `packages/bugspotter-intelligence/src/routes/bugs/mitigations.ts`
 
-Mirror the same `preHandler` guard and replace the `results = []` stub with a real service call.
+Mirror the same `preHandler` guard (including the verified-credential tenant check above) and replace the `results = []` stub with a real service call. Keep the route's existing literal path (`/api/v1/bugs/:id/mitigations`), for the same reason as `similar.ts`.
 
 ```ts
 // Append after existing imports:
@@ -187,27 +207,38 @@ import { AppError } from '../../errors.js';
 
 // Replace the existing bare route registration with:
 fastify.get(
-  '/:id/mitigations',
+  '/api/v1/bugs/:id/mitigations',
   {
     preHandler: async (request) => {
-      const token = request.headers.authorization?.replace('Bearer ', '');
+      const authHeader = request.headers.authorization;
+      const token = authHeader?.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length)
+        : undefined;
       if (!token) {
-        throw new AppError(401, 'Unauthorized');
+        throw new AppError('Unauthorized', 401);
+      }
+      let tenantId: string;
+      try {
+        ({ tenantId } = request.server.authService.verifyToken(token));
+      } catch {
+        throw new AppError('Unauthorized', 401);
       }
       const bug = await request.server.mitigationService.getBugById(
         (request.params as { id: string }).id
       );
-      if (!bug || bug.tenantId !== token) {
-        throw new AppError(403, 'Forbidden');
+      if (!bug || bug.tenantId !== tenantId) {
+        throw new AppError('Forbidden', 403);
       }
     },
   },
   async (request, reply) => {
     // Replace: const results = [];
-    const results = await request.server.mitigationService.findMitigations(
+    // findMitigations already returns a MitigationResponse-shaped object
+    // (bug_id, mitigation_suggestion, based_on_similar_bugs) — forward it as-is.
+    const response = await request.server.mitigationService.findMitigations(
       (request.params as { id: string }).id
     );
-    return reply.send({ results });
+    return reply.send(response);
   }
 );
 ```
@@ -255,7 +286,7 @@ describe('threshold — error type', () => {
 
 **Mock/fixture updates required:**
 
-Construct a minimal Fastify instance with `similarityService` decorated onto it. The `getBugById` and `findSimilar` stubs must exist on the decorated service before `app.ready()` is called; Fastify will throw at decoration time if the service object is missing either key.
+Construct a minimal Fastify instance with `similarityService` and `authService` decorated onto it. All stubbed keys must exist on the decorated services before `app.ready()` is called; Fastify will throw at decoration time if either service object is missing a key the route reads. The route registers its own literal `/api/v1/bugs/:id/similar` path, so `buildApp` registers the plugin with no prefix and tests hit that literal URL.
 
 ```ts
 import Fastify, { FastifyInstance } from 'fastify';
@@ -266,15 +297,27 @@ interface MockSimilarityService {
   findSimilar: Mock;
 }
 
-function buildApp(serviceOverrides: Partial<MockSimilarityService> = {}): FastifyInstance {
+interface MockAuthService {
+  verifyToken: Mock;
+}
+
+function buildApp(
+  serviceOverrides: Partial<MockSimilarityService> = {},
+  authOverrides: Partial<MockAuthService> = {}
+): FastifyInstance {
   const app = Fastify();
   const similarityService: MockSimilarityService = {
     getBugById: vi.fn(),
     findSimilar: vi.fn(),
     ...serviceOverrides,
   };
+  const authService: MockAuthService = {
+    verifyToken: vi.fn(),
+    ...authOverrides,
+  };
   app.decorate('similarityService', similarityService);
-  app.register(import('../../../src/routes/bugs/similar.js'), { prefix: '/bugs' });
+  app.decorate('authService', authService);
+  app.register(import('../../../src/routes/bugs/similar.js'));
   return app;
 }
 ```
@@ -284,12 +327,12 @@ function buildApp(serviceOverrides: Partial<MockSimilarityService> = {}): Fastif
 ```ts
 import { describe, it, expect, vi } from 'vitest';
 
-describe('GET /bugs/:id/similar', () => {
+describe('GET /api/v1/bugs/:id/similar', () => {
   it('returns 401 when Authorization header is absent', async () => {
     const app = buildApp();
     await app.ready();
 
-    const res = await app.inject({ method: 'GET', url: '/bugs/bug-123/similar' });
+    const res = await app.inject({ method: 'GET', url: '/api/v1/bugs/bug-123/similar' });
 
     expect(res.statusCode).toBe(401);
   });
@@ -299,40 +342,49 @@ describe('GET /bugs/:id/similar', () => {
 
 ```ts
 it('returns 403 when the bug belongs to a different tenant', async () => {
-  const app = buildApp({
-    getBugById: vi.fn().mockResolvedValue({ id: 'bug-123', tenantId: 'tenant-b' }),
-  });
+  const app = buildApp(
+    { getBugById: vi.fn().mockResolvedValue({ id: 'bug-123', tenantId: 'tenant-b' }) },
+    { verifyToken: vi.fn().mockReturnValue({ tenantId: 'tenant-a' }) }
+  );
   await app.ready();
 
   const res = await app.inject({
     method: 'GET',
-    url: '/bugs/bug-123/similar',
-    headers: { authorization: 'Bearer tenant-a' },
+    url: '/api/v1/bugs/bug-123/similar',
+    headers: { authorization: 'Bearer opaque-credential' },
   });
 
   expect(res.statusCode).toBe(403);
 });
 ```
 
-**Test case C — matching tenant returns non-empty results (AC #5):**
+**Test case C — matching tenant returns the service's SimilarBugsResponse (AC #5):**
 
 ```ts
   it('returns similarity results for an authorised, same-tenant request', async () => {
-    const mockResults = [{ id: 'bug-456', score: 0.91 }];
-    const app = buildApp({
-      getBugById: vi.fn().mockResolvedValue({ id: 'bug-123', tenantId: 'tenant-a' }),
-      findSimilar: vi.fn().mockResolvedValue(mockResults),
-    });
+    const mockResponse = {
+      bug_id: 'bug-123',
+      is_duplicate: false,
+      similar_bugs: [{ id: 'bug-456', score: 0.91 }],
+      threshold_used: 0.8,
+    };
+    const app = buildApp(
+      {
+        getBugById: vi.fn().mockResolvedValue({ id: 'bug-123', tenantId: 'tenant-a' }),
+        findSimilar: vi.fn().mockResolvedValue(mockResponse),
+      },
+      { verifyToken: vi.fn().mockReturnValue({ tenantId: 'tenant-a' }) }
+    );
     await app.ready();
 
     const res = await app.inject({
       method: 'GET',
-      url: '/bugs/bug-123/similar',
-      headers: { authorization: 'Bearer tenant-a' },
+      url: '/api/v1/bugs/bug-123/similar',
+      headers: { authorization: 'Bearer opaque-credential' },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).results).toEqual(mockResults);
+    expect(JSON.parse(res.body)).toEqual(mockResponse);
   });
 });
 ```
@@ -341,7 +393,7 @@ it('returns 403 when the bug belongs to a different tenant', async () => {
 
 **Mock/fixture updates required:**
 
-Mirror the `buildApp` helper from `similar.test.ts`, replacing `similarityService` with `mitigationService` and stubbing `getBugById` and `findMitigations`. Both keys must be present on the stub object before `app.ready()` is called.
+Mirror the `buildApp` helper from `similar.test.ts`, replacing `similarityService` with `mitigationService` and stubbing `getBugById` and `findMitigations`, plus the same `authService` decoration. All keys must be present on the stub objects before `app.ready()` is called. The route registers its own literal `/api/v1/bugs/:id/mitigations` path, so `buildApp` registers with no prefix.
 
 ```ts
 import Fastify, { FastifyInstance } from 'fastify';
@@ -352,15 +404,27 @@ interface MockMitigationService {
   findMitigations: Mock;
 }
 
-function buildApp(serviceOverrides: Partial<MockMitigationService> = {}): FastifyInstance {
+interface MockAuthService {
+  verifyToken: Mock;
+}
+
+function buildApp(
+  serviceOverrides: Partial<MockMitigationService> = {},
+  authOverrides: Partial<MockAuthService> = {}
+): FastifyInstance {
   const app = Fastify();
   const mitigationService: MockMitigationService = {
     getBugById: vi.fn(),
     findMitigations: vi.fn(),
     ...serviceOverrides,
   };
+  const authService: MockAuthService = {
+    verifyToken: vi.fn(),
+    ...authOverrides,
+  };
   app.decorate('mitigationService', mitigationService);
-  app.register(import('../../../src/routes/bugs/mitigations.js'), { prefix: '/bugs' });
+  app.decorate('authService', authService);
+  app.register(import('../../../src/routes/bugs/mitigations.js'));
   return app;
 }
 ```
@@ -370,36 +434,43 @@ function buildApp(serviceOverrides: Partial<MockMitigationService> = {}): Fastif
 ```ts
 import { describe, it, expect } from 'vitest';
 
-describe('GET /bugs/:id/mitigations', () => {
+describe('GET /api/v1/bugs/:id/mitigations', () => {
   it('returns 401 when Authorization header is absent', async () => {
     const app = buildApp();
     await app.ready();
 
-    const res = await app.inject({ method: 'GET', url: '/bugs/bug-123/mitigations' });
+    const res = await app.inject({ method: 'GET', url: '/api/v1/bugs/bug-123/mitigations' });
 
     expect(res.statusCode).toBe(401);
   });
 ```
 
-**Test case B — matching tenant returns non-empty results (AC #6):**
+**Test case B — matching tenant returns the service's MitigationResponse (AC #6):**
 
 ```ts
   it('returns mitigation results for an authorised, same-tenant request', async () => {
-    const mockResults = [{ id: 'mit-1', description: 'Sanitize user input before passing to query builder' }];
-    const app = buildApp({
-      getBugById: vi.fn().mockResolvedValue({ id: 'bug-123', tenantId: 'tenant-a' }),
-      findMitigations: vi.fn().mockResolvedValue(mockResults),
-    });
+    const mockResponse = {
+      bug_id: 'bug-123',
+      mitigation_suggestion: 'Sanitize user input before passing to query builder',
+      based_on_similar_bugs: true,
+    };
+    const app = buildApp(
+      {
+        getBugById: vi.fn().mockResolvedValue({ id: 'bug-123', tenantId: 'tenant-a' }),
+        findMitigations: vi.fn().mockResolvedValue(mockResponse),
+      },
+      { verifyToken: vi.fn().mockReturnValue({ tenantId: 'tenant-a' }) }
+    );
     await app.ready();
 
     const res = await app.inject({
       method: 'GET',
-      url: '/bugs/bug-123/mitigations',
-      headers: { authorization: 'Bearer tenant-a' },
+      url: '/api/v1/bugs/bug-123/mitigations',
+      headers: { authorization: 'Bearer opaque-credential' },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).results).toEqual(mockResults);
+    expect(JSON.parse(res.body)).toEqual(mockResponse);
   });
 });
 ```
