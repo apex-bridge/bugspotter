@@ -143,7 +143,7 @@ Rules:
 
 let specContent;
 try {
-  ({ text: specContent } = await callClaude({ prompt, maxTokens: 4096, timeoutMs: 90_000 }));
+  ({ text: specContent } = await callClaude({ prompt, maxTokens: 4096, timeoutMs: 180_000 }));
 } catch (err) {
   console.error(err.message);
   process.exit(1);
