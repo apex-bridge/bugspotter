@@ -249,10 +249,10 @@ fastify.get(
 
 **Mock/fixture updates required:**
 
-Add `AppError` import. Update every existing `expect(...).toThrow(Error)` assertion to `expect(...).toThrow(AppError)` so the test verifies the concrete class, not just the base `Error`.
+Add `AppError` to the file's existing top-of-file imports (do not add a second `import` statement for it later in the file). Update every existing `expect(...).toThrow(Error)` assertion to `expect(...).toThrow(AppError)` so the test verifies the concrete class, not just the base `Error`.
 
 ```ts
-// Append after existing imports:
+// Add alongside the existing top-of-file imports:
 import { AppError } from '../../src/errors.js';
 
 // Replace each instance of:
@@ -263,11 +263,9 @@ import { AppError } from '../../src/errors.js';
 
 **Test case — AppError statusCode on out-of-range input (AC #7):**
 
-```ts
-import { describe, it, expect } from 'vitest';
-import { AppError } from '../../src/errors.js';
-import { resolveThreshold } from '../../src/utils/threshold.js';
+Append this `describe` block to the file; it reuses the `describe`/`it`/`expect`, `resolveThreshold`, and `AppError` bindings already imported above — do not re-import them.
 
+```ts
 describe('threshold — error type', () => {
   it('throws AppError with statusCode 422 for an out-of-range value', () => {
     let caught: unknown;
@@ -286,11 +284,13 @@ describe('threshold — error type', () => {
 
 **Mock/fixture updates required:**
 
-Construct a minimal Fastify instance with `similarityService` and `authService` decorated onto it. All stubbed keys must exist on the decorated services before `app.ready()` is called; Fastify will throw at decoration time if either service object is missing a key the route reads. The route registers its own literal `/api/v1/bugs/:id/similar` path, so `buildApp` registers the plugin with no prefix and tests hit that literal URL.
+Construct a minimal Fastify instance with `similarityService` and `authService` decorated onto it. Fastify's `decorate()` does not validate the decorated value's shape — it only registers the property — so an incomplete stub is not caught at decoration time or at `app.ready()`; a missing method (e.g. `getBugById` or `verifyToken`) surfaces as a `TypeError` when the route handler calls it during `app.inject()`. Keep every stubbed key present up front so a failure points at the intended assertion, not an unrelated crash. The route registers its own literal `/api/v1/bugs/:id/similar` path, so `buildApp` registers the plugin with no prefix and tests hit that literal URL.
+
+This snippet's imports (`vi`, `describe`, `it`, `expect`) cover the whole file — the test-case snippets below reuse them and must not re-import from `vitest`.
 
 ```ts
 import Fastify, { FastifyInstance } from 'fastify';
-import { vi, type Mock } from 'vitest';
+import { describe, it, expect, vi, type Mock } from 'vitest';
 
 interface MockSimilarityService {
   getBugById: Mock;
@@ -325,8 +325,6 @@ function buildApp(
 **Test case A — no Authorization header returns 401 (AC #2):**
 
 ```ts
-import { describe, it, expect, vi } from 'vitest';
-
 describe('GET /api/v1/bugs/:id/similar', () => {
   it('returns 401 when Authorization header is absent', async () => {
     const app = buildApp();
@@ -402,7 +400,7 @@ it('returns 403 when the bug belongs to a different tenant', async () => {
 
 **Mock/fixture updates required:**
 
-Mirror the `buildApp` helper from `similar.test.ts`, replacing `similarityService` with `mitigationService` and stubbing `getBugById` and `findMitigations`, plus the same `authService` decoration. All keys must be present on the stub objects before `app.ready()` is called. The route registers its own literal `/api/v1/bugs/:id/mitigations` path, so `buildApp` registers with no prefix.
+Mirror the `buildApp` helper from `similar.test.ts`, replacing `similarityService` with `mitigationService` and stubbing `getBugById` and `findMitigations`, plus the same `authService` decoration. As with `similar.test.ts`, keep every stubbed key present up front: Fastify's `decorate()` doesn't validate the stub's shape, so a missing method surfaces as a `TypeError` at request-injection time, not at decoration or `app.ready()`. The route registers its own literal `/api/v1/bugs/:id/mitigations` path, so `buildApp` registers with no prefix.
 
 ```ts
 import Fastify, { FastifyInstance } from 'fastify';
@@ -490,6 +488,7 @@ describe('GET /api/v1/bugs/:id/mitigations', () => {
 pnpm install
 pnpm --filter @bugspotter/intelligence build
 pnpm --filter @bugspotter/intelligence test
+! rg -n '\bTODO\b' packages/bugspotter-intelligence
 ```
 
-Rollback: n/a — all steps are additive (new package files, no schema migrations, no shared infrastructure changes). Reverting the PR removes the package from the workspace and reverts the lockfile update.
+Rollback: revert the PR/commit. Not purely additive — `threshold.ts`, `similar.ts`, `mitigations.ts`, and `threshold.test.ts` are existing files with modified content, not new ones, so deleting only the new files would leave those edits in place. `git revert` undoes both the new files and the modifications to the four existing files, plus the `pnpm-lock.yaml` update.
