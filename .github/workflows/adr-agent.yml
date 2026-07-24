@@ -1,11 +1,20 @@
 name: ADR Agent
 
 # Phase 1 agent: fires when a human applies the `needs-adr` label.
-# Calls Claude API to draft an ADR in docs/adr/ and opens a DRAFT PR.
+# Calls Claude to draft an ADR in docs/adr/ and opens a DRAFT PR.
 # Gate 2 (ADR ratification) is human-held: the agent cannot merge.
 #
 # If a linked spec PR exists, its content is passed to the agent for context.
-# Required secrets: ANTHROPIC_API_KEY
+#
+# LLM backend is switchable via the LLM_BACKEND repo variable:
+#   unset/"api" (default) — Messages API, billed per-token, needs
+#     secrets.ANTHROPIC_API_KEY
+#   "cli" — routes through the Claude Code CLI so usage draws from a Claude
+#     subscription instead, needs secrets.CLAUDE_CODE_OAUTH_TOKEN (generate
+#     with `claude setup-token`, requires Pro/Max/Team/Enterprise)
+# Set with: gh variable set LLM_BACKEND --body cli   (or "api" to switch back)
+#
+# Required secrets: ANTHROPIC_API_KEY and/or CLAUDE_CODE_OAUTH_TOKEN
 # ADR: docs/adr/0042-agent-identity-scoped-app.md
 
 on:
@@ -34,6 +43,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install Claude Code CLI
+        if: vars.LLM_BACKEND == 'cli'
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Fetch linked spec (if any)
         id: spec
         env:
@@ -55,7 +68,9 @@ jobs:
       - name: Generate ADR
         id: gen
         env:
+          LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}

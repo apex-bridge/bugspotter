@@ -2,18 +2,24 @@ name: Impl Agent
 
 # Phase 2 agent: fires when a human applies the `agent-working` label after
 # ratifying the spec (Gate 1) and optionally an ADR (Gate 2).
-# Reads the linked spec, calls Claude API, opens a DRAFT PR with a scaffold.
+# Reads the linked spec, calls Claude, opens a DRAFT PR with a scaffold.
 # Gate 3 (merge) is human-held: the agent cannot merge.
 #
 # Model router (label-based):
 #   complexity:high  -> claude-opus-4-8
 #   pii-sensitive    -> claude-haiku-4-5-20251001
 #   default          -> claude-sonnet-4-6
+# The selected model is used on whichever LLM backend is active below.
 #
-# Prompt caching: static context (CLAUDE.md + style examples) is marked
-# cache_control=ephemeral; repeated runs on the same day skip re-sending it.
+# LLM backend is switchable via the LLM_BACKEND repo variable:
+#   unset/"api" (default) — Messages API, billed per-token, needs
+#     secrets.ANTHROPIC_API_KEY
+#   "cli" — routes through the Claude Code CLI so usage draws from a Claude
+#     subscription instead, needs secrets.CLAUDE_CODE_OAUTH_TOKEN (generate
+#     with `claude setup-token`, requires Pro/Max/Team/Enterprise)
+# Set with: gh variable set LLM_BACKEND --body cli   (or "api" to switch back)
 #
-# Required secrets: ANTHROPIC_API_KEY
+# Required secrets: ANTHROPIC_API_KEY and/or CLAUDE_CODE_OAUTH_TOKEN
 # ADR: docs/adr/0042-agent-identity-scoped-app.md
 
 on:
@@ -48,6 +54,10 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
+      - name: Install Claude Code CLI
+        if: vars.LLM_BACKEND == 'cli'
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Fetch linked spec (required)
         id: spec
         env:
@@ -71,7 +81,9 @@ jobs:
         id: gen
         timeout-minutes: 15
         env:
+          LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}

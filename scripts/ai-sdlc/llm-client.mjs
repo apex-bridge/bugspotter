@@ -21,6 +21,12 @@
 //   ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN are deliberately stripped from the
 //   CLI subprocess env (see callViaCli) since they outrank the OAuth token
 //   in Claude Code's auth precedence and would otherwise silently shadow it.
+//
+// callClaude({ prompt, maxTokens, timeoutMs, model }) — `model` is optional
+//   (defaults to claude-sonnet-4-6 on both backends) and lets a caller like
+//   generate-impl.mjs's label-based model router (complexity:high ->
+//   claude-opus-4-8, pii-sensitive -> claude-haiku, default -> sonnet)
+//   pick a different model per call on either backend.
 
 import { spawn } from 'node:child_process';
 
@@ -40,7 +46,7 @@ export function requireLlmCredentials() {
   }
 }
 
-async function callViaApi({ prompt, maxTokens, timeoutMs }) {
+async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -50,7 +56,7 @@ async function callViaApi({ prompt, maxTokens, timeoutMs }) {
     },
     signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
+      model: model || 'claude-sonnet-4-6',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -78,7 +84,7 @@ async function callViaApi({ prompt, maxTokens, timeoutMs }) {
   return { text: data.content[0].text, stopReason: data.stop_reason };
 }
 
-async function callViaCli({ prompt, timeoutMs }) {
+async function callViaCli({ prompt, timeoutMs, model }) {
   return new Promise((resolve, reject) => {
     // ANTHROPIC_API_KEY (and ANTHROPIC_AUTH_TOKEN) outrank the OAuth token in
     // Claude Code's own auth precedence, so a stale/low-balance key set
@@ -110,7 +116,15 @@ async function callViaCli({ prompt, timeoutMs }) {
       // Confirmed empirically on both Windows (shell: true) and POSIX
       // (shell: false, tested under WSL) that '--tools=' parses correctly
       // and disables tools, so one token form is used unconditionally.
-      ['-p', '--output-format', 'json', '--model', CLI_MODEL, '--tools=', '--strict-mcp-config'],
+      [
+        '-p',
+        '--output-format',
+        'json',
+        '--model',
+        model || CLI_MODEL,
+        '--tools=',
+        '--strict-mcp-config',
+      ],
       // shell only on Windows, where npm's global bin is a .cmd shim spawn()
       // can't exec directly. On POSIX (CI runs on ubuntu-latest) spawning
       // claude directly means SIGKILL on timeout kills the actual process
@@ -176,9 +190,13 @@ async function callViaCli({ prompt, timeoutMs }) {
 }
 
 // Returns { text, stopReason }, e.g. stopReason 'end_turn' | 'max_tokens'.
-export async function callClaude({ prompt, maxTokens, timeoutMs }) {
+// `model` is optional and overrides the hardcoded per-backend default —
+// used by generate-impl.mjs's label-based model router (complexity:high /
+// pii-sensitive / default). Callers that omit it get the same model as
+// before this option existed.
+export async function callClaude({ prompt, maxTokens, timeoutMs, model }) {
   if (LLM_BACKEND === 'cli') {
-    return callViaCli({ prompt, timeoutMs });
+    return callViaCli({ prompt, timeoutMs, model });
   }
-  return callViaApi({ prompt, maxTokens, timeoutMs });
+  return callViaApi({ prompt, maxTokens, timeoutMs, model });
 }
