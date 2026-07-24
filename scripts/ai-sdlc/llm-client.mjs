@@ -27,6 +27,13 @@
 //   generate-impl.mjs's label-based model router (complexity:high ->
 //   claude-opus-4-8, pii-sensitive -> claude-haiku, default -> sonnet)
 //   pick a different model per call on either backend.
+//   `maxTokens` only takes effect on the API backend (becomes max_tokens in
+//   the request body). callViaCli ignores it — `claude --help` has no flag
+//   to cap output tokens per call (only --max-budget-usd, a dollar budget,
+//   not a token count) — so it cannot be forwarded to the CLI backend.
+//   Callers should not assume it bounds CLI-backend output length; both
+//   backends still return stopReason, so a truncated response is equally
+//   detectable via stopReason === 'max_tokens' regardless of backend.
 
 import { spawn } from 'node:child_process';
 
@@ -84,6 +91,8 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
   return { text: data.content[0].text, stopReason: data.stop_reason };
 }
 
+// No `maxTokens` param here (deliberately) — the CLI has no per-call
+// output-token cap to forward it to. See the module header comment.
 async function callViaCli({ prompt, timeoutMs, model }) {
   return new Promise((resolve, reject) => {
     // ANTHROPIC_API_KEY (and ANTHROPIC_AUTH_TOKEN) outrank the OAuth token in
