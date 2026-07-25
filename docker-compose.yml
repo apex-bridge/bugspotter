@@ -402,6 +402,9 @@ services:
       API_URL: ${API_URL:-}
       # Git commit hash for version display (injected at runtime)
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
+      # Object-storage host for the admin CSP (runtime; bare host, no scheme).
+      # Empty => only same-origin storage is allowed. See .env.example.
+      STORAGE_DOMAIN: ${STORAGE_DOMAIN:-}
     ports:
       - '${ADMIN_PORT:-3001}:80'
     networks:

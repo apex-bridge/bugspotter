@@ -156,6 +156,46 @@ echo "${GREEN}✓${NC} PASS: Empty API_URL doesn't fail (uses fallback)"
 PASSED=$((PASSED + 1))
 
 echo ""
+echo "${YELLOW}=== Testing validate_storage_domain() ===${NC}"
+
+# Valid STORAGE_DOMAIN hosts (bare host, no scheme; wildcard allowed)
+test_valid "Wildcard host" "STORAGE_DOMAIN" "*.storage.yandexcloud.kz" "validate_storage_domain"
+test_valid "Plain host" "STORAGE_DOMAIN" "s3.your-cloud.example" "validate_storage_domain"
+test_valid "Host with port" "STORAGE_DOMAIN" "minio.internal:9000" "validate_storage_domain"
+
+# Scheme is normalized away rather than doubled (prevents https://https://...)
+export STORAGE_DOMAIN="https://s3.example.com"
+validate_storage_domain > /dev/null 2>&1
+if [ "$STORAGE_CSP" = " https://s3.example.com" ]; then
+    echo "${GREEN}✓${NC} PASS: Leading scheme is stripped, not doubled"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: Scheme normalization produced '$STORAGE_CSP'"
+    FAILED=$((FAILED + 1))
+fi
+unset STORAGE_DOMAIN STORAGE_CSP
+
+# Invalid STORAGE_DOMAIN values (CSP injection attempts)
+test_invalid "Space injection" "STORAGE_DOMAIN" "evil.com attacker.com" "validate_storage_domain"
+test_invalid "Semicolon directive injection" "STORAGE_DOMAIN" "evil.com; script-src 'unsafe-inline'" "validate_storage_domain"
+test_invalid "Single quote injection" "STORAGE_DOMAIN" "evil.com'" "validate_storage_domain"
+test_invalid "Angle brackets" "STORAGE_DOMAIN" "evil.com<script>" "validate_storage_domain"
+test_invalid "Parentheses injection" "STORAGE_DOMAIN" "evil.com()" "validate_storage_domain"
+test_invalid "Path smuggling" "STORAGE_DOMAIN" "evil.com/path" "validate_storage_domain"
+
+# Empty value: no storage source added to CSP
+unset STORAGE_DOMAIN
+validate_storage_domain > /dev/null 2>&1
+if [ -z "$STORAGE_CSP" ]; then
+    echo "${GREEN}✓${NC} PASS: Empty STORAGE_DOMAIN yields no CSP source"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: Empty STORAGE_DOMAIN should yield empty STORAGE_CSP"
+    FAILED=$((FAILED + 1))
+fi
+unset STORAGE_CSP
+
+echo ""
 echo "${YELLOW}=== Test Summary ===${NC}"
 echo "${GREEN}Passed: $PASSED${NC}"
 echo "${RED}Failed: $FAILED${NC}"

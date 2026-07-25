@@ -11,6 +11,7 @@ set -e
 validate_git_commit
 validate_api_domain
 validate_api_url
+validate_storage_domain
 
 # Inject runtime configuration (git commit hash + API URL from environment)
 echo "Injecting runtime configuration..."
@@ -22,13 +23,9 @@ window.__RUNTIME_CONFIG__ = {
 EOF
 echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}, API_URL=${API_URL:-}"
 
-# Build storage CSP fragment from STORAGE_DOMAIN (operator's object-storage host,
-# e.g. "*.storage.yandexcloud.kz"). Empty => only 'self' is allowed for storage.
-if [ -n "${STORAGE_DOMAIN:-}" ]; then
-    export STORAGE_CSP=" https://${STORAGE_DOMAIN}"
-else
-    export STORAGE_CSP=""
-fi
+# STORAGE_CSP is built and validated by validate_storage_domain above
+# (operator's object-storage host, e.g. "*.storage.yandexcloud.kz";
+# empty => only 'self' is allowed for storage).
 echo "Storage CSP fragment: '${STORAGE_CSP}'"
 
 # Process nginx template for standalone deployment

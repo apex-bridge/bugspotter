@@ -96,3 +96,42 @@ validate_api_url() {
         echo "API_URL not set - will use VITE_API_URL fallback in browser"
     fi
 }
+
+# Validate STORAGE_DOMAIN and build the CSP fragment for object storage.
+# Security: STORAGE_CSP is interpolated into the admin Content-Security-Policy
+# header, so an unvalidated value could inject additional CSP directives
+# (e.g. "evil.com; script-src 'unsafe-inline'"). Mirror the API_DOMAIN checks.
+validate_storage_domain() {
+    if [ -n "$STORAGE_DOMAIN" ]; then
+        # Normalize: the value is expected WITHOUT a scheme (a bare host, wildcard
+        # allowed). Strip a leading http(s):// if an operator included one so we
+        # never emit "https://https://...".
+        _storage_host="${STORAGE_DOMAIN#https://}"
+        _storage_host="${_storage_host#http://}"
+
+        # Critical security check: reject CSP-breaking characters. Spaces add extra
+        # sources; semicolons/quotes/parens/angle brackets inject new directives;
+        # slashes would smuggle a scheme or path into a host-source token.
+        case "$_storage_host" in
+            *\ *|*\'*|*\"*|*\;*|*\(*|*\)*|*\<*|*\>*|*/*)
+                echo "ERROR: STORAGE_DOMAIN contains invalid characters: $STORAGE_DOMAIN" >&2
+                echo "Set a bare host without scheme or path, e.g. *.storage.yandexcloud.kz" >&2
+                echo "Whitespace, quotes, semicolons, parentheses, angle brackets, and slashes are not allowed (CSP injection risk)" >&2
+                exit 1
+                ;;
+        esac
+
+        # Format check: optional "*." wildcard, dotted host labels, optional port.
+        if ! echo "$_storage_host" | grep -qE '^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?$'; then
+            echo "ERROR: Invalid STORAGE_DOMAIN format: $STORAGE_DOMAIN" >&2
+            echo "Example: *.storage.yandexcloud.kz or s3.your-cloud.example" >&2
+            exit 1
+        fi
+
+        export STORAGE_CSP=" https://${_storage_host}"
+        echo "STORAGE_DOMAIN validated: $_storage_host"
+    else
+        export STORAGE_CSP=""
+        echo "STORAGE_DOMAIN not set - only same-origin storage allowed in CSP"
+    fi
+}

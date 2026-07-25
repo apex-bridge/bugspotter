@@ -5,8 +5,11 @@ image pinning and the safe upgrade order. Read alongside `DOCKER.md`.
 
 ## Image pinning
 
-Every service image resolves from an environment variable with a `:latest`
-fallback intended only for local development:
+Every BugSpotter application service image (listed below) resolves from an
+environment variable with a `:latest` fallback intended only for local
+development. Third-party infrastructure images (Postgres/Redis/MinIO and the
+monitoring stack) are pinned directly in `docker-compose.yml`, not via these
+variables:
 
 | Service      | Variable             | Default                          |
 | ------------ | -------------------- | -------------------------------- |
