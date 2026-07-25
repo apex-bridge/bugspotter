@@ -105,16 +105,15 @@ validate_storage_domain() {
     if [ -n "$STORAGE_DOMAIN" ]; then
         # Reject control characters (newline, CR, tab, ...) up-front. The format
         # check below uses grep, which matches per-line, so a multi-line value
-        # such as $'good.com\n; script-src evil' could otherwise sneak a
-        # malicious line past the anchored ^...$ match (grep -q succeeds if ANY
-        # single line matches).
-        case "$STORAGE_DOMAIN" in
-            *[[:cntrl:]]*)
-                echo "ERROR: STORAGE_DOMAIN contains control characters: $STORAGE_DOMAIN" >&2
-                echo "Newlines, tabs, and other control characters are not allowed (CSP injection risk)" >&2
-                exit 1
-                ;;
-        esac
+        # such as $'good.com\nevil.com' could otherwise sneak a second line past
+        # the anchored ^...$ match (grep -q succeeds if ANY single line matches).
+        # Strip all C0 control chars + DEL and compare: an octal tr range is
+        # portable across busybox/dash sh, whereas a [[:cntrl:]] case glob is not.
+        if [ "$STORAGE_DOMAIN" != "$(printf '%s' "$STORAGE_DOMAIN" | tr -d '\000-\037\177')" ]; then
+            echo "ERROR: STORAGE_DOMAIN contains control characters" >&2
+            echo "Newlines, tabs, and other control characters are not allowed (CSP injection risk)" >&2
+            exit 1
+        fi
 
         # Preserve an operator-supplied scheme so an HTTP-only object store is not
         # rewritten to https (the browser would then block the mismatched request).
