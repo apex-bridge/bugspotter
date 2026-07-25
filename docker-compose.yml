@@ -400,11 +400,18 @@ services:
       # For cross-origin: API_URL=https://demo.api.bugspotter.io
       # For same-domain with nginx proxy: Leave empty (default)
       API_URL: ${API_URL:-}
+      # API domain added to the admin CSP connect-src for a cross-origin API
+      # (Pattern B). Empty => same-domain. Consumed by docker-entrypoint.sh.
+      API_DOMAIN: ${API_DOMAIN:-}
       # Git commit hash for version display (injected at runtime)
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
       # Object-storage host for the admin CSP (runtime; bare host, no scheme).
       # Empty => only same-origin storage is allowed. See .env.example.
       STORAGE_DOMAIN: ${STORAGE_DOMAIN:-}
+      # Set to true to drop the Jira avatar CDNs (secure.gravatar.com,
+      # *.atl-paas.net) from the admin CSP on a strictly data-localized
+      # deployment. Empty/unset keeps them allowed. See .env.example.
+      DISABLE_INTEGRATION_AVATAR_CSP: ${DISABLE_INTEGRATION_AVATAR_CSP:-}
     ports:
       - '${ADMIN_PORT:-3001}:80'
     networks:
