@@ -178,3 +178,88 @@ test('callViaCli error path includes stdout content (not just stderr) in the thr
     return true;
   });
 });
+
+test('callViaCli forwards a caller-supplied model into --model argv, overriding the CLI default', async () => {
+  process.env.FAKE_CLAUDE_MODE = 'success';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  process.env.FAKE_CLAUDE_ARGV_DUMP = ARGV_DUMP;
+
+  try {
+    // generate-impl.mjs's label-based model router passes `model` through
+    // callClaude() to reach the CLI's --model flag on this backend — prove
+    // it actually lands there instead of silently falling back to CLI_MODEL.
+    await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000, model: 'claude-opus-4-8' });
+
+    const argv = JSON.parse(readFileSync(ARGV_DUMP, 'utf8'));
+    const modelIndex = argv.indexOf('--model');
+    assert.ok(modelIndex !== -1, '--model must be present in argv');
+    assert.equal(argv[modelIndex + 1], 'claude-opus-4-8');
+  } finally {
+    delete process.env.FAKE_CLAUDE_ARGV_DUMP;
+  }
+});
+
+// --- API backend: model propagation ---
+//
+// The tests above import llm-client.mjs once with LLM_BACKEND=cli fixed at
+// module-load time (LLM_BACKEND is read at import time, not per-call — see
+// the comment above the first import). Exercising the API backend in the
+// same process needs a second, independently-configured module instance, so
+// it's imported here under a cache-busting query string (Node treats
+// import specifiers with different query strings as distinct module
+// instances, each re-evaluating top-level code — including the
+// LLM_BACKEND const — under whatever process.env holds at that moment).
+process.env.LLM_BACKEND = 'api';
+process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
+const { callClaude: callClaudeApi } = await import('./llm-client.mjs?backend=api');
+
+test("callViaApi forwards a caller-supplied model into the request body's model field", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    return new Response(
+      JSON.stringify({
+        content: [{ type: 'text', text: 'fake api response' }],
+        stop_reason: 'end_turn',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  };
+
+  try {
+    const result = await callClaudeApi({
+      prompt: 'hi',
+      maxTokens: 100,
+      timeoutMs: 10000,
+      model: 'claude-opus-4-8',
+    });
+    assert.equal(result.text, 'fake api response');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.model, 'claude-opus-4-8');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi falls back to the hardcoded default model when none is supplied', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    return new Response(
+      JSON.stringify({
+        content: [{ type: 'text', text: 'fake api response' }],
+        stop_reason: 'end_turn',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  };
+
+  try {
+    await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(requests[0].body.model, 'claude-sonnet-4-6');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
