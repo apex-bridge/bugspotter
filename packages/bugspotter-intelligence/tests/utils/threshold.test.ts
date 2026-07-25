@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { resolveThreshold, THRESHOLD_MIN, THRESHOLD_MAX } from '../../src/utils/threshold.js';
+import { AppError } from '../../src/errors.js';
 
 describe('resolveThreshold', () => {
   afterEach(() => {
@@ -93,6 +94,19 @@ describe('resolveThreshold', () => {
 
     it('falls back to 0.85 when orgDefault is undefined and env missing', () => {
       expect(resolveThreshold(undefined, undefined)).toBe(0.85);
+    });
+  });
+
+  describe('threshold — error type', () => {
+    it('throws AppError with statusCode 422 for an out-of-range value', () => {
+      let caught: unknown;
+      try {
+        resolveThreshold(-1);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(AppError);
+      expect((caught as AppError).statusCode).toBe(422);
     });
   });
 });
