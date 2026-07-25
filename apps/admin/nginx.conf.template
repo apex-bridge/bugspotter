@@ -37,14 +37,16 @@ server {
     include /etc/nginx/snippets/security-headers-permissions.conf;
     
     # Content Security Policy - Dynamically configured
-    # API_DOMAIN_CSP is set by entrypoint script based on API_DOMAIN env var
-    # If API_DOMAIN is empty, only 'self' is allowed (same-domain deployment)
-    # If API_DOMAIN is set, it's added to connect-src with proper spacing
-    # Note: React/Vite requires 'unsafe-inline' for dynamic styles
-    # img-src includes https://*.r2.cloudflarestorage.com for screenshot/replay uploads
-    # font-src includes https://*.demo.bugspotter.io for Next.js optimized fonts
-    # connect-src includes R2 for fetching replay JSON files and *.demo.bugspotter.io for external app data
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io https://secure.gravatar.com https://*.atl-paas.net; font-src 'self' data: https://*.demo.bugspotter.io; connect-src 'self' https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+    # Both fragments below are injected by the entrypoint (envsubst); each is
+    # either empty or a single space-prefixed https origin.
+    #   API_DOMAIN_CSP  - from API_DOMAIN, added to connect-src for cross-origin
+    #                     admin -> API deployments. Empty => only 'self'.
+    #   STORAGE_CSP     - from STORAGE_DOMAIN (the operator's S3/object-storage
+    #                     host, e.g. *.storage.yandexcloud.kz), added to img-src
+    #                     and connect-src for screenshots/replays. Empty => 'self'.
+    # No third-party hosts are hardcoded here - the deployment supplies its own.
+    # Note: React/Vite requires 'unsafe-inline' for dynamic styles.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:${STORAGE_CSP}; font-src 'self' data:; connect-src 'self'${STORAGE_CSP}${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 
     # API proxy (for same-domain deployments)
     # In Docker Compose: proxies /api/* to backend container

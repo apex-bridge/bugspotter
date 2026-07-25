@@ -22,8 +22,17 @@ window.__RUNTIME_CONFIG__ = {
 EOF
 echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}, API_URL=${API_URL:-}"
 
+# Build storage CSP fragment from STORAGE_DOMAIN (operator's object-storage host,
+# e.g. "*.storage.yandexcloud.kz"). Empty => only 'self' is allowed for storage.
+if [ -n "${STORAGE_DOMAIN:-}" ]; then
+    export STORAGE_CSP=" https://${STORAGE_DOMAIN}"
+else
+    export STORAGE_CSP=""
+fi
+echo "Storage CSP fragment: '${STORAGE_CSP}'"
+
 # Process nginx template for standalone deployment
-envsubst '${API_DOMAIN_CSP}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+envsubst '${API_DOMAIN_CSP} ${STORAGE_CSP}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 
 echo "=== Generated nginx configuration (standalone) ==="
 grep "Content-Security-Policy" /etc/nginx/conf.d/default.conf
