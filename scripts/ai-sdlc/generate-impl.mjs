@@ -1,37 +1,31 @@
 #!/usr/bin/env node
-// Phase 2 impl agent: reads a ratified spec + codebase context, calls Claude API,
+// Phase 2 impl agent: reads a ratified spec + codebase context, calls Claude,
 // writes a multi-file implementation scaffold.
 //
 // Model router (label-based via ISSUE_LABELS env):
 //   complexity:high  -> claude-opus-4-8   (deep architecture, cross-cutting changes)
 //   pii-sensitive    -> claude-haiku-4-5-20251001  (local-floor stand-in; cheapest hosted)
 //   default          -> claude-sonnet-4-6
+// The selected model is passed to callClaude's `model` override on either backend.
 //
-// Prompt caching: static context (CLAUDE.md files + pattern examples) marked with
-// cache_control so repeated runs on the same day skip re-sending that payload.
+// Static context (CLAUDE.md files + pattern examples) is prepended to the prompt.
+// (Anthropic-native prompt caching via cache_control no longer applies once routed
+// through llm-client.mjs's plain-string prompt — see llm-client.mjs.)
 //
 // Output: writes files listed in Claude's JSON response; outputs file list to GITHUB_OUTPUT.
 //
-// Required env: ANTHROPIC_API_KEY, ISSUE_NUMBER, ISSUE_TITLE, SPEC_CONTENT
+// Required env: ISSUE_NUMBER, ISSUE_TITLE, SPEC_CONTENT, plus either
+//   ANTHROPIC_API_KEY (default) or CLAUDE_CODE_OAUTH_TOKEN (LLM_BACKEND=cli)
 // Optional:     ISSUE_LABELS (comma-separated), GITHUB_OUTPUT
 
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { callClaude, requireLlmCredentials } from './llm-client.mjs';
 
-const {
-  ANTHROPIC_API_KEY,
-  ISSUE_NUMBER,
-  ISSUE_TITLE,
-  ISSUE_LABELS = '',
-  SPEC_CONTENT,
-  GITHUB_OUTPUT,
-} = process.env;
+const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_LABELS = '', SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
-if (!ANTHROPIC_API_KEY) {
-  console.error('Missing ANTHROPIC_API_KEY');
-  process.exit(1);
-}
+requireLlmCredentials();
 if (!ISSUE_NUMBER) {
   console.error('Missing ISSUE_NUMBER');
   process.exit(1);
@@ -48,9 +42,9 @@ if (!SPEC_CONTENT) {
 // Model router — label-based with per-tier overrides via GitHub repo variables.
 // Change without a code edit: set IMPL_MODEL_HIGH / IMPL_MODEL_DEFAULT / IMPL_MODEL_LOW
 // in Settings > Secrets and variables > Actions > Variables.
-const MODEL_HIGH    = process.env.IMPL_MODEL_HIGH    || 'claude-opus-4-8';
+const MODEL_HIGH = process.env.IMPL_MODEL_HIGH || 'claude-opus-4-8';
 const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || 'claude-sonnet-4-6';
-const MODEL_LOW     = process.env.IMPL_MODEL_LOW     || 'claude-haiku-4-5-20251001';
+const MODEL_LOW = process.env.IMPL_MODEL_LOW || 'claude-haiku-4-5-20251001';
 
 function selectModel(labels) {
   const set = new Set(labels.split(',').map((l) => l.trim().toLowerCase()));
@@ -65,33 +59,43 @@ function selectModel(labels) {
 const MODEL = selectModel(ISSUE_LABELS);
 console.log(`Model router selected: ${MODEL} (labels: "${ISSUE_LABELS || 'none'}")`);
 
-// Read static context for prompt caching
+// Read static context (CLAUDE.md files + style examples) shared by every issue
 function safeRead(path) {
-  try { return readFileSync(path, 'utf8'); } catch { return ''; }
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
-const rootClaudeMd    = safeRead('CLAUDE.md');
+const rootClaudeMd = safeRead('CLAUDE.md');
 const backendClaudeMd = safeRead('packages/backend/CLAUDE.md');
-const contributing    = safeRead('CONTRIBUTING.md');
+const contributing = safeRead('CONTRIBUTING.md');
 
 // Read one existing route + test as style examples
 function findExample(dir, ext) {
   try {
     const files = readdirSync(dir).filter((f) => f.endsWith(ext));
     return files.length ? safeRead(`${dir}/${files[0]}`) : '';
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 const routeExample = findExample('packages/backend/src/api/routes', '.ts').slice(0, 1500);
-const testExample  = findExample('packages/backend/tests/api', '.test.ts').slice(0, 1500);
+const testExample = findExample('packages/backend/tests/api', '.test.ts').slice(0, 1500);
 
-// Static context block (cached)
+// Static context block (prepended to every generate-impl prompt)
 const staticContext = [
-  rootClaudeMd    ? `# CLAUDE.md (root)\n${rootClaudeMd}`    : '',
+  rootClaudeMd ? `# CLAUDE.md (root)\n${rootClaudeMd}` : '',
   backendClaudeMd ? `# CLAUDE.md (backend)\n${backendClaudeMd}` : '',
-  contributing    ? `# CONTRIBUTING.md\n${contributing}`     : '',
-  routeExample    ? `# Example route (style reference)\n\`\`\`typescript\n${routeExample}\n\`\`\`` : '',
-  testExample     ? `# Example test (style reference)\n\`\`\`typescript\n${testExample}\n\`\`\`` : '',
-].filter(Boolean).join('\n\n---\n\n');
+  contributing ? `# CONTRIBUTING.md\n${contributing}` : '',
+  routeExample
+    ? `# Example route (style reference)\n\`\`\`typescript\n${routeExample}\n\`\`\``
+    : '',
+  testExample ? `# Example test (style reference)\n\`\`\`typescript\n${testExample}\n\`\`\`` : '',
+]
+  .filter(Boolean)
+  .join('\n\n---\n\n');
 
 const specSection = `# Ratified spec\n${SPEC_CONTENT}`;
 
@@ -117,65 +121,41 @@ RULES:
 9. Scaffold tests must use the same test helpers as the example (do not invent new ones).
 10. Every generated file must compile without errors given reasonable stub imports.`;
 
-// Build messages with prompt caching on static context
-const messages = [
-  {
-    role: 'user',
-    content: [
-      {
-        type: 'text',
-        text: staticContext,
-        cache_control: { type: 'ephemeral' },
-      },
-      {
-        type: 'text',
-        text: userPrompt,
-      },
-    ],
-  },
-];
+// staticContext used to be sent as a separate cache_control-marked content
+// block so repeated same-day runs skipped re-sending it; llm-client.mjs's
+// callClaude takes a single plain-text prompt, so it's folded in as a plain
+// prefix here instead. This drops the token-cache cost saving but not
+// correctness — see the header comment above.
+const prompt = staticContext ? `${staticContext}\n\n${userPrompt}` : userPrompt;
 
-const res = await fetch('https://api.anthropic.com/v1/messages', {
-  method: 'POST',
-  signal: AbortSignal.timeout(120_000),
-  headers: {
-    'content-type': 'application/json',
-    'x-api-key': ANTHROPIC_API_KEY,
-    'anthropic-version': '2023-06-01',
-    'anthropic-beta': 'prompt-caching-2024-07-31',
-  },
-  body: JSON.stringify({
+let text, stopReason;
+try {
+  // 600s: this is the largest of the four ai-sdlc Claude calls — max_tokens
+  // (16384) is 2x verify-spec.mjs's (8192), and the prompt (static
+  // CLAUDE.md/CONTRIBUTING.md/style-example context plus the full ratified
+  // spec) is comparable in size to verify-spec's (spec + up to 15 source
+  // files). verify-spec.mjs measured 283.9s for its 8192-token generation
+  // via the CLI backend and set 420s (~1.5x margin). Scaling that budget for
+  // roughly double the output tokens suggests ~600-800s; 600_000ms keeps a
+  // comparable margin while staying under impl-agent.yml's 15-minute
+  // "Generate scaffold" step timeout (900s), leaving headroom for node
+  // startup and file I/O in the same step.
+  ({ text, stopReason } = await callClaude({
+    prompt,
+    maxTokens: 16384,
+    timeoutMs: 600_000,
     model: MODEL,
-    max_tokens: 16384,
-    messages,
-  }),
-});
-
-if (!res.ok) {
-  const text = await res.text().catch(() => '');
-  let detail = text;
-  try { detail = JSON.stringify(JSON.parse(text), null, 2); } catch { /* use raw text */ }
-  console.error(`Claude API error (${res.status}):`, detail);
+  }));
+} catch (err) {
+  console.error(err.message);
   process.exit(1);
-}
-
-const data = await res.json();
-if (data?.content?.[0]?.type !== 'text') {
-  console.error('Unexpected API response shape:', JSON.stringify(data, null, 2));
-  process.exit(1);
-}
-
-// Log cache stats if available
-const usage = data.usage ?? {};
-if (usage.cache_creation_input_tokens || usage.cache_read_input_tokens) {
-  console.log(
-    `Cache: created=${usage.cache_creation_input_tokens ?? 0} read=${usage.cache_read_input_tokens ?? 0} uncached=${usage.input_tokens ?? 0}`,
-  );
 }
 
 // Fail fast if truncated — a partial JSON response will always cause a parse error downstream
-if (data.stop_reason === 'max_tokens') {
-  console.error(`Claude response truncated (stop_reason=max_tokens). Raise max_tokens in generate-impl.mjs.`);
+if (stopReason === 'max_tokens') {
+  console.error(
+    `Claude response truncated (stop_reason=max_tokens). Raise max_tokens in generate-impl.mjs.`
+  );
   process.exit(1);
 }
 
@@ -183,12 +163,12 @@ if (data.stop_reason === 'max_tokens') {
 let parsed;
 try {
   // Extract JSON — handle leading prose + fenced block, or bare JSON
-  const fenceMatch = data.content[0].text.match(/```json\s*([\s\S]*?)\s*```/i);
-  const raw = fenceMatch ? fenceMatch[1].trim() : data.content[0].text.trim();
+  const fenceMatch = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  const raw = fenceMatch ? fenceMatch[1].trim() : text.trim();
   parsed = JSON.parse(raw);
 } catch (e) {
   console.error('Failed to parse JSON from Claude response:', e.message);
-  console.error('Raw response:', data.content[0].text.slice(0, 500));
+  console.error('Raw response:', text.slice(0, 500));
   process.exit(1);
 }
 
@@ -212,6 +192,7 @@ for (const { path, content } of parsed.files) {
   if (typeof path !== 'string' || typeof content !== 'string' || !path || !content) {
     continue;
   }
+  // eslint-disable-next-line no-control-regex -- deliberate: rejects paths containing raw control characters
   if (/[\x00-\x1f]/.test(path)) {
     console.error(`Rejected path with control characters: ${JSON.stringify(path)}`);
     continue;
@@ -246,6 +227,6 @@ if (GITHUB_OUTPUT) {
   appendFileSync(GITHUB_OUTPUT, `model_used=${MODEL}\n`);
   appendFileSync(
     GITHUB_OUTPUT,
-    `impl_summary<<${delimiter}\n${String(parsed.summary ?? '')}\n${delimiter}\n`,
+    `impl_summary<<${delimiter}\n${String(parsed.summary ?? '')}\n${delimiter}\n`
   );
 }
