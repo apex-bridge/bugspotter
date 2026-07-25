@@ -11,24 +11,30 @@ development. Third-party infrastructure images (Postgres/Redis/MinIO and the
 monitoring stack) are pinned directly in `docker-compose.yml`, not via these
 variables:
 
-| Service      | Variable             | Default                          |
-| ------------ | -------------------- | -------------------------------- |
-| api          | `API_IMAGE`          | `bugspotter-api:latest`          |
-| worker       | `WORKER_IMAGE`       | `bugspotter-api:latest`          |
-| admin        | `ADMIN_IMAGE`        | `bugspotter-admin:latest`        |
-| payment      | `PAYMENT_IMAGE`      | `bugspotter-payment:latest`      |
-| intelligence | `INTELLIGENCE_IMAGE` | `bugspotter-intelligence:latest` |
-| ollama       | `OLLAMA_IMAGE`       | `ollama/ollama:latest`           |
+| Service      | Variable             | Default                          | Profile      |
+| ------------ | -------------------- | -------------------------------- | ------------ |
+| api          | `API_IMAGE`          | `bugspotter-api:latest`          | always on    |
+| worker       | `WORKER_IMAGE`       | `bugspotter-api:latest`          | always on    |
+| admin        | `ADMIN_IMAGE`        | `bugspotter-admin:latest`        | always on    |
+| payment      | `PAYMENT_IMAGE`      | `bugspotter-payment:latest`      | always on    |
+| demo         | `DEMO_IMAGE`         | `bugspotter-demo:latest`         | demo         |
+| intelligence | `INTELLIGENCE_IMAGE` | `bugspotter-intelligence:latest` | intelligence |
+| ollama       | `OLLAMA_IMAGE`       | `ollama/ollama:latest`           | intelligence |
+
+The `demo`, `intelligence`, and `ollama` images only ship when their profile is
+enabled (`--profile demo` / `--profile intelligence`); pin them only if you run
+those profiles.
 
 `:latest` is mutable - two deploys weeks apart can pull different binaries. For a
 reproducible deployment, pin every variable in `.env` to an immutable reference,
 preferably a digest:
 
-```
+```dotenv
 API_IMAGE=registry.example/bugspotter-api@sha256:<digest>
 WORKER_IMAGE=registry.example/bugspotter-api@sha256:<digest>
 ADMIN_IMAGE=registry.example/bugspotter-admin@sha256:<digest>
 PAYMENT_IMAGE=registry.example/bugspotter-payment@sha256:<digest>
+DEMO_IMAGE=registry.example/bugspotter-demo@sha256:<digest>
 INTELLIGENCE_IMAGE=registry.example/bugspotter-intelligence@sha256:<digest>
 OLLAMA_IMAGE=ollama/ollama@sha256:<digest>
 ```
@@ -54,9 +60,12 @@ upgrading if the release includes schema changes.
 ## Rollback
 
 1. Restore the previous digests in `.env`.
-2. `docker compose pull && docker compose up -d`.
+2. Stop the running services: `docker compose down`.
 3. If the failed release applied a schema migration, restore the pre-upgrade
-   database backup - a newer forward migration cannot be undone in place.
+   database backup **before** starting the previous version - a newer forward
+   migration cannot be undone in place, and letting the old code run against the
+   upgraded schema risks further corruption.
+4. `docker compose pull && docker compose up -d`.
 
 ## Notes
 
