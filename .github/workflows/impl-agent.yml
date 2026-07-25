@@ -98,6 +98,20 @@ jobs:
       - name: Install dependencies (required for ESLint)
         run: pnpm install --frozen-lockfile
 
+      # Installing deps activates Husky's prepare script, which wires up the
+      # pre-push hook — it fires on the `git push` in "Commit scaffold to
+      # branch" below and runs the backend test suite. That suite imports
+      # internal workspace packages (@bugspotter/types, /utils,
+      # /message-broker, ...) whose package.json points `main` at a `dist/`
+      # that doesn't exist until they're built; without this, the push step
+      # fails on an unrelated module-resolution error in the pre-push hook,
+      # after the scaffold itself was already generated successfully. Using
+      # the same root `build` script (`pnpm --filter "./packages/*" build`)
+      # as everywhere else keeps this from silently missing a package if one
+      # is added later.
+      - name: Build workspace packages (required by pre-push test hook)
+        run: pnpm build
+
       - name: Format generated files
         env:
           FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
