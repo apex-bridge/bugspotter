@@ -103,11 +103,27 @@ validate_api_url() {
 # (e.g. "evil.com; script-src 'unsafe-inline'"). Mirror the API_DOMAIN checks.
 validate_storage_domain() {
     if [ -n "$STORAGE_DOMAIN" ]; then
-        # Normalize: the value is expected WITHOUT a scheme (a bare host, wildcard
-        # allowed). Strip a leading http(s):// if an operator included one so we
-        # never emit "https://https://...".
-        _storage_host="${STORAGE_DOMAIN#https://}"
-        _storage_host="${_storage_host#http://}"
+        # Reject control characters (newline, CR, tab, ...) up-front. The format
+        # check below uses grep, which matches per-line, so a multi-line value
+        # such as $'good.com\n; script-src evil' could otherwise sneak a
+        # malicious line past the anchored ^...$ match (grep -q succeeds if ANY
+        # single line matches).
+        case "$STORAGE_DOMAIN" in
+            *[[:cntrl:]]*)
+                echo "ERROR: STORAGE_DOMAIN contains control characters: $STORAGE_DOMAIN" >&2
+                echo "Newlines, tabs, and other control characters are not allowed (CSP injection risk)" >&2
+                exit 1
+                ;;
+        esac
+
+        # Preserve an operator-supplied scheme so an HTTP-only object store is not
+        # rewritten to https (the browser would then block the mismatched request).
+        # The documented bare-host form (no scheme) defaults to https.
+        case "$STORAGE_DOMAIN" in
+            https://*) _storage_scheme="https://"; _storage_host="${STORAGE_DOMAIN#https://}" ;;
+            http://*)  _storage_scheme="http://";  _storage_host="${STORAGE_DOMAIN#http://}" ;;
+            *)         _storage_scheme="https://"; _storage_host="$STORAGE_DOMAIN" ;;
+        esac
 
         # Critical security check: reject CSP-breaking characters. Spaces add extra
         # sources; semicolons/quotes/parens/angle brackets inject new directives;
@@ -115,7 +131,7 @@ validate_storage_domain() {
         case "$_storage_host" in
             *\ *|*\'*|*\"*|*\;*|*\(*|*\)*|*\<*|*\>*|*/*)
                 echo "ERROR: STORAGE_DOMAIN contains invalid characters: $STORAGE_DOMAIN" >&2
-                echo "Set a bare host without scheme or path, e.g. *.storage.yandexcloud.kz" >&2
+                echo "Set a bare host (optionally with http(s):// scheme) and no path, e.g. *.storage.yandexcloud.kz" >&2
                 echo "Whitespace, quotes, semicolons, parentheses, angle brackets, and slashes are not allowed (CSP injection risk)" >&2
                 exit 1
                 ;;
@@ -128,8 +144,8 @@ validate_storage_domain() {
             exit 1
         fi
 
-        export STORAGE_CSP=" https://${_storage_host}"
-        echo "STORAGE_DOMAIN validated: $_storage_host"
+        export STORAGE_CSP=" ${_storage_scheme}${_storage_host}"
+        echo "STORAGE_DOMAIN validated: ${_storage_scheme}${_storage_host}"
     else
         export STORAGE_CSP=""
         echo "STORAGE_DOMAIN not set - only same-origin storage allowed in CSP"

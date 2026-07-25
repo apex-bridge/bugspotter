@@ -163,14 +163,57 @@ test_valid "Wildcard host" "STORAGE_DOMAIN" "*.storage.yandexcloud.kz" "validate
 test_valid "Plain host" "STORAGE_DOMAIN" "s3.your-cloud.example" "validate_storage_domain"
 test_valid "Host with port" "STORAGE_DOMAIN" "minio.internal:9000" "validate_storage_domain"
 
-# Scheme is normalized away rather than doubled (prevents https://https://...)
+# An https:// scheme is preserved (not doubled into https://https://...)
 export STORAGE_DOMAIN="https://s3.example.com"
 validate_storage_domain > /dev/null 2>&1
 if [ "$STORAGE_CSP" = " https://s3.example.com" ]; then
-    echo "${GREEN}✓${NC} PASS: Leading scheme is stripped, not doubled"
+    echo "${GREEN}✓${NC} PASS: Leading https scheme is preserved, not doubled"
     PASSED=$((PASSED + 1))
 else
-    echo "${RED}✗${NC} FAIL: Scheme normalization produced '$STORAGE_CSP'"
+    echo "${RED}✗${NC} FAIL: Scheme handling produced '$STORAGE_CSP'"
+    FAILED=$((FAILED + 1))
+fi
+unset STORAGE_DOMAIN STORAGE_CSP
+
+# An operator-supplied http:// scheme must be PRESERVED, not forced to https —
+# otherwise the admin CSP would block requests to an HTTP-only object store.
+export STORAGE_DOMAIN="http://minio.internal:9000"
+validate_storage_domain > /dev/null 2>&1
+if [ "$STORAGE_CSP" = " http://minio.internal:9000" ]; then
+    echo "${GREEN}✓${NC} PASS: http scheme is preserved (not rewritten to https)"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: http scheme should be preserved, got '$STORAGE_CSP'"
+    FAILED=$((FAILED + 1))
+fi
+unset STORAGE_DOMAIN STORAGE_CSP
+
+# A bare host (no scheme) still defaults to https
+export STORAGE_DOMAIN="s3.your-cloud.example"
+validate_storage_domain > /dev/null 2>&1
+if [ "$STORAGE_CSP" = " https://s3.your-cloud.example" ]; then
+    echo "${GREEN}✓${NC} PASS: bare host defaults to https"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: bare host should default to https, got '$STORAGE_CSP'"
+    FAILED=$((FAILED + 1))
+fi
+unset STORAGE_DOMAIN STORAGE_CSP
+
+# Adversarial: a newline must not let a well-formed line smuggle a second host
+# past the per-line grep format check. BOTH lines here are individually valid
+# hosts, so only the embedded newline distinguishes this value — without the
+# control-character guard, grep -q would match line 1 and wrongly accept it.
+export STORAGE_DOMAIN="$(printf 'good.com\nevil.com')"
+(
+    . ./scripts/shared/validate-api-domain.sh
+    validate_storage_domain
+) > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "${GREEN}✓${NC} PASS: Newline-injected value correctly blocked"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: Newline-injected value should be blocked"
     FAILED=$((FAILED + 1))
 fi
 unset STORAGE_DOMAIN STORAGE_CSP
