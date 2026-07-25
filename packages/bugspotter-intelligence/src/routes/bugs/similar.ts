@@ -19,6 +19,13 @@ export default async function similarRoutes(fastify: FastifyInstance): Promise<v
         } catch {
           throw new AppError('Unauthorized', 401);
         }
+        // A credential that verifies but carries no tenantId is not a valid
+        // verified credential (constraint #3) — without this check, an
+        // unscoped bug (tenantId undefined) would pass `bug.tenantId !==
+        // tenantId` as undefined !== undefined, granting access.
+        if (!tenantId) {
+          throw new AppError('Unauthorized', 401);
+        }
         const bug = await (request.server as any).similarityService.getBugById(
           (request.params as { id: string }).id
         );

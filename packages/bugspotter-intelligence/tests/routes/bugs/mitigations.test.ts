@@ -1,9 +1,9 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import { describe, it, expect, vi, type Mock } from 'vitest';
 
-interface MockSimilarityService {
+interface MockMitigationService {
   getBugById: Mock;
-  findSimilar: Mock;
+  findMitigations: Mock;
 }
 
 interface MockAuthService {
@@ -11,31 +11,31 @@ interface MockAuthService {
 }
 
 function buildApp(
-  serviceOverrides: Partial<MockSimilarityService> = {},
+  serviceOverrides: Partial<MockMitigationService> = {},
   authOverrides: Partial<MockAuthService> = {}
 ): FastifyInstance {
   const app = Fastify();
-  const similarityService: MockSimilarityService = {
+  const mitigationService: MockMitigationService = {
     getBugById: vi.fn(),
-    findSimilar: vi.fn(),
+    findMitigations: vi.fn(),
     ...serviceOverrides,
   };
   const authService: MockAuthService = {
     verifyToken: vi.fn(),
     ...authOverrides,
   };
-  app.decorate('similarityService', similarityService);
+  app.decorate('mitigationService', mitigationService);
   app.decorate('authService', authService);
-  app.register(import('../../../src/routes/bugs/similar.js'));
+  app.register(import('../../../src/routes/bugs/mitigations.js'));
   return app;
 }
 
-describe('GET /api/v1/bugs/:id/similar', () => {
+describe('GET /api/v1/bugs/:id/mitigations', () => {
   it('returns 401 when Authorization header is absent', async () => {
     const app = buildApp();
     await app.ready();
 
-    const res = await app.inject({ method: 'GET', url: '/api/v1/bugs/bug-123/similar' });
+    const res = await app.inject({ method: 'GET', url: '/api/v1/bugs/bug-123/mitigations' });
 
     expect(res.statusCode).toBe(401);
   });
@@ -49,7 +49,7 @@ describe('GET /api/v1/bugs/:id/similar', () => {
 
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/bugs/bug-123/similar',
+      url: '/api/v1/bugs/bug-123/mitigations',
       headers: { authorization: 'Bearer opaque-credential' },
     });
 
@@ -69,33 +69,23 @@ describe('GET /api/v1/bugs/:id/similar', () => {
 
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/bugs/bug-123/similar',
+      url: '/api/v1/bugs/bug-123/mitigations',
       headers: { authorization: 'Bearer opaque-credential' },
     });
 
     expect(res.statusCode).toBe(401);
   });
 
-  it('returns similarity results for an authorised, same-tenant request', async () => {
+  it('returns mitigation results for an authorised, same-tenant request', async () => {
     const mockResponse = {
       bug_id: 'bug-123',
-      is_duplicate: false,
-      similar_bugs: [
-        {
-          bug_id: 'bug-456',
-          title: 'Login button unresponsive on Safari',
-          description: null,
-          status: 'open',
-          resolution: null,
-          similarity: 0.91,
-        },
-      ],
-      threshold_used: 0.8,
+      mitigation_suggestion: 'Sanitize user input before passing to query builder',
+      based_on_similar_bugs: true,
     };
     const app = buildApp(
       {
         getBugById: vi.fn().mockResolvedValue({ id: 'bug-123', tenantId: 'tenant-a' }),
-        findSimilar: vi.fn().mockResolvedValue(mockResponse),
+        findMitigations: vi.fn().mockResolvedValue(mockResponse),
       },
       { verifyToken: vi.fn().mockReturnValue({ tenantId: 'tenant-a' }) }
     );
@@ -103,7 +93,7 @@ describe('GET /api/v1/bugs/:id/similar', () => {
 
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/bugs/bug-123/similar',
+      url: '/api/v1/bugs/bug-123/mitigations',
       headers: { authorization: 'Bearer opaque-credential' },
     });
 
