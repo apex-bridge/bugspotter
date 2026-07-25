@@ -101,8 +101,8 @@ jobs:
       # Installing deps activates Husky's prepare script, which wires up the
       # pre-push hook — it fires on the `git push` in "Commit scaffold to
       # branch" below and runs the backend test suite. That suite imports
-      # internal workspace packages (@bugspotter/types, /utils,
-      # /message-broker, ...) whose package.json points `main` at a `dist/`
+      # internal workspace packages (@bugspotter/types, @bugspotter/utils,
+      # @bugspotter/message-broker, ...) whose package.json points `main` at a `dist/`
       # that doesn't exist until they're built; without this, the push step
       # fails on an unrelated module-resolution error in the pre-push hook,
       # after the scaffold itself was already generated successfully. Using
