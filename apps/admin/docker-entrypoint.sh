@@ -28,8 +28,19 @@ echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}, API_URL=${A
 # empty => only 'self' is allowed for storage).
 echo "Storage CSP fragment: '${STORAGE_CSP}'"
 
+# Jira user-picker avatars load from Atlassian-fixed CDNs (gravatar, atl-paas).
+# Allowed by default so Jira integrations render avatars; set
+# DISABLE_INTEGRATION_AVATAR_CSP=true on a strictly data-localized deployment
+# that must forbid all third-party image origins.
+if [ "${DISABLE_INTEGRATION_AVATAR_CSP:-false}" = "true" ]; then
+    export INTEGRATION_CSP=""
+else
+    export INTEGRATION_CSP=" https://secure.gravatar.com https://*.atl-paas.net"
+fi
+echo "Integration avatar CSP fragment: '${INTEGRATION_CSP}'"
+
 # Process nginx template for standalone deployment
-envsubst '${API_DOMAIN_CSP} ${STORAGE_CSP}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+envsubst '${API_DOMAIN_CSP} ${STORAGE_CSP} ${INTEGRATION_CSP}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 
 # Render the security-headers snippet (CSP needs ${API_DOMAIN_CSP} filled in).
 # The config includes /etc/nginx/snippets/security-headers.conf at server scope
