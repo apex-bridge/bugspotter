@@ -1,65 +1,18 @@
-/**
- * Shared threshold validation utilities for intelligence routes.
- * Both /similar and /mitigations accept an optional ?threshold query param
- * that overrides the per-org or service-level SIMILARITY_THRESHOLD default.
- */
+import { AppError } from '../errors.js';
 
-// TODO: import AppError from your actual middleware once the package is wired up
-// import { AppError } from '../middleware/error.js';
+const DEFAULT_THRESHOLD = 0.8;
+const MIN_THRESHOLD = 0;
+const MAX_THRESHOLD = 1;
 
-export const THRESHOLD_MIN = 0.5;
-export const THRESHOLD_MAX = 1.0;
-const THRESHOLD_ENV_DEFAULT = 0.85;
-
-/**
- * Resolve the effective similarity threshold.
- *
- * Priority chain:
- * 1. `queryValue`  — per-request override (must be valid or throws 422)
- * 2. `orgDefault`  — per-org setting loaded from `intelligence_settings`
- * 3. `SIMILARITY_THRESHOLD` env var — service-level default
- * 4. 0.85          — hardcoded last resort
- *
- * `orgDefault` values that are NaN or outside [THRESHOLD_MIN, THRESHOLD_MAX]
- * are silently ignored and the next fallback is used.
- */
-export function resolveThreshold(queryValue: number | undefined, orgDefault?: number): number {
-  const envRaw = Number(process.env.SIMILARITY_THRESHOLD ?? String(THRESHOLD_ENV_DEFAULT));
-  const envDefault =
-    isNaN(envRaw) || envRaw < THRESHOLD_MIN || envRaw > THRESHOLD_MAX
-      ? THRESHOLD_ENV_DEFAULT
-      : envRaw;
-
-  const validOrgDefault =
-    orgDefault !== undefined &&
-    !isNaN(orgDefault) &&
-    orgDefault >= THRESHOLD_MIN &&
-    orgDefault <= THRESHOLD_MAX
-      ? orgDefault
-      : undefined;
-
-  const fallback = validOrgDefault ?? envDefault;
-
-  if (queryValue === undefined) {
-    return fallback;
+export function resolveThreshold(value?: number | null): number {
+  if (value === undefined || value === null) {
+    return DEFAULT_THRESHOLD;
   }
-
-  if (isNaN(queryValue)) {
-    // TODO: replace with `throw new AppError(...)` once AppError is available
-    const err = new Error('threshold must be a number between 0.5 and 1.0') as Error & {
-      statusCode: number;
-    };
-    err.statusCode = 422;
-    throw err;
+  if (value < MIN_THRESHOLD) {
+    throw new AppError(`Threshold must be >= ${MIN_THRESHOLD}`, 422);
   }
-
-  if (queryValue < THRESHOLD_MIN || queryValue > THRESHOLD_MAX) {
-    const err = new Error(
-      `threshold must be between ${THRESHOLD_MIN} and ${THRESHOLD_MAX}`
-    ) as Error & { statusCode: number };
-    err.statusCode = 422;
-    throw err;
+  if (value > MAX_THRESHOLD) {
+    throw new AppError(`Threshold must be <= ${MAX_THRESHOLD}`, 422);
   }
-
-  return queryValue;
+  return value;
 }
