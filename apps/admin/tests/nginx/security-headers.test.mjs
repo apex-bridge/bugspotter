@@ -127,6 +127,11 @@ describe('Nginx security-header inheritance (#258 regression guard)', () => {
       assert.match(snippet, /Content-Security-Policy/, 'must define CSP');
       assert.match(snippet, /\$\{API_DOMAIN_CSP\}/, 'must keep the ${API_DOMAIN_CSP} fragment');
       assert.match(snippet, /style-src[^;]*'unsafe-inline'/, 'style-src must keep unsafe-inline');
+      assert.doesNotMatch(
+        snippet,
+        /script-src[^;]*'unsafe-inline'/,
+        'script-src must not allow unsafe-inline (Vite emits no inline <script>)'
+      );
     });
 
     it('every snippet carries a CSP with unsafe-inline for styles', () => {
