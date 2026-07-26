@@ -85,8 +85,12 @@ describe('Nginx security-header inheritance (#258 regression guard)', () => {
       });
 
       it('re-applies the security-header snippet in EVERY location that sets its own add_header', () => {
+        // Match actual `add_header` directives (line-start, optional indent), not
+        // the substring - the location bodies carry comments that mention
+        // "add_header" (e.g. "this location's add_header suppresses inheritance").
+        const setsAddHeader = /^[ \t]*add_header\b/m;
         const offenders = locations
-          .filter((loc) => /add_header/.test(loc.body))
+          .filter((loc) => setsAddHeader.test(loc.body))
           .filter((loc) => !loc.body.includes(wanted))
           .map((loc) => loc.spec);
 
@@ -123,6 +127,24 @@ describe('Nginx security-header inheritance (#258 regression guard)', () => {
       assert.match(snippet, /Content-Security-Policy/, 'must define CSP');
       assert.match(snippet, /\$\{API_DOMAIN_CSP\}/, 'must keep the ${API_DOMAIN_CSP} fragment');
       assert.match(snippet, /style-src[^;]*'unsafe-inline'/, 'style-src must keep unsafe-inline');
+    });
+
+    it('every snippet carries a CSP with unsafe-inline for styles', () => {
+      // Guards each snippet independently - deleting CSP from the prod or dev
+      // snippet must not slip through on the template snippet's check alone.
+      for (const snippet of [
+        'security-headers.conf.template',
+        'security-headers-prod.conf',
+        'security-headers-dev.conf',
+      ]) {
+        const content = readFileSync(join(SNIPPETS_DIR, snippet), 'utf-8');
+        assert.match(content, /Content-Security-Policy/, `${snippet} must define CSP`);
+        assert.match(
+          content,
+          /style-src[^;]*'unsafe-inline'/,
+          `${snippet} style-src must keep unsafe-inline`
+        );
+      }
     });
 
     it('every snippet umbrella pulls in the shared static headers', () => {
