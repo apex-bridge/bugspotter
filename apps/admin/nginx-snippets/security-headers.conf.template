@@ -1,0 +1,21 @@
+# All admin security headers in ONE place, so the exact same set can be applied
+# at the server scope AND re-applied inside every location that sets its own
+# add_header. nginx does not inherit add_header directives into a location that
+# defines any add_header of its own (the cache-control / CORS blocks below do),
+# so without re-including this, CSP + HSTS + framing/sniffing/referrer/permissions
+# silently vanish from HTML documents, hashed assets, and config.js.
+#
+# Rendered by docker-entrypoint.sh (envsubst fills ${API_DOMAIN_CSP}) to
+# /etc/nginx/snippets/security-headers.conf, which nginx.conf.template includes.
+include /etc/nginx/snippets/security-headers-common.conf;
+include /etc/nginx/snippets/security-headers-hsts.conf;
+include /etc/nginx/snippets/security-headers-permissions.conf;
+
+# Content Security Policy - dynamically configured.
+# API_DOMAIN_CSP is set by the entrypoint from the API_DOMAIN env var; empty =>
+# only 'self' (same-domain deployment), otherwise it is appended to connect-src.
+# Note: React/Vite requires 'unsafe-inline' for dynamic styles.
+# img-src includes https://*.r2.cloudflarestorage.com for screenshot/replay uploads.
+# font-src includes https://*.demo.bugspotter.io for Next.js optimized fonts.
+# connect-src includes R2 for fetching replay JSON and *.demo.bugspotter.io for external app data.
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io https://secure.gravatar.com https://*.atl-paas.net; font-src 'self' data: https://*.demo.bugspotter.io; connect-src 'self' https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
