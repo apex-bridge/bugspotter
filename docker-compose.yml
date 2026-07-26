@@ -405,8 +405,9 @@ services:
       API_DOMAIN: ${API_DOMAIN:-}
       # Git commit hash for version display (injected at runtime)
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
-      # Object-storage host for the admin CSP (runtime; bare host, no scheme).
-      # Empty => only same-origin storage is allowed. See .env.example.
+      # Object-storage host for the admin CSP (runtime; bare host defaults to
+      # https, or an explicit http(s):// scheme is preserved for HTTP-only
+      # stores). Empty => only same-origin storage is allowed. See .env.example.
       STORAGE_DOMAIN: ${STORAGE_DOMAIN:-}
       # Set to true to drop the Jira avatar CDNs (secure.gravatar.com,
       # *.atl-paas.net) from the admin CSP on a strictly data-localized

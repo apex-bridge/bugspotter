@@ -12,10 +12,12 @@ include /etc/nginx/snippets/security-headers-hsts.conf;
 include /etc/nginx/snippets/security-headers-permissions.conf;
 
 # Content Security Policy - dynamically configured. All three fragments are
-# injected by the entrypoint (envsubst); each is either empty or a single
-# space-prefixed https origin. No third-party hosts are hardcoded - the
-# deployment supplies its own, so nothing leaves the operator's perimeter unless
-# they opt in.
+# injected by the entrypoint (envsubst); each is either empty or a space-prefixed
+# list of http(s) host-sources (API_DOMAIN_CSP/STORAGE_CSP may be http for an
+# HTTP-only backend; INTEGRATION_CSP is the two fixed Jira avatar CDNs). The
+# operator-supplied API/STORAGE hosts stay within their perimeter; the only fixed
+# third-party origins are the Jira avatar CDNs, removed by
+# DISABLE_INTEGRATION_AVATAR_CSP.
 #   API_DOMAIN_CSP  - from API_DOMAIN, added to connect-src for cross-origin
 #                     admin -> API deployments. Empty => only 'self'.
 #   STORAGE_CSP     - from STORAGE_DOMAIN (the operator's S3/object-storage host,
