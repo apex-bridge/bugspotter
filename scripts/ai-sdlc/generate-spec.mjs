@@ -97,8 +97,7 @@ function scanDir(rootDir) {
 const sourceTree = [
   'packages/backend/src',
   'packages/backend/tests',
-  'packages/bugspotter-intelligence/src',
-  'packages/bugspotter-intelligence/tests',
+  'packages/backend-mock',
   'packages/billing/src',
   'packages/billing/tests',
   'packages/message-broker/src',
@@ -112,6 +111,23 @@ const sourceTree = [
   .flatMap((dir) => scanDir(dir))
   .join('\n');
 
+// The ADR index is the canonical cross-repo architecture record (which repo
+// owns which component, language, service boundaries — see docs/adr/README.md
+// itself). Without this, the spec-agent has only a same-repo file listing to
+// go on and will invent plausible-but-wrong architecture facts for anything
+// that lives outside this repo — e.g. it once fabricated a TypeScript
+// in-monorepo path for `bugspotter-intelligence`, which docs/adr/0007 records
+// as a separate Python/FastAPI service in its own repo. That spec got
+// ratified and built as real (wrong) files before anyone caught it (#226/#238).
+function safeRead(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+const adrIndex = safeRead('docs/adr/README.md');
+
 const prompt = `\
 You are a spec writer for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
 
@@ -119,8 +135,12 @@ Draft a spec document for GitHub issue #${ISSUE_NUMBER}. Follow the template bel
 
 TEMPLATE:
 ${template}
-
-SOURCE FILE TREE (use this to write accurate file paths and verify files exist):
+${
+  adrIndex
+    ? `\nPROJECT ARCHITECTURE INDEX (docs/adr/README.md — canonical record of which repo owns which component, language, and service boundary; do not state or assume any architecture fact that contradicts it):\n${adrIndex}\n`
+    : ''
+}
+SOURCE FILE TREE (use this to write accurate file paths and verify files exist — this is ONLY the bugspotter-public repo; a component the ADR index attributes to a different repo does NOT have a path here, even if its name looks like it would fit the packages/* convention):
 ${sourceTree}
 
 ISSUE #${ISSUE_NUMBER}: ${ISSUE_TITLE}
@@ -130,7 +150,7 @@ ${ISSUE_BODY?.trim() || '(no description provided)'}
 Rules:
 - "Linked issue:" line must say "Refs #${ISSUE_NUMBER}"
 - "ADR:" line: write "pending" if an ADR will be needed, "docs/adr/NNNN-slug.md" if the issue names one, or "n/a" if the change is purely additive with no architectural decision
-- "Files touched:" must list every file the spec edits or creates, using exact paths from the source tree above
+- "Files touched:" must list every file the spec edits or creates, using exact paths from the source tree above — if the issue describes work in a component the ADR index attributes to a different repo, say so explicitly in "Out of scope" instead of inventing a path in this repo
 - "Blocking prerequisites:" must list any issue or PR number that must land before this work can be implemented (e.g. "#238 — adds the foo table"), or "none" if there are no dependencies
 - In the Changes section, show ONLY new or changed lines — never reproduce the full existing file as if it were new code
 - Indicate insertion points precisely ("Append after <function/line>", "Replace <old> with <new>")

@@ -441,22 +441,6 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@22.19.7)(happy-dom@19.0.2)(jiti@1.21.7)(jsdom@27.0.0)(msw@2.11.6(@types/node@22.19.7)(typescript@5.9.3))(terser@5.44.0)(tsx@4.20.6)(yaml@2.8.1)
 
-  packages/bugspotter-intelligence:
-    dependencies:
-      '@sinclair/typebox':
-        specifier: ^0.34.0
-        version: 0.34.52
-      fastify:
-        specifier: ^5.8.5
-        version: 5.8.5
-    devDependencies:
-      typescript:
-        specifier: ^5.3.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.7)(@vitest/ui@3.2.4)(happy-dom@19.0.2)(jsdom@27.0.0)(msw@2.11.6(@types/node@22.19.7)(typescript@5.9.3))(terser@5.44.0)
-
   packages/message-broker:
     dependencies:
       bullmq:
@@ -2505,9 +2489,6 @@ packages:
 
   '@selderee/plugin-htmlparser2@0.11.0':
     resolution: {integrity: sha512-P33hHGdldxGabLFjPPpaTxVolMrzrcegejx+0GxjrIb9Zv48D8yAIA/QTDR2dFl7Uz7urX8aX6+5bCZslr+gWQ==}
-
-  '@sinclair/typebox@0.34.52':
-    resolution: {integrity: sha512-XiMQh7qqVlxZzcVD+kkGMNGMzcTrDMLWI7S4x7z1MkCkbDPrekpZXEUK0eZqZFMuHQg2a2DZOcDIh9o5v3Gonw==}
 
   '@smithy/abort-controller@4.2.0':
     resolution: {integrity: sha512-PLUYa+SUKOEZtXFURBu/CNxlsxfaFGxSBPcStL13KpVeVWIfdezWyDqkz7iDLmwnxojXD0s5KzuB5HGHvt4Aeg==}
@@ -9272,8 +9253,6 @@ snapshots:
     dependencies:
       domhandler: 5.0.3
       selderee: 0.11.0
-
-  '@sinclair/typebox@0.34.52': {}
 
   '@smithy/abort-controller@4.2.0':
     dependencies:
