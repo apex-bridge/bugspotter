@@ -80,11 +80,12 @@ COPY apps/admin/nginx.conf.template /etc/nginx/conf.d/default.conf.template
 # Copy nginx snippets (DRY: reusable security headers)
 COPY apps/admin/nginx-snippets /etc/nginx/snippets
 
-# Verify template has unsafe-inline in CSP
-RUN echo "=== Verifying nginx template CSP ===" && \
-    grep "style-src.*unsafe-inline" /etc/nginx/conf.d/default.conf.template || \
-    (echo "ERROR: unsafe-inline missing from template!" && exit 1) && \
-    echo "✓ Template verified: unsafe-inline present in style-src"
+# Verify the security-headers snippet template has unsafe-inline in CSP
+# (the CSP lives in security-headers.conf.template, rendered by the entrypoint)
+RUN echo "=== Verifying nginx CSP snippet ===" && \
+    grep "style-src.*unsafe-inline" /etc/nginx/snippets/security-headers.conf.template || \
+    (echo "ERROR: unsafe-inline missing from security-headers snippet!" && exit 1) && \
+    echo "✓ Snippet verified: unsafe-inline present in style-src"
 
 # Create directory for scripts
 RUN mkdir -p /app/scripts/shared

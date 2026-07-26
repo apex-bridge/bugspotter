@@ -25,12 +25,18 @@ echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}, API_URL=${A
 # Process nginx template for standalone deployment
 envsubst '${API_DOMAIN_CSP}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 
-echo "=== Generated nginx configuration (standalone) ==="
-grep "Content-Security-Policy" /etc/nginx/conf.d/default.conf
+# Render the security-headers snippet (CSP needs ${API_DOMAIN_CSP} filled in).
+# The config includes /etc/nginx/snippets/security-headers.conf at server scope
+# AND inside every location that sets its own add_header, so the security headers
+# are not dropped from HTML documents, hashed assets, and config.js.
+envsubst '${API_DOMAIN_CSP}' < /etc/nginx/snippets/security-headers.conf.template > /etc/nginx/snippets/security-headers.conf
+
+echo "=== Generated nginx security headers ==="
+grep "Content-Security-Policy" /etc/nginx/snippets/security-headers.conf
 echo "====================================="
 
 # Verify unsafe-inline is present in style-src
-if grep -q "style-src.*'self'.*'unsafe-inline'" /etc/nginx/conf.d/default.conf; then
+if grep -q "style-src.*'self'.*'unsafe-inline'" /etc/nginx/snippets/security-headers.conf; then
     echo "✓ CSP verified: style-src includes 'unsafe-inline'"
 else
     echo "⚠️  WARNING: style-src missing 'unsafe-inline' - React inline styles will be blocked!"
