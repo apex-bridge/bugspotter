@@ -42,11 +42,12 @@ echo "Integration avatar CSP fragment: '${INTEGRATION_CSP}'"
 # Process nginx template for standalone deployment
 envsubst '${API_DOMAIN_CSP} ${STORAGE_CSP} ${INTEGRATION_CSP}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 
-# Render the security-headers snippet (CSP needs ${API_DOMAIN_CSP} filled in).
+# Render the security-headers snippet: the CSP lives here now and needs all three
+# fragments (${API_DOMAIN_CSP} ${STORAGE_CSP} ${INTEGRATION_CSP}) filled in.
 # The config includes /etc/nginx/snippets/security-headers.conf at server scope
 # AND inside every location that sets its own add_header, so the security headers
 # are not dropped from HTML documents, hashed assets, and config.js.
-envsubst '${API_DOMAIN_CSP}' < /etc/nginx/snippets/security-headers.conf.template > /etc/nginx/snippets/security-headers.conf
+envsubst '${API_DOMAIN_CSP} ${STORAGE_CSP} ${INTEGRATION_CSP}' < /etc/nginx/snippets/security-headers.conf.template > /etc/nginx/snippets/security-headers.conf
 
 echo "=== Generated nginx security headers ==="
 grep "Content-Security-Policy" /etc/nginx/snippets/security-headers.conf

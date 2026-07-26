@@ -11,11 +11,19 @@ include /etc/nginx/snippets/security-headers-common.conf;
 include /etc/nginx/snippets/security-headers-hsts.conf;
 include /etc/nginx/snippets/security-headers-permissions.conf;
 
-# Content Security Policy - dynamically configured.
-# API_DOMAIN_CSP is set by the entrypoint from the API_DOMAIN env var; empty =>
-# only 'self' (same-domain deployment), otherwise it is appended to connect-src.
+# Content Security Policy - dynamically configured. All three fragments are
+# injected by the entrypoint (envsubst); each is either empty or a single
+# space-prefixed https origin. No third-party hosts are hardcoded - the
+# deployment supplies its own, so nothing leaves the operator's perimeter unless
+# they opt in.
+#   API_DOMAIN_CSP  - from API_DOMAIN, added to connect-src for cross-origin
+#                     admin -> API deployments. Empty => only 'self'.
+#   STORAGE_CSP     - from STORAGE_DOMAIN (the operator's S3/object-storage host,
+#                     e.g. *.storage.yandexcloud.kz), added to img-src and
+#                     connect-src for screenshots/replays. Empty => 'self'.
+#   INTEGRATION_CSP - Atlassian-fixed avatar CDNs (gravatar, atl-paas) for the
+#                     Jira user picker, added to img-src. On by default; set
+#                     DISABLE_INTEGRATION_AVATAR_CSP=true to drop it (strict
+#                     data-localized deploys that forbid third-party images).
 # Note: React/Vite requires 'unsafe-inline' for dynamic styles.
-# img-src includes https://*.r2.cloudflarestorage.com for screenshot/replay uploads.
-# font-src includes https://*.demo.bugspotter.io for Next.js optimized fonts.
-# connect-src includes R2 for fetching replay JSON and *.demo.bugspotter.io for external app data.
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io https://secure.gravatar.com https://*.atl-paas.net; font-src 'self' data: https://*.demo.bugspotter.io; connect-src 'self' https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:${STORAGE_CSP}${INTEGRATION_CSP}; font-src 'self' data:; connect-src 'self'${STORAGE_CSP}${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
