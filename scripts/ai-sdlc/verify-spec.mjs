@@ -59,6 +59,13 @@ if (!fileSections) {
   process.exit(0);
 }
 
+// Same rationale as generate-spec.mjs: without the ADR index, the verifier
+// has no way to catch an architecture claim that's internally consistent
+// with the rest of the spec but factually wrong (e.g. "bugspotter-intelligence
+// is a TypeScript package in this repo" — docs/adr/0007 says it's a separate
+// Python service). That exact miss let spec #226 reach the impl-agent.
+const adrIndex = existsSync('docs/adr/README.md') ? readFileSync('docs/adr/README.md', 'utf8') : '';
+
 const prompt = `\
 You are an adversarial reviewer for a spec document. Your job is to find and fix ONLY factual errors before the spec reaches an impl-agent.
 
@@ -67,7 +74,11 @@ ${spec}
 
 SOURCE FILES REFERENCED BY THE SPEC:
 ${fileSections}
-
+${
+  adrIndex
+    ? `\nPROJECT ARCHITECTURE INDEX (docs/adr/README.md — canonical record of which repo owns which component, language, and service boundary):\n${adrIndex}\n`
+    : ''
+}
 Check for:
 1. Method or function names called in the spec that don't exist in the source files
 2. File paths in the spec that don't match actual paths
@@ -76,6 +87,7 @@ Check for:
 5. TypeScript closure narrowing — optional function parameters are not narrowed by early-return guards inside nested async closures; a const binding is required
 6. Schema constraints that would produce wrong HTTP status codes (e.g. minimum on a schema field that causes Fastify to reject values the caller legally sends, mapped to a worse error code downstream)
 7. Code shown as "new code to write" that is actually already present in the source file verbatim (impl-agent would duplicate it)
+8. Architecture claims (language, service location, which repo owns a component) that contradict the ADR index above — e.g. proposing to create or edit a package in THIS repo for something the ADR index attributes to a different repo
 
 Do NOT change:
 - The spec's intent, scope, or architectural decisions
