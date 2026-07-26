@@ -17,10 +17,11 @@
     "test:e2e:ci": "CI=true playwright test --project=chromium --retries=2",
     "test:e2e:notifications": "playwright test notification-delivery.spec.ts",
     "test:e2e:notifications:headed": "playwright test notification-delivery.spec.ts --headed",
-    "test:nginx": "node tests/nginx/config-validation.test.mjs && node tests/nginx/cors-origin.test.mjs && node tests/nginx/cache-directives.test.mjs",
+    "test:nginx": "node tests/nginx/config-validation.test.mjs && node tests/nginx/cors-origin.test.mjs && node tests/nginx/cache-directives.test.mjs && node tests/nginx/security-headers.test.mjs",
     "test:nginx:config": "node tests/nginx/config-validation.test.mjs",
     "test:nginx:cors": "node tests/nginx/cors-origin.test.mjs",
     "test:nginx:cache": "node tests/nginx/cache-directives.test.mjs",
+    "test:nginx:security": "node tests/nginx/security-headers.test.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },

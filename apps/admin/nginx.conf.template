@@ -31,20 +31,13 @@ server {
         # Note: font/woff and font/woff2 excluded - already compressed (WOFF uses zlib, WOFF2 uses Brotli)
         # Gzipping provides <1% reduction while consuming CPU cycles
 
-    # Security headers (DRY: extracted to reusable snippets)
-    include /etc/nginx/snippets/security-headers-common.conf;
-    include /etc/nginx/snippets/security-headers-hsts.conf;
-    include /etc/nginx/snippets/security-headers-permissions.conf;
-    
-    # Content Security Policy - Dynamically configured
-    # API_DOMAIN_CSP is set by entrypoint script based on API_DOMAIN env var
-    # If API_DOMAIN is empty, only 'self' is allowed (same-domain deployment)
-    # If API_DOMAIN is set, it's added to connect-src with proper spacing
-    # Note: React/Vite requires 'unsafe-inline' for dynamic styles
-    # img-src includes https://*.r2.cloudflarestorage.com for screenshot/replay uploads
-    # font-src includes https://*.demo.bugspotter.io for Next.js optimized fonts
-    # connect-src includes R2 for fetching replay JSON files and *.demo.bugspotter.io for external app data
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io https://secure.gravatar.com https://*.atl-paas.net; font-src 'self' data: https://*.demo.bugspotter.io; connect-src 'self' https://*.r2.cloudflarestorage.com https://*.demo.bugspotter.io${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+    # Security headers (CSP + HSTS + framing/sniffing/referrer/permissions),
+    # consolidated into one snippet. It MUST also be re-included inside every
+    # location that sets its own add_header (config.js / assets / .html below),
+    # because nginx drops all inherited add_header directives from a location that
+    # defines any of its own. Rendered from security-headers.conf.template by the
+    # entrypoint (envsubst fills ${API_DOMAIN_CSP}).
+    include /etc/nginx/snippets/security-headers.conf;
 
     # API proxy (for same-domain deployments)
     # In Docker Compose: proxies /api/* to backend container
@@ -79,6 +72,8 @@ server {
     location = /config.js {
         expires -1;
         add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+        # Re-apply security headers: this location's add_header suppresses inheritance.
+        include /etc/nginx/snippets/security-headers.conf;
     }
 
     # Cache static assets (CDN-optimized)
@@ -93,6 +88,8 @@ server {
         add_header Access-Control-Allow-Origin $cors_origin always;
         # CRITICAL: Tell CDN to cache separately per origin to prevent serving wrong CORS headers
         add_header Vary Origin always;
+        # Re-apply security headers: this location's add_header suppresses inheritance.
+        include /etc/nginx/snippets/security-headers.conf;
     }
 
     # Cache HTML with short TTL (for SPA navigation)
@@ -100,6 +97,10 @@ server {
         expires 5m;
         add_header Cache-Control "public, max-age=300, must-revalidate";
         etag on;
+        # Re-apply security headers: this location's add_header suppresses inheritance.
+        # SPA routes try_files to /index.html, which re-matches THIS location, so
+        # without this include every HTML document is served with no CSP/HSTS.
+        include /etc/nginx/snippets/security-headers.conf;
     }
 
     # Disable access to hidden files
