@@ -25,5 +25,7 @@ include /etc/nginx/snippets/security-headers-permissions.conf;
 #                     Jira user picker, added to img-src. On by default; set
 #                     DISABLE_INTEGRATION_AVATAR_CSP=true to drop it (strict
 #                     data-localized deploys that forbid third-party images).
-# Note: React/Vite requires 'unsafe-inline' for dynamic styles.
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:${STORAGE_CSP}${INTEGRATION_CSP}; font-src 'self' data:; connect-src 'self'${STORAGE_CSP}${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+# Note: 'unsafe-inline' is scoped to style-src only - React/Vite injects dynamic
+# inline styles at runtime. The Vite production build emits no inline <script>
+# (entry + config.js are external src=), so script-src stays locked to 'self'.
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:${STORAGE_CSP}${INTEGRATION_CSP}; font-src 'self' data:; connect-src 'self'${STORAGE_CSP}${API_DOMAIN_CSP}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
