@@ -1009,6 +1009,63 @@ services:
           memory: 2500M
           cpus: '0.25'
 
+  # ==========================================================================
+  # Off-site KZ Backup Runner (profile: backup)
+  # ==========================================================================
+  # Dumps the main Postgres + intelligence-db and mirrors object storage to a
+  # SECOND KZ cloud (PS.KZ), so a Yandex account-level failure cannot take the
+  # backups with it. Opt-in and inert until enabled:
+  #   COMPOSE_PROFILES=backup  (or --profile backup)
+  # Requires the BACKUP_S3_* credentials in .env (see .env.example). Read-only on
+  # every source; only writes to the backup bucket. See BACKUP.md.
+  pg-backup:
+    <<: *default-logging
+    profiles: [backup]
+    image: ${BACKUP_IMAGE:-bugspotter-backup:latest}
+    build:
+      context: .
+      dockerfile: docker/backup/Dockerfile
+    container_name: bugspotter-backup
+    restart: unless-stopped
+    environment:
+      # Cadence (default 6h) - the health check treats >12h as a missed cycle.
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      # Retention (grandfather-father-son) - see scripts/backup/prune.sh.
+      BACKUP_KEEP_RECENT: ${BACKUP_KEEP_RECENT:-8}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-7}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-4}
+      # Source: main Postgres (same connection string the app uses).
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-bugspotter}}
+      # Source: intelligence-db (only dumped when INTELLIGENCE_ENABLED=true).
+      INTELLIGENCE_ENABLED: ${INTELLIGENCE_ENABLED:-false}
+      INTELLIGENCE_DB_HOST: ${INTELLIGENCE_DB_HOST:-intelligence-db}
+      INTELLIGENCE_DB_PORT: ${INTELLIGENCE_DB_PORT:-5432}
+      INTELLIGENCE_DB_NAME: ${INTELLIGENCE_DB_NAME:-bugspotter_intelligence}
+      INTELLIGENCE_DB_USER: ${INTELLIGENCE_DB_USER:-postgres}
+      INTELLIGENCE_DB_PASSWORD: ${INTELLIGENCE_DB_PASSWORD:-}
+      # Source: object storage (Yandex Object Storage in prod).
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_BUCKET: ${S3_BUCKET:-bugspotter}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-${MINIO_APP_ACCESS_KEY:-}}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_APP_SECRET_KEY:-}}
+      S3_REGION: ${S3_REGION:-ru-central1}
+      # Destination: off-site KZ backup bucket (PS.KZ). Required.
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:?set BACKUP_S3_ENDPOINT for the backup profile}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-bugspotter-backup-kz}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:?set BACKUP_S3_ACCESS_KEY for the backup profile}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:?set BACKUP_S3_SECRET_KEY for the backup profile}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-kz-1}
+    networks:
+      - bugspotter
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
 # ============================================================================
 # Named Volumes
 # ============================================================================
