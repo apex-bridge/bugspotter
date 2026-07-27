@@ -27,7 +27,10 @@ skipped unless `INTELLIGENCE_ENABLED=true`.
 ## Retention (grandfather-father-son)
 
 Applied to `postgres/` and `intelligence/` after each cycle
-(`scripts/backup/prune.sh`). Object storage is a live mirror, not pruned by age.
+(`scripts/backup/prune.sh`). Object storage (`storage/`) is an additive copy
+(never deleted here, so a source-side deletion can't destroy the backed-up
+object); it is not pruned by age. Bound its growth with a lifecycle policy on the
+backup bucket if you need a ceiling.
 
 - keep the newest `BACKUP_KEEP_RECENT` dumps outright (default 8 = ~48h at 6h)
 - keep the newest dump per calendar day for `BACKUP_KEEP_DAILY` days (default 7)
@@ -107,4 +110,5 @@ skill.
 ## Tests
 
 - `bash scripts/backup/test-prune.sh` - retention decision logic (pure function,
-  8 invariants incl. partition + idempotence). Also runs inside the image.
+  10 invariants incl. partition, idempotence + input validation). Also runs
+  inside the image.

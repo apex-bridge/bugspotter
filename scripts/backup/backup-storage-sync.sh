@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Mirror the source object storage (screenshots, replays, attachments) to the
+# Copy the source object storage (screenshots, replays, attachments) to the
 # off-site backup bucket under storage/.
 #
 # Uses rclone because the source and destination are two DIFFERENT S3 endpoints;
 # `aws s3 sync` cannot cross endpoints in one command. rclone copies only
 # new/changed objects, so repeated runs are cheap.
+#
+# This is `rclone copy`, NOT `rclone sync`: it is additive and never deletes on
+# the destination. That is deliberate for a backup - an object deleted (or
+# encrypted by ransomware) at the source must NOT be deleted from the off-site
+# copy. The tradeoff is that storage/ grows monotonically; bound it with a
+# bucket lifecycle/expiry policy on the backup bucket if you need a ceiling.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/backup/lib.sh
