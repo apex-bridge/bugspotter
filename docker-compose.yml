@@ -1012,7 +1012,7 @@ services:
   # ==========================================================================
   # Off-site Backup Runner (profile: backup)
   # ==========================================================================
-  # Dumps the main Postgres + intelligence-db and mirrors object storage to any
+  # Dumps the main Postgres + intelligence-db and copies object storage to any
   # S3-compatible target, so a failure in the primary provider's account cannot
   # take the backups with it. Hosting-agnostic: the operator points BACKUP_S3_*
   # at whatever off-site bucket they choose (a different provider/region than the
@@ -1032,6 +1032,11 @@ services:
     environment:
       # Cadence (default 6h) - the health check treats >12h as a missed cycle.
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      # After a failed cycle, retry sooner than the full interval (default 10m).
+      BACKUP_RETRY_SECONDS: ${BACKUP_RETRY_SECONDS:-600}
+      # Per-stream wall-clock cap so a hung dump/sync can't stall the cycle
+      # (default 4h; 0 disables). Raise it if a large object-storage sync needs it.
+      BACKUP_STREAM_TIMEOUT_SECONDS: ${BACKUP_STREAM_TIMEOUT_SECONDS:-14400}
       # Retention (grandfather-father-son) - see scripts/backup/prune.sh.
       BACKUP_KEEP_RECENT: ${BACKUP_KEEP_RECENT:-8}
       BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-7}
