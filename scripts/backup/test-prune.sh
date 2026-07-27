@@ -10,6 +10,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # assertion failure doesn't silently abort the whole run.
 set +eu
 
+# Stub log() (normally from lib.sh, not sourced here) so select_deletions' input
+# validation can report to stderr without pulling in the S3 helpers.
+log() { printf '[test] %s\n' "$*" >&2; }
+
 pass=0
 fail=0
 ok()   { pass=$((pass + 1)); }
@@ -67,6 +71,14 @@ if [ -z "$out" ]; then ok; else bad "7: emitted a non-matching key: $out"; fi
 # ---- Test 8: the single oldest key over a long span IS deleted ----
 oldest="$(printf '%s\n' "$keys" | sort | head -1)"
 if printf '%s\n' "$dels" | grep -qxF "$oldest"; then ok; else bad "8: oldest key was not pruned"; fi
+
+# ---- Test 9: malformed retention counts are rejected, never emit deletions ----
+# A non-numeric or negative count must return non-zero and delete nothing, so a
+# typo can't silently disable a tier and over-prune.
+out="$(export BACKUP_KEEP_RECENT=abc; gen_keys 40 | select_deletions)"; rc=$?
+if [ "$rc" -ne 0 ] && [ -z "$out" ]; then ok; else bad "9a: non-numeric keep_recent not rejected (rc=$rc out=$out)"; fi
+out="$(export BACKUP_KEEP_DAILY=-1; gen_keys 40 | select_deletions)"; rc=$?
+if [ "$rc" -ne 0 ] && [ -z "$out" ]; then ok; else bad "9b: negative keep_daily not rejected (rc=$rc out=$out)"; fi
 
 printf '\nprune retention: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -9,8 +9,10 @@
 #   - keep the newest dump per ISO week for BACKUP_KEEP_WEEKLY weeks
 #   - delete everything else
 #
-# Object storage (storage/) is NOT pruned here - it is a live mirror of the
-# source, so deletions there are driven by the source, not by age.
+# Object storage (storage/) is NOT pruned here - it is an additive copy that
+# deliberately retains objects even after they are deleted at the source (see
+# backup-storage-sync.sh), so age-based pruning would defeat its purpose. Bound
+# its growth with a lifecycle policy on the backup bucket if needed.
 set -euo pipefail
 
 # Parse the YYYYMMDD-HHMMSS stamp out of a key like "postgres/20260727-120000.pgdump".
@@ -34,6 +36,16 @@ select_deletions() {
   local keep_recent="${BACKUP_KEEP_RECENT:-8}"
   local keep_daily="${BACKUP_KEEP_DAILY:-7}"
   local keep_weekly="${BACKUP_KEEP_WEEKLY:-4}"
+
+  # Reject malformed retention counts before making any delete decision: a
+  # non-numeric or negative value would silently disable a tier and over-delete.
+  local value
+  for value in "$keep_recent" "$keep_daily" "$keep_weekly"; do
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+      log "invalid retention count: '${value}' (want a non-negative integer)"
+      return 2
+    fi
+  done
 
   local parsed
   parsed="$(while IFS= read -r k; do [ -n "$k" ] && _parse_key "$k"; done | sort -rn)"
@@ -67,9 +79,13 @@ select_deletions() {
 
 _prune_prefix() {
   local prefix="$1" keys deletions
-  keys="$(aws_backup s3 ls "s3://${BACKUP_S3_BUCKET}/${prefix}/" --recursive 2>/dev/null \
-    | awk '{print $NF}' || true)"
-  deletions="$(printf '%s\n' "$keys" | select_deletions || true)"
+  # No `|| true`: a failed listing (bad creds/endpoint/network) must fail this
+  # stream, not masquerade as "nothing to delete" and silently skip retention.
+  # `set -o pipefail` propagates an aws failure through the awk pipe. An empty
+  # prefix legitimately lists nothing and exits 0, so it stays a no-op.
+  keys="$(aws_backup s3 ls "s3://${BACKUP_S3_BUCKET}/${prefix}/" --recursive \
+    | awk '{print $NF}')"
+  deletions="$(printf '%s\n' "$keys" | select_deletions)"
   if [ -z "$deletions" ]; then
     log "prune ${prefix}: nothing to delete"
     return 0
