@@ -20,13 +20,15 @@ run() {
   local name="$1" script="$2" rc=0
   log "=== ${name} ==="
   if [ "${STREAM_TIMEOUT}" -gt 0 ]; then
-    timeout "${STREAM_TIMEOUT}" "${SCRIPT_DIR}/${script}" || rc=$?
+    # --kill-after: if SIGTERM is ignored, SIGKILL 30s later so a stuck stream
+    # can't outlive its cap. Exit 124 = terminated on timeout, 137 = SIGKILLed.
+    timeout --kill-after=30s "${STREAM_TIMEOUT}" "${SCRIPT_DIR}/${script}" || rc=$?
   else
     "${SCRIPT_DIR}/${script}" || rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
     log "=== ${name} OK ==="
-  elif [ "$rc" -eq 124 ]; then
+  elif [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
     log "=== ${name} TIMED OUT after ${STREAM_TIMEOUT}s (continuing) ==="
     return 1
   else
