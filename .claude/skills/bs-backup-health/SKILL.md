@@ -67,7 +67,7 @@ aws s3 ls s3://${BACKUP_S3_BUCKET}/postgres/ \
 
 Validate:
 
-- **Freshness:** latest file 12 hours old or less (pg-backup runs every 6h; 12h means we missed a cycle)
+- **Freshness:** latest file 12 hours old or less (pg-backup runs every 6h; 12h means we missed a cycle). These thresholds assume the default 6h cadence; if the deployment raised `BACKUP_INTERVAL_SECONDS` (see `docker-compose.yml`), scale the freshness window to about 2x the configured interval before flagging STALE.
 - **Size sanity:** file >1 MB. Zero-byte or KB-range = likely corrupted pg_dump
 - **Naming:** matches `postgres/YYYYMMDD-HHMMSS.pgdump` (see scripts/backup/backup-pg.sh)
 - **History depth:** at least 7 daily + 4 weekly snapshots present (per retention policy)
@@ -88,7 +88,12 @@ aws s3 ls s3://${BACKUP_S3_BUCKET}/storage/ \
 
 Validate:
 
-- **Freshness:** the object-storage mirror runs once per cycle (6h) - newest object should be 8h old or less
+- **Freshness:** read the per-cycle heartbeat, not the newest object's age. Because `backup-storage-sync.sh` uses additive `rclone copy`, a cycle with no source changes uploads nothing, so a quiet bucket can show an old newest-object even when every sync succeeded. Check the marker instead (about 2x the configured cadence, so 8h or less at the default 6h):
+  ```bash
+  aws s3 ls s3://${BACKUP_S3_BUCKET}/storage/.last-sync \
+    --endpoint-url=${BACKUP_S3_ENDPOINT}
+  ```
+  A missing or stale `.last-sync` means the sync stream is not completing; investigate its logs.
 - **Object-count parity:** backup count should be 99% of source or more. Requires `yc` when the source is Yandex Object Storage (see Step 4); skip if unavailable. Get source count:
   ```bash
   yc storage bucket get <source-bucket> --format json | jq '{size_bytes, object_count}'
@@ -111,7 +116,7 @@ POSTGRES (main)
 
 INTELLIGENCE-DB
   Status:    ✓ OK
-  Latest:    intelligence/20260522-14.pgdump  (32 min ago, 8 MB)
+  Latest:    intelligence/20260522-140000.pgdump  (32 min ago, 8 MB)
   Embeddings rows: 1,243
 
 OBJECT STORAGE

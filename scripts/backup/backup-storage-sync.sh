@@ -44,4 +44,11 @@ rclone copy "src:${S3_BUCKET}" "dst:${BACKUP_S3_BUCKET}/storage" \
   --fast-list --checksum --transfers "${BACKUP_SYNC_TRANSFERS:-8}" \
   --stats-one-line --stats "${BACKUP_SYNC_STATS_INTERVAL:-30s}"
 
+# Write a per-cycle heartbeat AFTER a successful copy. Because `rclone copy` is
+# additive, a cycle with no source changes uploads nothing, so the newest object
+# age is not a reliable "did the sync run?" signal. The health check reads this
+# marker for freshness instead. Only reached when the copy above succeeded.
+printf '%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+  | rclone rcat "dst:${BACKUP_S3_BUCKET}/storage/.last-sync"
+
 log "object storage sync complete"
