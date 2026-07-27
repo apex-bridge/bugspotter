@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dump the intelligence-db (pgvector, embeddings) and upload it to the off-site
-# KZ backup bucket under intelligence/. Losing this DB means hours of LLM
+# backup bucket under intelligence/. Losing this DB means hours of LLM
 # re-computation on recovery, so it is backed up on the same schedule as main.
 #
 # Skips cleanly (exit 0) when INTELLIGENCE_ENABLED is not true, so the backup

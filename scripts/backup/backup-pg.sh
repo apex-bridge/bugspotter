@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dump the main Postgres database (Yandex Managed PostgreSQL in prod) and upload
-# the dump to the off-site KZ backup bucket under postgres/.
+# the dump to the off-site backup bucket under postgres/.
 #
 # Reads DATABASE_URL (same connection string the app uses). pg_dump connects over
 # the network; this does not touch or lock the source beyond a normal dump.

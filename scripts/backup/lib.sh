@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Shared helpers for the off-site KZ backup scripts.
+# Shared helpers for the off-site backup scripts.
 #
-# All backup streams (main Postgres, intelligence-db, object storage) land in a
-# SECOND KZ cloud (PS.KZ), never Yandex, so a Yandex account-level failure cannot
-# take the backups with it. Nothing here writes to the source; it only reads the
-# source and writes to the backup bucket.
+# All backup streams (main Postgres, intelligence-db, object storage) land in an
+# off-site, S3-compatible bucket (operator's choice of provider), so a failure in
+# the primary provider's account cannot take the backups with it. Nothing here
+# writes to the source; it only reads the source and writes to the backup bucket.
 set -euo pipefail
 
 log() { printf '%s [backup] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
@@ -57,5 +57,5 @@ export_backup_creds() {
   require_env BACKUP_S3_ENDPOINT BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY BACKUP_S3_SECRET_KEY
   export AWS_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY}"
   export AWS_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_KEY}"
-  export AWS_DEFAULT_REGION="${BACKUP_S3_REGION:-kz-1}"
+  export AWS_DEFAULT_REGION="${BACKUP_S3_REGION:-us-east-1}"
 }

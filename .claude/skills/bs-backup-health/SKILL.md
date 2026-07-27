@@ -1,11 +1,13 @@
 ---
 name: bs-backup-health
-description: Check whether BugSpotter production backups in the off-site KZ bucket are fresh and restorable. Reports last-backup timestamps per data source (main Postgres, intelligence-db, YC Object Storage), validates file size sanity, surfaces stale or missing backups with remediation suggestions. TRIGGER when user asks about backup status, backup health, "проверь бэкапы", DR readiness; before running a migration drill; before production migration; as a weekly health check.
+description: Check whether BugSpotter production backups in the off-site bucket are fresh and restorable. Reports last-backup timestamps per data source (main Postgres, intelligence-db, object storage), validates file size sanity, surfaces stale or missing backups with remediation suggestions. TRIGGER when user asks about backup status, backup health, "проверь бэкапы", DR readiness; before running a migration drill; before production migration; as a weekly health check.
 ---
 
 # bs-backup-health
 
-Verifies that BugSpotter prod data is safely backed up to a second (non-YC) KZ cloud and ready for restoration. **Does NOT modify anything** — read-only inspection.
+Verifies that BugSpotter prod data is safely backed up to the off-site,
+S3-compatible backup bucket and ready for restoration. **Does NOT modify
+anything** — read-only inspection.
 
 ## When to invoke
 
@@ -30,12 +32,12 @@ Grep `docker-compose.yml` and `docker-compose.*.yml` for a service named `pg-bac
 
 ### Step 2 — Identify the backup bucket
 
-From `.env.example`, `docker-compose.yml`, or `.env.sops`, extract:
+From `.env`, `docker-compose.yml`, or the deploy secret store, extract:
 
-- `BACKUP_S3_BUCKET` (expected: `bugspotter-backup-kz`)
-- `BACKUP_S3_ENDPOINT` (PS.KZ or Pro-Data endpoint)
+- `BACKUP_S3_BUCKET` (default: `bugspotter-backups`)
+- `BACKUP_S3_ENDPOINT` (whatever S3-compatible endpoint the operator configured)
 
-Report which provider is being used so the user has context.
+Report which provider/endpoint is being used so the user has context.
 
 ### Step 3 — Credentials availability
 
@@ -65,9 +67,9 @@ aws s3 ls s3://${BACKUP_S3_BUCKET}/postgres/ \
 
 Validate:
 
-- **Freshness:** latest file ≤12 hours old (pg-backup runs every 6h; 12h means we missed a cycle)
+- **Freshness:** latest file 12 hours old or less (pg-backup runs every 6h; 12h means we missed a cycle)
 - **Size sanity:** file >1 MB. Zero-byte or KB-range = likely corrupted pg_dump
-- **Naming:** matches `postgres/YYYYMMDD-HH.pgdump` (or current scripts/backup-pg.sh convention)
+- **Naming:** matches `postgres/YYYYMMDD-HHMMSS.pgdump` (see scripts/backup/backup-pg.sh)
 - **History depth:** at least 7 daily + 4 weekly snapshots present (per retention policy)
 
 ### B. Intelligence-db backup
@@ -86,10 +88,10 @@ aws s3 ls s3://${BACKUP_S3_BUCKET}/storage/ \
 
 Validate:
 
-- **Freshness:** rclone sync runs hourly → newest object should be ≤2h old
-- **Object-count parity:** backup count should be ≥99% of source. Requires `yc` (see Step 4); skip if unavailable. Get source count:
+- **Freshness:** the object-storage mirror runs once per cycle (6h) - newest object should be 8h old or less
+- **Object-count parity:** backup count should be 99% of source or more. Requires `yc` when the source is Yandex Object Storage (see Step 4); skip if unavailable. Get source count:
   ```bash
-  yc storage bucket get bugspotter-storage-kz --format json | jq '{size_bytes, object_count}'
+  yc storage bucket get <source-bucket> --format json | jq '{size_bytes, object_count}'
   ```
   Then compare.
 
@@ -103,9 +105,9 @@ BugSpotter Backup Health Check — 2026-05-22 14:32 +05
 
 POSTGRES (main)
   Status:    ✓ OK
-  Latest:    postgres/20260522-14.pgdump  (32 min ago, 142 MB)
+  Latest:    postgres/20260522-140000.pgdump  (32 min ago, 142 MB)
   History:   7 daily + 4 weekly snapshots
-  Bucket:    bugspotter-backup-kz @ PS.KZ
+  Bucket:    <BACKUP_S3_BUCKET> @ <BACKUP_S3_ENDPOINT>
 
 INTELLIGENCE-DB
   Status:    ✓ OK
@@ -114,9 +116,9 @@ INTELLIGENCE-DB
 
 OBJECT STORAGE
   Status:    ⚠ STALE
-  Last sync: 26h ago  (expected ≤2h)
-  Source:    bugspotter-storage-kz  (4,892 objects, 12.4 GB)
-  Backup:    bugspotter-backup-kz/storage  (4,591 objects, 11.8 GB)
+  Last sync: 26h ago  (expected 8h or less)
+  Source:    <S3_BUCKET>  (4,892 objects, 12.4 GB)
+  Backup:    <BACKUP_S3_BUCKET>/storage  (4,591 objects, 11.8 GB)
   Delta:     301 missing objects, 600 MB
 
 ═══════════════════════════════════════════════════════
