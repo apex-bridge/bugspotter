@@ -184,6 +184,22 @@ jobs:
           cache-from: type=gha,scope=payment
           cache-to: type=gha,mode=max,scope=payment
 
+      # Off-site backup runner image. Only built when backups are configured
+      # (BACKUP_S3_ENDPOINT var set), so deploys stay unchanged until the owner
+      # provisions an off-site bucket. See BACKUP.md and issue #262.
+      - name: Build and push Backup image
+        if: vars.BACKUP_S3_ENDPOINT != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backup/Dockerfile
+          push: true
+          tags: |
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-backup:sha-${{ github.sha }}
+            ${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-backup:latest
+          cache-from: type=gha,scope=backup
+          cache-to: type=gha,mode=max,scope=backup
+
   # ================================================================
   # Step 3: Deploy to VM via SSH
   # ================================================================
@@ -278,6 +294,16 @@ jobs:
           S3_REGION=${{ vars.S3_REGION || 'ru-central1' }}
           S3_FORCE_PATH_STYLE=${{ vars.S3_FORCE_PATH_STYLE || 'true' }}
           SIGNED_URL_EXPIRATION_SECONDS=${{ vars.SIGNED_URL_EXPIRATION_SECONDS || '2592000' }}
+
+          # Off-site Backups (opt-in - see BACKUP.md, issue #262). The runner
+          # starts only when BACKUP_S3_ENDPOINT + BACKUP_S3_ACCESS_KEY are set;
+          # unset => the lines below are empty and the deploy skips the profile.
+          BACKUP_IMAGE=${{ env.YC_REGISTRY }}/${{ secrets.YC_REGISTRY_ID }}/bugspotter-backup:latest
+          BACKUP_S3_ENDPOINT=${{ vars.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_BUCKET=${{ vars.BACKUP_S3_BUCKET || 'bugspotter-backups' }}
+          BACKUP_S3_ACCESS_KEY=${{ secrets.BACKUP_S3_ACCESS_KEY }}
+          BACKUP_S3_SECRET_KEY=${{ secrets.BACKUP_S3_SECRET_KEY }}
+          BACKUP_S3_REGION=${{ vars.BACKUP_S3_REGION || 'us-east-1' }}
 
           # API Server
           # Container always listens on port 3000 internally (hardcoded in docker-compose.yml).
@@ -548,6 +574,20 @@ jobs:
             $COMPOSE --profile intelligence up -d --no-build
           else
             echo "⏭️ Skipping intelligence (requires INTELLIGENCE_ENABLED=true and INTELLIGENCE_DB_PASSWORD)"
+          fi
+
+          # Start the off-site backup runner when configured. Requires BOTH the
+          # endpoint and an access key in .env, so a half-set config skips rather
+          # than crash-looping the container on empty credentials.
+          if grep -qE '^BACKUP_S3_ENDPOINT=.+' .env 2>/dev/null \
+            && grep -qE '^BACKUP_S3_ACCESS_KEY=.+' .env 2>/dev/null; then
+            echo "Starting off-site backup runner..."
+            $COMPOSE --profile backup pull || {
+              echo "⚠️ Failed to pull backup image; continuing with existing" >&2
+            }
+            $COMPOSE --profile backup up -d --no-build
+          else
+            echo "⏭️ Skipping off-site backup (BACKUP_S3_ENDPOINT + BACKUP_S3_ACCESS_KEY not set in .env)"
           fi
 
           # Ensure monitoring stack is running when GRAFANA_ADMIN_PASSWORD is configured.
