@@ -1009,6 +1009,73 @@ services:
           memory: 2500M
           cpus: '0.25'
 
+  # ==========================================================================
+  # Off-site Backup Runner (profile: backup)
+  # ==========================================================================
+  # Dumps the main Postgres + intelligence-db and copies object storage to any
+  # S3-compatible target, so a failure in the primary provider's account cannot
+  # take the backups with it. Hosting-agnostic: the operator points BACKUP_S3_*
+  # at whatever off-site bucket they choose (a different provider/region than the
+  # primary is the point). Opt-in and inert until enabled:
+  #   COMPOSE_PROFILES=backup  (or --profile backup)
+  # Requires the BACKUP_S3_* credentials in .env (see .env.example). Read-only on
+  # every source; only writes to the backup bucket. See BACKUP.md.
+  pg-backup:
+    <<: *default-logging
+    profiles: [backup]
+    image: ${BACKUP_IMAGE:-bugspotter-backup:latest}
+    build:
+      context: .
+      dockerfile: docker/backup/Dockerfile
+    container_name: bugspotter-backup
+    restart: unless-stopped
+    environment:
+      # Cadence (default 6h) - the health check treats >12h as a missed cycle.
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      # After a failed cycle, retry sooner than the full interval (default 10m).
+      BACKUP_RETRY_SECONDS: ${BACKUP_RETRY_SECONDS:-600}
+      # Per-stream wall-clock cap so a hung dump/sync can't stall the cycle
+      # (default 4h; 0 disables). Raise it if a large object-storage sync needs it.
+      BACKUP_STREAM_TIMEOUT_SECONDS: ${BACKUP_STREAM_TIMEOUT_SECONDS:-14400}
+      # Retention (grandfather-father-son) - see scripts/backup/prune.sh.
+      BACKUP_KEEP_RECENT: ${BACKUP_KEEP_RECENT:-8}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-7}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-4}
+      # Source: main Postgres (same connection string the app uses).
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-bugspotter}}
+      # Source: intelligence-db (only dumped when INTELLIGENCE_ENABLED=true).
+      INTELLIGENCE_ENABLED: ${INTELLIGENCE_ENABLED:-false}
+      INTELLIGENCE_DB_HOST: ${INTELLIGENCE_DB_HOST:-intelligence-db}
+      INTELLIGENCE_DB_PORT: ${INTELLIGENCE_DB_PORT:-5432}
+      INTELLIGENCE_DB_NAME: ${INTELLIGENCE_DB_NAME:-bugspotter_intelligence}
+      INTELLIGENCE_DB_USER: ${INTELLIGENCE_DB_USER:-postgres}
+      INTELLIGENCE_DB_PASSWORD: ${INTELLIGENCE_DB_PASSWORD:-}
+      # Source: object storage (reuses the app's own S3 config, read-only).
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_BUCKET: ${S3_BUCKET:-bugspotter}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-${MINIO_APP_ACCESS_KEY:-}}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_APP_SECRET_KEY:-}}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      # Destination: off-site S3-compatible backup bucket. Required at runtime -
+      # export_backup_creds() in lib.sh fails loudly if any is empty. Left as
+      # :- (not :?) so `docker compose config` validates without them set; the
+      # service is profile-gated and won't start on a stock deploy anyway.
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-bugspotter-backups}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-us-east-1}
+    networks:
+      - bugspotter
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+
 # ============================================================================
 # Named Volumes
 # ============================================================================
