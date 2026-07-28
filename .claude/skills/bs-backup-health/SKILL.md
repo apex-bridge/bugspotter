@@ -88,7 +88,7 @@ aws s3 ls s3://${BACKUP_S3_BUCKET}/storage/ \
 
 Validate:
 
-- **Freshness:** read the per-cycle heartbeat, not the newest object's age. Because `backup-storage-sync.sh` uses additive `rclone copy`, a cycle with no source changes uploads nothing, so a quiet bucket can show an old newest-object even when every sync succeeded. Check the marker instead (about 2x the configured cadence, so 8h or less at the default 6h):
+- **Freshness:** read the per-cycle heartbeat, not the newest object's age. Because `backup-storage-sync.sh` uses additive `rclone copy`, a cycle with no source changes uploads nothing, so a quiet bucket can show an old newest-object even when every sync succeeded. Check the marker instead (about 2x the configured cadence, so 12h or less at the default 6h):
   ```bash
   aws s3 ls s3://${BACKUP_S3_BUCKET}/storage/.last-sync \
     --endpoint-url=${BACKUP_S3_ENDPOINT}
@@ -121,7 +121,7 @@ INTELLIGENCE-DB
 
 OBJECT STORAGE
   Status:    ⚠ STALE
-  Last sync: 26h ago  (expected 8h or less)
+  Last sync: 26h ago  (expected 12h or less)
   Source:    <S3_BUCKET>  (4,892 objects, 12.4 GB)
   Backup:    <BACKUP_S3_BUCKET>/storage  (4,591 objects, 11.8 GB)
   Delta:     301 missing objects, 600 MB
@@ -145,13 +145,15 @@ If the last restore test is >90 days old, recommend running `bs-restore-test`.
 
 ## Escalation criteria
 
-| Symptom                              | Action                                                   |
-| ------------------------------------ | -------------------------------------------------------- |
-| Any backup >24h old                  | Immediate — investigate same day                         |
-| PG dump <10% of usual size           | Possible corruption — block any migration until verified |
-| Cannot list bucket at all            | Credentials or network — escalate to founder             |
-| Backup count regression vs yesterday | Lifecycle policy misbehaving — review bucket rules       |
-| Object Storage delta >5% of source   | Sync broken — check rclone logs                          |
+Thresholds below assume the default 6h cadence. If the deployment raised `BACKUP_INTERVAL_SECONDS`, scale the overdue boundary with it (about 2x the configured interval, matching the freshness window above) so a longer valid schedule is not both fresh and overdue.
+
+| Symptom                                                       | Action                                                   |
+| ------------------------------------------------------------- | -------------------------------------------------------- |
+| Any backup older than 2x the cadence (24h+ at the default 6h) | Immediate - investigate same day                         |
+| PG dump <10% of usual size                                    | Possible corruption — block any migration until verified |
+| Cannot list bucket at all                                     | Credentials or network — escalate to founder             |
+| Backup count regression vs yesterday                          | Lifecycle policy misbehaving — review bucket rules       |
+| Object Storage delta >5% of source                            | Sync broken — check rclone logs                          |
 
 ## What this skill does NOT do
 
