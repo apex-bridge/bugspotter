@@ -227,18 +227,22 @@ describe('MinIO Service Account Permission Boundaries', () => {
       await expect(serviceAccountClient.send(command)).rejects.toThrow();
     });
 
-    it('should NOT allow listing all buckets', async () => {
+    it('should NOT expose buckets other than its own', async () => {
       if (skipTests) {
         return;
       }
 
-      // MinIO requires ListAllMyBuckets permission to list buckets
-      // Service account should not have this permission
+      // Modern MinIO (RELEASE.2024-10+) does not 403 ListBuckets for a
+      // policy-scoped user; it returns a FILTERED list containing only the
+      // buckets the account has access to. The security property to guarantee is
+      // that no OTHER bucket is visible - not that the call is denied outright.
       const { ListBucketsCommand } = await import('@aws-sdk/client-s3');
 
-      const command = new ListBucketsCommand({});
+      const { Buckets } = await serviceAccountClient.send(new ListBucketsCommand({}));
+      const names = (Buckets ?? []).map((b) => b.Name);
 
-      await expect(serviceAccountClient.send(command)).rejects.toThrow(/Access Denied|Forbidden/i);
+      expect(names).toContain(TEST_BUCKET);
+      expect(names.filter((name) => name !== TEST_BUCKET)).toEqual([]);
     });
   });
 
@@ -251,9 +255,11 @@ describe('MinIO Service Account Permission Boundaries', () => {
       const accessKey = process.env.MINIO_APP_ACCESS_KEY || 'bugspotter-app';
       const rootUser = process.env.MINIO_ROOT_USER || 'minioadmin';
 
-      // Service account credentials should be different from root
+      // Service account must be a distinct, non-root identity (least privilege).
+      // Do NOT assert a hardcoded key literal - the default is `bugspotter-app-user`
+      // (see scripts/init-minio.sh / docker-compose.yml) and operators may override it.
+      expect(accessKey).toBeTruthy();
       expect(accessKey).not.toBe(rootUser);
-      expect(accessKey).toBe('bugspotter-app'); // Verify correct service account
     });
 
     it('should verify environment variables are properly configured', () => {
