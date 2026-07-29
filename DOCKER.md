@@ -408,7 +408,7 @@ Before deploying to production:
    - Monitor worker queue metrics
 
 5. ✅ **Plan backups**:
-   - Database backups (pg_dump)
+   - Enable the off-site backup runner (`--profile backup`, see [BACKUP.md](BACKUP.md))
    - S3/MinIO bucket versioning
    - Redis AOF persistence
 
@@ -563,23 +563,36 @@ api:
 
 ## Backups
 
-### Database Backup
+### Automated off-site backups (recommended)
+
+There is a built-in, opt-in backup runner behind the `backup` profile. It dumps
+the main Postgres (and intelligence-db when `INTELLIGENCE_ENABLED=true`) and
+mirrors object storage to any S3-compatible off-site bucket (a different
+provider/region than primary), with grandfather-father-son retention. It is
+read-only on every source and inert until you set the `BACKUP_S3_*` credentials.
 
 ```bash
-# Backup PostgreSQL
-docker compose exec postgres pg_dump -U bugspotter bugspotter > backup.sql
-
-# Restore
-docker compose exec -T postgres psql -U bugspotter bugspotter < backup.sql
+# Configure BACKUP_S3_* in .env (see .env.example), then:
+docker compose --profile backup up -d pg-backup
+docker compose logs -f pg-backup
 ```
 
-### MinIO Backup
+Provisioning, retention, and the restore drill are documented in [BACKUP.md](BACKUP.md);
+check freshness with the `bs-backup-health` skill.
+
+### Manual / ad-hoc backup
+
+For a one-off dump without the runner:
 
 ```bash
-# Backup bucket
-docker compose exec minio mc mirror minio/bugspotter /backup/bugspotter
+# Backup PostgreSQL (honors the container's configured POSTGRES_USER/POSTGRES_DB)
+docker compose exec postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup.sql
 
-# Or use MinIO's built-in replication
+# Restore
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backup.sql
+
+# Backup MinIO bucket
+docker compose exec minio mc mirror minio/bugspotter /backup/bugspotter
 ```
 
 ## Monitoring
