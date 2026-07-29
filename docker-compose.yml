@@ -6,6 +6,7 @@
 # - postgres, redis, minio: Development only (profile: dev)
 # - intelligence, intelligence-db, ollama: AI features (profile: intelligence)
 # - prometheus, grafana, etc.: Monitoring only (profile: monitoring)
+# - pg-backup: Off-site backups only (profile: backup) - opt-in, see BACKUP.md
 #
 # Development:
 #   .env.example sets COMPOSE_PROFILES=dev so `docker compose up` starts local
