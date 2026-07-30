@@ -25,6 +25,7 @@ import {
   HeadBucketCommand,
 } from '@aws-sdk/client-s3';
 import { Readable } from 'node:stream';
+import { randomUUID } from 'node:crypto';
 
 // Test configuration
 const TEST_BUCKET = process.env.S3_BUCKET || 'bugspotter';
@@ -90,7 +91,9 @@ describe('MinIO Service Account Permission Boundaries', () => {
         forcePathStyle: true,
       });
 
-      probeBucket = `bugspotter-forbidden-probe-${Date.now()}`;
+      // Random suffix so parallel workers / CI jobs sharing a MinIO instance
+      // cannot collide on the bucket name. Stays well under the 63-char limit.
+      probeBucket = `bugspotter-forbidden-probe-${randomUUID().slice(0, 8)}`;
       await rootClient.send(new CreateBucketCommand({ Bucket: probeBucket }));
     }
   });
