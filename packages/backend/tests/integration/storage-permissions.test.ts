@@ -19,6 +19,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   ListObjectsV2Command,
+  ListBucketsCommand,
   CreateBucketCommand,
   DeleteBucketCommand,
   HeadBucketCommand,
@@ -33,6 +34,13 @@ const TEST_KEY = `screenshots/${TEST_PROJECT_ID}/test-permissions.txt`;
 // Service account credentials (least-privilege)
 // Initialized in beforeAll to avoid hardcoded fallback secrets
 let serviceAccountClient: S3Client;
+
+// Root-credentials client + a probe bucket outside the service account's policy.
+// Only provisioned when root creds are available; used to turn the ListBuckets
+// boundary check into a real regression test instead of a single-bucket no-op.
+let rootClient: S3Client | undefined;
+let probeBucket: string | undefined;
+const rootCredsAvailable = !!(process.env.MINIO_ROOT_USER && process.env.MINIO_ROOT_PASSWORD);
 
 // Helper to convert readable stream to buffer
 async function streamToBuffer(stream: Readable): Promise<Buffer> {
@@ -49,7 +57,7 @@ describe('MinIO Service Account Permission Boundaries', () => {
     !process.env.MINIO_APP_ACCESS_KEY ||
     !process.env.MINIO_APP_SECRET_KEY;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     if (skipTests) {
       console.log('⏭️  Skipping MinIO permission tests (set TEST_MINIO=true to enable)');
       console.log('💡 Also ensure MINIO_APP_ACCESS_KEY and MINIO_APP_SECRET_KEY are set in .env');
@@ -66,6 +74,25 @@ describe('MinIO Service Account Permission Boundaries', () => {
       },
       forcePathStyle: true,
     });
+
+    // When root creds are available, provision a bucket the service account's
+    // policy does not cover. The ListBuckets boundary test then asserts the
+    // scoped account cannot see it - a real regression check that a single
+    // bucket fixture cannot provide.
+    if (rootCredsAvailable) {
+      rootClient = new S3Client({
+        endpoint: process.env.S3_ENDPOINT || 'http://localhost:9000',
+        region: process.env.S3_REGION || 'us-east-1',
+        credentials: {
+          accessKeyId: process.env.MINIO_ROOT_USER!,
+          secretAccessKey: process.env.MINIO_ROOT_PASSWORD!,
+        },
+        forcePathStyle: true,
+      });
+
+      probeBucket = `bugspotter-forbidden-probe-${Date.now()}`;
+      await rootClient.send(new CreateBucketCommand({ Bucket: probeBucket }));
+    }
   });
 
   afterAll(async () => {
@@ -83,6 +110,15 @@ describe('MinIO Service Account Permission Boundaries', () => {
       );
     } catch {
       // Ignore cleanup errors
+    }
+
+    // Tear down the probe bucket provisioned in beforeAll (root creds only)
+    if (probeBucket && rootClient) {
+      try {
+        await rootClient.send(new DeleteBucketCommand({ Bucket: probeBucket }));
+      } catch {
+        // Ignore cleanup errors
+      }
     }
   });
 
@@ -236,12 +272,18 @@ describe('MinIO Service Account Permission Boundaries', () => {
       // policy-scoped user; it returns a FILTERED list containing only the
       // buckets the account has access to. The security property to guarantee is
       // that no OTHER bucket is visible - not that the call is denied outright.
-      const { ListBucketsCommand } = await import('@aws-sdk/client-s3');
-
       const { Buckets } = await serviceAccountClient.send(new ListBucketsCommand({}));
       const names = (Buckets ?? []).map((b) => b.Name);
 
       expect(names).toContain(TEST_BUCKET);
+
+      // With root creds a probe bucket exists outside the policy; the scoped
+      // account must not see it. Without root creds this degrades to the
+      // property check below (which is only meaningful given such a bucket).
+      if (probeBucket) {
+        expect(names).not.toContain(probeBucket);
+      }
+
       expect(names.filter((name) => name !== TEST_BUCKET)).toEqual([]);
     });
   });
@@ -252,13 +294,13 @@ describe('MinIO Service Account Permission Boundaries', () => {
         return;
       }
 
-      const accessKey = process.env.MINIO_APP_ACCESS_KEY || 'bugspotter-app';
+      // The skip guard guarantees MINIO_APP_ACCESS_KEY is set here, so read it
+      // directly - no hardcoded fallback literal (the default varies across
+      // compose variants: bugspotter-app-user vs bugspotter-app).
+      const accessKey = process.env.MINIO_APP_ACCESS_KEY!;
       const rootUser = process.env.MINIO_ROOT_USER || 'minioadmin';
 
       // Service account must be a distinct, non-root identity (least privilege).
-      // Do NOT assert a hardcoded key literal - the default is `bugspotter-app-user`
-      // (see scripts/init-minio.sh / docker-compose.yml) and operators may override it.
-      expect(accessKey).toBeTruthy();
       expect(accessKey).not.toBe(rootUser);
     });
 
