@@ -1,0 +1,61 @@
+name: Cross-repo integration
+description: Parent ticket for a change that spans 2+ repos, tracking sub-tickets via GitHub's cross-repo sub-issues
+# Use when a task genuinely needs coordinated changes in more than one repo
+# (e.g. this repo + apex-bridge/bugspotter-intelligence). File one plain
+# issue per repo as usual (each runs through that repo's own AI-SDLC
+# pipeline unmodified), then file this as the parent and attach the
+# per-repo issues as sub-issues:
+#   gh api --method POST repos/OWNER/REPO/issues/<this>/sub_issues -F sub_issue_id=<global id>
+# (sub_issue_id is the issue's global database id, not its repo-local
+# number - `gh api repos/OWNER/REPO/issues/N --jq .id` looks it up.)
+# This ticket is not a merge gate - it cannot block any sub-ticket's own
+# PR from merging (nothing in this pipeline supports that). It closes
+# strictly after all sub-tickets are merged, once a human has actually
+# looked at the seam between them.
+labels: ['cross-repo', 'ai-sdlc']
+body:
+  - type: textarea
+    id: spans
+    attributes:
+      label: Spans
+      description: 'Every repo#issue this integration covers, one per line (e.g. apex-bridge/bugspotter#269).'
+      placeholder: |
+        apex-bridge/bugspotter#269
+        apex-bridge/bugspotter-intelligence#50
+    validations:
+      required: true
+
+  - type: textarea
+    id: merge_order
+    attributes:
+      label: Merge order
+      description: >
+        State explicitly whether these can merge in any order or must land in a
+        specific sequence, and why. Do not leave this blank and assume
+        independence — an unstated order is treated as unknown, not as "safe."
+        If one PR depends on a field/type/route the other introduces, say which
+        merges first.
+    validations:
+      required: true
+
+  - type: textarea
+    id: interface_contract
+    attributes:
+      label: Interface contract
+      description: >
+        Name the exact seam between the repos — the specific types, field names,
+        status codes, or schema shapes each side must agree on (e.g. a Zod type
+        in one repo and its Pydantic counterpart in another). If you can't name
+        it concretely, that's a sign this needs more thought before filing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: >
+        How to confirm the pieces actually work together after all sub-tickets
+        are merged — something neither repo's own CI checks in isolation.
+    validations:
+      required: true
