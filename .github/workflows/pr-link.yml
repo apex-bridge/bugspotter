@@ -12,6 +12,8 @@ name: PR Link
 # so "discloses #123" doesn't false-match on "closes" as a substring - same
 # class of bug Copilot found and fixed in bugspotter-metrics's linked_issue
 # extraction; this file has the identical shape, closed here too.
+# Both alternatives are also bounded on the trailing side (\b) so partial
+# tokens like "#123abc" or "ADR-1234X" cannot satisfy the check.
 # To gate merges, add "PR Link" to branch protection required checks (#199).
 # Tier-2 drift-check (does the code match the spec?) is a later, advisory phase.
 
@@ -36,14 +38,14 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          if echo "$PR_BODY" | grep -qiE '\b(Closes|Refs|Fixes|Tracks|Resolves|References)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+|ADR-[0-9]{4}'; then
+          if echo "$PR_BODY" | grep -qiE '\b(Closes|Refs|Fixes|Tracks|Resolves|References)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+\b|\bADR-[0-9]{4}\b'; then
             echo "OK: PR body references a GitHub issue or ADR."
           else
             echo "FAIL: PR body must reference a GitHub issue or ADR."
             echo ""
             echo "Add one of:"
             echo "  Closes #NNN   Refs #NNN   Fixes #NNN   Tracks #NNN   ADR-NNNN"
-            echo "  Refs owner/repo#NNN   (cross-repo reference)"
+            echo "  Any keyword above also accepts owner/repo#NNN (cross-repo reference)"
             echo ""
             echo "If there is no matching issue yet, open one first (use the Spec template)."
             exit 1
