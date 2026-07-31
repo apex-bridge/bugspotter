@@ -63,6 +63,14 @@ const VALID = [
   ['inside a longer body', '## Summary\n\nSome prose here.\n\nCloses #202\n\n- a bullet\n'],
   ['multiple spaces after keyword', 'Closes    #123'],
   ['tab after keyword', 'Closes\t#123'],
+  // Markdown emphasis. "_" is a word character, so a \b-based boundary would
+  // reject these even though the body plainly reads as a reference.
+  ['italic underscores', '_Closes #123_'],
+  ['bold underscores', '__Closes #123__'],
+  ['italic underscores around an ADR', '_ADR-0041_'],
+  ['italic asterisks', '*Closes #123*'],
+  ['bold asterisks', '**Closes #123**'],
+  ['inline code', '`Closes #123`'],
 ];
 
 for (const [name, body] of VALID) {
@@ -88,6 +96,21 @@ const INVALID = [
   ['ADR as a trailing substring', 'notADR-1234'],
   ['ADR with too few digits', 'ADR-123'],
   ['ADR with too many digits', 'ADR-12345'],
+  // Non-ASCII partial tokens. A \b-based boundary is ASCII-only in JS and
+  // would let these through, reopening the class of bug the boundary exists
+  // to close.
+  ['ADR with a trailing accented letter', 'ADR-1234é'],
+  ['ADR with a trailing CJK character', 'ADR-1234你'],
+  ['trailing Cyrillic after the number', 'Closes #123д'],
+  ['leading Cyrillic before the keyword', 'дcloses #123'],
+  // A separator between keyword and reference is required (\s+, not \s*).
+  ['keyword glued to the number', 'Closes#123'],
+  ['keyword glued to a cross-repo ref', 'Closes' + 'owner/repo#1'],
+  // The owner/repo prefix is constrained: real path characters only, and the
+  // slash is not optional.
+  ['prefix with colons', 'Closes a:b/c:d#1'],
+  ['prefix with no slash', 'Closes foo#123'],
+  ['prefix with a space in it', 'Closes own er/repo#1'],
   // grep was line-oriented; the port must stay line-oriented.
   ['keyword and number on separate lines', 'Closes\n#123'],
 ];
@@ -127,8 +150,16 @@ test('PR_BODY env path fails closed when unset', () => {
   }
 });
 
-test('CRLF body is handled', () => {
+// Named for what it actually asserts. The \r? in the split is defensive only:
+// a trailing \r is neither a digit nor a letter, so the boundary lookaheads
+// hold with or without it, and no input distinguishes /\r?\n/ from /\n/ here.
+// Do not read this as coverage of the split itself.
+test('a CRLF body still passes', () => {
   assert.equal(run('## Summary\r\n\r\nCloses #202\r\n').code, 0);
+});
+
+test('a CRLF body with no reference still fails', () => {
+  assert.equal(run('## Summary\r\n\r\nno link here\r\n').code, 1);
 });
 
 test('missing --message argument exits 2', () => {

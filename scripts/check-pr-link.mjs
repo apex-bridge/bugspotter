@@ -24,12 +24,22 @@
 
 import { readFileSync } from 'node:fs';
 
-// Faithful port of the previous `grep -qiE` pattern. \s+ is safe here only
-// because the body is matched one line at a time (see hasReference): grep is
-// line-oriented, so a keyword and its #NNN on separate lines never matched,
-// and must not start matching now.
+// Port of the previous `grep -qiE` pattern. \s+ is safe here only because the
+// body is matched one line at a time (see hasReference): grep is line-oriented,
+// so a keyword and its #NNN on separate lines never matched, and must not start
+// matching now.
+//
+// The boundaries are letter-based lookarounds, not \b, for two reasons:
+//   - \b treats "_" as a word character, so markdown emphasis around an
+//     otherwise valid reference ("_Closes #123_", "_ADR-0041_") would fail the
+//     gate. Those are common in PR bodies and must pass.
+//   - JS \b is ASCII-only while GNU grep's is locale-aware, so \b would let
+//     the partial tokens this guard exists to reject back in via non-ASCII
+//     ("ADR-1234e" with an accent, "Closes #123" with a trailing Cyrillic
+//     letter, or "dcloses #123" with a Cyrillic lead).
+// Digits are excluded on the trailing side too, so "ADR-12345" stays rejected.
 const REFERENCE =
-  /\b(?:Closes|Refs|Fixes|Tracks|Resolves|References)\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[0-9]+\b|\bADR-[0-9]{4}\b/i;
+  /(?<!\p{L})(?:Closes|Refs|Fixes|Tracks|Resolves|References)\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[0-9]+(?![0-9\p{L}])|(?<!\p{L})ADR-[0-9]{4}(?![0-9\p{L}])/iu;
 
 function hasReference(body) {
   return body.split(/\r?\n/).some((line) => REFERENCE.test(line));
