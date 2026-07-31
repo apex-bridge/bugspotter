@@ -3,8 +3,19 @@ name: PR Link
 # Tier-1 guard (#202): every PR body must reference a GitHub issue or ADR.
 # Accepted forms: "Closes #NNN", "Refs #NNN", "Fixes #NNN", "Tracks #NNN",
 # "Resolves #NNN", "References #NNN" (case-insensitive), or "ADR-NNNN".
-# A bare "#NNN" is NOT accepted — requires a keyword to avoid false-passes
-# from HTML comments or prose in the default PR template.
+# #NNN may optionally carry an "owner/repo#NNN" prefix for a cross-repo
+# reference (e.g. "Refs apex-bridge/bugspotter-intelligence#48") - added
+# after #269 showed the bare-#NNN-only regex rejects the org's own existing
+# cross-repo cross-link convention. A bare "#NNN" (no keyword) is still NOT
+# accepted — requires a keyword to avoid false-passes from HTML comments or
+# prose in the default PR template. The keyword group is word-bounded (\b)
+# so "discloses #123" doesn't false-match on "closes" as a substring - same
+# class of bug Copilot found and fixed in bugspotter-metrics's linked_issue
+# extraction; this file has the identical shape, closed here too.
+# Both alternatives are also bounded on the trailing side (\b) so partial
+# tokens like "#123abc" or "ADR-1234X" cannot satisfy the check.
+# The pattern lives in scripts/check-pr-link.mjs (with tests alongside it)
+# rather than inline here, so it can be exercised without pushing a PR.
 # To gate merges, add "PR Link" to branch protection required checks (#199).
 # Tier-2 drift-check (does the code match the spec?) is a later, advisory phase.
 
@@ -24,19 +35,23 @@ jobs:
   pr-link:
     name: PR Link
     runs-on: ubuntu-latest
+    # The job runs the PR's own copy of the checker and its tests, so cap it
+    # rather than inheriting the 360-minute default.
+    timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test the link checker
+        run: node --test scripts/check-pr-link.test.mjs
+
       - name: Check PR body references an issue or ADR
         env:
+          # PR body via env, never inlined into run: as an actions expression
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          if echo "$PR_BODY" | grep -qiE '(Closes|Refs|Fixes|Tracks|Resolves|References)\s+#[0-9]+|ADR-[0-9]{4}'; then
-            echo "OK: PR body references a GitHub issue or ADR."
-          else
-            echo "FAIL: PR body must reference a GitHub issue or ADR."
-            echo ""
-            echo "Add one of:"
-            echo "  Closes #NNN   Refs #NNN   Fixes #NNN   Tracks #NNN   ADR-NNNN"
-            echo ""
-            echo "If there is no matching issue yet, open one first (use the Spec template)."
-            exit 1
-          fi
+        run: node scripts/check-pr-link.mjs
