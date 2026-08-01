@@ -74,6 +74,14 @@ jobs:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
         run: node scripts/ai-sdlc/verify-spec-ownership.mjs
 
+      # Advisory only (see the script's own header for why this isn't a
+      # hard cap yet) - warns if the spec's declared scope is large enough
+      # to be worth a second look before ratifying.
+      - name: Check spec scope (advisory)
+        env:
+          SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
+        run: node scripts/ai-sdlc/check-spec-scope.mjs
+
       - name: Format generated files
         env:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
