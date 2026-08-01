@@ -46,6 +46,26 @@ const exampleAdr = exampleFile
   ? readFileSync(`docs/adr/${exampleFile}`, 'utf8').slice(0, 1200)
   : '';
 
+// generate-spec.mjs and verify-spec.mjs both inject docs/adr/README.md (the
+// cross-repo architecture index) into their prompts; this script did not,
+// despite ADR ratification being the human judgment gate that's supposed to
+// catch exactly the failure the index exists to prevent — a component
+// attributed to a fabricated in-repo path instead of its real, separate
+// repo (docs/adr/0007 records bugspotter-intelligence as a Python/FastAPI
+// service in its own repo; #226/#238 hallucinated a TypeScript package for
+// it here, and the human ratification gate that should have caught it had
+// no index to check against either). Without this, the artifact a human is
+// actually asked to ratify is the least-grounded of the three generation
+// steps, not the best-grounded one.
+function safeRead(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+const adrIndex = safeRead('docs/adr/README.md');
+
 const slug = ISSUE_TITLE.toLowerCase()
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '')
@@ -60,7 +80,11 @@ Draft ADR-${padded} for GitHub issue #${ISSUE_NUMBER}. Match the style of the ex
 
 EXAMPLE ADR (for style reference only — do not copy its content):
 ${exampleAdr}
-
+${
+  adrIndex
+    ? `\nPROJECT ARCHITECTURE INDEX (docs/adr/README.md — canonical record of which repo owns which component, language, and service boundary; do not state or assume any architecture fact that contradicts it):\n${adrIndex}\n`
+    : ''
+}
 Required sections (use this exact structure):
 # ADR-${padded}: <title>
 
@@ -97,6 +121,7 @@ ${SPEC_CONTENT ? `\nLINKED SPEC:\n${SPEC_CONTENT.slice(0, 1500)}` : ''}
 Rules:
 - Status must be "Proposed" (human ratifies and changes it to "Accepted")
 - Be concrete about consequences; call out residual risks explicitly
+- Do not state or imply that a component lives in this repo, in a particular language, or behind a particular service boundary if the architecture index above attributes it to a different repo — if the issue concerns such a component, say so explicitly rather than inventing an in-repo shape for it
 - Return ONLY the ADR document — no preamble, no explanation, no markdown fences`;
 
 let adrContent, stopReason;

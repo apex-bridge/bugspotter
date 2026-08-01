@@ -59,6 +59,9 @@ jobs:
       - name: Check formatting
         run: pnpm run format:check
 
+      - name: Run AI-SDLC script tests
+        run: node --test scripts/ai-sdlc/*.test.mjs
+
   test-backend-db:
     name: Backend Database Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
@@ -589,7 +592,15 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, playwright-admin]
+    needs:
+      [
+        lint,
+        test-backend-db,
+        test-backend-api,
+        test-backend-services,
+        test-backend-other,
+        playwright-admin,
+      ]
 
     steps:
       - name: Checkout code
@@ -625,7 +636,6 @@ jobs:
           # This ensures @bugspotter/types is available for backend
           pnpm --filter @bugspotter/types run build
           pnpm --recursive --filter "./packages/**" --filter "!@bugspotter/types" run build
-
 
   test-coverage:
     name: Test Coverage
@@ -758,7 +768,19 @@ jobs:
     # block below. Both must move together: removing it from one without
     # the other either lets a failure slip through (only in `needs`) or
     # waits on a job that doesn't gate (only in checks).
-    needs: [lint, test-backend-db, test-backend-api, test-backend-services, test-backend-other, test-backend-integration, playwright-admin, build, test-coverage, validate-compose]
+    needs:
+      [
+        lint,
+        test-backend-db,
+        test-backend-api,
+        test-backend-services,
+        test-backend-other,
+        test-backend-integration,
+        playwright-admin,
+        build,
+        test-coverage,
+        validate-compose,
+      ]
     if: always()
     steps:
       - name: Check all jobs succeeded

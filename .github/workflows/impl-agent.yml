@@ -95,6 +95,16 @@ jobs:
           IMPL_MODEL_LOW: ${{ vars.IMPL_MODEL_LOW }}
         run: node scripts/ai-sdlc/generate-impl.mjs
 
+      # Hard gate: the scaffold must not write a file the ratified spec
+      # never declared under "Files touched" - an unambiguous comparison,
+      # not a judgment call, so unlike check-spec-scope.mjs's advisory
+      # warning this fails the workflow outright.
+      - name: Check impl scope against spec
+        env:
+          SPEC_FILE: ${{ steps.spec.outputs.spec_file }}
+          FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
+        run: node scripts/ai-sdlc/check-impl-scope.mjs
+
       - name: Install dependencies (required for ESLint)
         run: pnpm install --frozen-lockfile
 
