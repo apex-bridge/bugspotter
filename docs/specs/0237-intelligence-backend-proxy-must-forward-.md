@@ -32,6 +32,18 @@ Prior history, for anyone reading this after the fact: this bug was previously m
 5. In the worker (`processAnalyzeJob`), `resolvedOrgId: string | undefined` is already an existing parameter (used later for `applyDedupAction` at line ~244) - reuse it, don't re-derive the org id.
 6. `processAnalyzeJob` is currently not exported from `intelligence-worker.ts` (only `createIntelligenceWorker` is) and has zero test coverage today - there's an existing `// TODO: Add unit tests (processAnalyzeJob, ...)` at line 51. Export it (named export, no behavior change) so it can be unit-tested directly. The existing worker-test convention in this repo (e.g. `notification-worker.test.ts`) only shallow-tests worker creation and job-data validation, not processor logic - there's no existing harness for driving a job through the created worker's internal processor callback, so direct export-and-call is the pragmatic path here, not a new pattern to invent.
 7. `createMockDb()` in `intelligence-routes.test.ts` (line ~97) has no `organizations` key - add `organizations: { findById: vi.fn() }`, matching the existing `projects` mock shape in that file.
+8. **`intelligenceRoutes`'s exported function signature must not change at all.** Current, exact, on `main`:
+   ```ts
+   export function intelligenceRoutes(
+     fastify: FastifyInstance,
+     intelligenceClient: IntelligenceClient,
+     db?: DatabaseClient,
+     clientFactory?: IntelligenceClientFactory
+   );
+   ```
+   Do not rename, retype, reorder, add, or remove a parameter. In particular, `clientFactory`'s type is `IntelligenceClientFactory` (imported from `tenant-config.ts`) - do not introduce a differently-named type (e.g. a local `ClientFactory` interface) for it or for anything passed to `resolveClient`. This function is called from `intelligence.plugin.ts` with a real `IntelligenceClientFactory` instance; a type mismatch here fails the whole package build, not just this file.
+9. **`createIntelligenceWorker`'s exported function signature, and everything else in `intelligence-worker.ts` other than `processAnalyzeJob`, must not change.** `createIntelligenceWorker` is registered in `worker-manager.ts`'s `WORKER_REGISTRY` as `factory: createIntelligenceWorker as IntelligenceWorkerFactory` - a signature change there breaks that cast at compile time, in a file this spec does not list under "Files touched" and must not need to.
+10. The only function-signature change permitted anywhere in this spec is adding the `export` keyword to `processAnalyzeJob` (a visibility change; its parameter list, types, and order stay exactly as they are today). Every other function in both edited files - `resolveClient`, `createIntelligenceWorker`, `processResolutionJob`, `processEnrichJob`, `processMitigationJob`, anything else already in either file - must remain byte-for-byte identical to what's on `main`. If achieving the fix seems to require touching one of them, stop and flag it in the PR description rather than making the change - that would mean this spec is wrong, not that the boundary should be silently crossed.
 
 ## Acceptance criteria
 
