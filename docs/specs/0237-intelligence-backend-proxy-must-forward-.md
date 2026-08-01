@@ -1,204 +1,351 @@
-# Spec: Backend proxy must forward org similarity threshold to intelligence service
+# Spec: backend proxy must forward org similarity threshold to intelligence service
 
-<!-- Keep in sync with .github/ISSUE_TEMPLATE/spec.yml — that template is the canonical source. -->
+<!-- This is the AI-generated spec document. .github/ISSUE_TEMPLATE/spec.yml is
+     the human issue-filing form - different structure, different purpose. -->
 
 Linked issue: Refs #237
-ADR: pending
+ADR: n/a
 
-## Problem / motivation
+**Files touched:** `packages/backend/src/api/routes/intelligence.ts`, `packages/backend/src/queue/workers/intelligence-worker.ts`, `packages/backend/tests/api/intelligence-routes.test.ts`, `packages/backend/tests/queue/intelligence-worker.test.ts` (new)
+**Blocking prerequisites:** none
 
-`GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` resolves the similarity threshold exclusively from the client-supplied `threshold` query param. The per-org `intelligence_similarity_threshold` stored in `intelligence_settings` and resolved through `tenant-config.ts` is never read inside the route handler and is never forwarded to the `bugspotter-intelligence` service. As a result, the `resolveThreshold(queryValue, orgDefault)` helper introduced in #226 always receives `undefined` as `orgDefault`, making the org-level setting a no-op end-to-end. Org administrators who configure a custom threshold see no effect on returned results.
+## Problem
 
-## Blocking prerequisites
+The org-level `intelligence_similarity_threshold` setting (stored in `organizations.settings`, resolved via `tenant-config.ts`, fully wired through the admin CRUD API and admin UI) has no effect anywhere it should. The interactive similar-bugs route (`GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar`, `intelligence.ts:216-224`) only reads a client-supplied `threshold` query param. The automated dedup/auto-close worker (`intelligence-worker.ts`'s `processAnalyzeJob`, `getSimilarBugs` call at line 221) sends no threshold at all. Every org - whether or not it configured a custom threshold - gets whatever single global default the external `bugspotter-intelligence` Python service happens to be running with. This drives real auto-dedup/auto-close behavior for every organization, not just an API response value.
 
-The following must land before this spec's "How" steps can run end-to-end:
+Prior history, for anyone reading this after the fact: this bug was previously misdiagnosed and "fixed" against a hallucinated in-repo TypeScript package (`packages/bugspotter-intelligence`), deleted in PR #260 once discovered. The real `bugspotter-intelligence` is a separate Python/FastAPI service in its own repo (see ADR-0007). `intelligence-client.ts` and the docker-compose service pointing at it were never touched by that episode and don't need to change here - this spec supersedes the one merged for this issue on 2026-07-19, which targeted the deleted package.
 
-- **#238 — graduate `bugspotter-intelligence` scaffold**: the package currently has no `package.json`, `tsconfig.json`, or `vitest.config.ts`, and `@sinclair/typebox` (imported by `similar.ts`) is not in `pnpm-lock.yaml`. Steps 5–7 below (`pnpm --filter @bugspotter/intelligence build/test`) will fail to even resolve the package until #238 is merged. Step 4 (file edits only) can be done before #238 lands.
+## Out of scope
 
-## Scope and constraints
+- Changes to the external `bugspotter-intelligence` Python service - its `/api/v1/bugs/{bug_id}/similar` endpoint already accepts a `threshold` query param and falls back to its own global config default when omitted (`bug_query_service.py:89-93`); that fallback is exactly what this fix relies on.
+- Changes to `intelligence-client.ts`'s `getSimilarBugs()` - it already omits the `threshold` query param entirely when `undefined` (`intelligence-client.ts:101-103`), which is the correct behavior for preserving the Python service's own fallback.
+- UI surface for configuring `intelligence_similarity_threshold` - already exists (`intelligence-settings-panel.tsx`), untouched here.
+- Aligning `intelligence_similarity_threshold`'s accepted PATCH range with anything else - not touched.
+- Caching the per-request `db.organizations.findById` read - the client-resolution path in `resolveClient` already does an uncached read of the same kind; this fix adds one more, not a new caching concern.
 
-In scope:
+## Constraints
 
-- Reading `intelligence_similarity_threshold` directly from the org's `settings` JSONB via `db.organizations.findById` inside the similar-bugs route handler in `packages/backend/src/api/routes/intelligence.ts` (raw read, not `getOrgIntelligenceSettings`, to preserve the `undefined` signal when no override is set — see Constraints)
-- Passing the resolved org threshold as `orgThreshold` to `IntelligenceClient.getSimilarBugs`
-- Forwarding `orgThreshold` as the `org_threshold` query param in the HTTP request made by `IntelligenceClient` to the intelligence service
-- Adding `org_threshold` to the querystring schema in `packages/bugspotter-intelligence/src/routes/bugs/similar.ts` and passing it as `orgDefault` to `resolveThreshold`
-- Unit tests for the five threshold-precedence cases enumerated in the How section
-
-Out of scope:
-
-- Changes to the `resolveThreshold` function itself (already correct from #226)
-- UI surface for configuring `intelligence_similarity_threshold` (tracked separately)
-- Caching of the per-org settings DB read (the `db.organizations.findById` call runs uncached on every `/similar` request; the `clientFactory` LRU cache only covers the `IntelligenceClient` instance, not raw settings). Acceptable for a first pass; a follow-up should evaluate whether to extend the cache or batch the reads.
-- Altering the threshold-resolution logic for any endpoint other than `/similar`
-- Aligning the `intelligence_similarity_threshold` accepted range in `intelligence-settings.ts` (currently `[0, 1]`) with `resolveThreshold`'s valid range (`[0.5, 1.0]`). An org configured with a value below 0.5 will silently fall through to env/hardcoded fallback — the same "setting is a no-op" symptom this fix addresses, for a subset of otherwise-valid values. Tracked as a follow-up: either tighten the PATCH schema to `minimum: 0.5` or surface a warning to the admin.
-
-Constraints:
-
-- `orgThreshold` must never override an explicitly supplied client `threshold`; `resolveThreshold` precedence order (client → org → env → hardcoded 0.85) must be preserved
-- The raw JSONB read must be used instead of `getOrgIntelligenceSettings`, which always fills in a 0.75 default and would collapse "org has no setting" into a number, making the env-var and hardcoded-0.85 fallback paths unreachable
-- TypeScript does not propagate control-flow narrowing of an optional parameter into a nested closure. Even though `intelligenceRoutes` early-returns when `db` is falsy, `db` is still typed as `DatabaseClient | undefined` inside the nested `async (request, reply) =>` handler — `tsc --strict` emits `TS18048: 'db' is possibly 'undefined'`. Bind it to a const immediately after the early-return guard: `const database = db;`. TypeScript narrows a const binding at the point of assignment and the narrowing holds inside the closure. Use `database` (not `db`) everywhere in the handler body.
-- The `org_threshold` query param sent to the intelligence service must be omitted entirely (not sent as an empty string) when no org setting exists, so that `resolveThreshold` correctly falls through to the env-var fallback
-- No new database migrations are required; `intelligence_settings` and `intelligence_similarity_threshold` already exist
-- Changes must not alter the public API contract of `GET /similar` as seen by external callers
+1. Must NOT use `getOrgIntelligenceSettings`/`resolveOrgIntelligenceSettings` (`tenant-config.ts`) to obtain the fallback threshold. Both bake in a hardcoded default (0.75) whenever the org hasn't set a value (`tenant-config.ts:116-118`), which would make every org without an explicit override silently send `0.75` to the Python service - overriding its own global default rather than falling through to it. Must read the raw `org.settings.intelligence_similarity_threshold` (via `db.organizations.findById(orgId)`; `OrganizationSettings` type at `db/types.ts:705`) and only forward it when it is not `null`/`undefined`.
+2. Precedence: client-supplied `threshold` (route) wins first; else the org's explicit raw setting if present; else omit the param entirely so `intelligence-client.ts`'s existing `undefined`-omission behavior and the Python service's own fallback apply. Never synthesize a value when neither the client nor the org has one.
+3. In the route handler, only look up the org's threshold when `request.query.threshold` is `undefined` - avoid an unnecessary DB read on the common path where the client already supplied one.
+4. `request.project.organization_id` is reliably populated in this handler: the route's `guard(db, { auth: 'userOrApiKey', resource: { type: 'project', paramName: 'projectId' } })` preHandler resolves to `authorization/middleware.ts`'s `resolveResource()`, which sets `request.project` unconditionally for any project resource (`authorization/middleware.ts:254`).
+5. In the worker (`processAnalyzeJob`), `resolvedOrgId: string | undefined` is already an existing parameter (used later for `applyDedupAction` at line ~244) - reuse it, don't re-derive the org id.
+6. `processAnalyzeJob` is currently not exported from `intelligence-worker.ts` (only `createIntelligenceWorker` is) and has zero test coverage today - there's an existing `// TODO: Add unit tests (processAnalyzeJob, ...)` at line 51. Export it (named export, no behavior change) so it can be unit-tested directly. The existing worker-test convention in this repo (e.g. `notification-worker.test.ts`) only shallow-tests worker creation and job-data validation, not processor logic - there's no existing harness for driving a job through the created worker's internal processor callback, so direct export-and-call is the pragmatic path here, not a new pattern to invent.
+7. `createMockDb()` in `intelligence-routes.test.ts` (line ~97) has no `organizations` key - add `organizations: { findById: vi.fn() }`, matching the existing `projects` mock shape in that file.
 
 ## Acceptance criteria
 
-- [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar?threshold=0.9` — with org setting 0.7 — causes `resolveThreshold` to be called with `(0.9, 0.7)` and return 0.9 (client wins), verified by spying on `resolveThreshold` or the logged threshold value
-- [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param) — with org setting 0.7 — causes `resolveThreshold` to be called with `(undefined, 0.7)` and return 0.7, confirmed via integration test asserting the proxied request URL contains `org_threshold=0.7`
-- [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param) — org `settings` JSONB has no `intelligence_similarity_threshold` key (or it is null) — causes `resolveThreshold` to be called with `(undefined, undefined)` and return the `SIMILARITY_THRESHOLD` env value (0.6 in the test), verified by spying on `resolveThreshold`'s return value (not on result content, since `similar.ts` returns a stub `[]`)
-- [ ] `GET /api/v1/intelligence/projects/:projectId/bugs/:id/similar` (no `threshold` param, no org setting, no `SIMILARITY_THRESHOLD` env var) — `resolveThreshold` returns 0.85 without error, verified by spy
-- [ ] When `request.project?.organization_id` is absent, the handler does not throw and `getSimilarBugs` receives `orgThreshold: undefined`
-- [ ] The `org_threshold` query param is absent from the proxied URL when `orgThreshold` is `undefined`, verified by a unit test asserting the constructed URL string
-- [ ] All existing test assertions and logic in `packages/backend` and `packages/bugspotter-intelligence` continue to pass. **Note:** `createMockDb()` in `packages/backend/tests/api/intelligence-routes.test.ts` must be updated to add an `organizations` key; without it `db.organizations.findById(...)` throws `TypeError` on any test that hits the similar-bugs handler with `request.project.organization_id` set. The required addition to the helper is: `organizations: { findById: vi.fn().mockResolvedValue({ settings: { intelligence_similarity_threshold: null } }) }`. This is a mock-fixture update, not a change to test assertions or logic.
+- [ ] `GET .../similar?threshold=0.9`, org has `intelligence_similarity_threshold: 0.7` set - calls `getSimilarBugs` with `threshold: 0.9` and does not query `organizations.findById` - verified by test case A
+- [ ] `GET .../similar` (no `threshold` param), org has `intelligence_similarity_threshold: 0.7` set - calls `getSimilarBugs` with `threshold: 0.7` - verified by test case B
+- [ ] `GET .../similar` (no `threshold` param), org has no `intelligence_similarity_threshold` set (`null`/absent from `settings`) - calls `getSimilarBugs` with `threshold: undefined` (param omitted, never defaulted to `0.75`) - verified by test case C
+- [ ] `GET .../similar` when `request.project.organization_id` is absent (self-hosted / no org) - does not attempt an org lookup and calls `getSimilarBugs` with `threshold: undefined` - verified by test case D
+- [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId` with an explicit org threshold set - calls `client.getSimilarBugs(bugReportId, { projectId, threshold: <org value> })` - verified by test case E
+- [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId` with no org threshold set - calls `getSimilarBugs` with `threshold: undefined` - verified by test case F
+- [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId === undefined` - does not attempt an org lookup - verified by test case G
+- [ ] `GET .../similar` (no `threshold` param), org has `intelligence_similarity_threshold: null` explicitly set (not merely absent from `settings`) - calls `getSimilarBugs` with `threshold: undefined` - verified by test case C2
+- [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId` set but `organizations.findById` rejects - the rejection propagates and fails the job, no special handling (consistent with `analyzeBug`/`getSimilarBugs` already being unguarded in this function) - verified by test case H
+- [ ] All existing tests in `intelligence-routes.test.ts` and the new intelligence-worker suite pass
 
-## How (runnable steps)
+## Changes
 
-> **Prerequisite:** merge #238 first so `pnpm --filter bugspotter-intelligence` resolves.
+### `packages/backend/src/api/routes/intelligence.ts`
+
+Add a small helper, and call it only when the client didn't already supply a threshold, right before the existing `getSimilarBugs` call.
+
+```ts
+// Add near resolveClient:
+async function resolveOrgThreshold(
+  db: DatabaseClient,
+  orgId: string | undefined
+): Promise<number | undefined> {
+  if (!orgId) return undefined;
+  const org = await db.organizations.findById(orgId);
+  return org?.settings.intelligence_similarity_threshold ?? undefined;
+}
+```
+
+```ts
+// Replace the existing handler body (lines 216-222):
+const { projectId, id } = request.params;
+let { threshold, limit } = request.query;
+const client = await resolveClient(request, clientFactory, intelligenceClient);
+
+if (threshold === undefined) {
+  threshold = await resolveOrgThreshold(db, request.project?.organization_id ?? undefined);
+}
+
+const result = await handleIntelligenceRequest(client, (c) =>
+  c.getSimilarBugs(id, { threshold, limit, projectId })
+);
+```
+
+### `packages/backend/src/queue/workers/intelligence-worker.ts`
+
+```ts
+// Change the function to a named export (line 187) - no other signature change:
+export async function processAnalyzeJob(
+```
+
+```ts
+// Replace the existing call (line 221):
+// Before:
+const similarResult = await client.getSimilarBugs(bugReportId, { projectId });
+
+// After:
+let orgThreshold: number | undefined;
+if (resolvedOrgId) {
+  const org = await db.organizations.findById(resolvedOrgId);
+  orgThreshold = org?.settings.intelligence_similarity_threshold ?? undefined;
+}
+const similarResult = await client.getSimilarBugs(bugReportId, {
+  projectId,
+  threshold: orgThreshold,
+});
+```
+
+**Failure behavior:** `db.organizations.findById` is deliberately left unwrapped here, matching this function's existing pattern - `client.analyzeBug` and `client.getSimilarBugs` (steps 1-2, lines 210/221) are equally unguarded; only the dedup-application step (step 3) has a try/catch, and that's documented in-code as "never throw from dedup." A DB error (or rejected promise) during the org lookup therefore propagates out of `processAnalyzeJob` and fails the job under the queue's existing retry policy, rather than silently swallowing the error and proceeding with the service's global default threshold. This is intentional: retrying is safer than dedup-checking a bug against the wrong similarity sensitivity because a transient DB read failed. Verified by test case H.
+
+## Tests
+
+### `packages/backend/tests/api/intelligence-routes.test.ts`
+
+**Mock/fixture updates required:**
+
+```ts
+// createMockDb(), add alongside the existing `projects` key:
+organizations: {
+  findById: vi.fn().mockResolvedValue({ id: MOCK_ORG_ID, settings: {} }),
+},
+```
+
+The module-level `guard` mock (`intelligence-routes.test.ts:28-34`) unconditionally sets `request.project.organization_id = MOCK_ORG_ID`, ignoring `db.projects.findById` entirely - test case D needs to simulate "no org" through the guard mock itself, not through `db`. Make the guard implementation overridable:
+
+```ts
+// Replace the existing vi.mock('../../src/api/authorization/index.js', ...) block with:
+const mockGuardImpl = vi.fn((request: any) => {
+  request.project = { id: request.params?.projectId, organization_id: MOCK_ORG_ID };
+});
+vi.mock('../../src/api/authorization/index.js', () => ({
+  guard: () => async (request: any) => mockGuardImpl(request),
+}));
+```
+
+(This mirrors the working pattern the now-superseded spec for this issue already worked out for the same underlying test-infrastructure limitation - reused here, not reinvented.)
+
+**Route registration:** the existing top-level `beforeEach` (`intelligence-routes.test.ts:119-127`) already calls `intelligenceRoutes(app, globalClient, createMockDb(), clientFactory as any)` once per test. Test cases A/B/C/C2 must reuse that single registration - a second call to `intelligenceRoutes` on the same `app` instance registers the same method+path twice and Fastify throws `FST_ERR_DUPLICATED_ROUTE` synchronously. Hoist `mockDb` to a `describe`-scoped `let` so each test case can configure it without re-registering routes:
+
+```ts
+// Replace the existing suite-level declarations and beforeEach:
+let app: FastifyInstance;
+let globalClient: ReturnType<typeof createMockClient>;
+let orgClient: ReturnType<typeof createMockClient>;
+let clientFactory: ReturnType<typeof createMockClientFactory>;
+let mockDb: ReturnType<typeof createMockDb>;
+
+beforeEach(async () => {
+  app = Fastify();
+  globalClient = createMockClient();
+  orgClient = createMockClient();
+  clientFactory = createMockClientFactory(orgClient);
+  mockDb = createMockDb();
+
+  intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
+  await app.ready();
+});
+```
+
+Test case D exercises the self-hosted (no-`clientFactory`) registration, which is a different route wiring than the shared `beforeEach` sets up - it uses its own local Fastify instance instead of the shared `app`, so it doesn't collide with the routes already registered there.
+
+**Test case A - client threshold wins, no org lookup (AC #1):**
+
+```ts
+it('uses the client-supplied threshold and does not look up the org setting', async () => {
+  await app.inject({
+    method: 'GET',
+    url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar?threshold=0.9`,
+  });
+  expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+    BUG_ID,
+    expect.objectContaining({ threshold: 0.9 })
+  );
+  expect(mockDb.organizations.findById).not.toHaveBeenCalled();
+});
+```
+
+**Test case B - org threshold used when client omits one (AC #2):**
+
+```ts
+it('falls back to the org threshold when the client omits one', async () => {
+  mockDb.organizations.findById.mockResolvedValue({
+    id: MOCK_ORG_ID,
+    settings: { intelligence_similarity_threshold: 0.7 },
+  });
+  await app.inject({
+    method: 'GET',
+    url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+  });
+  expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+    BUG_ID,
+    expect.objectContaining({ threshold: 0.7 })
+  );
+  expect(mockDb.organizations.findById).toHaveBeenCalledWith(MOCK_ORG_ID);
+});
+```
+
+**Test case C - no org setting, threshold omitted not defaulted (AC #3):**
+
+```ts
+it('omits threshold entirely when neither client nor org has one set', async () => {
+  // mockDb.organizations.findById resolves { settings: {} } by default (set in beforeEach)
+  await app.inject({
+    method: 'GET',
+    url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+  });
+  expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+    BUG_ID,
+    expect.objectContaining({ threshold: undefined })
+  );
+});
+```
+
+**Test case C2 - explicit `null` setting, same as absent (AC #3):**
+
+```ts
+it('omits threshold when the org setting is explicitly null', async () => {
+  mockDb.organizations.findById.mockResolvedValue({
+    id: MOCK_ORG_ID,
+    settings: { intelligence_similarity_threshold: null },
+  });
+  await app.inject({
+    method: 'GET',
+    url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+  });
+  expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+    BUG_ID,
+    expect.objectContaining({ threshold: undefined })
+  );
+});
+```
+
+**Test case D - no org context, no lookup attempted (AC #4):**
+
+```ts
+it('does not attempt an org lookup when there is no organization_id (self-hosted)', async () => {
+  mockGuardImpl.mockImplementationOnce((request: any) => {
+    request.project = { id: 'proj-1', organization_id: null };
+  });
+  const selfHostedApp = Fastify();
+  const selfHostedDb = createMockDb();
+  intelligenceRoutes(selfHostedApp, globalClient, selfHostedDb); // no clientFactory - self-hosted path
+  await selfHostedApp.ready();
+  try {
+    await selfHostedApp.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+    });
+  } finally {
+    await selfHostedApp.close();
+  }
+  expect(selfHostedDb.organizations.findById).not.toHaveBeenCalled();
+  expect(globalClient.getSimilarBugs).toHaveBeenCalledWith(
+    BUG_ID,
+    expect.objectContaining({ threshold: undefined })
+  );
+});
+```
+
+### `packages/backend/tests/queue/intelligence-worker.test.ts` (new file)
+
+**Mock/fixture updates required:**
+
+New file. Build minimal `DatabaseClient`/`IntelligenceClient`/`IJobHandle` mocks (`DatabaseClient` mock shape follows `notification-worker.test.ts`'s pattern), plus `organizations: { findById: vi.fn() }`. Import `processAnalyzeJob` directly per constraint #6 - no `createIntelligenceWorker`/queue harness needed for these cases.
+
+`IJobHandle` (`packages/message-broker/src/interfaces.ts:13-20`) requires `updateProgress(...)` - `processAnalyzeJob`'s first step (`ProgressTracker.update`, `progress-tracker.ts:71-78`) calls it immediately, before reaching any of the code under test. The job mock must include it or every test case throws before `getSimilarBugs` is ever called. `processAnalyzeJob`'s `ruleExecutor` argument (a `DedupRuleExecutor`, `services/rules/executor.ts:84`) is never invoked in test cases E-G since `is_duplicate: false` skips that branch entirely - a type-cast stub is sufficient, not a real mock.
+
+```ts
+// Shared fixtures for test cases E-G:
+const mockJob = {
+  id: 'job-1',
+  data: { bugReportId: 'bug-1', projectId: 'proj-1', payload: { bug_id: 'bug-1' } },
+  updateProgress: vi.fn(),
+} as any;
+const mockClient = {
+  analyzeBug: vi.fn().mockResolvedValue({ embedding_generated: true, stored: true }),
+  getSimilarBugs: vi.fn().mockResolvedValue({ is_duplicate: false, similar_bugs: [] }),
+} as any;
+const mockRuleExecutor = {} as DedupRuleExecutor; // unused on the is_duplicate:false path
+```
+
+**Test case E - worker forwards the org threshold (AC #5):**
+
+```ts
+it('forwards the org similarity threshold to getSimilarBugs', async () => {
+  const mockDb = {
+    organizations: {
+      findById: vi.fn().mockResolvedValue({ settings: { intelligence_similarity_threshold: 0.7 } }),
+    },
+  } as any;
+
+  await processAnalyzeJob(mockJob, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor);
+
+  expect(mockClient.getSimilarBugs).toHaveBeenCalledWith(
+    'bug-1',
+    expect.objectContaining({ threshold: 0.7 })
+  );
+  expect(mockDb.organizations.findById).toHaveBeenCalledWith('org-1');
+});
+```
+
+**Test case F - no org setting, threshold omitted (AC #6):**
+
+```ts
+it('omits threshold when the org has none set', async () => {
+  const mockDb = {
+    organizations: { findById: vi.fn().mockResolvedValue({ settings: {} }) },
+  } as any;
+
+  await processAnalyzeJob(mockJob, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor);
+
+  expect(mockClient.getSimilarBugs).toHaveBeenCalledWith(
+    'bug-1',
+    expect.objectContaining({ threshold: undefined })
+  );
+});
+```
+
+**Test case G - no resolvedOrgId, no lookup (AC #7):**
+
+```ts
+it('does not look up an org when resolvedOrgId is undefined', async () => {
+  const mockDb = { organizations: { findById: vi.fn() } } as any;
+
+  await processAnalyzeJob(mockJob, mockClient, mockDb, undefined, Date.now(), mockRuleExecutor);
+
+  expect(mockDb.organizations.findById).not.toHaveBeenCalled();
+});
+```
+
+**Test case H - org lookup failure propagates, no special handling:**
+
+```ts
+it('propagates when the org lookup rejects, failing the job', async () => {
+  const mockDb = {
+    organizations: { findById: vi.fn().mockRejectedValue(new Error('db unavailable')) },
+  } as any;
+
+  await expect(
+    processAnalyzeJob(mockJob, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor)
+  ).rejects.toThrow('db unavailable');
+
+  expect(mockClient.getSimilarBugs).not.toHaveBeenCalled();
+});
+```
+
+## Verification
 
 ```bash
-# 1. No new packages required; ensure lockfile is up to date after #238 lands
-cd /repo
-pnpm install --frozen-lockfile
-
-# 2. Edit the similar-bugs route handler
-# File: packages/backend/src/api/routes/intelligence.ts
-#
-# After the existing `if (!db) { ... return; }` early-return guard,
-# add a const binding to capture the narrowed type for use in closures:
-#
-#   const database = db;   // narrows DatabaseClient | undefined → DatabaseClient
-#                          // tsc --strict does not propagate narrowing into
-#                          // nested async closures from a parameter; a const
-#                          // binding at this scope holds the narrowing.
-#
-# Inside the handler for GET /projects/:projectId/bugs/:id/similar,
-# after the existing `resolveClient` call, add:
-#
-#   const orgThreshold: number | undefined =
-#     request.project?.organization_id != null
-#       ? ((await database.organizations.findById(request.project.organization_id))
-#           ?.settings.intelligence_similarity_threshold) ?? undefined
-#   // Note: ?.settings (not ?.settings?) — Organization.settings is non-nullable in the DB
-#   // type; the outer ?. handles the null findById result, not a missing settings field.
-#       : undefined;
-#
-# Note: reads the raw JSONB field rather than going through
-# getOrgIntelligenceSettings, which fills in a 0.75 default and would
-# collapse "org has no setting" into a number, making the env-var and
-# hardcoded-0.85 fallback paths unreachable.
-#
-# Then update the getSimilarBugs call from:
-#   c.getSimilarBugs(id, { threshold, limit, projectId })
-# to:
-#   c.getSimilarBugs(id, { threshold, limit, projectId, orgThreshold })
-
-# 3. Forward orgThreshold in IntelligenceClient
-# File: packages/backend/src/services/intelligence/intelligence-client.ts
-#
-# The existing getSimilarBugs method already builds a params block with
-# threshold, limit, and project_id guards. Do NOT rewrite the existing
-# block — append ONE new guard after the last existing if-statement:
-#
-#   if (options?.orgThreshold !== undefined) {
-#     params.org_threshold = String(options.orgThreshold);
-#   }
-#
-# Also extend the method signature's options type to include orgThreshold:
-#   options?: { threshold?: number; limit?: number; projectId?: string; orgThreshold?: number }
-
-# 4. Add org_threshold to the intelligence service querystring schema
-# File: packages/bugspotter-intelligence/src/routes/bugs/similar.ts
-#
-# In the Fastify route schema, add to the querystring object:
-#   org_threshold: Type.Optional(Type.Number())
-#
-# Do NOT add minimum/maximum constraints here. The backend schema for
-# intelligence_similarity_threshold accepts [0, 1]. If this schema used
-# minimum: 0.5, a value like 0.3 sent by the backend would be rejected
-# with HTTP 400, which IntelligenceClient maps to a 502 for the caller —
-# worse than the current no-op. resolveThreshold already silently ignores
-# orgDefault values below THRESHOLD_MIN (0.5) and falls through to the
-# env/hardcoded fallback, which IS the correct "silent fallthrough" behavior.
-#
-# In the handler, update the resolveThreshold call from:
-#   const threshold = resolveThreshold(request.query.threshold);
-# to:
-#   const threshold = resolveThreshold(request.query.threshold, request.query.org_threshold);
-
-# 5. Build to confirm no TypeScript errors
-pnpm --filter backend build
-pnpm --filter @bugspotter/intelligence build   # requires #238
-
-# 6. Run existing unit tests
-pnpm --filter backend test:unit
-pnpm --filter @bugspotter/intelligence test    # requires #238
-
-# 7. Add unit tests for threshold precedence
-#
-# File: packages/bugspotter-intelligence/tests/routes/bugs/similar.test.ts
-# (requires #238 for package resolution)
-#
-# Vitest ES-module mock pattern required for test cases A-D:
-#   import * as thresholdMod from '../../src/utils/threshold.js';
-#   vi.mock('../../src/utils/threshold.js');   // must be top-level, not inside describe
-#   // then inside each test:
-#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(<expected>);
-#   // assert with:
-#   expect(thresholdMod.resolveThreshold).toHaveBeenCalledWith(<args>);
-#
-# Test case A — client threshold wins (AC #1):
-#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.9);
-#   Inject GET /api/v1/bugs/bug-1/similar?threshold=0.9&org_threshold=0.7.
-#   Assert resolveThreshold called with (0.9, 0.7) and returned 0.9.
-#
-# Test case B — org default used when no client threshold (AC #2):
-#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.7);
-#   Inject GET /api/v1/bugs/bug-1/similar?org_threshold=0.7.
-#   Assert resolveThreshold called with (undefined, 0.7).
-#
-# Test case C — env fallback (AC #3):
-#   process.env.SIMILARITY_THRESHOLD = '0.6';
-#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.6);
-#   Inject GET /api/v1/bugs/bug-1/similar (no threshold, no org_threshold).
-#   Assert resolveThreshold called with (undefined, undefined) and returned 0.6.
-#   Note: assert on resolveThreshold's return value via the mock, NOT on response
-#   body content (similar.ts returns stub [] regardless of threshold).
-#
-# Test case D — hardcoded fallback (AC #4):
-#   delete process.env.SIMILARITY_THRESHOLD;
-#   vi.mocked(thresholdMod.resolveThreshold).mockReturnValue(0.85);
-#   Inject GET /api/v1/bugs/bug-1/similar (no params).
-#   Assert resolveThreshold called with (undefined, undefined) and returned 0.85.
-#
-# File: packages/backend/tests/api/intelligence-routes.test.ts
-#
-# Test case E — graceful no-org-context fallback (AC #5):
-#   The module-level guard mock (intelligence-routes.test.ts line 28) always
-#   sets request.project.organization_id via a fixed factory. Do NOT add a
-#   second vi.mock('../../src/api/authorization/index.js', ...) call — vi.mock
-#   is hoisted to the top of the file regardless of nesting, so a duplicate
-#   mock for the same module path would override the guard for every test in
-#   the file (including A-D), not just the one it's declared near.
-#
-#   Instead, make the existing guard mock reconfigurable: back it with a
-#   vi.fn() default implementation that test case E overrides once via
-#   mockImplementationOnce:
-#     const mockGuardImpl = vi.fn((request: any) => {
-#       request.project = { id: request.params?.projectId, organization_id: MOCK_ORG_ID };
-#     });
-#     vi.mock('../../src/api/authorization/index.js', () => ({
-#       guard: () => async (request: any) => mockGuardImpl(request),
-#     }));
-#   Then in test case E:
-#     mockGuardImpl.mockImplementationOnce((request: any) => {
-#       request.project = { id: 'proj-1', organization_id: null };
-#     });
-#   Then spy on getSimilarBugs and assert it receives orgThreshold: undefined.
-#
-# Test case F — org_threshold absent from proxied URL when undefined (AC #6):
-#   Spy on IntelligenceClient.getSimilarBugs or the underlying axios request.
-#   Call the route with no threshold and no org setting (mock findById returns
-#   { settings: { intelligence_similarity_threshold: null } }).
-#   Assert the captured URL does not contain the string 'org_threshold'.
+pnpm --filter @bugspotter/backend typecheck
+pnpm --filter @bugspotter/backend test:unit
 ```
+
+Rollback: n/a - purely additive read plus conditional param forwarding on two existing call sites; reverting restores current (buggy) behavior with no data or schema impact.
