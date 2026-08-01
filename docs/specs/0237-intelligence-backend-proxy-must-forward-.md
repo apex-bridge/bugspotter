@@ -132,12 +132,34 @@ vi.mock('../../src/api/authorization/index.js', () => ({
 
 (This mirrors the working pattern the now-superseded spec for this issue already worked out for the same underlying test-infrastructure limitation - reused here, not reinvented.)
 
+**Route registration:** the existing top-level `beforeEach` (`intelligence-routes.test.ts:119-127`) already calls `intelligenceRoutes(app, globalClient, createMockDb(), clientFactory as any)` once per test. Test cases A/B/C/C2 must reuse that single registration - a second call to `intelligenceRoutes` on the same `app` instance registers the same method+path twice and Fastify throws `FST_ERR_DUPLICATED_ROUTE` synchronously. Hoist `mockDb` to a `describe`-scoped `let` so each test case can configure it without re-registering routes:
+
+```ts
+// Replace the existing suite-level declarations and beforeEach:
+let app: FastifyInstance;
+let globalClient: ReturnType<typeof createMockClient>;
+let orgClient: ReturnType<typeof createMockClient>;
+let clientFactory: ReturnType<typeof createMockClientFactory>;
+let mockDb: ReturnType<typeof createMockDb>;
+
+beforeEach(async () => {
+  app = Fastify();
+  globalClient = createMockClient();
+  orgClient = createMockClient();
+  clientFactory = createMockClientFactory(orgClient);
+  mockDb = createMockDb();
+
+  intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
+  await app.ready();
+});
+```
+
+Test case D exercises the self-hosted (no-`clientFactory`) registration, which is a different route wiring than the shared `beforeEach` sets up - it uses its own local Fastify instance instead of the shared `app`, so it doesn't collide with the routes already registered there.
+
 **Test case A - client threshold wins, no org lookup (AC #1):**
 
 ```ts
 it('uses the client-supplied threshold and does not look up the org setting', async () => {
-  const mockDb = createMockDb();
-  intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
   await app.inject({
     method: 'GET',
     url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar?threshold=0.9`,
@@ -154,12 +176,10 @@ it('uses the client-supplied threshold and does not look up the org setting', as
 
 ```ts
 it('falls back to the org threshold when the client omits one', async () => {
-  const mockDb = createMockDb();
   mockDb.organizations.findById.mockResolvedValue({
     id: MOCK_ORG_ID,
     settings: { intelligence_similarity_threshold: 0.7 },
   });
-  intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
   await app.inject({
     method: 'GET',
     url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
@@ -175,8 +195,7 @@ it('falls back to the org threshold when the client omits one', async () => {
 
 ```ts
 it('omits threshold entirely when neither client nor org has one set', async () => {
-  const mockDb = createMockDb(); // organizations.findById resolves { settings: {} } by default
-  intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
+  // mockDb.organizations.findById resolves { settings: {} } by default (set in beforeEach)
   await app.inject({
     method: 'GET',
     url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
@@ -192,12 +211,10 @@ it('omits threshold entirely when neither client nor org has one set', async () 
 
 ```ts
 it('omits threshold when the org setting is explicitly null', async () => {
-  const mockDb = createMockDb();
   mockDb.organizations.findById.mockResolvedValue({
     id: MOCK_ORG_ID,
     settings: { intelligence_similarity_threshold: null },
   });
-  intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
   await app.inject({
     method: 'GET',
     url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
@@ -216,13 +233,19 @@ it('does not attempt an org lookup when there is no organization_id (self-hosted
   mockGuardImpl.mockImplementationOnce((request: any) => {
     request.project = { id: 'proj-1', organization_id: null };
   });
-  const mockDb = createMockDb();
-  intelligenceRoutes(app, globalClient, mockDb); // no clientFactory - self-hosted path
-  await app.inject({
-    method: 'GET',
-    url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
-  });
-  expect(mockDb.organizations.findById).not.toHaveBeenCalled();
+  const selfHostedApp = Fastify();
+  const selfHostedDb = createMockDb();
+  intelligenceRoutes(selfHostedApp, globalClient, selfHostedDb); // no clientFactory - self-hosted path
+  await selfHostedApp.ready();
+  try {
+    await selfHostedApp.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+    });
+  } finally {
+    await selfHostedApp.close();
+  }
+  expect(selfHostedDb.organizations.findById).not.toHaveBeenCalled();
   expect(globalClient.getSimilarBugs).toHaveBeenCalledWith(
     BUG_ID,
     expect.objectContaining({ threshold: undefined })
