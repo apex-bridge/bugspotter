@@ -16,11 +16,29 @@
 // Required env var: SPEC_FILE. Optional: SPEC_SCOPE_CAP (default 6).
 // Always exits 0 - this is advisory only.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
 
 export const DEFAULT_CAP = 6;
+
+/**
+ * Parses SPEC_SCOPE_CAP into a non-negative integer, falling back to
+ * DEFAULT_CAP for anything unset, non-numeric, negative, or fractional.
+ * `Number('')` and `Number(undefined)` both fall through cleanly since
+ * `Number.isInteger` rejects NaN.
+ */
+export function resolveCap(rawCap, defaultCap = DEFAULT_CAP) {
+  if (!rawCap) {
+    // Covers both "unset" (undefined) and GitHub Actions' habit of
+    // resolving an unconfigured `vars.*` reference to an empty string
+    // rather than leaving the env var absent — `Number('')` is 0, which
+    // Number.isInteger happily accepts, so this must be checked first.
+    return defaultCap;
+  }
+  const parsed = Number(rawCap);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : defaultCap;
+}
 
 /** Returns a warning string if declaredPaths.length exceeds cap, else null. */
 export function checkFanOut(declaredPaths, cap = DEFAULT_CAP) {
@@ -59,10 +77,21 @@ function main() {
     process.exit(0);
   }
 
-  const cap = SPEC_SCOPE_CAP ? Number(SPEC_SCOPE_CAP) : DEFAULT_CAP;
+  const parsedCap = Number(SPEC_SCOPE_CAP);
+  const capIsValid = !SPEC_SCOPE_CAP || (Number.isInteger(parsedCap) && parsedCap >= 0);
+  if (!capIsValid) {
+    console.warn(`Spec scope check: ignoring invalid SPEC_SCOPE_CAP="${SPEC_SCOPE_CAP}".`);
+  }
+  const cap = resolveCap(SPEC_SCOPE_CAP);
   const warning = checkFanOut(declaredPaths, cap);
   if (warning) {
     console.warn(`::warning::${warning}`);
+    // Advisory output that only lands in run-log annotations is easy for a
+    // spec reviewer to miss — they see the PR, not the Action run. Surface
+    // it in the job summary too, when running under GitHub Actions.
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n**Spec scope warning:** ${warning}\n`);
+    }
   } else {
     console.log(`Spec scope check: ${declaredPaths.length} file(s) declared, within cap (${cap}).`);
   }

@@ -14,8 +14,11 @@
 //
 // Required env vars: SPEC_FILE, FILES_WRITTEN (comma-separated, matching
 // generate-impl.mjs's GITHUB_OUTPUT format).
-// Exit 1 if any written file is undeclared. Exit 0 if the spec has no
-// parseable "Files touched" line (nothing to check against) or is clean.
+// Exit 1 if any written file is undeclared, OR if the ratified spec can't be
+// read or has no parseable "Files touched" line — a hard gate that no-ops on
+// a malformed baseline isn't a gate, it's a trap door. Exit 0 only when the
+// comparison actually ran and came back clean (or there's nothing written to
+// check, per FILES_WRITTEN being empty).
 
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -42,14 +45,18 @@ function main() {
   try {
     spec = readFileSync(SPEC_FILE, 'utf8');
   } catch (err) {
-    console.warn(`Impl scope check: could not read spec file: ${err.message}`);
-    process.exit(0);
+    console.error(`Impl scope check: could not read spec file: ${err.message}`);
+    process.exit(1);
   }
 
   const declaredPaths = extractDeclaredPaths(spec);
   if (!declaredPaths || declaredPaths.length === 0) {
-    console.warn('Impl scope check: spec has no parseable "Files touched:" line — skipping.');
-    process.exit(0);
+    console.error(
+      'Impl scope check FAILED: spec has no parseable "Files touched:" line, so the ' +
+        'scaffold cannot be checked against it. Fix the ratified spec\'s "Files touched" ' +
+        'field rather than skip the check silently.'
+    );
+    process.exit(1);
   }
 
   const writtenPaths = FILES_WRITTEN.split(',')

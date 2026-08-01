@@ -3,7 +3,31 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkFanOut, DEFAULT_CAP } from './check-spec-scope.mjs';
+import { checkFanOut, resolveCap, DEFAULT_CAP } from './check-spec-scope.mjs';
+
+describe('resolveCap', () => {
+  test('parses a valid numeric string', () => {
+    assert.equal(resolveCap('10'), 10);
+  });
+
+  test('falls back to DEFAULT_CAP when unset', () => {
+    assert.equal(resolveCap(undefined), DEFAULT_CAP);
+    assert.equal(resolveCap(''), DEFAULT_CAP);
+  });
+
+  test('falls back to DEFAULT_CAP for non-numeric input', () => {
+    assert.equal(resolveCap('abc'), DEFAULT_CAP);
+  });
+
+  test('falls back to DEFAULT_CAP for a negative or fractional value', () => {
+    assert.equal(resolveCap('-1'), DEFAULT_CAP);
+    assert.equal(resolveCap('2.5'), DEFAULT_CAP);
+  });
+
+  test('zero is a valid cap', () => {
+    assert.equal(resolveCap('0'), 0);
+  });
+});
 
 describe('checkFanOut', () => {
   test('returns null when the count is at or below the cap', () => {

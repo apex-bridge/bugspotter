@@ -53,6 +53,35 @@ describe('extractDeclaredPaths', () => {
   test('returns an empty array when the line has no backtick paths', () => {
     assert.deepEqual(extractDeclaredPaths('**Files touched:** none yet'), []);
   });
+
+  test('extracts every path from a multiline bulleted list (real spec shape)', () => {
+    // Matches how generate-spec.mjs and every real ratified spec (e.g.
+    // docs/specs/0238-*.md) actually format this field — a bulleted list on
+    // the lines FOLLOWING the label, not inline with it. A regression here
+    // silently drops every declared path but the first, which is exactly
+    // the #238 shape this whole check exists to catch.
+    const spec = [
+      '**Files touched:**',
+      '',
+      '- `packages/a/one.ts` (new)',
+      '- `packages/a/two.ts`',
+      '- `packages/a/three.ts` (new)',
+      '',
+      '**Blocking prerequisites:** none',
+      '',
+      '## Problem',
+    ].join('\n');
+    assert.deepEqual(extractDeclaredPaths(spec), [
+      'packages/a/one.ts',
+      'packages/a/two.ts',
+      'packages/a/three.ts',
+    ]);
+  });
+
+  test('terminates the block at end of string when Files touched is the last field', () => {
+    const spec = '**Files touched:**\n\n- `packages/a/one.ts`';
+    assert.deepEqual(extractDeclaredPaths(spec), ['packages/a/one.ts']);
+  });
 });
 
 describe('extractOutOfScopeText', () => {
@@ -67,6 +96,18 @@ describe('extractOutOfScopeText', () => {
 
   test('returns empty string when there is no Out of scope section', () => {
     assert.equal(extractOutOfScopeText('# Spec: no such section'), '');
+  });
+
+  test('extracts the section when it is the last thing in the file with no trailing newline', () => {
+    // Ownership check runs BEFORE the "Format generated files" (prettier)
+    // step in spec-agent.yml, so freshly-generated content isn't guaranteed
+    // to end with a newline yet. A missing match here silently drops a
+    // deliberate disclaimer and fails the build on a false positive.
+    const spec = '## Out of scope\n\n- The external `bugspotter-intelligence` python service';
+    assert.match(
+      extractOutOfScopeText(spec),
+      /the external `bugspotter-intelligence` python service/
+    );
   });
 });
 
@@ -125,6 +166,42 @@ describe('checkOwnership', () => {
   test('does not flag paths with no packages/ or apps/ root', () => {
     const violations = checkOwnership(['docs/specs/0001-foo.md'], foreignTokens, '', noPathsExist);
     assert.equal(violations.length, 0);
+  });
+
+  test('checks the apps/ root the same way as packages/', () => {
+    const violations = checkOwnership(
+      ['apps/bugspotter-sdk/src/index.ts'],
+      new Map([['sdk', new Set(['0015'])]]),
+      '',
+      noPathsExist
+    );
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0].token, 'sdk');
+  });
+
+  test('does not flag a short legitimate component that is merely a substring of a foreign token', () => {
+    // "ext" is a real, unrelated component name; "extension" is a foreign
+    // token (ADR-0015, the Chrome extension repo). Bidirectional substring
+    // matching (`token.includes(component)`) used to flag this as a
+    // violation purely because "extension".includes("ext") is true.
+    const violations = checkOwnership(
+      ['packages/ext/src/index.ts'],
+      new Map([['extension', new Set(['0015'])]]),
+      '',
+      noPathsExist
+    );
+    assert.equal(violations.length, 0);
+  });
+
+  test('still flags a hyphenated variant of a foreign token', () => {
+    const violations = checkOwnership(
+      ['packages/intelligence-client/src/index.ts'],
+      foreignTokens,
+      '',
+      noPathsExist
+    );
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0].token, 'intelligence');
   });
 
   test('flags multiple declared paths independently', () => {

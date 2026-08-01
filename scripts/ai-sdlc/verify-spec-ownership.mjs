@@ -54,9 +54,15 @@ export function parseAdrOwnership(adrIndexText) {
   return foreignTokens;
 }
 
-/** Extract backtick-quoted paths from the spec's "**Files touched:**" line. */
+/**
+ * Extract backtick-quoted paths from the spec's "**Files touched:**" field.
+ * Real generated specs put the list on the lines FOLLOWING the label (a
+ * bulleted list — see docs/specs/0238's own "Files touched" block), not on
+ * the same line, so this must capture the whole block up to the next
+ * "**"-prefixed field or "##" heading, not just the first line.
+ */
 export function extractDeclaredPaths(specText) {
-  const filesTouchedMatch = specText.match(/\*\*Files touched:\*\*\s*(.+)/);
+  const filesTouchedMatch = specText.match(/\*\*Files touched:\*\*\s*([\s\S]*?)(?=\n\*\*|\n##|$)/);
   if (!filesTouchedMatch) {
     return null;
   }
@@ -65,7 +71,7 @@ export function extractDeclaredPaths(specText) {
 
 /** Extract the lowercased body text of the spec's "## Out of scope" section. */
 export function extractOutOfScopeText(specText) {
-  const match = specText.match(/## Out of scope\s*\n([\s\S]*?)(?=\n## |\n$)/);
+  const match = specText.match(/## Out of scope\s*\n([\s\S]*?)(?=\n## |$)/);
   return (match?.[1] ?? '').toLowerCase();
 }
 
@@ -89,7 +95,12 @@ export function checkOwnership(declaredPaths, foreignTokens, outOfScopeText, pat
       .replace(/\.[a-z]+$/, '');
 
     for (const [token, adrNums] of foreignTokens) {
-      if (component !== token && !component.includes(token) && !token.includes(component)) {
+      // Exact match, or the component is a hyphenated variant of the token
+      // (e.g. "intelligence-client" for token "intelligence"). Deliberately
+      // NOT bidirectional substring matching: `token.includes(component)`
+      // would flag a legitimate short component like "ext" just because it
+      // is a substring of the foreign token "extension".
+      if (component !== token && !component.startsWith(`${token}-`)) {
         continue;
       }
 
