@@ -64,6 +64,16 @@ jobs:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
         run: node scripts/ai-sdlc/verify-spec.mjs
 
+      # Deterministic follow-up to the LLM pass above: no model call, no
+      # attention/instruction-following failure mode. Fails the workflow
+      # (not advisory) if the spec declares a new path colliding with a
+      # component docs/adr/README.md attributes to a different repo - the
+      # exact shape of the #226/#238 mistake.
+      - name: Verify spec path ownership (deterministic)
+        env:
+          SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
+        run: node scripts/ai-sdlc/verify-spec-ownership.mjs
+
       - name: Format generated files
         env:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
