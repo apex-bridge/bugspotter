@@ -15,6 +15,14 @@ describe('resolveCap', () => {
     assert.equal(resolveCap(''), DEFAULT_CAP);
   });
 
+  test('falls back to DEFAULT_CAP for a whitespace-only value', () => {
+    // Number('   ') is 0, not NaN — a naive check would silently turn a
+    // whitespace-only SPEC_SCOPE_CAP into a zero-file cap instead of
+    // treating it as unset.
+    assert.equal(resolveCap('   '), DEFAULT_CAP);
+    assert.equal(resolveCap('\t\n'), DEFAULT_CAP);
+  });
+
   test('falls back to DEFAULT_CAP for non-numeric input', () => {
     assert.equal(resolveCap('abc'), DEFAULT_CAP);
   });

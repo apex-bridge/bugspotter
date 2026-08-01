@@ -24,19 +24,21 @@ export const DEFAULT_CAP = 6;
 
 /**
  * Parses SPEC_SCOPE_CAP into a non-negative integer, falling back to
- * DEFAULT_CAP for anything unset, non-numeric, negative, or fractional.
- * `Number('')` and `Number(undefined)` both fall through cleanly since
- * `Number.isInteger` rejects NaN.
+ * DEFAULT_CAP for anything unset, whitespace-only, non-numeric, negative,
+ * or fractional. `Number('')` and `Number(undefined)` both fall through
+ * cleanly since `Number.isInteger` rejects NaN — but `Number('   ')` is 0,
+ * not NaN, so whitespace must be trimmed away BEFORE the emptiness check
+ * or a whitespace-only value silently becomes a zero-file cap.
  */
 export function resolveCap(rawCap, defaultCap = DEFAULT_CAP) {
-  if (!rawCap) {
-    // Covers both "unset" (undefined) and GitHub Actions' habit of
-    // resolving an unconfigured `vars.*` reference to an empty string
-    // rather than leaving the env var absent — `Number('')` is 0, which
-    // Number.isInteger happily accepts, so this must be checked first.
+  const trimmed = typeof rawCap === 'string' ? rawCap.trim() : rawCap;
+  if (!trimmed) {
+    // Covers "unset" (undefined), whitespace-only, and GitHub Actions'
+    // habit of resolving an unconfigured `vars.*` reference to an empty
+    // string rather than leaving the env var absent.
     return defaultCap;
   }
-  const parsed = Number(rawCap);
+  const parsed = Number(trimmed);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : defaultCap;
 }
 
@@ -77,8 +79,9 @@ function main() {
     process.exit(0);
   }
 
-  const parsedCap = Number(SPEC_SCOPE_CAP);
-  const capIsValid = !SPEC_SCOPE_CAP || (Number.isInteger(parsedCap) && parsedCap >= 0);
+  const trimmedCap = SPEC_SCOPE_CAP?.trim();
+  const parsedCap = Number(trimmedCap);
+  const capIsValid = !trimmedCap || (Number.isInteger(parsedCap) && parsedCap >= 0);
   if (!capIsValid) {
     console.warn(`Spec scope check: ignoring invalid SPEC_SCOPE_CAP="${SPEC_SCOPE_CAP}".`);
   }
