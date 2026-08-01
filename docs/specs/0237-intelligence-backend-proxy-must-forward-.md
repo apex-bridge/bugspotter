@@ -188,6 +188,7 @@ it('falls back to the org threshold when the client omits one', async () => {
     BUG_ID,
     expect.objectContaining({ threshold: 0.7 })
   );
+  expect(mockDb.organizations.findById).toHaveBeenCalledWith(MOCK_ORG_ID);
 });
 ```
 
@@ -291,6 +292,7 @@ it('forwards the org similarity threshold to getSimilarBugs', async () => {
     'bug-1',
     expect.objectContaining({ threshold: 0.7 })
   );
+  expect(mockDb.organizations.findById).toHaveBeenCalledWith('org-1');
 });
 ```
 
