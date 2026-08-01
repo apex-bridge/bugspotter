@@ -18,6 +18,21 @@ on:
   # one: documentation, workflow YAML (the action's own validation
   # guardrail rejects modified workflows from PR branches anyway),
   # marketing HTML, etc.
+  #
+  # `docs/specs/**` and `docs/adr/**` are deliberately carved back IN
+  # (the trailing `!`-prefixed entries — GitHub Actions evaluates path
+  # patterns in list order and the last match wins, so these override
+  # the broader `**.md`/`docs/**` ignores above them for exactly these
+  # two subtrees). Those two artifact classes are the ones tied to the
+  # pipeline's non-delegable human judgment gates (spec approval, ADR
+  # ratification) — and were, until this fix, the ONLY doc changes that
+  # got zero automatic review. That gap is not hypothetical: it's the
+  # direct mechanism behind the #226/#238 incident (a spec hallucinated
+  # a whole in-repo package; nothing auto-reviewed it, and it took
+  # multiple PR cycles before a human caught it via a manually-triggered
+  # `@claude` review). See docs/specs/0237-intelligence-backend-proxy-
+  # must-forward-.md's own review history for a live example of what
+  # automatic multi-round review on a spec actually catches.
   pull_request:
     types: [opened, ready_for_review, reopened]
     paths-ignore:
@@ -26,6 +41,8 @@ on:
       - '.github/**'
       - '*.html'
       - 'apps/**/*.html'
+      - '!docs/specs/**'
+      - '!docs/adr/**'
   # @claude mentions in PR comments and review threads. The `if:` guard
   # below keeps the workflow from running on issue-comments outside of
   # PRs and on comments that don't address Claude.
