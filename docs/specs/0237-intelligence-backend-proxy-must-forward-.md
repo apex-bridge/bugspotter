@@ -42,6 +42,8 @@ Prior history, for anyone reading this after the fact: this bug was previously m
 - [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId` with an explicit org threshold set - calls `client.getSimilarBugs(bugReportId, { projectId, threshold: <org value> })` - verified by test case E
 - [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId` with no org threshold set - calls `getSimilarBugs` with `threshold: undefined` - verified by test case F
 - [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId === undefined` - does not attempt an org lookup - verified by test case G
+- [ ] `GET .../similar` (no `threshold` param), org has `intelligence_similarity_threshold: null` explicitly set (not merely absent from `settings`) - calls `getSimilarBugs` with `threshold: undefined` - verified by test case C2
+- [ ] Worker's `processAnalyzeJob`, given `resolvedOrgId` set but `organizations.findById` rejects - the rejection propagates and fails the job, no special handling (consistent with `analyzeBug`/`getSimilarBugs` already being unguarded in this function) - verified by test case H
 - [ ] All existing tests in `intelligence-routes.test.ts` and the new intelligence-worker suite pass
 
 ## Changes
@@ -100,6 +102,8 @@ const similarResult = await client.getSimilarBugs(bugReportId, {
   threshold: orgThreshold,
 });
 ```
+
+**Failure behavior:** `db.organizations.findById` is deliberately left unwrapped here, matching this function's existing pattern - `client.analyzeBug` and `client.getSimilarBugs` (steps 1-2, lines 210/221) are equally unguarded; only the dedup-application step (step 3) has a try/catch, and that's documented in-code as "never throw from dedup." A DB error (or rejected promise) during the org lookup therefore propagates out of `processAnalyzeJob` and fails the job under the queue's existing retry policy, rather than silently swallowing the error and proceeding with the service's global default threshold. This is intentional: retrying is safer than dedup-checking a bug against the wrong similarity sensitivity because a transient DB read failed. Verified by test case H.
 
 ## Tests
 
@@ -184,6 +188,27 @@ it('omits threshold entirely when neither client nor org has one set', async () 
 });
 ```
 
+**Test case C2 - explicit `null` setting, same as absent (AC #3):**
+
+```ts
+it('omits threshold when the org setting is explicitly null', async () => {
+  const mockDb = createMockDb();
+  mockDb.organizations.findById.mockResolvedValue({
+    id: MOCK_ORG_ID,
+    settings: { intelligence_similarity_threshold: null },
+  });
+  intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
+  await app.inject({
+    method: 'GET',
+    url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+  });
+  expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+    BUG_ID,
+    expect.objectContaining({ threshold: undefined })
+  );
+});
+```
+
 **Test case D - no org context, no lookup attempted (AC #4):**
 
 ```ts
@@ -198,6 +223,10 @@ it('does not attempt an org lookup when there is no organization_id (self-hosted
     url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
   });
   expect(mockDb.organizations.findById).not.toHaveBeenCalled();
+  expect(globalClient.getSimilarBugs).toHaveBeenCalledWith(
+    BUG_ID,
+    expect.objectContaining({ threshold: undefined })
+  );
 });
 ```
 
@@ -268,6 +297,22 @@ it('does not look up an org when resolvedOrgId is undefined', async () => {
   await processAnalyzeJob(mockJob, mockClient, mockDb, undefined, Date.now(), mockRuleExecutor);
 
   expect(mockDb.organizations.findById).not.toHaveBeenCalled();
+});
+```
+
+**Test case H - org lookup failure propagates, no special handling:**
+
+```ts
+it('propagates when the org lookup rejects, failing the job', async () => {
+  const mockDb = {
+    organizations: { findById: vi.fn().mockRejectedValue(new Error('db unavailable')) },
+  } as any;
+
+  await expect(
+    processAnalyzeJob(mockJob, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor)
+  ).rejects.toThrow('db unavailable');
+
+  expect(mockClient.getSimilarBugs).not.toHaveBeenCalled();
 });
 ```
 
