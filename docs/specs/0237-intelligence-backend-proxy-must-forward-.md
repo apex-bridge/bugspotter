@@ -28,7 +28,7 @@ Prior history, for anyone reading this after the fact: this bug was previously m
 1. Must NOT use `getOrgIntelligenceSettings`/`resolveOrgIntelligenceSettings` (`tenant-config.ts`) to obtain the fallback threshold. Both bake in a hardcoded default (0.75) whenever the org hasn't set a value (`tenant-config.ts:116-118`), which would make every org without an explicit override silently send `0.75` to the Python service - overriding its own global default rather than falling through to it. Must read the raw `org.settings.intelligence_similarity_threshold` (via `db.organizations.findById(orgId)`; `OrganizationSettings` type at `db/types.ts:705`) and only forward it when it is not `null`/`undefined`.
 2. Precedence: client-supplied `threshold` (route) wins first; else the org's explicit raw setting if present; else omit the param entirely so `intelligence-client.ts`'s existing `undefined`-omission behavior and the Python service's own fallback apply. Never synthesize a value when neither the client nor the org has one.
 3. In the route handler, only look up the org's threshold when `request.query.threshold` is `undefined` - avoid an unnecessary DB read on the common path where the client already supplied one.
-4. `request.project.organization_id` is reliably populated in this handler: the route's `guard(db, { auth: 'userOrApiKey', resource: { type: 'project', paramName: 'projectId' } })` preHandler sets `request.project` before the handler runs (`project-access.ts:125`, documented as guaranteed at line 54-55 of the same file).
+4. `request.project.organization_id` is reliably populated in this handler: the route's `guard(db, { auth: 'userOrApiKey', resource: { type: 'project', paramName: 'projectId' } })` preHandler resolves to `authorization/middleware.ts`'s `resolveResource()`, which sets `request.project` unconditionally for any project resource (`authorization/middleware.ts:254`).
 5. In the worker (`processAnalyzeJob`), `resolvedOrgId: string | undefined` is already an existing parameter (used later for `applyDedupAction` at line ~244) - reuse it, don't re-derive the org id.
 6. `processAnalyzeJob` is currently not exported from `intelligence-worker.ts` (only `createIntelligenceWorker` is) and has zero test coverage today - there's an existing `// TODO: Add unit tests (processAnalyzeJob, ...)` at line 51. Export it (named export, no behavior change) so it can be unit-tested directly. The existing worker-test convention in this repo (e.g. `notification-worker.test.ts`) only shallow-tests worker creation and job-data validation, not processor logic - there's no existing harness for driving a job through the created worker's internal processor callback, so direct export-and-call is the pragmatic path here, not a new pattern to invent.
 7. `createMockDb()` in `intelligence-routes.test.ts` (line ~97) has no `organizations` key - add `organizations: { findById: vi.fn() }`, matching the existing `projects` mock shape in that file.
@@ -58,7 +58,7 @@ async function resolveOrgThreshold(
 ): Promise<number | undefined> {
   if (!orgId) return undefined;
   const org = await db.organizations.findById(orgId);
-  return org?.settings?.intelligence_similarity_threshold ?? undefined;
+  return org?.settings.intelligence_similarity_threshold ?? undefined;
 }
 ```
 
@@ -93,7 +93,7 @@ const similarResult = await client.getSimilarBugs(bugReportId, { projectId });
 let orgThreshold: number | undefined;
 if (resolvedOrgId) {
   const org = await db.organizations.findById(resolvedOrgId);
-  orgThreshold = org?.settings?.intelligence_similarity_threshold ?? undefined;
+  orgThreshold = org?.settings.intelligence_similarity_threshold ?? undefined;
 }
 const similarResult = await client.getSimilarBugs(bugReportId, {
   projectId,
@@ -113,6 +113,20 @@ organizations: {
   findById: vi.fn().mockResolvedValue({ id: MOCK_ORG_ID, settings: {} }),
 },
 ```
+
+The module-level `guard` mock (`intelligence-routes.test.ts:28-34`) unconditionally sets `request.project.organization_id = MOCK_ORG_ID`, ignoring `db.projects.findById` entirely - test case D needs to simulate "no org" through the guard mock itself, not through `db`. Make the guard implementation overridable:
+
+```ts
+// Replace the existing vi.mock('../../src/api/authorization/index.js', ...) block with:
+const mockGuardImpl = vi.fn((request: any) => {
+  request.project = { id: request.params?.projectId, organization_id: MOCK_ORG_ID };
+});
+vi.mock('../../src/api/authorization/index.js', () => ({
+  guard: () => async (request: any) => mockGuardImpl(request),
+}));
+```
+
+(This mirrors the working pattern the now-superseded spec for this issue already worked out for the same underlying test-infrastructure limitation - reused here, not reinvented.)
 
 **Test case A - client threshold wins, no org lookup (AC #1):**
 
@@ -174,8 +188,10 @@ it('omits threshold entirely when neither client nor org has one set', async () 
 
 ```ts
 it('does not attempt an org lookup when there is no organization_id (self-hosted)', async () => {
+  mockGuardImpl.mockImplementationOnce((request: any) => {
+    request.project = { id: 'proj-1', organization_id: null };
+  });
   const mockDb = createMockDb();
-  mockDb.projects.findById.mockResolvedValue({ id: 'proj-1', organization_id: null });
   intelligenceRoutes(app, globalClient, mockDb); // no clientFactory - self-hosted path
   await app.inject({
     method: 'GET',
@@ -191,6 +207,22 @@ it('does not attempt an org lookup when there is no organization_id (self-hosted
 
 New file. Build minimal `DatabaseClient`/`IntelligenceClient`/`IJobHandle` mocks (`DatabaseClient` mock shape follows `notification-worker.test.ts`'s pattern), plus `organizations: { findById: vi.fn() }`. Import `processAnalyzeJob` directly per constraint #6 - no `createIntelligenceWorker`/queue harness needed for these cases.
 
+`IJobHandle` (`packages/message-broker/src/interfaces.ts:13-20`) requires `updateProgress(...)` - `processAnalyzeJob`'s first step (`ProgressTracker.update`, `progress-tracker.ts:71-78`) calls it immediately, before reaching any of the code under test. The job mock must include it or every test case throws before `getSimilarBugs` is ever called. `processAnalyzeJob`'s `ruleExecutor` argument (a `DedupRuleExecutor`, `services/rules/executor.ts:84`) is never invoked in test cases E-G since `is_duplicate: false` skips that branch entirely - a type-cast stub is sufficient, not a real mock.
+
+```ts
+// Shared fixtures for test cases E-G:
+const mockJob = {
+  id: 'job-1',
+  data: { bugReportId: 'bug-1', projectId: 'proj-1', payload: { bug_id: 'bug-1' } },
+  updateProgress: vi.fn(),
+} as any;
+const mockClient = {
+  analyzeBug: vi.fn().mockResolvedValue({ embedding_generated: true, stored: true }),
+  getSimilarBugs: vi.fn().mockResolvedValue({ is_duplicate: false, similar_bugs: [] }),
+} as any;
+const mockRuleExecutor = {} as DedupRuleExecutor; // unused on the is_duplicate:false path
+```
+
 **Test case E - worker forwards the org threshold (AC #5):**
 
 ```ts
@@ -200,16 +232,8 @@ it('forwards the org similarity threshold to getSimilarBugs', async () => {
       findById: vi.fn().mockResolvedValue({ settings: { intelligence_similarity_threshold: 0.7 } }),
     },
   } as any;
-  const mockClient = {
-    analyzeBug: vi.fn().mockResolvedValue({ embedding_generated: true, stored: true }),
-    getSimilarBugs: vi.fn().mockResolvedValue({ is_duplicate: false, similar_bugs: [] }),
-  } as any;
-  const job = {
-    id: 'job-1',
-    data: { bugReportId: 'bug-1', projectId: 'proj-1', payload: { bug_id: 'bug-1' } },
-  } as any;
 
-  await processAnalyzeJob(job, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor);
+  await processAnalyzeJob(mockJob, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor);
 
   expect(mockClient.getSimilarBugs).toHaveBeenCalledWith(
     'bug-1',
@@ -225,9 +249,8 @@ it('omits threshold when the org has none set', async () => {
   const mockDb = {
     organizations: { findById: vi.fn().mockResolvedValue({ settings: {} }) },
   } as any;
-  // ...same client/job setup as test case E...
 
-  await processAnalyzeJob(job, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor);
+  await processAnalyzeJob(mockJob, mockClient, mockDb, 'org-1', Date.now(), mockRuleExecutor);
 
   expect(mockClient.getSimilarBugs).toHaveBeenCalledWith(
     'bug-1',
@@ -241,9 +264,8 @@ it('omits threshold when the org has none set', async () => {
 ```ts
 it('does not look up an org when resolvedOrgId is undefined', async () => {
   const mockDb = { organizations: { findById: vi.fn() } } as any;
-  // ...same client/job setup, pass undefined for resolvedOrgId...
 
-  await processAnalyzeJob(job, mockClient, mockDb, undefined, Date.now(), mockRuleExecutor);
+  await processAnalyzeJob(mockJob, mockClient, mockDb, undefined, Date.now(), mockRuleExecutor);
 
   expect(mockDb.organizations.findById).not.toHaveBeenCalled();
 });
