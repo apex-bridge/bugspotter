@@ -25,13 +25,11 @@ vi.mock('../../src/api/middleware/auth.js', () => ({
 
 // Mock guard middleware to attach project with organization_id
 const MOCK_ORG_ID = '0ae3f3af-4eea-400b-b8f5-39958c546c70';
+const mockGuardImpl = vi.fn((request: any) => {
+  request.project = { id: request.params?.projectId, organization_id: MOCK_ORG_ID };
+});
 vi.mock('../../src/api/authorization/index.js', () => ({
-  guard: () => async (request: any) => {
-    request.project = {
-      id: request.params?.projectId,
-      organization_id: MOCK_ORG_ID,
-    };
-  },
+  guard: () => async (request: any) => mockGuardImpl(request),
 }));
 
 vi.mock('../../src/logger.js', () => ({
@@ -100,6 +98,9 @@ function createMockDb() {
       findById: vi.fn().mockResolvedValue({ id: 'proj-1', organization_id: MOCK_ORG_ID }),
       getUserRole: vi.fn().mockResolvedValue('admin'),
     },
+    organizations: {
+      findById: vi.fn().mockResolvedValue({ id: MOCK_ORG_ID, settings: {} }),
+    },
   } as any;
 }
 
@@ -115,14 +116,16 @@ describe('Intelligence Routes - Per-Org Client Resolution', () => {
   let globalClient: ReturnType<typeof createMockClient>;
   let orgClient: ReturnType<typeof createMockClient>;
   let clientFactory: ReturnType<typeof createMockClientFactory>;
+  let mockDb: ReturnType<typeof createMockDb>;
 
   beforeEach(async () => {
     app = Fastify();
     globalClient = createMockClient();
     orgClient = createMockClient();
     clientFactory = createMockClientFactory(orgClient);
+    mockDb = createMockDb();
 
-    intelligenceRoutes(app, globalClient, createMockDb(), clientFactory as any);
+    intelligenceRoutes(app, globalClient, mockDb, clientFactory as any);
     await app.ready();
   });
 
@@ -182,6 +185,84 @@ describe('Intelligence Routes - Per-Org Client Resolution', () => {
 
       expect(res.statusCode).toBe(503);
       expect(res.json().message).toContain('not configured');
+    });
+
+    it('uses the client-supplied threshold and does not look up the org setting', async () => {
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar?threshold=0.9`,
+      });
+      expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+        BUG_ID,
+        expect.objectContaining({ threshold: 0.9 })
+      );
+      expect(mockDb.organizations.findById).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the org threshold when the client omits one', async () => {
+      mockDb.organizations.findById.mockResolvedValue({
+        id: MOCK_ORG_ID,
+        settings: { intelligence_similarity_threshold: 0.7 },
+      });
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+      });
+      expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+        BUG_ID,
+        expect.objectContaining({ threshold: 0.7 })
+      );
+      expect(mockDb.organizations.findById).toHaveBeenCalledWith(MOCK_ORG_ID);
+    });
+
+    it('omits threshold entirely when neither client nor org has one set', async () => {
+      // mockDb.organizations.findById resolves { settings: {} } by default (set in beforeEach)
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+      });
+      expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+        BUG_ID,
+        expect.objectContaining({ threshold: undefined })
+      );
+    });
+
+    it('omits threshold when the org setting is explicitly null', async () => {
+      mockDb.organizations.findById.mockResolvedValue({
+        id: MOCK_ORG_ID,
+        settings: { intelligence_similarity_threshold: null },
+      });
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+      });
+      expect(orgClient.getSimilarBugs).toHaveBeenCalledWith(
+        BUG_ID,
+        expect.objectContaining({ threshold: undefined })
+      );
+    });
+
+    it('does not attempt an org lookup when there is no organization_id (self-hosted)', async () => {
+      mockGuardImpl.mockImplementationOnce((request: any) => {
+        request.project = { id: 'proj-1', organization_id: null };
+      });
+      const selfHostedApp = Fastify();
+      const selfHostedDb = createMockDb();
+      intelligenceRoutes(selfHostedApp, globalClient, selfHostedDb); // no clientFactory - self-hosted path
+      await selfHostedApp.ready();
+      try {
+        await selfHostedApp.inject({
+          method: 'GET',
+          url: `/api/v1/intelligence/projects/${PROJECT_ID}/bugs/${BUG_ID}/similar`,
+        });
+      } finally {
+        await selfHostedApp.close();
+      }
+      expect(selfHostedDb.organizations.findById).not.toHaveBeenCalled();
+      expect(globalClient.getSimilarBugs).toHaveBeenCalledWith(
+        BUG_ID,
+        expect.objectContaining({ threshold: undefined })
+      );
     });
   });
 
