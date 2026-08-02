@@ -105,7 +105,8 @@ console.log(
 let text, stopReason;
 try {
   // 420s: this prompt (spec + up to 15 source files) is larger than
-  // generate-spec's, so it needs more than generate-spec's 180s. Measured
+  // generate-spec's, which is also 420s now (it was 180s when this comment
+  // was first written, and that number turned out to be too small). Measured
   // empirically on the CLI backend with a ~60K-char verify prompt (spec +
   // 4 source files): 283.9s to complete via callClaude's fixed --tools=
   // path (single turn, real corrected output, not a truncation). 420s

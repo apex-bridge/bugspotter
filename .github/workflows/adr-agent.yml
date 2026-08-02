@@ -67,6 +67,10 @@ jobs:
 
       - name: Generate ADR
         id: gen
+        # 6m > generate-adr.mjs's own 300s (5m) LLM timeout, so the script's
+        # error wins over a silent step kill. One LLM call in this job, so the
+        # 15m job cap has ample room around it.
+        timeout-minutes: 6
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

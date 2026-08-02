@@ -126,16 +126,23 @@ Rules:
 
 let adrContent, stopReason;
 try {
-  // 120s: this prompt is much smaller than generate-spec.mjs's (no
-  // TEMPLATE.md, no source-file tree — just one ~1200-char example ADR plus
-  // the issue body and an optional ~1500-char spec excerpt) and max_tokens
-  // (2048) is half of generate-spec's (4096), so it needs less time than
-  // generate-spec's 180s. It still needs more than the old API-only 60s
-  // budget to cover the CLI backend's subprocess startup overhead.
+  // 300s. The previous 120s rested on a premise that is no longer true: it
+  // argued this prompt is "much smaller than generate-spec.mjs's (no
+  // TEMPLATE.md, no source-file tree)" and so needs less than that script's
+  // 180s. Both halves broke:
+  //   1. PR #273 added the same ~10KB ADR index here, so the input is no
+  //      longer in a different size class.
+  //   2. generate-spec's 180s was itself below its own measured runtime and
+  //      failed in practice (run 30752527569); it is now 420s, so "less
+  //      than generate-spec" is no longer a small number either.
+  // max_tokens here is still half of generate-spec's (2048 vs 4096), and
+  // output tokens dominate wall time, so ~300s is the proportionate budget
+  // rather than a flat copy of 420s. adr-agent.yml caps this step at 6m,
+  // above this 300s, inside a 15m job cap that holds only this one LLM call.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
     maxTokens: 2048,
-    timeoutMs: 120_000,
+    timeoutMs: 300_000,
   }));
 } catch (err) {
   console.error(err.message);
