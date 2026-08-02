@@ -326,7 +326,8 @@ RULES:
 7. Do NOT generate package.json, pnpm-lock.yaml, or any config file changes.
 8. Do NOT generate more than 6 files total.
 9. Scaffold tests must use the same test helpers as the example (do not invent new ones).
-10. Every generated file must compile without errors given reasonable stub imports.`;
+10. Every generated file must compile without errors given reasonable stub imports.
+11. Generated code must also pass ESLint, not just tsc — the commit step runs \`eslint --fix\` in a pre-commit hook and a remaining error hard-fails the run. Auto-fixable issues are handled for you; the ones that are not include \`prefer-const\` on a partially-reassigned destructuring (\`let { a, b }\` where only \`a\` is reassigned — declare \`b\` as a separate \`const\`). If a spec's own sample code would violate such a rule, follow the spec's intent and emit the lint-clean equivalent.`;
 
 // staticContext used to be sent as a separate cache_control-marked content
 // block so repeated same-day runs skipped re-sending it; llm-client.mjs's
