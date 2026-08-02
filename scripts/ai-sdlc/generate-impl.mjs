@@ -18,10 +18,18 @@
 //   ANTHROPIC_API_KEY (default) or CLAUDE_CODE_OAUTH_TOKEN (LLM_BACKEND=cli)
 // Optional:     ISSUE_LABELS (comma-separated), GITHUB_OUTPUT
 
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  appendFileSync,
+  readdirSync,
+  existsSync,
+} from 'node:fs';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { callClaude, requireLlmCredentials } from './llm-client.mjs';
+import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
 
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_LABELS = '', SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
@@ -99,6 +107,50 @@ const staticContext = [
 
 const specSection = `# Ratified spec\n${SPEC_CONTENT}`;
 
+// Current content of every file the spec declares under "Files touched" that
+// already exists. Without this, the agent is asked to emit COMPLETE file
+// contents ({path, content}) for files it has never seen — it can only
+// reconstruct the untouched 95% from imagination, which is exactly how
+// issue #237's second attempt drifted `intelligenceRoutes`'s and
+// `createIntelligenceWorker`'s signatures and broke the build in two files
+// the spec never listed. The third attempt then failed differently: the spec
+// (correctly tightened to demand byte-for-byte fidelity to `main`) made the
+// model try to Read the files, but tools are disabled on this path
+// (llm-client.mjs's `--tools=`), so it emitted prose narration instead of
+// JSON and the parse failed. Both failures share this one root cause.
+//
+// verify-spec.mjs already does exactly this for its own prompt; this mirrors
+// that, including the same 1000-line-per-file cap.
+const MAX_LINES_PER_FILE = 1000;
+const declaredPaths = extractDeclaredPaths(SPEC_CONTENT) ?? [];
+const currentFiles = declaredPaths
+  .filter((p) => !p.includes('..') && existsSync(p))
+  .map((p) => {
+    const content = safeRead(p);
+    if (!content) {
+      return null;
+    }
+    const lines = content.split('\n');
+    const body = lines.slice(0, MAX_LINES_PER_FILE).join('\n');
+    const truncated =
+      lines.length > MAX_LINES_PER_FILE ? `\n[… truncated at ${MAX_LINES_PER_FILE} lines]` : '';
+    return `## ${p}\n\`\`\`typescript\n${body}${truncated}\n\`\`\``;
+  })
+  .filter(Boolean);
+
+const currentFilesSection = currentFiles.length
+  ? `# Current content of the files you must edit\n\nThese are the EXACT current contents on \`main\`. For each one you return, ` +
+    `reproduce it verbatim except for the specific changes the spec calls for. Do not ` +
+    `rewrite, reformat, reorder, or "improve" anything the spec does not explicitly ask ` +
+    `you to change.\n\n${currentFiles.join('\n\n')}`
+  : '';
+
+console.log(
+  currentFiles.length
+    ? `Injecting current content of ${currentFiles.length} existing declared file(s) into the prompt.`
+    : 'No existing declared files to inject (all-new-files spec, or no parseable "Files touched" line).'
+);
+
 const userPrompt = `\
 You are an implementation agent for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
 
@@ -108,8 +160,9 @@ Read the spec and acceptance criteria carefully. Generate exactly the files need
 Match the style of the examples in the static context above exactly (same import style, error classes, Fastify plugin pattern, test helpers).
 
 ${specSection}
-
+${currentFilesSection ? `\n${currentFilesSection}\n` : ''}
 RULES:
+0. You have NO tools available — no Read, no Grep, no Bash. Everything you need is already in this prompt. Do not attempt a tool call and do not narrate one; if a file you must edit is shown above, use that content as the source of truth, and if something you need is genuinely absent, make the smallest reasonable assumption and note it in a TODO comment rather than stopping to ask for it.
 1. Return ONLY valid JSON — no prose, no markdown fences around the JSON itself.
 2. Schema: { "files": [ { "path": "...", "content": "..." } ], "summary": "one sentence" }
 3. Paths are relative to the repo root (e.g. "packages/backend/src/api/routes/foo.ts").
@@ -136,14 +189,25 @@ try {
   // spec) is comparable in size to verify-spec's (spec + up to 15 source
   // files). verify-spec.mjs measured 283.9s for its 8192-token generation
   // via the CLI backend and set 420s (~1.5x margin). Scaling that budget for
-  // roughly double the output tokens suggests ~600-800s; 600_000ms keeps a
-  // comparable margin while staying under impl-agent.yml's 15-minute
-  // "Generate scaffold" step timeout (900s), leaving headroom for node
-  // startup and file I/O in the same step.
+  // roughly double the output tokens suggests ~600-800s.
+  //
+  // 600_000ms proved too thin against real measurements on issue #237: one
+  // run timed out at exactly 600s, and the run that did complete took 9m08s
+  // (548s) — a 9% margin. Raised to 780_000ms (13m), which still sits under
+  // impl-agent.yml's "Generate scaffold" step timeout with room for node
+  // startup and file I/O (that step's budget was raised to 18m in the same
+  // change, under the job's 20m cap).
+  //
+  // The deeper cost driver is the response schema: {path, content} means the
+  // model re-emits every declared file IN FULL, so editing three ~500-line
+  // files costs ~15K output tokens of mostly-unchanged text against a 16384
+  // cap. That's the real scaling limit here, and a diff/patch-shaped schema
+  // would be the structural fix — deliberately not attempted in this change,
+  // which is scoped to making the current shape work.
   ({ text, stopReason } = await callClaude({
     prompt,
     maxTokens: 16384,
-    timeoutMs: 600_000,
+    timeoutMs: 780_000,
     model: MODEL,
   }));
 } catch (err) {

@@ -79,7 +79,11 @@ jobs:
 
       - name: Generate scaffold
         id: gen
-        timeout-minutes: 15
+        # 18m, under the job's 20m cap. Raised from 15m alongside
+        # generate-impl.mjs's CLI timeout (600s -> 780s): a real run on
+        # issue #237 took 9m08s and another timed out at exactly 10m, so the
+        # old budget had no useful margin.
+        timeout-minutes: 18
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
