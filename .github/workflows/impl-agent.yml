@@ -40,7 +40,14 @@ jobs:
     name: Generate implementation scaffold
     if: github.event.label.name == 'agent-working'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Must exceed the "Generate scaffold" step budget (18m) plus everything
+    # around it, or a slow-but-successful generation gets killed after paying
+    # for the model call. Measured on run 30149093922 (the last fully green
+    # run): ~17s of setup before the step, ~64s for scope check + install +
+    # build + prettier + eslint + commit/push (which runs the pre-push unit
+    # suite) + PR + comment after it. 18m + ~1.5m left no margin under a 20m
+    # cap; 25m leaves ~6m for a slower runner or a larger scaffold.
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +86,11 @@ jobs:
 
       - name: Generate scaffold
         id: gen
-        timeout-minutes: 15
+        # 18m, under the job's 25m cap. Raised from 15m alongside
+        # generate-impl.mjs's CLI timeout (600s -> 780s): a real run on
+        # issue #237 took 9m08s and another timed out at exactly 10m, so the
+        # old budget had no useful margin.
+        timeout-minutes: 18
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
