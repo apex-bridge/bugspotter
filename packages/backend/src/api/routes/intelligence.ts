@@ -225,10 +225,6 @@ export function intelligenceRoutes(
     },
     async (request, reply) => {
       const { projectId, id } = request.params;
-      // `limit` is destructured separately as a const: with `let { threshold, limit }`,
-      // ESLint's prefer-const (default `destructuring: "any"`) errors on `limit`,
-      // which is never reassigned. The pre-commit hook runs `eslint --fix`, and this
-      // is not auto-fixable, so it hard-fails the commit.
       const { limit } = request.query;
       let threshold = request.query.threshold;
       const client = await resolveClient(request, clientFactory, intelligenceClient);
