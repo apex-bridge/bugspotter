@@ -184,7 +184,7 @@ async function processIntelligenceJob(
 /**
  * Process bug analysis: submit for embedding then check for duplicates
  */
-async function processAnalyzeJob(
+export async function processAnalyzeJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
   client: IntelligenceClient,
   db: DatabaseClient,
@@ -218,7 +218,15 @@ async function processAnalyzeJob(
 
   // Step 2: Check for similar/duplicate bugs (scoped to project)
   await progress.update(2, 'Checking for duplicates');
-  const similarResult = await client.getSimilarBugs(bugReportId, { projectId });
+  let orgThreshold: number | undefined;
+  if (resolvedOrgId) {
+    const org = await db.organizations.findById(resolvedOrgId);
+    orgThreshold = org?.settings.intelligence_similarity_threshold ?? undefined;
+  }
+  const similarResult = await client.getSimilarBugs(bugReportId, {
+    projectId,
+    threshold: orgThreshold,
+  });
 
   logger.info('Similarity check completed', {
     jobId: job.id,
