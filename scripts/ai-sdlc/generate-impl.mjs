@@ -107,6 +107,67 @@ const staticContext = [
 
 const specSection = `# Ratified spec\n${SPEC_CONTENT}`;
 
+const repoRoot = process.cwd();
+
+// Paths the agent may never write, and — since the read side below feeds an
+// external LLM API — may never read either. `.git/config` in particular holds
+// actions/checkout's `http.<url>.extraheader` credential on a runner, so
+// injecting it into a prompt would ship GITHUB_TOKEN off-box.
+const FORBIDDEN_PATH_PATTERNS = [
+  /^\.git(\/|$)/,
+  /^\.github\/workflows\//,
+  /(^|\/)package(-lock)?\.json$/,
+  /(^|\/)(pnpm-lock\.yaml|yarn\.lock)$/,
+];
+
+/**
+ * Repo-relative POSIX path for `p`, or null if it escapes the repo root.
+ * A substring check for '..' is not enough on its own: it lets an absolute
+ * path ('/etc/passwd', 'C:\\...') through untouched.
+ */
+function toRepoRelative(p) {
+  const relPath = relative(repoRoot, resolve(repoRoot, p));
+  if (!relPath || relPath.startsWith('..') || isAbsolute(relPath)) {
+    return null;
+  }
+  return relPath.replaceAll('\\', '/');
+}
+
+/** Both directions of the LLM boundary — read and write — use this one rule. */
+function isAllowedRepoPath(p) {
+  const relPath = toRepoRelative(p);
+  return relPath !== null && !FORBIDDEN_PATH_PATTERNS.some((re) => re.test(relPath));
+}
+
+const LANGUAGE_BY_EXT = {
+  ts: 'typescript',
+  tsx: 'typescript',
+  mts: 'typescript',
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  json: 'json',
+  yml: 'yaml',
+  yaml: 'yaml',
+  sql: 'sql',
+  md: 'markdown',
+};
+
+function languageFor(path) {
+  return LANGUAGE_BY_EXT[path.split('.').pop()?.toLowerCase() ?? ''] ?? '';
+}
+
+/**
+ * Pick a fence longer than the longest backtick run in the body, per
+ * CommonMark. Escaping the body instead (```  -> `` `) would corrupt content
+ * the very next paragraph tells the model to reproduce verbatim.
+ */
+function fenceFor(body) {
+  const longest = Math.max(0, ...[...body.matchAll(/`+/g)].map((m) => m[0].length));
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
 // Current content of every file the spec declares under "Files touched" that
 // already exists. Without this, the agent is asked to emit COMPLETE file
 // contents ({path, content}) for files it has never seen — it can only
@@ -123,31 +184,56 @@ const specSection = `# Ratified spec\n${SPEC_CONTENT}`;
 // that, including the same 1000-line-per-file cap.
 const MAX_LINES_PER_FILE = 1000;
 const declaredPaths = extractDeclaredPaths(SPEC_CONTENT) ?? [];
+let truncatedCount = 0;
 const currentFiles = declaredPaths
-  .filter((p) => !p.includes('..') && existsSync(p))
+  .filter((p) => isAllowedRepoPath(p) && existsSync(p))
   .map((p) => {
-    const content = safeRead(p);
-    if (!content) {
+    // Read directly rather than via safeRead: safeRead collapses "unreadable"
+    // and "genuinely empty" into the same '' and would drop a real empty file.
+    // The catch also covers a declared path that resolves to a directory.
+    let content;
+    try {
+      content = readFileSync(p, 'utf8');
+    } catch {
       return null;
     }
     const lines = content.split('\n');
-    const body = lines.slice(0, MAX_LINES_PER_FILE).join('\n');
-    const truncated =
-      lines.length > MAX_LINES_PER_FILE ? `\n[… truncated at ${MAX_LINES_PER_FILE} lines]` : '';
-    return `## ${p}\n\`\`\`typescript\n${body}${truncated}\n\`\`\``;
+    const isTruncated = lines.length > MAX_LINES_PER_FILE;
+    const body = isTruncated ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') : content;
+    const fence = fenceFor(body);
+    if (isTruncated) {
+      truncatedCount += 1;
+    }
+    // A truncated file must be labelled at its own header, not just in the
+    // preamble: the repo has source and test files well past this cap
+    // (packages/backend/tests/api/storage-urls.test.ts is ~1800 lines), and
+    // "reproduce it verbatim" applied to a body missing its tail means the
+    // agent silently deletes everything past line 1000.
+    const header = isTruncated
+      ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lines.length}. ` +
+        `Reference only — do NOT return this file.`
+      : `## ${p}`;
+    return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
   })
   .filter(Boolean);
 
 const currentFilesSection = currentFiles.length
-  ? `# Current content of the files you must edit\n\nThese are the EXACT current contents on \`main\`. For each one you return, ` +
-    `reproduce it verbatim except for the specific changes the spec calls for. Do not ` +
-    `rewrite, reformat, reorder, or "improve" anything the spec does not explicitly ask ` +
-    `you to change.\n\n${currentFiles.join('\n\n')}`
+  ? `# Current content of the files you must edit\n\nThese are the current contents of these ` +
+    `files in this checkout. For each one you return, reproduce it verbatim except for the ` +
+    `specific changes the spec calls for. Do not rewrite, reformat, reorder, or "improve" ` +
+    `anything the spec does not explicitly ask you to change.` +
+    (truncatedCount
+      ? `\n\nA file marked TRUNCATED is shown only in part. Never return one: you would ` +
+        `silently delete the lines you cannot see. Treat it as read-only reference, and if ` +
+        `the spec requires changing it, say so in your summary instead of returning it.`
+      : '') +
+    `\n\n${currentFiles.join('\n\n')}`
   : '';
 
 console.log(
   currentFiles.length
-    ? `Injecting current content of ${currentFiles.length} existing declared file(s) into the prompt.`
+    ? `Injecting current content of ${currentFiles.length} existing declared file(s) into the ` +
+        `prompt${truncatedCount ? ` (${truncatedCount} truncated, marked read-only)` : ''}.`
     : 'No existing declared files to inject (all-new-files spec, or no parseable "Files touched" line).'
 );
 
@@ -196,7 +282,7 @@ try {
   // (548s) — a 9% margin. Raised to 780_000ms (13m), which still sits under
   // impl-agent.yml's "Generate scaffold" step timeout with room for node
   // startup and file I/O (that step's budget was raised to 18m in the same
-  // change, under the job's 20m cap).
+  // change, and the job cap to 25m so the post-generation steps still fit).
   //
   // The deeper cost driver is the response schema: {path, content} means the
   // model re-emits every declared file IN FULL, so editing three ~500-line
@@ -241,16 +327,9 @@ if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) {
   process.exit(1);
 }
 
-// Write files
+// Write files (repoRoot + FORBIDDEN_PATH_PATTERNS are declared above, shared
+// with the read side of the prompt-injection boundary)
 const writtenPaths = [];
-const repoRoot = process.cwd();
-const FORBIDDEN_PATH_PATTERNS = [
-  /^\.git(\/|$)/,
-  /^\.github\/workflows\//,
-  /(^|\/)package(-lock)?\.json$/,
-  /(^|\/)(pnpm-lock\.yaml|yarn\.lock)$/,
-];
-
 const seenPaths = new Set();
 for (const { path, content } of parsed.files) {
   if (typeof path !== 'string' || typeof content !== 'string' || !path || !content) {
@@ -262,8 +341,8 @@ for (const { path, content } of parsed.files) {
     continue;
   }
   const resolvedPath = resolve(repoRoot, path);
-  const relPath = relative(repoRoot, resolvedPath);
-  if (relPath.startsWith('..') || isAbsolute(relPath)) {
+  const relPath = toRepoRelative(path);
+  if (relPath === null) {
     console.error(`Path traversal detected and blocked: ${path}`);
     continue;
   }
