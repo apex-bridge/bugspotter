@@ -221,6 +221,7 @@ function fenceFor(body) {
 const MAX_LINES_PER_FILE = 1000;
 const declaredPaths = extractDeclaredPaths(SPEC_CONTENT) ?? [];
 let truncatedCount = 0;
+const truncatedFiles = [];
 const currentFiles = declaredPaths
   .filter((p) => isAllowedRepoPath(p) && existsSync(p))
   .map((p) => {
@@ -234,11 +235,22 @@ const currentFiles = declaredPaths
       return null;
     }
     const lines = content.split('\n');
-    const isTruncated = lines.length > MAX_LINES_PER_FILE;
+    // A trailing newline terminates the last line, it does not start a new
+    // one: split('\n') on "a\nb\n" yields three entries, the last of them
+    // empty. Counting entries raw would read every file written with the
+    // usual trailing newline as one line longer than it is, so a file of
+    // exactly MAX_LINES_PER_FILE lines would land over the cap. That was
+    // merely a mislabel while over-cap files were only annotated TRUNCATED;
+    // the preflight below turns over-cap into a hard exit, so the same
+    // off-by-one would now reject a spec that sits exactly at the cap and is
+    // perfectly satisfiable.
+    const lineCount = lines.length - (lines.at(-1) === '' ? 1 : 0);
+    const isTruncated = lineCount > MAX_LINES_PER_FILE;
     const body = isTruncated ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') : content;
     const fence = fenceFor(body);
     if (isTruncated) {
       truncatedCount += 1;
+      truncatedFiles.push({ path: p, lines: lineCount });
     }
     // A truncated file must be labelled at its own header, not just in the
     // preamble: the repo has source and test files well past this cap
@@ -246,12 +258,34 @@ const currentFiles = declaredPaths
     // "reproduce it verbatim" applied to a body missing its tail means the
     // agent silently deletes everything past line 1000.
     const header = isTruncated
-      ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lines.length}. ` +
+      ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lineCount}. ` +
         `Reference only — do NOT return this file.`
       : `## ${p}`;
     return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
   })
   .filter(Boolean);
+
+// Fail BEFORE the model call if the spec is unsatisfiable by construction.
+// Two individually-correct rules collide: the prompt above tells the model
+// never to return a TRUNCATED file (returning one would silently delete
+// everything past the cap), while check-impl-scope.mjs hard-fails when a
+// declared file is not written. A spec declaring an over-cap file therefore
+// deadlocks - the model correctly refuses, the gate correctly fails, and a
+// re-run fails identically. 27 files in packages/backend alone are over the
+// cap, so this is reachable, not theoretical. Detecting it here costs
+// milliseconds; detecting it downstream costs a full 9-13 minute paid run
+// that cannot succeed.
+if (truncatedFiles.length > 0) {
+  console.error(
+    `Refusing to call the model: the spec declares ${truncatedFiles.length} file(s) larger ` +
+      `than the ${MAX_LINES_PER_FILE}-line context cap:\n` +
+      truncatedFiles.map((f) => `  ${f.path} (${f.lines} lines)`).join('\n') +
+      `\n\nThe agent cannot safely return a file it can only partially see, but the impl-scope ` +
+      `gate requires every declared file to be written - so this spec cannot succeed as ` +
+      `written. Narrow the spec to smaller files, split the change, or make this edit by hand.`
+  );
+  process.exit(1);
+}
 
 const currentFilesSection = currentFiles.length
   ? `# Current content of the files you must edit\n\nThese are the current contents of these ` +

@@ -33,7 +33,16 @@ jobs:
     name: Draft spec
     if: github.event.label.name == 'needs-spec'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 22m. This job makes TWO sequential LLM calls - generate-spec.mjs (420s)
+    # and verify-spec.mjs (420s) - so the job cap has to contain 840s of model
+    # budget plus setup. At 15m (900s) it did not: worst case was ~840s of LLM
+    # plus checkout, setup-node, `npm install -g @anthropic-ai/claude-code`,
+    # prettier, git push and two `gh` calls. The failure mode was the worst
+    # available - GitHub cancels the job mid-call, so a spec that generate-spec
+    # already wrote to disk is discarded uncommitted, after both calls were
+    # paid for. Step caps below bound each call individually; this bounds the
+    # whole job with room for the setup around them.
+    timeout-minutes: 22
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +56,9 @@ jobs:
 
       - name: Generate spec
         id: gen
+        # 8m > generate-spec.mjs's own 420s (7m) LLM timeout, so the script's
+        # error message wins over a silent step kill.
+        timeout-minutes: 8
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -57,6 +69,12 @@ jobs:
         run: node scripts/ai-sdlc/generate-spec.mjs
 
       - name: Verify and patch spec (adversarial factual check)
+        # 8m > verify-spec.mjs's own 420s (7m) LLM timeout. Important here
+        # specifically: verify-spec.mjs deliberately exits 0 on any error so a
+        # verifier hiccup preserves the already-generated spec. A step kill
+        # bypasses that design and loses the spec, so the cap must sit above
+        # the script's own timeout, never below it.
+        timeout-minutes: 8
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
