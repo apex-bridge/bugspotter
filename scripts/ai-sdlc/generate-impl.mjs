@@ -237,6 +237,38 @@ console.log(
     : 'No existing declared files to inject (all-new-files spec, or no parseable "Files touched" line).'
 );
 
+// Output-budget visibility. The {path, content} schema means every declared
+// file the agent edits is re-emitted IN FULL, so the OUTPUT side binds long
+// before the input context does — issue #237's three declared files are
+// ~49KB, roughly 13.6K tokens of mostly-unchanged text.
+//
+// MAX_TOKENS only actually caps anything on the API backend: callViaCli
+// ignores it because `claude` has no per-call output-token flag (see
+// llm-client.mjs's header). So the warning below is backend-aware rather
+// than asserting a cap that isn't in force — LLM_BACKEND is `cli` today.
+// No preflight hard-stop: it would have to guess which declared files the
+// agent will actually return, and a wrong guess blocks a run that would
+// have succeeded. A diff-shaped response schema is the structural fix; see
+// this PR's description.
+const MAX_TOKENS = 16384;
+const declaredBytes = currentFiles.reduce((n, s) => n + s.length, 0);
+const estimatedOutputTokens = Math.round(declaredBytes / 3.6);
+if (currentFiles.length) {
+  const base =
+    `Output budget: re-emitting all ${currentFiles.length} declared file(s) in full is ` +
+    `~${estimatedOutputTokens} tokens.`;
+  if (process.env.LLM_BACKEND === 'cli') {
+    console.log(`${base} No per-call output cap on the CLI backend.`);
+  } else if (estimatedOutputTokens > MAX_TOKENS * 0.8) {
+    console.warn(
+      `${base} That is over 80% of this backend's ${MAX_TOKENS}-token max_tokens — expect a ` +
+        `max_tokens truncation if the agent returns every declared file.`
+    );
+  } else {
+    console.log(`${base} Cap is ${MAX_TOKENS} tokens on this backend.`);
+  }
+}
+
 const userPrompt = `\
 You are an implementation agent for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
 
@@ -292,7 +324,7 @@ try {
   // which is scoped to making the current shape work.
   ({ text, stopReason } = await callClaude({
     prompt,
-    maxTokens: 16384,
+    maxTokens: MAX_TOKENS,
     timeoutMs: 780_000,
     model: MODEL,
   }));
