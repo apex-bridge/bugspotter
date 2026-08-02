@@ -165,6 +165,17 @@ async function resolveClient(
   return globalClient;
 }
 
+async function resolveOrgThreshold(
+  db: DatabaseClient,
+  orgId: string | undefined
+): Promise<number | undefined> {
+  if (!orgId) {
+    return undefined;
+  }
+  const org = await db.organizations.findById(orgId);
+  return org?.settings.intelligence_similarity_threshold ?? undefined;
+}
+
 export function intelligenceRoutes(
   fastify: FastifyInstance,
   intelligenceClient: IntelligenceClient,
@@ -214,8 +225,13 @@ export function intelligenceRoutes(
     },
     async (request, reply) => {
       const { projectId, id } = request.params;
-      const { threshold, limit } = request.query;
+      const { limit } = request.query;
+      let threshold = request.query.threshold;
       const client = await resolveClient(request, clientFactory, intelligenceClient);
+
+      if (threshold === undefined) {
+        threshold = await resolveOrgThreshold(db, request.project?.organization_id ?? undefined);
+      }
 
       const result = await handleIntelligenceRequest(client, (c) =>
         c.getSimilarBugs(id, { threshold, limit, projectId })
