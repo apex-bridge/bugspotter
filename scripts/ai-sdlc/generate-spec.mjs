@@ -173,8 +173,10 @@ try {
   //      duration for similar work.
   //   2. It failed in practice - run 30752527569 (issue #269) died at
   //      exactly 180000ms having produced nothing.
-  // spec-agent.yml's step budget is 15 min (900s), so this leaves ample
-  // headroom for node startup and the file write afterwards.
+  // spec-agent.yml caps this step at 8m, above this 420s, so the error above
+  // wins over a silent step kill. Note the job also runs verify-spec.mjs
+  // (another 420s), so raising either number means re-checking that job's
+  // 22m cap still contains both plus setup - see that file's comments.
   ({ text: specContent } = await callClaude({ prompt, maxTokens: 4096, timeoutMs: 420_000 }));
 } catch (err) {
   console.error(err.message);

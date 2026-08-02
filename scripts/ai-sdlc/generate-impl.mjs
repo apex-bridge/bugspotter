@@ -221,6 +221,7 @@ function fenceFor(body) {
 const MAX_LINES_PER_FILE = 1000;
 const declaredPaths = extractDeclaredPaths(SPEC_CONTENT) ?? [];
 let truncatedCount = 0;
+const truncatedFiles = [];
 const currentFiles = declaredPaths
   .filter((p) => isAllowedRepoPath(p) && existsSync(p))
   .map((p) => {
@@ -239,6 +240,7 @@ const currentFiles = declaredPaths
     const fence = fenceFor(body);
     if (isTruncated) {
       truncatedCount += 1;
+      truncatedFiles.push({ path: p, lines: lines.length });
     }
     // A truncated file must be labelled at its own header, not just in the
     // preamble: the repo has source and test files well past this cap
@@ -252,6 +254,28 @@ const currentFiles = declaredPaths
     return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
   })
   .filter(Boolean);
+
+// Fail BEFORE the model call if the spec is unsatisfiable by construction.
+// Two individually-correct rules collide: the prompt above tells the model
+// never to return a TRUNCATED file (returning one would silently delete
+// everything past the cap), while check-impl-scope.mjs hard-fails when a
+// declared file is not written. A spec declaring an over-cap file therefore
+// deadlocks - the model correctly refuses, the gate correctly fails, and a
+// re-run fails identically. 27 files in packages/backend alone are over the
+// cap, so this is reachable, not theoretical. Detecting it here costs
+// milliseconds; detecting it downstream costs a full 9-13 minute paid run
+// that cannot succeed.
+if (truncatedFiles.length > 0) {
+  console.error(
+    `Refusing to call the model: the spec declares ${truncatedFiles.length} file(s) larger ` +
+      `than the ${MAX_LINES_PER_FILE}-line context cap:\n` +
+      truncatedFiles.map((f) => `  ${f.path} (${f.lines} lines)`).join('\n') +
+      `\n\nThe agent cannot safely return a file it can only partially see, but the impl-scope ` +
+      `gate requires every declared file to be written - so this spec cannot succeed as ` +
+      `written. Narrow the spec to smaller files, split the change, or make this edit by hand.`
+  );
+  process.exit(1);
+}
 
 const currentFilesSection = currentFiles.length
   ? `# Current content of the files you must edit\n\nThese are the current contents of these ` +

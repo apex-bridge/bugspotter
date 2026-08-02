@@ -137,7 +137,8 @@ try {
   //      than generate-spec" is no longer a small number either.
   // max_tokens here is still half of generate-spec's (2048 vs 4096), and
   // output tokens dominate wall time, so ~300s is the proportionate budget
-  // rather than a flat copy of 420s. adr-agent.yml's step cap is 15 min.
+  // rather than a flat copy of 420s. adr-agent.yml caps this step at 6m,
+  // above this 300s, inside a 15m job cap that holds only this one LLM call.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
     maxTokens: 2048,
