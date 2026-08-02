@@ -25,6 +25,7 @@ import {
   appendFileSync,
   readdirSync,
   existsSync,
+  realpathSync,
 } from 'node:fs';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -121,22 +122,57 @@ const FORBIDDEN_PATH_PATTERNS = [
 ];
 
 /**
- * Repo-relative POSIX path for `p`, or null if it escapes the repo root.
+ * POSIX path of `p` relative to `base`, or null if it escapes `base`.
  * A substring check for '..' is not enough on its own: it lets an absolute
  * path ('/etc/passwd', 'C:\\...') through untouched.
  */
-function toRepoRelative(p) {
-  const relPath = relative(repoRoot, resolve(repoRoot, p));
+function relativeToBase(base, p) {
+  const relPath = relative(base, resolve(base, p));
   if (!relPath || relPath.startsWith('..') || isAbsolute(relPath)) {
     return null;
   }
   return relPath.replaceAll('\\', '/');
 }
 
+function toRepoRelative(p) {
+  return relativeToBase(repoRoot, p);
+}
+
+function isForbidden(relPath) {
+  return FORBIDDEN_PATH_PATTERNS.some((re) => re.test(relPath));
+}
+
+// Resolved once: the workspace itself can sit behind a symlink (macOS
+// /tmp -> /private/tmp), and comparing a realpath against a lexical root
+// would then reject every legitimate file.
+let realRepoRoot = repoRoot;
+try {
+  realRepoRoot = realpathSync(repoRoot);
+} catch {
+  /* keep the lexical root */
+}
+
 /** Both directions of the LLM boundary — read and write — use this one rule. */
 function isAllowedRepoPath(p) {
   const relPath = toRepoRelative(p);
-  return relPath !== null && !FORBIDDEN_PATH_PATTERNS.some((re) => re.test(relPath));
+  if (relPath === null || isForbidden(relPath)) {
+    return false;
+  }
+  // The check above is lexical, so a committed symlink passes it while
+  // pointing somewhere else entirely. `.git/config` is the case that makes
+  // this worth closing: on a runner it holds actions/checkout's credential,
+  // which — unlike ordinary file contents — an attacker cannot obtain just
+  // by committing it. Only meaningful for paths that already exist; a path
+  // yet to be created cannot be a symlink, so a failed realpath is not an
+  // escape.
+  let realPath;
+  try {
+    realPath = realpathSync(p);
+  } catch {
+    return true;
+  }
+  const realRel = relativeToBase(realRepoRoot, realPath);
+  return realRel !== null && !isForbidden(realRel);
 }
 
 const LANGUAGE_BY_EXT = {
