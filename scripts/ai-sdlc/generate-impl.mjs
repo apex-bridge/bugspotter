@@ -235,12 +235,22 @@ const currentFiles = declaredPaths
       return null;
     }
     const lines = content.split('\n');
-    const isTruncated = lines.length > MAX_LINES_PER_FILE;
+    // A trailing newline terminates the last line, it does not start a new
+    // one: split('\n') on "a\nb\n" yields three entries, the last of them
+    // empty. Counting entries raw would read every file written with the
+    // usual trailing newline as one line longer than it is, so a file of
+    // exactly MAX_LINES_PER_FILE lines would land over the cap. That was
+    // merely a mislabel while over-cap files were only annotated TRUNCATED;
+    // the preflight below turns over-cap into a hard exit, so the same
+    // off-by-one would now reject a spec that sits exactly at the cap and is
+    // perfectly satisfiable.
+    const lineCount = lines.length - (lines.at(-1) === '' ? 1 : 0);
+    const isTruncated = lineCount > MAX_LINES_PER_FILE;
     const body = isTruncated ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') : content;
     const fence = fenceFor(body);
     if (isTruncated) {
       truncatedCount += 1;
-      truncatedFiles.push({ path: p, lines: lines.length });
+      truncatedFiles.push({ path: p, lines: lineCount });
     }
     // A truncated file must be labelled at its own header, not just in the
     // preamble: the repo has source and test files well past this cap
@@ -248,7 +258,7 @@ const currentFiles = declaredPaths
     // "reproduce it verbatim" applied to a body missing its tail means the
     // agent silently deletes everything past line 1000.
     const header = isTruncated
-      ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lines.length}. ` +
+      ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lineCount}. ` +
         `Reference only — do NOT return this file.`
       : `## ${p}`;
     return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
