@@ -22,16 +22,36 @@
 // not attempt.
 //
 // Required env vars: SPEC_FILE, FILES_WRITTEN (comma-separated, matching
-// generate-impl.mjs's GITHUB_OUTPUT format).
-// Exit 1 if any written file is undeclared, OR if the ratified spec can't be
-// read or has no parseable "Files touched" line — a hard gate that no-ops on
-// a malformed baseline isn't a gate, it's a trap door. Exit 0 only when the
-// comparison actually ran and came back clean (or there's nothing written to
-// check, per FILES_WRITTEN being empty).
+// generate-impl.mjs's GITHUB_OUTPUT format). FILES_WRITTEN must be SET, but
+// may be empty — an empty value means the scaffold wrote nothing, which is
+// under-delivery of EVERY declared path rather than a reason to skip the
+// check. It short-circuited to exit 0 until 2026-08-02, which left the most
+// extreme version of the #237 bug (zero of N declared files) passing green
+// through the gate built to catch it.
+// Exit 1 if the two lists disagree in either direction, OR if the ratified
+// spec can't be read or has no parseable "Files touched" line — a hard gate
+// that no-ops on a malformed baseline isn't a gate, it's a trap door.
+// Exit 0 only when the comparison actually ran and came back clean.
 
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
+
+/**
+ * Canonicalize a repo-relative path for set comparison.
+ *
+ * The two sides of this comparison are produced very differently: written
+ * paths come from generate-impl.mjs, already normalized by node's
+ * `relative()` (no `./`, forward slashes); declared paths are lifted
+ * verbatim out of backticks in human-ratified, LLM-drafted markdown. A
+ * stray `./` or a stray space on the spec side would otherwise make the
+ * SAME file show up in BOTH failure lists at once - reported as written-but-
+ * undeclared and declared-but-unwritten simultaneously - which is a
+ * confusing false failure that costs a full generation run.
+ */
+export function normalizePath(p) {
+  return p.trim().replaceAll('\\', '/').replace(/^\.\//, '');
+}
 
 /** Returns the subset of writtenPaths not present in declaredPaths. */
 export function findUndeclaredPaths(writtenPaths, declaredPaths) {
@@ -60,9 +80,17 @@ function main() {
     console.error('Missing SPEC_FILE');
     process.exit(1);
   }
-  if (!FILES_WRITTEN) {
-    console.warn('Impl scope check: FILES_WRITTEN is empty — nothing to check.');
-    process.exit(0);
+  // Deliberately `=== undefined`, not falsy. An EMPTY FILES_WRITTEN must
+  // fall through to the comparison below: "wrote nothing" is the maximal
+  // under-delivery, not an absence of work to check. Only an env var that
+  // was never plumbed through at all is a caller error, and it is treated
+  // like a missing SPEC_FILE rather than waved through.
+  if (FILES_WRITTEN === undefined) {
+    console.error(
+      "Missing FILES_WRITTEN. Set it to generate-impl.mjs's files_written output; " +
+        'an empty string is valid and means the scaffold wrote nothing.'
+    );
+    process.exit(1);
   }
 
   let spec;
@@ -73,8 +101,8 @@ function main() {
     process.exit(1);
   }
 
-  const declaredPaths = extractDeclaredPaths(spec);
-  if (!declaredPaths || declaredPaths.length === 0) {
+  const declaredPaths = (extractDeclaredPaths(spec) ?? []).map(normalizePath).filter(Boolean);
+  if (declaredPaths.length === 0) {
     console.error(
       'Impl scope check FAILED: spec has no parseable "Files touched:" line, so the ' +
         'scaffold cannot be checked against it. Fix the ratified spec\'s "Files touched" ' +
@@ -83,11 +111,8 @@ function main() {
     process.exit(1);
   }
 
-  const writtenPaths = FILES_WRITTEN.split(',')
-    .map((p) => p.trim())
-    .filter(Boolean);
+  const writtenPaths = FILES_WRITTEN.split(',').map(normalizePath).filter(Boolean);
   const undeclared = findUndeclaredPaths(writtenPaths, declaredPaths);
-
   const unwritten = findUnwrittenPaths(writtenPaths, declaredPaths);
 
   if (undeclared.length > 0 || unwritten.length > 0) {
@@ -109,6 +134,15 @@ function main() {
       for (const p of unwritten) {
         console.error(`  - ${p}`);
       }
+      if (writtenPaths.length === 0) {
+        console.error(
+          '\n  The scaffold wrote NOTHING - every declared path is missing. generate-impl.mjs\n' +
+            '  already aborts on zero writes, so an empty FILES_WRITTEN arriving here usually\n' +
+            '  means the env plumbing between the two steps broke, not that the model produced\n' +
+            "  nothing. Check the generate step's files_written output before re-running."
+        );
+      }
+
       console.error(
         '\n  A ratified spec is a contract: silently delivering less than it promises is how\n' +
           '  acceptance criteria ship unverified (see issue #237, where a skipped test file\n' +

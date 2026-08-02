@@ -106,10 +106,14 @@ jobs:
           IMPL_MODEL_LOW: ${{ vars.IMPL_MODEL_LOW }}
         run: node scripts/ai-sdlc/generate-impl.mjs
 
-      # Hard gate: the scaffold must not write a file the ratified spec
-      # never declared under "Files touched" - an unambiguous comparison,
-      # not a judgment call, so unlike check-spec-scope.mjs's advisory
-      # warning this fails the workflow outright.
+      # Hard gate: the scaffold's file list and the ratified spec's "Files
+      # touched" list must match EXACTLY - no file written that the spec
+      # never declared, and no file declared that the scaffold never wrote.
+      # An unambiguous comparison, not a judgment call, so unlike
+      # check-spec-scope.mjs's advisory warning this fails the workflow
+      # outright. FILES_WRITTEN is passed even when empty: an empty value
+      # means the scaffold wrote nothing, which the gate must fail rather
+      # than skip.
       - name: Check impl scope against spec
         env:
           SPEC_FILE: ${{ steps.spec.outputs.spec_file }}
