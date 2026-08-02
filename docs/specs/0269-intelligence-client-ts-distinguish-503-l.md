@@ -11,14 +11,14 @@ ADR: n/a
 
 ## Problem
 
-`intelligence-client.ts` routes every upstream 5xx response through the same code path: same retry count, same fixed backoff delay, and the same circuit-breaker trip weight. `bugspotter-intelligence` PR #48 (merged) added a deliberate distinction: a 503 with `{"detail":"LLM backend unavailable","code":"llm_unavailable"}` and `Retry-After: 30` signals a transient, known-recoverable condition (the LLM backend is down or timing out), whereas a generic 500 signals an actual service defect. Nothing on this side reads the status distinction, the response-body code, or the `Retry-After` header: `wrapError` maps any status `>= 500` to the same `'server_error'` code with no 503 special-casing, `isRetryableError` only checks `status >= 500 || status === 429`, and the circuit-breaker trip predicate only checks `code !== 'client_error'`. A transient LLM outage therefore trips the circuit breaker as aggressively as a real intelligence-service defect, causing unnecessary degraded service for all intelligence features during routine LLM cold-starts or restarts.
+`intelligence-client.ts` routes every upstream 5xx response through the same code path: same retry count, same backoff policy (`calculateBackoff` is exponential with plus-or-minus 25% jitter, not a fixed delay), and the same circuit-breaker trip weight. `bugspotter-intelligence` PR #48 (merged) added a deliberate distinction: a 503 with `{"detail":"LLM backend unavailable","code":"llm_unavailable"}` and `Retry-After: 30` signals a transient, known-recoverable condition (the LLM backend is down or timing out), whereas a generic 500 signals an actual service defect. Nothing on this side reads the status distinction, the response-body code, or the `Retry-After` header: `wrapError` maps any status `>= 500` to the same `'server_error'` code with no 503 special-casing, `isRetryableError` only checks `status >= 500 || status === 429`, and the circuit-breaker trip predicate only checks `code !== 'client_error'`. A transient LLM outage therefore trips the circuit breaker as aggressively as a real intelligence-service defect, causing unnecessary degraded service for all intelligence features during routine LLM cold-starts or restarts.
 
 ## Out of scope
 
 - Changes to the `bugspotter-intelligence` service itself (separate repo; PR #48 already merged).
 - Admin UI or end-user API responses surfacing the `retryAfter` value or LLM availability state.
 - Adjusting circuit-breaker thresholds or window sizes for any error code other than `llm_unavailable`.
-- Retry scheduling infrastructure changes beyond passing the per-error delay hint to existing callers.
+- Retry scheduling. `retryAfter` is attached to the error as metadata only: **no caller reads it in this change**, and neither `isRetryableError` nor `calculateBackoff` is modified. Honouring the hint would mean sleeping up to 120 s inside `requestWithRetry`, which runs in the request path, so acting on it is deliberately deferred to a follow-up that can move the wait to a worker. The behavioural half of this spec is the circuit-breaker exclusion, not the delay hint.
 
 ## Constraints
 
@@ -31,7 +31,7 @@ ADR: n/a
 ## Acceptance criteria
 
 - [ ] A 503 response with `body.code === 'llm_unavailable'` is mapped to an `IntelligenceError` with `.code === 'llm_unavailable'`, distinct from the generic `>= 500` path — verified by test case A.
-- [ ] The mapped error's `.retryAfter` equals the `Retry-After` header integer (capped at 120 s, defaulting to 30 s when the header is absent) — verified by test case B.
+- [ ] The mapped error's `.retryAfter` equals the `Retry-After` header integer (capped at 120 s, defaulting to 30 s when the header is absent) — verified by test case B. This asserts the parse only; per Out of scope, nothing consumes the value yet.
 - [ ] A plain 500 response continues to map exactly as before, with no `.retryAfter` property and no change to `.code` — verified by test case C.
 - [ ] A 503 response whose body lacks `code: 'llm_unavailable'` falls through to the existing `>= 500` branch — verified by test case D.
 - [ ] The `llm_unavailable` error carries `.tripCircuitBreaker === false`, and the circuit-breaker trip predicate does not count it as a failure — verified by test case E.
@@ -40,17 +40,27 @@ ADR: n/a
 
 ### `packages/backend/src/services/intelligence/intelligence-client.ts`
 
-Extract the error-mapping logic from the private `wrapError` method into an exported `mapIntelligenceError(error: unknown, method: string, path: string): IntelligenceError` function so that unit tests can call it directly. Extract the circuit-breaker trip predicate into an exported `shouldTripCircuitBreaker(error: IntelligenceError): boolean` function for the same reason.
+Extract the error-mapping logic from the private `wrapError` method into an exported `mapIntelligenceError(error: unknown, method: string, path: string): IntelligenceError` function so that unit tests can call it directly. Extract the circuit-breaker trip predicate into an exported `shouldTripCircuitBreaker(error: unknown): boolean` function for the same reason. It takes `unknown`, not `IntelligenceError`, because the current inline predicate also handles non-`IntelligenceError` values (it returns `true` for them) and that branch must survive extraction.
 
-Add a dedicated 503+`llm_unavailable` branch in `mapIntelligenceError` before the existing `>= 500` fall-through, attach `retryAfter` and `tripCircuitBreaker` to the returned error, and extend the circuit-breaker trip predicate to exclude `llm_unavailable`. Extend the `IntelligenceError` constructor to accept an optional fourth `options` parameter carrying `retryAfter` and `tripCircuitBreaker`.
+Add a dedicated 503+`llm_unavailable` branch in `mapIntelligenceError` before the existing `>= 500` fall-through, attach `retryAfter` and `tripCircuitBreaker` to the returned error, and make the circuit-breaker trip predicate read the new flag. Extend the `IntelligenceError` constructor to accept an optional fourth `options` parameter carrying `retryAfter` and `tripCircuitBreaker`.
+
+`method` and `path` stay in the extracted function's signature because `wrapError` uses them to build the message (`Intelligence ${method} ${path} failed: ...`); the tests below pass them explicitly.
 
 ```ts
-// In mapIntelligenceError — insert BEFORE the existing `status >= 500` branch:
-if (error.response?.status === 503 && error.response?.data?.code === 'llm_unavailable') {
+// In mapIntelligenceError — insert BEFORE the existing `status >= 500` branch.
+// `body` reuses the same object-guard wrapError already applies before reading
+// `detail` (intelligence-client.ts:434-437) rather than reaching into an
+// untyped `data`, which can be a string when the upstream returns an error page.
+const body =
+  typeof error.response?.data === 'object' && error.response?.data !== null
+    ? (error.response.data as Record<string, unknown>)
+    : undefined;
+
+if (error.response?.status === 503 && body?.code === 'llm_unavailable') {
   const raw = parseInt(error.response.headers?.['retry-after'] ?? '30', 10);
-  const retryAfter = Math.min(isNaN(raw) ? 30 : raw, 120);
+  const retryAfter = Math.min(Number.isNaN(raw) ? 30 : raw, 120);
   return new IntelligenceError(
-    error.response.data.detail ?? 'LLM backend unavailable',
+    typeof body.detail === 'string' ? body.detail : 'LLM backend unavailable',
     'llm_unavailable',
     503,
     { retryAfter, tripCircuitBreaker: false }
@@ -59,10 +69,18 @@ if (error.response?.status === 503 && error.response?.data?.code === 'llm_unavai
 ```
 
 ```ts
-// In the circuit-breaker trip predicate — replace:
-//   code !== 'client_error'
-// with:
-code !== 'client_error' && code !== 'llm_unavailable';
+// Extract the inline predicate at intelligence-client.ts:315-320 into an
+// exported function so test case E can call it directly. It reads the new
+// flag and keeps the existing default for every error that does not set one,
+// so no `llm_unavailable` string check is needed anywhere (constraint #4).
+// The non-IntelligenceError fallback (`return true`) is preserved from the
+// current inline predicate.
+export function shouldTripCircuitBreaker(error: unknown): boolean {
+  if (error instanceof IntelligenceError) {
+    return error.tripCircuitBreaker ?? error.code !== 'client_error';
+  }
+  return true;
+}
 ```
 
 ## Tests
@@ -74,13 +92,32 @@ code !== 'client_error' && code !== 'llm_unavailable';
 The existing mock error factory `createAxiosError` currently accepts positional arguments `(status: number, detail?: string)` and does not support `headers`. Change its call signature to accept an object `{ status, data, headers }` so that `Retry-After` can be set per-test, and update all existing callers in the file accordingly:
 
 ```ts
-// Change createAxiosError to accept an object — extend the shape it accepts:
-headers: Record<string, string>; // add this field; default to {}
-// and wire it into the mock response object:
-response: {
-  (status, data, headers);
+// Replaces the positional factory at intelligence-client.test.ts:32-44.
+// `data` is passed through whole (the old form wrapped a bare `detail`
+// string), so callers can set a body `code` as well.
+function createAxiosError({
+  status,
+  data = {},
+  headers = {},
+}: {
+  status: number;
+  data?: unknown;
+  headers?: Record<string, string>;
+}): Error & { isAxiosError: boolean; response?: unknown } {
+  const error = new Error(`Request failed with status ${status}`) as Error & {
+    isAxiosError: boolean;
+    response?: { status: number; data: unknown; headers: Record<string, string> };
+  };
+  error.isAxiosError = true;
+  error.response = { status, data, headers };
+  return error;
 }
 ```
+
+Every existing call site in the file uses the positional form (for example
+`createAxiosError(500, 'Internal error')`) and must be rewritten to
+`createAxiosError({ status: 500, data: { detail: 'Internal error' } })`.
+The suite does not compile until all of them are converted.
 
 **Test case A — 503 + llm_unavailable maps to distinct code (AC #1):**
 
@@ -92,7 +129,7 @@ it('maps 503 llm_unavailable to IntelligenceError with code llm_unavailable', ()
     headers: { 'retry-after': '30' },
   });
 
-  const result = mapIntelligenceError(axiosErr);
+  const result = mapIntelligenceError(axiosErr, 'POST', '/analyze');
 
   expect(result.code).toBe('llm_unavailable');
 });
@@ -109,10 +146,12 @@ it('uses Retry-After header as retryAfter, capped at 120, defaulting to 30', () 
       headers: retryAfterHeader ? { 'retry-after': retryAfterHeader } : {},
     });
 
-  expect(mapIntelligenceError(make('45')).retryAfter).toBe(45);
-  expect(mapIntelligenceError(make('999')).retryAfter).toBe(120);
-  expect(mapIntelligenceError(make()).retryAfter).toBe(30);
-  expect(mapIntelligenceError(make('notanumber')).retryAfter).toBe(30);
+  const map = (e: unknown) => mapIntelligenceError(e, 'POST', '/analyze');
+
+  expect(map(make('45')).retryAfter).toBe(45);
+  expect(map(make('999')).retryAfter).toBe(120);
+  expect(map(make()).retryAfter).toBe(30);
+  expect(map(make('notanumber')).retryAfter).toBe(30);
 });
 ```
 
@@ -126,7 +165,7 @@ it('maps a plain 500 via the existing >=500 branch without retryAfter', () => {
     headers: {},
   });
 
-  const result = mapIntelligenceError(axiosErr);
+  const result = mapIntelligenceError(axiosErr, 'POST', '/analyze');
 
   expect(result.code).not.toBe('llm_unavailable');
   expect((result as any).retryAfter).toBeUndefined();
@@ -143,7 +182,7 @@ it('maps 503 without llm_unavailable body code via the generic >=500 branch', ()
     headers: {},
   });
 
-  const result = mapIntelligenceError(axiosErr);
+  const result = mapIntelligenceError(axiosErr, 'POST', '/analyze');
 
   expect(result.code).not.toBe('llm_unavailable');
   expect((result as any).retryAfter).toBeUndefined();
@@ -160,7 +199,7 @@ it('sets tripCircuitBreaker false on llm_unavailable and the trip predicate excl
     headers: { 'retry-after': '30' },
   });
 
-  const err = mapIntelligenceError(axiosErr);
+  const err = mapIntelligenceError(axiosErr, 'POST', '/analyze');
   expect(err.tripCircuitBreaker).toBe(false);
 
   // The circuit-breaker predicate must evaluate to false for this error:
