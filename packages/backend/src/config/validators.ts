@@ -245,8 +245,15 @@ function isLoopback(hostname: string): boolean {
  * Check if a hostname can only resolve inside the container network.
  *
  * A single-label hostname is a compose service name - `minio`, `postgres`,
- * `redis`. It has no public DNS meaning, so traffic addressed to it never
- * leaves the host. Publicly reachable endpoints are always dotted.
+ * `redis`. It carries no public DNS delegation, so traffic addressed to it
+ * does not leave the host.
+ *
+ * The shape check is deliberately narrow: only a bare DNS label qualifies
+ * (letters, digits, hyphen, and the underscore Compose permits in service
+ * names). Everything else is rejected, which matters most for IP literals -
+ * the WHATWG URL parser returns IPv6 addresses bracketed and often dotless
+ * (`[2001:db8::1]`), so a dot-only test would have let a routable address
+ * through as "internal".
  *
  * Localhost and loopback are excluded deliberately: those stay rejected in
  * production by validateProductionHostname, because they signal a config
@@ -254,7 +261,10 @@ function isLoopback(hostname: string): boolean {
  * container-to-container link.
  */
 function isInternalServiceHost(hostname: string): boolean {
-  return !hostname.includes('.') && !isLocalhost(hostname) && !isLoopback(hostname);
+  if (!/^[a-z0-9_-]+$/i.test(hostname)) {
+    return false;
+  }
+  return !isLocalhost(hostname) && !isLoopback(hostname);
 }
 
 /**

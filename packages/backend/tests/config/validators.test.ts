@@ -465,6 +465,25 @@ describe('Configuration Validators', () => {
       expect(errors).toContain('S3_ENDPOINT must use https:// in production for security');
     });
 
+    it('should still reject plaintext HTTP to an IP literal in production', () => {
+      // `new URL('http://[2001:db8::1]:9000').hostname` is '[2001:db8::1]' -
+      // bracketed and dotless - so the exemption must key on the DNS-label
+      // shape, not merely on the absence of a dot.
+      [
+        'http://[2001:db8::1]:9000',
+        'http://[fe80::1]:9000',
+        'http://[::ffff:1.2.3.4]:9000',
+      ].forEach((endpoint) => {
+        expect(validateS3Endpoint(endpoint, 'minio', 'production')).toContain(
+          'S3_ENDPOINT must use https:// in production for security'
+        );
+      });
+
+      expect(validateS3Endpoint('http://93.184.216.34:9000', 's3', 'production')).toContain(
+        'S3_ENDPOINT must use https:// in production for security'
+      );
+    });
+
     it('should still reject localhost and loopback in production', () => {
       // Undotted, but these mean "someone shipped a developer default", not a
       // deliberate container link, so they stay rejected.
