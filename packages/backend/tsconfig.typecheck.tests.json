@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  // Test-side typecheck. NOT wired into CI: it currently reports ~184 errors,
+  // all in tests/ (src is clean). Run it locally with
+  // `pnpm --filter @bugspotter/backend typecheck:tests`.
+  //
+  // The errors cluster into a few root causes rather than 184 independent
+  // problems: partial `vi.fn()` mocks cast to full class types (TS2345),
+  // fixture drift where BugReport gained organization_id and duplicate_of but
+  // literals were never updated (TS2739/TS2741/TS2353), and a mechanical tail
+  // of unused declarations, implicit any params and relative imports missing
+  // a .js extension. Fixing them via shared fixture/mock factories is what
+  // stops the drift recurring; patching each literal only resets the clock.
+  //
+  // When this reaches zero, fold tests/**/* back into tsconfig.typecheck.json
+  // and delete this file, so one gating command covers both.
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules", "dist", "coverage"]
+}

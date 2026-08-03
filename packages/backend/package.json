@@ -29,7 +29,8 @@
     "test:integration:watch": "vitest watch --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "test:cleanup": "bash scripts/cleanup-test-data.sh",
-    "typecheck": "tsc --noEmit --project tsconfig.typecheck.json"
+    "typecheck": "tsc --noEmit --project tsconfig.typecheck.json",
+    "typecheck:tests": "tsc --noEmit --project tsconfig.typecheck.tests.json"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.907.0",

@@ -59,6 +59,23 @@ jobs:
       - name: Check formatting
         run: pnpm run format:check
 
+      # Required by the typecheck below: packages/backend imports internal
+      # workspace packages (@bugspotter/types, @bugspotter/utils, ...) whose
+      # package.json points `main`/`types` at a dist/ that does not exist
+      # until they are built, and backend's tsconfig has no `paths` mapping
+      # to resolve them from source instead.
+      - name: Build workspace packages
+        run: pnpm build
+
+      # Backend src is clean today; this makes that enforced rather than
+      # incidental. Nothing ran `typecheck` before, `pnpm run lint`'s glob
+      # covers packages/*/src but not packages/*/tests, and vitest transpiles
+      # without checking - so a type error in backend source would have
+      # reached main unnoticed. Scoped to src: the test-side backlog is
+      # tracked by the non-gating `typecheck:tests`.
+      - name: Typecheck backend src
+        run: pnpm --filter @bugspotter/backend typecheck
+
       - name: Run AI-SDLC script tests
         run: node --test scripts/ai-sdlc/*.test.mjs
 
