@@ -19,8 +19,8 @@ x-logging: &default-logging
   logging:
     driver: json-file
     options:
-      max-size: "10m"
-      max-file: "5"
+      max-size: '10m'
+      max-file: '5'
 
 services:
   prometheus:
@@ -92,6 +92,12 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      # provisioning/dashboards/dashboards.yml points the file provider at
+      # /var/lib/grafana/dashboards. Nothing ever created it, so the provider
+      # logged "failed to search for dashboards" every 10s - 44k lines on the
+      # production box. Mounting the directory makes the provider valid and
+      # gives dashboards somewhere to live.
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
       - bugspotter
     ports:
@@ -188,9 +194,11 @@ services:
     container_name: bugspotter-postgres-exporter
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@${POSTGRES_HOST:?POSTGRES_HOST is required}:6432/${POSTGRES_DB:-bugspotter}?sslmode=verify-full&sslrootcert=/etc/ssl/certs/yandex-ca.pem
-    volumes:
-      - /opt/bugspotter/yandex-ca.pem:/etc/ssl/certs/yandex-ca.pem:ro
+      # Port and sslmode are parameterised because the topology differs: a
+      # managed cluster answers on a pooler port behind TLS, a container on
+      # the compose network answers on 5432 in plaintext that never leaves
+      # the host. Defaults target the container case.
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@${POSTGRES_HOST:?POSTGRES_HOST is required}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-bugspotter}?sslmode=${POSTGRES_SSLMODE:-disable}
     networks:
       - bugspotter
     healthcheck:
@@ -215,11 +223,10 @@ services:
     container_name: bugspotter-redis-exporter
     restart: unless-stopped
     environment:
-      REDIS_ADDR: rediss://${REDIS_HOST:?REDIS_HOST is required}:6380
+      # rediss/6380 for a managed cluster, redis/6379 for a container on the
+      # compose network. Defaults target the container case.
+      REDIS_ADDR: ${REDIS_SCHEME:-redis}://${REDIS_HOST:?REDIS_HOST is required}:${REDIS_PORT:-6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-      REDIS_EXPORTER_TLS_CA_CERT_FILE: /etc/ssl/certs/yandex-ca.pem
-    volumes:
-      - /opt/bugspotter/yandex-ca.pem:/etc/ssl/certs/yandex-ca.pem:ro
     networks:
       - bugspotter
     healthcheck:
@@ -237,30 +244,6 @@ services:
           memory: 32M
           cpus: '0.05'
 
-  # ==========================================================================
-  # Application services — mount Yandex Cloud KZ CA certificate
-  # ==========================================================================
-  # NODE_EXTRA_CA_CERTS tells Node.js to trust the Yandex Cloud KZ private CA
-  # for all TLS connections (PostgreSQL, Redis/Valkey, S3, SMTP).
-  # The cert file is downloaded during VM setup (see YANDEX_CLOUD_DEPLOYMENT_GUIDE.md §11.3).
-  api:
-    environment:
-      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
-    volumes:
-      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
-
-  worker:
-    environment:
-      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
-    volumes:
-      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
-
-  payment-service:
-    environment:
-      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
-    volumes:
-      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
-
   # Dozzle — Real-time Docker Log Viewer
   # The full definition lives in docker-compose.yml (base). This override only
   # adds the production port binding. Keep this minimal — Docker Compose merges
@@ -277,7 +260,6 @@ volumes:
     driver: local
   alertmanager_data:
     driver: local
-
 # Note: the bugspotter network is defined in the base docker-compose.yml.
 # Docker Compose merges top-level sections from all -f files, so services
 # here can reference networks: [bugspotter] without redefining it.
