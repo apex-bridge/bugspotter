@@ -281,9 +281,13 @@ jobs:
 
           # API Server
           # Container always listens on port 3000 internally (hardcoded in docker-compose.yml).
-          # API_HOST_PORT only controls the host port binding.
-          API_HOST_PORT=${{ vars.API_HOST_PORT || '3000' }}
-          ADMIN_PORT=${{ vars.ADMIN_PORT || '3001' }}
+          # API_HOST_PORT only controls the host port binding, and it is a
+          # binding rather than a bare port: the 127.0.0.1 prefix keeps the
+          # published port off the public interface, because Docker's own
+          # nftables rules bypass ufw. Public traffic arrives over TLS on 443
+          # via the host reverse proxy, which reaches these on loopback.
+          API_HOST_PORT=${{ vars.API_HOST_PORT || '127.0.0.1:3000' }}
+          ADMIN_PORT=${{ vars.ADMIN_PORT || '127.0.0.1:3001' }}
           NODE_ENV=${{ vars.NODE_ENV || 'production' }}
           LOG_LEVEL=${{ vars.LOG_LEVEL || 'warn' }}
           DEPLOYMENT_MODE=${{ vars.DEPLOYMENT_MODE || 'saas' }}
@@ -350,7 +354,8 @@ jobs:
           WORKER_NOTIFICATION_ENABLED=${{ vars.WORKER_NOTIFICATION_ENABLED || 'true' }}
 
           # Demo App
-          DEMO_PORT=${{ vars.DEMO_PORT || '3003' }}
+          # Host binding, same reasoning as API_HOST_PORT above.
+          DEMO_PORT=${{ vars.DEMO_PORT || '127.0.0.1:3003' }}
           DEMO_API_URL=${{ vars.DEMO_API_URL }}
           DEMO_API_KEY=${{ secrets.DEMO_API_KEY }}
           DEMO_ADMIN_URL=${{ vars.DEMO_ADMIN_URL }}
