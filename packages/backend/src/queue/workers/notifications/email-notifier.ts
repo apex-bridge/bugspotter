@@ -191,7 +191,11 @@ export class EmailNotifier implements INotifier {
         smtp: {
           host: smtpHost,
           port: smtpPort,
-          ...resolveSmtpTls(smtpPort),
+          // Only `secure` survives: this config is mapped field-by-field onto
+          // EmailChannelConfig below, and createTransporter re-derives
+          // requireTLS from the port there. Spreading the whole result would
+          // carry a requireTLS that nothing downstream reads.
+          secure: resolveSmtpTls(smtpPort).secure,
           auth: {
             user: smtpUser,
             pass: smtpPass,

@@ -27,15 +27,20 @@ function createTransporter(config: EmailChannelConfig): Transporter {
   // build a transporter cannot drift. smtp_secure stays an operator override:
   // it can force implicit TLS off for a channel, but never on for a port that
   // does not speak it.
+  //
+  // The channel config is stored as unvalidated JSON, so smtp_secure can be
+  // absent on a persisted record even though the type marks it required. Fall
+  // back to the port's own policy rather than to `undefined`, which would
+  // otherwise open a plaintext connection against a TLS-only listener.
   const portTls = resolveSmtpTls(config.smtp_port);
-  const useSecure = config.smtp_secure && portTls.secure;
+  const useSecure = (config.smtp_secure ?? portTls.secure) && portTls.secure;
   const requireTls = portTls.requireTLS || !useSecure;
 
   return nodemailer.createTransport({
     host: config.smtp_host,
     port: config.smtp_port,
-    secure: useSecure, // true for 465, false for other ports
-    requireTLS: requireTls, // true for 587 to force STARTTLS
+    secure: useSecure, // implicit TLS: 465 and 2465
+    requireTLS: requireTls, // force STARTTLS: 25, 587, 2525, 2587 and unknown ports
     auth: {
       user: config.smtp_user,
       pass: config.smtp_pass,
