@@ -360,7 +360,11 @@ services:
     ports:
       # Container always listens on 3000; only the host binding is configurable.
       # Prometheus scrapes api:3000 — do NOT change the container port.
-      - '${API_HOST_PORT:-3000}:3000'
+      # Loopback by default. Docker writes its own nftables rules and bypasses
+      # ufw entirely, so a published port is reachable from the internet even
+      # with a deny-by-default firewall. Behind a reverse proxy nothing needs a
+      # public binding. Override with API_HOST_PORT=3000 to expose it.
+      - '${API_HOST_PORT:-127.0.0.1:3000}:3000'
     networks:
       - bugspotter
     healthcheck:
@@ -415,7 +419,8 @@ services:
       # deployment. Empty/unset keeps them allowed. See .env.example.
       DISABLE_INTEGRATION_AVATAR_CSP: ${DISABLE_INTEGRATION_AVATAR_CSP:-}
     ports:
-      - '${ADMIN_PORT:-3001}:80'
+      # Loopback by default - see the note on api. Override with ADMIN_PORT=3001.
+      - '${ADMIN_PORT:-127.0.0.1:3001}:80'
     networks:
       - bugspotter
     healthcheck:
@@ -464,7 +469,8 @@ services:
       DEMO_VIEWER_PASSWORD: ${DEMO_VIEWER_PASSWORD:-}
       DEMO_MAGIC_TOKEN: ${DEMO_MAGIC_TOKEN:-}
     ports:
-      - '${DEMO_PORT:-3003}:80'
+      # Loopback by default - see the note on api. Override with DEMO_PORT=3003.
+      - '${DEMO_PORT:-127.0.0.1:3003}:80'
     networks:
       - bugspotter
     healthcheck:
