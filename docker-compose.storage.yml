@@ -5,7 +5,7 @@
 # at a public hostname.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.storage.yml \
-#     --profile infra up -d minio
+#     --profile dev up -d minio
 #
 # WHY THIS IS NEEDED
 # ------------------
@@ -63,4 +63,7 @@ services:
   minio:
     ports:
       # Loopback only. The host proxy is what exposes this publicly, with TLS.
-      - '127.0.0.1:${MINIO_HOST_PORT:-9000}:9000'
+      # MINIO_PORT is the name docker-compose.override.yml already publishes
+      # under and .env.example already documents - same knob, so reuse it
+      # rather than adding a second one for the same binding.
+      - '127.0.0.1:${MINIO_PORT:-9000}:9000'
