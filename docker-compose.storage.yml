@@ -50,7 +50,12 @@
 #       }
 #   }
 #
-# Then set S3_ENDPOINT=https://storage.example.com and restart api + worker.
+# Then set S3_ENDPOINT=https://storage.example.com and recreate api + worker.
+# `docker compose restart` is not enough: it reuses the existing containers,
+# which keep the value baked in when they were created. Only `up -d` picks the
+# new one up.
+#
+#   docker compose up -d api worker
 #
 # Verify with a real round trip rather than a health check - a presigned GET
 # returning 404 (not 403) proves the signature survived the proxy:
