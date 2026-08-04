@@ -14,6 +14,7 @@ import type {
 import { DEFAULT_NOTIFIER_CONFIG } from './notifier-interface.js';
 import { EmailChannelHandler } from '../../../services/notifications/email-handler.js';
 import type { EmailChannelConfig } from '../../../types/notifications.js';
+import { resolveSmtpTls } from '../../../utils/smtp-tls.js';
 
 /**
  * Email notifier configuration
@@ -190,7 +191,7 @@ export class EmailNotifier implements INotifier {
         smtp: {
           host: smtpHost,
           port: smtpPort,
-          secure: smtpPort === 465,
+          ...resolveSmtpTls(smtpPort),
           auth: {
             user: smtpUser,
             pass: smtpPass,

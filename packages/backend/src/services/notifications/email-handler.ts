@@ -11,6 +11,7 @@ import type {
   DeliveryResult,
 } from '../../types/notifications.js';
 import { getLogger } from '../../logger.js';
+import { resolveSmtpTls } from '../../utils/smtp-tls.js';
 
 const logger = getLogger();
 
@@ -22,11 +23,13 @@ const logger = getLogger();
  * Create SMTP transporter from config
  */
 function createTransporter(config: EmailChannelConfig): Transporter {
-  // Port 465 uses direct SSL (secure: true)
-  // Port 587 uses STARTTLS (secure: false, but still encrypted)
-  // See: https://nodemailer.com/smtp/#tls-options
-  const useSecure = config.smtp_secure && config.smtp_port === 465;
-  const requireTls = config.smtp_port === 587 || !useSecure;
+  // Port -> transport security lives in resolveSmtpTls so the six places that
+  // build a transporter cannot drift. smtp_secure stays an operator override:
+  // it can force implicit TLS off for a channel, but never on for a port that
+  // does not speak it.
+  const portTls = resolveSmtpTls(config.smtp_port);
+  const useSecure = config.smtp_secure && portTls.secure;
+  const requireTls = portTls.requireTLS || !useSecure;
 
   return nodemailer.createTransport({
     host: config.smtp_host,
