@@ -449,6 +449,51 @@ describe('Configuration Validators', () => {
       expect(errors).toEqual([]);
     });
 
+    it('should accept plaintext HTTP to a container service name in production', () => {
+      // Single-box deployments reach MinIO over the compose network, where the
+      // traffic never leaves the host. Same reasoning that already permits
+      // postgres:5432 and redis:6379 without TLS.
+      ['http://minio:9000', 'http://minio', 'http://storage:9000'].forEach((endpoint) => {
+        expect(validateS3Endpoint(endpoint, 'minio', 'production')).toEqual([]);
+      });
+    });
+
+    it('should still reject plaintext HTTP to a routable host in production', () => {
+      // The exemption must not widen to anything reachable from outside the
+      // host, which is the case the https rule exists for.
+      const errors = validateS3Endpoint('http://s3.example.com', 's3', 'production');
+      expect(errors).toContain('S3_ENDPOINT must use https:// in production for security');
+    });
+
+    it('should still reject plaintext HTTP to an IP literal in production', () => {
+      // `new URL('http://[2001:db8::1]:9000').hostname` is '[2001:db8::1]' -
+      // bracketed and dotless - so the exemption must key on the DNS-label
+      // shape, not merely on the absence of a dot.
+      [
+        'http://[2001:db8::1]:9000',
+        'http://[fe80::1]:9000',
+        'http://[::ffff:1.2.3.4]:9000',
+      ].forEach((endpoint) => {
+        expect(validateS3Endpoint(endpoint, 'minio', 'production')).toContain(
+          'S3_ENDPOINT must use https:// in production for security'
+        );
+      });
+
+      expect(validateS3Endpoint('http://93.184.216.34:9000', 's3', 'production')).toContain(
+        'S3_ENDPOINT must use https:// in production for security'
+      );
+    });
+
+    it('should still reject localhost and loopback in production', () => {
+      // Undotted, but these mean "someone shipped a developer default", not a
+      // deliberate container link, so they stay rejected.
+      const localhost = validateS3Endpoint('http://localhost:9000', 'minio', 'production');
+      expect(localhost.some((e) => e.includes('cannot use localhost'))).toBe(true);
+
+      const loopback = validateS3Endpoint('http://127.0.0.1:9000', 'minio', 'production');
+      expect(loopback.some((e) => e.includes('cannot use loopback'))).toBe(true);
+    });
+
     it('should require endpoint for minio backend', () => {
       const errors = validateS3Endpoint(undefined, 'minio', 'production');
       expect(errors).toContain('S3_ENDPOINT is required for minio storage');
