@@ -51,6 +51,7 @@ export default defineConfig({
       'tests/api/intelligence-routes.test.ts',
       'tests/api/services/**/*.test.ts',
       'tests/cache/**/*.test.ts',
+      'tests/utils/**/*.test.ts',
       // Only include pure unit tests from tests/db/ (no database required)
       'tests/db/filter-builder.test.ts',
       'tests/db/filter-builder-edge-cases.test.ts',

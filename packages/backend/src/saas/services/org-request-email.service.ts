@@ -9,6 +9,7 @@ import type { Transporter } from 'nodemailer';
 import { config } from '../../config.js';
 import { getLogger } from '../../logger.js';
 import { ConfigurationError } from '../../api/middleware/error.js';
+import { resolveSmtpTls } from '../../utils/smtp-tls.js';
 
 export type EmailLocale = 'en' | 'ru' | 'kk';
 
@@ -240,13 +241,12 @@ export class OrgRequestEmailService {
       );
     }
 
-    const useSecure = port === 465;
+    const tlsOptions = resolveSmtpTls(port);
 
     this.transporter = nodemailer.createTransport({
       host,
       port,
-      secure: useSecure,
-      requireTLS: port === 587,
+      ...tlsOptions,
       auth: { user, pass },
       tls: {
         rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',

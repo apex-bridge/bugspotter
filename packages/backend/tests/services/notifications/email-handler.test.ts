@@ -103,6 +103,33 @@ describe('EmailChannelHandler', () => {
       });
     });
 
+    it('should use implicit TLS on an SMTPS port when smtp_secure is absent', async () => {
+      // The channel config is persisted as unvalidated JSON, so smtp_secure can
+      // be missing even though the type marks it required. Defaulting it to
+      // false would open a plaintext connection against a TLS-only listener.
+      const { smtp_secure: _omitted, ...withoutSecure } = config;
+      const payload: NotificationPayload = {
+        to: 'test@example.com',
+        subject: 'Test',
+        body: 'Body',
+      };
+
+      mockTransporter.sendMail.mockResolvedValue({
+        messageId: '<msg-123@example.com>',
+        accepted: [],
+        rejected: [],
+        response: '250 OK',
+      });
+
+      for (const port of [465, 2465]) {
+        (nodemailer.createTransport as Mock).mockClear();
+        await handler.send({ ...withoutSecure, smtp_port: port } as typeof config, payload);
+        expect(nodemailer.createTransport).toHaveBeenCalledWith(
+          expect.objectContaining({ port, secure: true, requireTLS: false })
+        );
+      }
+    });
+
     it('should format from address with name', async () => {
       const payload: NotificationPayload = {
         to: 'test@example.com',
