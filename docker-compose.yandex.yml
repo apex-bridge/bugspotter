@@ -1,0 +1,59 @@
+# ============================================================================
+# BugSpotter - Yandex Cloud KZ overrides
+# ============================================================================
+# Applied on top of the base and monitoring files by the production deploy
+# (see .github/workflows/deploy-yandex.yml):
+#
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.monitoring.yml \
+#                  -f docker-compose.yandex.yml up -d
+#
+# Everything here is specific to running against Yandex Cloud KZ managed
+# Postgres/Valkey, which answer on pooler ports and terminate TLS with a
+# private CA. The base and monitoring files default to the single-box
+# topology - containers on the compose bridge, plaintext, no CA - so these
+# settings cannot live there: an unconditional bind mount makes Docker create
+# a directory at /opt/bugspotter/yandex-ca.pem on any host that has no such
+# file, which then breaks the very services it was meant to configure.
+#
+# The cert is downloaded during VM setup (see YANDEX_CLOUD_DEPLOYMENT_GUIDE.md).
+
+services:
+  # Managed Postgres is reached through the pooler behind TLS signed by the
+  # Yandex private CA, so the exporter needs both verify-full and the CA file.
+  postgres-exporter:
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@${POSTGRES_HOST:?POSTGRES_HOST is required}:${POSTGRES_PORT:-6432}/${POSTGRES_DB:-bugspotter}?sslmode=${POSTGRES_SSLMODE:-verify-full}&sslrootcert=/etc/ssl/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/etc/ssl/certs/yandex-ca.pem:ro
+
+  # Managed Valkey likewise: rediss on the TLS port, same private CA.
+  redis-exporter:
+    environment:
+      REDIS_ADDR: ${REDIS_SCHEME:-rediss}://${REDIS_HOST:?REDIS_HOST is required}:${REDIS_PORT:-6380}
+      REDIS_EXPORTER_TLS_CA_CERT_FILE: /etc/ssl/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/etc/ssl/certs/yandex-ca.pem:ro
+
+  # NODE_EXTRA_CA_CERTS is set in the production .env and passed through by the
+  # base file, but nothing else mounts the file it names. Node does not fail on
+  # a missing path - it starts and silently keeps only the default trust store -
+  # so without these mounts TLS to managed Postgres, Valkey and Object Storage
+  # fails at connection time rather than at boot.
+  api:
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
+
+  worker:
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
+
+  payment-service:
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem
+    volumes:
+      - /opt/bugspotter/yandex-ca.pem:/app/certs/yandex-ca.pem:ro
