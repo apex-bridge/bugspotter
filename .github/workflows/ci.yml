@@ -715,6 +715,23 @@ jobs:
           REDIS_PASSWORD: test
           GRAFANA_ADMIN_PASSWORD: test
 
+      - name: Validate compose with monitoring + yandex overrides
+        # The production deploy applies all three files, so the merged result
+        # is what actually runs there - validate that combination too.
+        run: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml -f docker-compose.yandex.yml config --quiet
+        env:
+          JWT_SECRET: test
+          CORS_ORIGINS: http://localhost:3000
+          # The steps above share a different filler, but a newly added copy of
+          # it trips gitleaks' generic-api-key rule (the existing copies predate
+          # that gate). This one is already allowlisted in .gitleaks.toml.
+          ENCRYPTION_KEY: ci_encryption_key_for_testing_only_32bytes
+          POSTGRES_HOST: localhost
+          POSTGRES_PASSWORD: test
+          REDIS_HOST: localhost
+          REDIS_PASSWORD: test
+          GRAFANA_ADMIN_PASSWORD: test
+
       - name: Validate compose with intelligence profile
         run: docker compose -f docker-compose.yml --profile intelligence config --quiet
         env:

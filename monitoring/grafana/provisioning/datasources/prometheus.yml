@@ -1,7 +1,11 @@
 apiVersion: 1
 
 datasources:
+  # uid is pinned so provisioned dashboards can reference it. Without it
+  # Grafana generates a random uid per install and every dashboard panel
+  # binds to a datasource that does not exist on the next box.
   - name: Prometheus
+    uid: bugspotter-prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090

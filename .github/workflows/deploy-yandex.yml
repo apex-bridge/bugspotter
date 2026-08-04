@@ -218,6 +218,7 @@ jobs:
           sparse-checkout: |
             docker-compose.yml
             docker-compose.monitoring.yml
+            docker-compose.yandex.yml
             docker/intelligence
             monitoring
             scripts
@@ -407,6 +408,8 @@ jobs:
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker-compose.yml
           scp -i ~/.ssh/deploy_key docker-compose.monitoring.yml \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker-compose.monitoring.yml
+          scp -i ~/.ssh/deploy_key docker-compose.yandex.yml \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/docker-compose.yandex.yml
           scp -r -i ~/.ssh/deploy_key monitoring/. \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/bugspotter/monitoring
 
@@ -516,7 +519,9 @@ jobs:
           # Always include the monitoring override so compose knows about all
           # services. This prevents --remove-orphans from killing monitoring
           # containers and ensures monitoring images are pulled alongside app images.
-          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.monitoring.yml"
+          # docker-compose.yandex.yml comes last so its managed-cluster TLS
+          # settings win over the container defaults in the other two files.
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.monitoring.yml -f docker-compose.yandex.yml"
 
           # Pull new images (app + demo + monitoring)
           # demo now lives behind `profiles: [demo]`, so it must be named

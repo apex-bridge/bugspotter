@@ -242,6 +242,32 @@ function isLoopback(hostname: string): boolean {
 }
 
 /**
+ * Check if a hostname can only resolve inside the container network.
+ *
+ * A single-label hostname is a compose service name - `minio`, `postgres`,
+ * `redis`. It carries no public DNS delegation, so traffic addressed to it
+ * does not leave the host.
+ *
+ * The shape check is deliberately narrow: only a bare DNS label qualifies
+ * (letters, digits, hyphen, and the underscore Compose permits in service
+ * names). Everything else is rejected, which matters most for IP literals -
+ * the WHATWG URL parser returns IPv6 addresses bracketed and often dotless
+ * (`[2001:db8::1]`), so a dot-only test would have let a routable address
+ * through as "internal".
+ *
+ * Localhost and loopback are excluded deliberately: those stay rejected in
+ * production by validateProductionHostname, because they signal a config
+ * that was never updated from a developer default rather than a deliberate
+ * container-to-container link.
+ */
+function isInternalServiceHost(hostname: string): boolean {
+  if (!/^[a-z0-9_-]+$/i.test(hostname)) {
+    return false;
+  }
+  return !isLocalhost(hostname) && !isLoopback(hostname);
+}
+
+/**
  * Check if IPv4 address is in private range (RFC 1918)
  */
 function isPrivateIPv4(hostname: string): boolean {
@@ -511,8 +537,12 @@ export function validateS3Endpoint(
       errors.push(`S3_ENDPOINT must use http:// or https:// protocol. Got: ${url.protocol}`);
     }
 
-    // In production, require HTTPS for security
-    if (env === 'production' && url.protocol !== 'https:') {
+    // In production, require HTTPS for security. Container-network traffic is
+    // exempt: an endpoint like http://minio:9000 never leaves the host, which
+    // is the same reasoning that already lets DATABASE_URL and REDIS_URL reach
+    // `postgres` and `redis` over plaintext. Requiring TLS there would force a
+    // certificate on a link that is not observable from outside the machine.
+    if (env === 'production' && url.protocol !== 'https:' && !isInternalServiceHost(url.hostname)) {
       errors.push('S3_ENDPOINT must use https:// in production for security');
     }
 
