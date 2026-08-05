@@ -191,6 +191,11 @@ describe('IntelligenceClient', () => {
       expect(map(llmUnavailable('not-a-number')).retryAfter).toBe(30);
     });
 
+    it('floors a negative Retry-After at 0 rather than passing it through', () => {
+      expect(map(llmUnavailable('-5')).retryAfter).toBe(0);
+      expect(map(llmUnavailable('-999')).retryAfter).toBe(0);
+    });
+
     it('leaves a plain 500 mapping exactly as before', () => {
       const err = map(createAxiosError({ status: 500, data: { detail: 'Internal error' } }));
       expect(err.code).toBe('server_error');

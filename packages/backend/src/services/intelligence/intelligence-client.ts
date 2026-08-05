@@ -500,7 +500,9 @@ export function mapIntelligenceError(
           : '30',
         10
       );
-      const retryAfter = Math.min(Number.isNaN(raw) ? 30 : raw, 120);
+      // Clamp both ends: a malformed negative header would otherwise survive as
+      // a negative duration, and this field exists to be turned into a delay.
+      const retryAfter = Math.max(0, Math.min(Number.isNaN(raw) ? 30 : raw, 120));
       return new IntelligenceError(
         `Intelligence ${method} ${path} failed: ${detail}`,
         'llm_unavailable',
