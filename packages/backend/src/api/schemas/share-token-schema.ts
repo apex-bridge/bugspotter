@@ -126,6 +126,12 @@ export const getSharedReplaySchema = {
                 status: { type: 'string' },
                 priority: { type: 'string' },
                 created_at: { type: 'string', format: 'date-time' },
+                // The route computes these presigned URLs, but Fastify strips any
+                // property a response schema does not declare - so without these two
+                // lines the screenshot silently never reaches the shared view,
+                // however healthy storage is.
+                screenshot_url: { type: 'string', nullable: true },
+                thumbnail_url: { type: 'string', nullable: true },
               },
             },
             session: {
