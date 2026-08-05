@@ -732,6 +732,20 @@ jobs:
           REDIS_PASSWORD: test
           GRAFANA_ADMIN_PASSWORD: test
 
+      - name: Validate compose with storage overlay
+        # docker-compose.storage.yml is opt-in (MinIO-on-the-box), so it is not
+        # part of the deploy combination above and would otherwise never be
+        # parsed by CI.
+        run: docker compose -f docker-compose.yml -f docker-compose.storage.yml --profile dev config --quiet
+        env:
+          JWT_SECRET: test
+          CORS_ORIGINS: http://localhost:3000
+          ENCRYPTION_KEY: ci_encryption_key_for_testing_only_32bytes
+          POSTGRES_PASSWORD: test
+          REDIS_PASSWORD: test
+          MINIO_ROOT_PASSWORD: test-minio-root-password
+          MINIO_APP_SECRET_KEY: test-minio-app-secret-key
+
       - name: Validate compose with intelligence profile
         run: docker compose -f docker-compose.yml --profile intelligence config --quiet
         env:

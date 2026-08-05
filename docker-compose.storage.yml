@@ -1,0 +1,74 @@
+# ============================================================================
+# BugSpotter - Public object storage endpoint
+# ============================================================================
+# Publishes MinIO on loopback so a host reverse proxy can serve it over HTTPS
+# at a public hostname.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.storage.yml \
+#     --profile dev up -d minio
+#
+# WHY THIS IS NEEDED
+# ------------------
+# Uploads do not go through the API. The API returns a presigned S3 URL and the
+# browser (SDK or extension) PUTs directly to it. That URL is built from
+# S3_ENDPOINT, so S3_ENDPOINT must be a hostname the *browser* can reach, over
+# HTTPS.
+#
+# With the default S3_ENDPOINT=http://minio:9000 the browser receives
+# `http://minio:9000/...`, which fails twice: `minio` is a compose service name
+# with no public DNS, and the SDK rejects non-HTTPS upload URLs outright
+# (isSecureEndpoint in @bugspotter/common allows http only for localhost).
+# Server-side storage keeps working, so this presents as "screenshot upload
+# requires HTTPS" in the client while the API looks perfectly healthy.
+#
+# Managed object storage (S3, R2, Yandex) does not need this file - those
+# endpoints are already public HTTPS. It is specifically for MinIO-on-the-box.
+#
+# HOST SIDE
+# ---------
+# Terminate TLS at the host proxy and forward to 127.0.0.1:9000. Two settings
+# are not optional:
+#
+#   server {
+#       listen 443 ssl http2;
+#       server_name storage.example.com;
+#
+#       ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+#       ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+#
+#       # Replays are multi-MB gzip blobs; nginx's 1m default 413s them while
+#       # smaller screenshots succeed, which makes the failure look random.
+#       client_max_body_size 200m;
+#       proxy_request_buffering off;
+#
+#       location / {
+#           proxy_pass http://127.0.0.1:9000;
+#           # MinIO recomputes the SigV4 signature over the Host header. If the
+#           # proxy rewrites it, every request fails SignatureDoesNotMatch.
+#           proxy_set_header Host $host;
+#           proxy_set_header X-Forwarded-Proto $scheme;
+#       }
+#   }
+#
+# Then set S3_ENDPOINT=https://storage.example.com and recreate api + worker.
+# `docker compose restart` is not enough: it reuses the existing containers,
+# which keep the value baked in when they were created. Only `up -d` picks the
+# new one up.
+#
+#   docker compose up -d api worker
+#
+# Verify with a real round trip rather than a health check - a presigned GET
+# returning 404 (not 403) proves the signature survived the proxy:
+#
+#   mc share upload local/<bucket>/probe.png     # generates a presigned POST
+#   curl ... -F file=@probe.png                   # expect HTTP 204
+# ============================================================================
+
+services:
+  minio:
+    ports:
+      # Loopback only. The host proxy is what exposes this publicly, with TLS.
+      # MINIO_PORT is the name docker-compose.override.yml already publishes
+      # under and .env.example already documents - same knob, so reuse it
+      # rather than adding a second one for the same binding.
+      - '127.0.0.1:${MINIO_PORT:-9000}:9000'
