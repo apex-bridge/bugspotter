@@ -19,6 +19,9 @@ export const bugReportSchema = {
     title: { type: 'string' },
     description: { type: 'string', nullable: true },
     screenshot_url: { type: 'string', nullable: true },
+    // Declared so Fastify does not strip it - the report read paths derive
+    // all three from storage keys (issue #291).
+    thumbnail_url: { type: 'string', nullable: true },
     replay_url: { type: 'string', nullable: true },
     screenshot_key: { type: 'string', nullable: true },
     replay_key: { type: 'string', nullable: true },
