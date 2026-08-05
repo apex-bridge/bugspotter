@@ -69,7 +69,68 @@ process.env.LLM_BACKEND = 'cli';
 process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token';
 process.env.PATH = `${DIR}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`;
 
-const { callClaude } = await import('./llm-client.mjs');
+const { callClaude, logCliTelemetry } = await import('./llm-client.mjs');
+
+// Collects what logCliTelemetry emits so the assertions below read the real
+// output rather than trusting the function was called.
+function captureLog() {
+  const lines = { log: [], warn: [] };
+  return {
+    lines,
+    logger: {
+      log: (m) => lines.log.push(m),
+      warn: (m) => lines.warn.push(m),
+    },
+  };
+}
+
+test('logCliTelemetry surfaces turns, wall time, tokens and cost from the CLI envelope', () => {
+  const { lines, logger } = captureLog();
+
+  logCliTelemetry(
+    {
+      num_turns: 1,
+      duration_ms: 474_000,
+      duration_api_ms: 470_500,
+      usage: { input_tokens: 21_400, output_tokens: 6594 },
+      total_cost_usd: 0.1234,
+    },
+    logger
+  );
+
+  assert.equal(lines.log.length, 1);
+  assert.match(lines.log[0], /turns=1/);
+  assert.match(lines.log[0], /wall=474s/);
+  assert.match(lines.log[0], /api=471s/);
+  assert.match(lines.log[0], /in=21400/);
+  assert.match(lines.log[0], /out=6594/);
+  assert.match(lines.log[0], /cost=\$0\.1234/);
+  assert.equal(lines.warn.length, 0, 'a single-turn call must not warn');
+});
+
+test('logCliTelemetry warns when the CLI reports more than one turn despite --tools=', () => {
+  const { lines, logger } = captureLog();
+
+  logCliTelemetry({ num_turns: 50, duration_ms: 330_000 }, logger);
+
+  assert.equal(lines.warn.length, 1);
+  assert.match(lines.warn[0], /50 turns/);
+  assert.match(lines.warn[0], /--tools=/);
+});
+
+test('logCliTelemetry tolerates an envelope carrying no telemetry fields', () => {
+  const { lines, logger } = captureLog();
+
+  // The CLI's JSON shape is not a contract this repo controls. Telemetry must
+  // never throw and fail a run that already produced a usable result.
+  assert.doesNotThrow(() => logCliTelemetry({ result: 'ok' }, logger));
+  assert.doesNotThrow(() => logCliTelemetry(undefined, logger));
+
+  assert.equal(lines.warn.length, 0);
+  for (const line of lines.log) {
+    assert.match(line, /no telemetry fields/);
+  }
+});
 
 test('callViaCli strips ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN from the spawned child env, keeps other vars', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-leaked-key';

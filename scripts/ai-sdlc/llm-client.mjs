@@ -91,6 +91,53 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
   return { text: data.content[0].text, stopReason: data.stop_reason };
 }
 
+// The CLI's `--output-format json` envelope carries operational fields this
+// module used to discard: turn count, wall time, and token usage. Without them
+// a slow call is a black box. impl-agent run 30761885485 spent its entire 780s
+// timeout on a response the script itself had measured at ~6594 output tokens,
+// and nothing in the log could distinguish one slow turn from a multi-turn loop.
+//
+// `num_turns` is the load-bearing field. callViaCli passes `--tools=` precisely
+// to get a single-shot completion; a call reporting more than one turn means
+// that flag is not holding and an agentic loop is running, which is a bug with
+// a fix rather than latency to wait out. Surfaced as a warning so it cannot be
+// missed in a CI log.
+//
+// Every field is read defensively: the CLI's envelope is not a contract this
+// repo controls, and telemetry must never be able to fail a run that produced
+// a usable result.
+export function logCliTelemetry(data, log = console) {
+  const turns = typeof data?.num_turns === 'number' ? data.num_turns : null;
+  const parts = [];
+  if (turns !== null) {
+    parts.push(`turns=${turns}`);
+  }
+  if (typeof data?.duration_ms === 'number') {
+    parts.push(`wall=${Math.round(data.duration_ms / 1000)}s`);
+  }
+  if (typeof data?.duration_api_ms === 'number') {
+    parts.push(`api=${Math.round(data.duration_api_ms / 1000)}s`);
+  }
+  if (typeof data?.usage?.input_tokens === 'number') {
+    parts.push(`in=${data.usage.input_tokens}`);
+  }
+  if (typeof data?.usage?.output_tokens === 'number') {
+    parts.push(`out=${data.usage.output_tokens}`);
+  }
+  if (typeof data?.total_cost_usd === 'number') {
+    parts.push(`cost=$${data.total_cost_usd.toFixed(4)}`);
+  }
+
+  log.log(`claude CLI: ${parts.length > 0 ? parts.join(' ') : 'no telemetry fields in response'}`);
+
+  if (turns !== null && turns > 1) {
+    log.warn(
+      `claude CLI reported ${turns} turns for a call made with --tools=, which should be ` +
+        `single-shot. Tool disabling is not holding and this call ran an agentic loop.`
+    );
+  }
+}
+
 // No `maxTokens` param here (deliberately) — the CLI has no per-call
 // output-token cap to forward it to. See the module header comment.
 async function callViaCli({ prompt, timeoutMs, model }) {
@@ -189,6 +236,7 @@ async function callViaCli({ prompt, timeoutMs, model }) {
         reject(new Error(`Unexpected claude CLI response shape: ${JSON.stringify(data)}`));
         return;
       }
+      logCliTelemetry(data);
       resolve({ text: data.result, stopReason: data.stop_reason });
     });
 
