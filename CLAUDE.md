@@ -23,7 +23,8 @@ Flags that depend on mode are declared in `packages/backend/src/config.ts`.
 ```bash
 ./dev.sh start                                   # bring up the full stack
 pnpm --filter @bugspotter/backend dev            # API on :3000 (single service, no full stack)
-pnpm --filter @bugspotter/backend typecheck      # src-only typecheck
+pnpm --filter @bugspotter/backend typecheck      # src-only typecheck (gates CI)
+pnpm --filter @bugspotter/backend typecheck:tests # tests too; ~184 known errors, not gating
 pnpm --filter @bugspotter/backend test:unit      # no docker needed
 pnpm --filter @bugspotter/backend migrate        # run DB migrations
 pnpm --filter @bugspotter/admin dev              # admin UI on :5173
