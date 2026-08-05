@@ -5,6 +5,17 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*", "tests/**/*"],
-  "exclude": ["node_modules", "dist", "coverage"]
+  // src only, matching tsconfig.json's own `exclude: [..., "tests"]` and the
+  // description in CLAUDE.md. This config previously included tests/**/* as
+  // well, but nothing ever ran it: no workflow invokes `typecheck`, `pnpm run
+  // lint`'s glob covers packages/*/src (not packages/*/tests), and vitest
+  // transpiles TypeScript without checking it. 184 type errors accumulated in
+  // tests behind three green gates.
+  //
+  // src is clean today, so gating on it in CI costs nothing and makes that
+  // state enforced rather than incidental. The test-side debt is real and is
+  // tracked separately via `typecheck:tests` (tsconfig.typecheck.tests.json),
+  // which is deliberately NOT gating until it reaches zero.
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "coverage", "tests"]
 }
