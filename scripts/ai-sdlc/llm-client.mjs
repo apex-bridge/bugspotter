@@ -36,6 +36,7 @@
 //   detectable via stopReason === 'max_tokens' regardless of backend.
 
 import { spawn } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 
 const LLM_BACKEND = process.env.LLM_BACKEND || 'api';
 
@@ -138,6 +139,83 @@ export function logCliTelemetry(data, log = console) {
   }
 }
 
+// How often callViaCli reports that a call is still in flight. The CLI buffers
+// its whole `--output-format json` envelope to the end, so a long call is
+// otherwise indistinguishable from a hung one until the timeout fires.
+const CLI_HEARTBEAT_MS = 60_000;
+
+// logCliTelemetry only ever runs on the success path — it needs a parsed
+// envelope, and a timed-out call never produces one. That left the failure
+// mode we most need to explain as the one emitting no diagnostics at all:
+// impl-agent runs 30761885485 and 31039877104 both burned the full 780s and
+// logged exactly one line, `claude CLI timed out after 780000ms`, discarding
+// every byte the child had written.
+//
+// The byte counts are the load-bearing part, not the tails. `stdout 0B` after
+// 780s means the CLI never emitted its envelope — it was still working, or
+// wedged, and the timeout is the symptom rather than the cause. Non-zero
+// stdout means it produced something we then threw away, which is a parsing
+// or size problem instead. Those need opposite fixes, and today's log cannot
+// tell them apart.
+//
+// Tails are bounded because stderr can carry progress spew and this string
+// goes into an Error message that lands in a CI log.
+export function formatCliTimeout({
+  timeoutMs,
+  elapsedMs = null,
+  stdout = '',
+  stderr = '',
+  tailChars = 1500,
+}) {
+  // Keep this exact prefix: it is the string the run logs have been
+  // identified by across every timeout so far.
+  let message = `claude CLI timed out after ${timeoutMs}ms`;
+  if (typeof elapsedMs === 'number') {
+    message += ` (killed at ${Math.round(elapsedMs / 1000)}s)`;
+  }
+
+  // Real UTF-8 byte counts, not String#length: that counts UTF-16 code units,
+  // so any non-ASCII the CLI emits would be under-reported under a "B" label.
+  const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
+  const stderrBytes = Buffer.byteLength(stderr, 'utf8');
+
+  message += `\n  received: stdout ${stdoutBytes}B, stderr ${stderrBytes}B`;
+
+  if (stdoutBytes === 0 && stderrBytes === 0) {
+    message +=
+      '\n  the child wrote nothing at all before being killed — it produced no ' +
+      'envelope, so this is a stalled or still-working call, not an oversized ' +
+      'or malformed response.';
+    return message;
+  }
+
+  // Clipping is deliberately character-based (slice operates on code units,
+  // and cutting a UTF-8 buffer at a byte offset can split a character), so the
+  // unit is spelled out to keep it distinct from the byte counts above.
+  const tail = (label, text) => {
+    if (text.length === 0) {
+      return '';
+    }
+    const clipped = text.length > tailChars;
+    return `\n  ${label} tail${clipped ? ` (last ${tailChars} chars of ${text.length})` : ''}:\n${
+      clipped ? text.slice(-tailChars) : text
+    }`;
+  };
+
+  return message + tail('stderr', stderr.trim()) + tail('stdout', stdout.trim());
+}
+
+// Emitted every CLI_HEARTBEAT_MS while a call is in flight. Byte counts make
+// the difference between "streaming, just slow" and "silent since the first
+// second" visible while the run is still happening, instead of only in the
+// post-mortem.
+export function formatCliProgress({ elapsedMs, stdoutBytes, stderrBytes }) {
+  return (
+    `claude CLI: still running after ${Math.round(elapsedMs / 1000)}s ` +
+    `(stdout ${stdoutBytes}B, stderr ${stderrBytes}B)`
+  );
+}
+
 // No `maxTokens` param here (deliberately) — the CLI has no per-call
 // output-token cap to forward it to. See the module header comment.
 async function callViaCli({ prompt, timeoutMs, model }) {
@@ -190,9 +268,29 @@ async function callViaCli({ prompt, timeoutMs, model }) {
 
     let stdout = '';
     let stderr = '';
+    const startedAt = Date.now();
+
+    // unref'd so a stray interval can never hold the process open on a path
+    // that forgets to clear it; every exit path below clears it anyway.
+    const heartbeat = setInterval(() => {
+      console.log(
+        formatCliProgress({
+          elapsedMs: Date.now() - startedAt,
+          stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
+          stderrBytes: Buffer.byteLength(stderr, 'utf8'),
+        })
+      );
+    }, CLI_HEARTBEAT_MS);
+    heartbeat.unref?.();
+
     const timer = setTimeout(() => {
+      clearInterval(heartbeat);
       child.kill('SIGKILL');
-      reject(new Error(`claude CLI timed out after ${timeoutMs}ms`));
+      reject(
+        new Error(
+          formatCliTimeout({ timeoutMs, elapsedMs: Date.now() - startedAt, stdout, stderr })
+        )
+      );
     }, timeoutMs);
 
     child.stdout.setEncoding('utf8');
@@ -205,10 +303,12 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     });
     child.on('error', (err) => {
       clearTimeout(timer);
+      clearInterval(heartbeat);
       reject(err);
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      clearInterval(heartbeat);
       if (code !== 0 || signal) {
         const reason = code !== null ? `code ${code}` : `signal ${signal}`;
         // The claude CLI's error detail (e.g. a billing/auth failure) lands
