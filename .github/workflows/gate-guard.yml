@@ -1,0 +1,104 @@
+name: Gate Guard
+
+# Gate 4 (deploy) is a human action: a pipeline issue is meant to stay open at
+# `needs-deploy` until someone has actually deployed and verified. Nothing
+# enforced that. An implementation PR whose body said `Closes #NNN` instead of
+# `Refs #NNN` auto-closed the issue on merge, so it never reached the gate and
+# Gate 4 silently did not happen - no error, no warning, indistinguishable from
+# success. PR #283 was written that way and was caught only by hand.
+#
+# `PR Link` cannot catch this: it accepts `Closes` and `Refs` identically,
+# because it only asks whether SOME issue is referenced. It is also deliberately
+# a pure offline string function, and teaching it about issue state would give a
+# required check a network failure mode. More importantly, a closing keyword is
+# only one route to skipping Gate 4 - a human clicking "Close issue" does
+# identical damage, and no PR-body check will ever see that. So the guard lives
+# on the issue, where the gate lives.
+#
+# This workflow never blocks anything. Worst case it posts a comment.
+#
+# Refs #269.
+
+on:
+  issues:
+    types: [closed]
+
+# Serialised per issue: a close/reopen storm must not race itself.
+concurrency:
+  group: gate-guard-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  gate-4:
+    name: Gate Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test the guard
+        run: node --test scripts/ai-sdlc/check-gate-4.test.mjs
+
+      # An issue closed as a side effect of a merged PR has a `closed` timeline
+      # event carrying a commit_id; one closed by a person does not. That is the
+      # line between "a keyword did this" (restore it) and "someone decided
+      # this" (leave it alone), so it is worth the extra API call.
+      - name: Determine whether a merge closed this issue
+        id: cause
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          CLOSED_BY_MERGE="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/timeline?per_page=100" \
+            --paginate \
+            --jq '[.[] | select(.event == "closed") | .commit_id] | last | if . == null then "false" else "true" end')"
+          echo "closed_by_merge=${CLOSED_BY_MERGE}" >> "$GITHUB_OUTPUT"
+          echo "closed_by_merge=${CLOSED_BY_MERGE}"
+
+      - name: Decide
+        id: decide
+        env:
+          # Raw JSON, not a joined string: label names can contain commas and
+          # spaces, and an Actions expression cannot emit a real newline as a
+          # join separator.
+          ISSUE_LABELS_JSON: ${{ toJSON(github.event.issue.labels) }}
+          ISSUE_STATE_REASON: ${{ github.event.issue.state_reason }}
+          CLOSED_BY_MERGE: ${{ steps.cause.outputs.closed_by_merge }}
+        run: node scripts/ai-sdlc/check-gate-4.mjs
+
+      - name: Reopen and restore the deploy gate
+        if: steps.decide.outputs.action == 'restore'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GATE: ${{ steps.decide.outputs.gate }}
+          BODY: ${{ steps.decide.outputs.comment }}
+        run: |
+          set -euo pipefail
+          gh issue reopen "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --remove-label "$GATE" --add-label needs-deploy
+          printf '%s' "$BODY" | gh issue comment "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" --body-file -
+
+      - name: Note that the gate was skipped
+        if: steps.decide.outputs.action == 'comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          BODY: ${{ steps.decide.outputs.comment }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$BODY" | gh issue comment "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" --body-file -

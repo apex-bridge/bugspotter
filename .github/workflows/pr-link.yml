@@ -54,4 +54,7 @@ jobs:
         env:
           # PR body via env, never inlined into run: as an actions expression
           PR_BODY: ${{ github.event.pull_request.body }}
+          # Branch name selects implementation PRs for the Gate-4 advisory
+          # warning. Advisory only - it never changes this check's exit code.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: node scripts/check-pr-link.mjs

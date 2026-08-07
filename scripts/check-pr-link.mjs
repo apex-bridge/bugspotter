@@ -45,6 +45,51 @@ function hasReference(body) {
   return body.split(/\r?\n/).some((line) => REFERENCE.test(line));
 }
 
+// GitHub's full set of closing keywords, which is wider than this guard's own
+// accept-list (it takes `Closes`/`Fixes`/`Resolves` but not `Closed`/`Fixed`/
+// `Resolved`). Matched in full here so the warning below is not blind to a
+// form that still auto-closes an issue.
+const CLOSING =
+  /(?<!\p{L})(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[0-9]+(?![0-9\p{L}])/iu;
+
+/**
+ * Warn - never fail - when an implementation PR uses a closing keyword.
+ *
+ * Merging such a PR auto-closes the linked issue, so it never reaches
+ * `needs-deploy` and Gate 4 (deploy) is silently skipped. PR #283 was written
+ * this way and was caught by hand, not by CI.
+ *
+ * This is advisory on purpose. The real guard is `.github/workflows/
+ * gate-guard.yml`, which watches the issue itself and therefore also catches a
+ * human closing it by hand - something no PR-body check can see. Failing here
+ * instead would put a hard gate on a heuristic (a branch-name prefix) and add
+ * friction to every ordinary PR that legitimately closes an issue.
+ *
+ * Deliberately not exported: this module calls main() unconditionally at load,
+ * and adding a main-guard to a Tier-1 required check risks the one failure mode
+ * that matters here - a wrong guard means main() never runs and every PR passes
+ * silently. Exercised through the CLI in check-pr-link.test.mjs instead.
+ *
+ * @returns {boolean} true when a warning was emitted
+ */
+function warnOnClosingKeyword(body, headRef, log = console) {
+  if (!headRef || !headRef.startsWith('impl/')) {
+    return false;
+  }
+  const line = body.split(/\r?\n/).find((l) => CLOSING.test(l));
+  if (!line) {
+    return false;
+  }
+  // ::warning:: surfaces in the Actions UI and the PR's checks tab without
+  // affecting the exit code.
+  log.log(
+    `::warning::This looks like an implementation PR (branch "${headRef}") and its body ` +
+      `uses a closing keyword: "${line.trim()}". Merging will auto-close the issue, ` +
+      `skipping Gate 4 (needs-deploy). Use "Refs #NNN" unless you mean to close it.`
+  );
+  return true;
+}
+
 function fail() {
   console.error('FAIL: PR body must reference a GitHub issue or ADR.');
   console.error('');
@@ -83,6 +128,10 @@ function main() {
     fail();
   }
   console.log('OK: PR body references a GitHub issue or ADR.');
+
+  // Advisory only, and deliberately after the pass line so it can never be
+  // mistaken for the reason a run failed.
+  warnOnClosingKeyword(body, process.env.HEAD_REF ?? '');
 }
 
 main();
