@@ -312,12 +312,7 @@ export class IntelligenceClient {
         // Only trip the breaker on server/network/rate-limit errors — client errors (4xx)
         // indicate the service is healthy, just rejecting our input.
         // Note: requestWithRetry wraps errors into IntelligenceError, so we check that.
-        (error) => {
-          if (error instanceof IntelligenceError) {
-            return error.code !== 'client_error';
-          }
-          return true;
-        }
+        shouldTripCircuitBreaker
       );
     } catch (error) {
       // Re-throw IntelligenceError as-is — it's already wrapped
@@ -425,44 +420,7 @@ export class IntelligenceClient {
   }
 
   private wrapError(error: unknown, method: string, path: string): IntelligenceError {
-    if (error instanceof CircuitOpenError) {
-      return new IntelligenceError(error.message, 'circuit_open', 503);
-    }
-
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status ?? 0;
-      const rawDetail =
-        typeof error.response?.data === 'object' && error.response?.data !== null
-          ? (error.response.data as Record<string, unknown>).detail
-          : undefined;
-      // detail could be a string or an object — coerce to string safely
-      const detail =
-        typeof rawDetail === 'string'
-          ? rawDetail
-          : rawDetail !== undefined
-            ? JSON.stringify(rawDetail)
-            : error.message;
-
-      const code =
-        status === 0
-          ? 'network_error'
-          : status === 429
-            ? 'rate_limit_error'
-            : status >= 500
-              ? 'server_error'
-              : 'client_error';
-      return new IntelligenceError(
-        `Intelligence ${method} ${path} failed: ${detail}`,
-        code,
-        status
-      );
-    }
-
-    return new IntelligenceError(
-      `Intelligence ${method} ${path} failed: ${error instanceof Error ? error.message : String(error)}`,
-      'unknown',
-      0
-    );
+    return mapIntelligenceError(error, method, path);
   }
 }
 
@@ -471,12 +429,83 @@ export class IntelligenceClient {
  * Used to distinguish intelligence failures from other errors in handlers.
  */
 export class IntelligenceError extends Error {
+  readonly retryAfter?: number;
+  readonly tripCircuitBreaker?: boolean;
+
   constructor(
     message: string,
     public readonly code: string,
-    public readonly statusCode: number
+    public readonly statusCode: number,
+    options?: { retryAfter?: number; tripCircuitBreaker?: boolean }
   ) {
     super(message);
     this.name = 'IntelligenceError';
+    this.retryAfter = options?.retryAfter;
+    this.tripCircuitBreaker = options?.tripCircuitBreaker;
   }
+}
+
+export function mapIntelligenceError(
+  error: unknown,
+  method: string,
+  path: string
+): IntelligenceError {
+  if (error instanceof CircuitOpenError) {
+    return new IntelligenceError(error.message, 'circuit_open', 503);
+  }
+
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status ?? 0;
+    const body =
+      typeof error.response?.data === 'object' && error.response?.data !== null
+        ? (error.response.data as Record<string, unknown>)
+        : undefined;
+
+    if (error.response?.status === 503 && body?.code === 'llm_unavailable') {
+      const raw = parseInt(error.response.headers?.['retry-after'] ?? '30', 10);
+      const retryAfter = Math.min(Number.isNaN(raw) ? 30 : raw, 120);
+      const detail = typeof body.detail === 'string' ? body.detail : 'LLM backend unavailable';
+      return new IntelligenceError(
+        `Intelligence ${method} ${path} failed: ${detail}`,
+        'llm_unavailable',
+        503,
+        { retryAfter, tripCircuitBreaker: false }
+      );
+    }
+
+    const rawDetail = body?.detail;
+    const detail =
+      typeof rawDetail === 'string'
+        ? rawDetail
+        : rawDetail !== undefined
+          ? JSON.stringify(rawDetail)
+          : error.message;
+
+    const code =
+      status === 0
+        ? 'network_error'
+        : status === 429
+          ? 'rate_limit_error'
+          : status >= 500
+            ? 'server_error'
+            : 'client_error';
+    return new IntelligenceError(`Intelligence ${method} ${path} failed: ${detail}`, code, status);
+  }
+
+  return new IntelligenceError(
+    `Intelligence ${method} ${path} failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+    'unknown',
+    0
+  );
+}
+
+// The non-IntelligenceError fallback (`return true`) is preserved from the
+// current inline predicate — a non-intelligence error is always circuit-trip-worthy.
+export function shouldTripCircuitBreaker(error: unknown): boolean {
+  if (error instanceof IntelligenceError) {
+    return error.tripCircuitBreaker ?? error.code !== 'client_error';
+  }
+  return true;
 }
