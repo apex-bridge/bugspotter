@@ -175,8 +175,19 @@ test('formatCliTimeout clips long output so an Error message cannot flood a CI l
   const message = formatCliTimeout({ timeoutMs: 5000, stdout: huge, tailChars: 100 });
 
   assert.match(message, /stdout 50000B/, 'the true size must still be reported');
-  assert.match(message, /last 100 of 50000/);
+  assert.match(message, /last 100 chars of 50000/);
   assert.ok(message.length < 1000, `expected a clipped message, got ${message.length} chars`);
+});
+
+test('formatCliTimeout counts UTF-8 bytes, not UTF-16 code units', () => {
+  // '😀' is one code point, String#length 2, and 4 bytes on the wire. Reporting
+  // 2 under a "B" label under-reports what the child actually wrote — and the
+  // clipping line must stay in its own unit rather than silently mixing the two.
+  const message = formatCliTimeout({ timeoutMs: 5000, stdout: '😀', stderr: 'café' });
+
+  assert.match(message, /stdout 4B/);
+  assert.match(message, /stderr 5B/, "'café' is 4 code units but 5 UTF-8 bytes");
+  assert.doesNotMatch(message, /stdout 2B/);
 });
 
 test('formatCliProgress reports elapsed time and bytes received so far', () => {

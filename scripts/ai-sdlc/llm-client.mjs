@@ -36,6 +36,7 @@
 //   detectable via stopReason === 'max_tokens' regardless of backend.
 
 import { spawn } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 
 const LLM_BACKEND = process.env.LLM_BACKEND || 'api';
 
@@ -173,9 +174,14 @@ export function formatCliTimeout({
     message += ` (killed at ${Math.round(elapsedMs / 1000)}s)`;
   }
 
-  message += `\n  received: stdout ${stdout.length}B, stderr ${stderr.length}B`;
+  // Real UTF-8 byte counts, not String#length: that counts UTF-16 code units,
+  // so any non-ASCII the CLI emits would be under-reported under a "B" label.
+  const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
+  const stderrBytes = Buffer.byteLength(stderr, 'utf8');
 
-  if (stdout.length === 0 && stderr.length === 0) {
+  message += `\n  received: stdout ${stdoutBytes}B, stderr ${stderrBytes}B`;
+
+  if (stdoutBytes === 0 && stderrBytes === 0) {
     message +=
       '\n  the child wrote nothing at all before being killed — it produced no ' +
       'envelope, so this is a stalled or still-working call, not an oversized ' +
@@ -183,12 +189,15 @@ export function formatCliTimeout({
     return message;
   }
 
+  // Clipping is deliberately character-based (slice operates on code units,
+  // and cutting a UTF-8 buffer at a byte offset can split a character), so the
+  // unit is spelled out to keep it distinct from the byte counts above.
   const tail = (label, text) => {
     if (text.length === 0) {
       return '';
     }
     const clipped = text.length > tailChars;
-    return `\n  ${label} tail${clipped ? ` (last ${tailChars} of ${text.length})` : ''}:\n${
+    return `\n  ${label} tail${clipped ? ` (last ${tailChars} chars of ${text.length})` : ''}:\n${
       clipped ? text.slice(-tailChars) : text
     }`;
   };
@@ -267,8 +276,8 @@ async function callViaCli({ prompt, timeoutMs, model }) {
       console.log(
         formatCliProgress({
           elapsedMs: Date.now() - startedAt,
-          stdoutBytes: stdout.length,
-          stderrBytes: stderr.length,
+          stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
+          stderrBytes: Buffer.byteLength(stderr, 'utf8'),
         })
       );
     }, CLI_HEARTBEAT_MS);
