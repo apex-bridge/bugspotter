@@ -44,6 +44,15 @@ writeFileSync(
     // (['-p', '--output-format', ...]).
     'if (argvDumpPath) fs.writeFileSync(argvDumpPath, JSON.stringify(process.argv.slice(2)));',
     "const mode = process.env.FAKE_CLAUDE_MODE || 'success';",
+    // Writes a partial (unparseable) envelope and then never finishes, so the
+    // parent's timeout path fires with real bytes already buffered. `return`
+    // is legal here: CommonJS wraps the module body in a function.
+    "if (mode === 'hang') {",
+    "  process.stdout.write('PARTIAL_ENVELOPE_MARKER');",
+    "  process.stderr.write('FAKE_STDERR_PROGRESS');",
+    '  setTimeout(function () { process.exit(0); }, 5000);',
+    '  return;',
+    '}',
     "if (mode === 'error') {",
     "  process.stdout.write('FAKE_STDOUT_MARKER: upstream billing failure detail');",
     '  process.exit(2);',
@@ -69,7 +78,9 @@ process.env.LLM_BACKEND = 'cli';
 process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token';
 process.env.PATH = `${DIR}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`;
 
-const { callClaude, logCliTelemetry } = await import('./llm-client.mjs');
+const { callClaude, logCliTelemetry, formatCliTimeout, formatCliProgress } = await import(
+  './llm-client.mjs'
+);
 
 // Collects what logCliTelemetry emits so the assertions below read the real
 // output rather than trusting the function was called.
@@ -130,6 +141,76 @@ test('logCliTelemetry tolerates an envelope carrying no telemetry fields', () =>
   for (const line of lines.log) {
     assert.match(line, /no telemetry fields/);
   }
+});
+
+test('formatCliTimeout reports byte counts and says so explicitly when the child wrote nothing', () => {
+  const message = formatCliTimeout({ timeoutMs: 780_000, elapsedMs: 780_142 });
+
+  // The historical prefix must survive: it is how every timeout so far has
+  // been identified in run logs.
+  assert.match(message, /^claude CLI timed out after 780000ms/);
+  assert.match(message, /killed at 780s/);
+  assert.match(message, /stdout 0B, stderr 0B/);
+  // The distinction the whole diagnostic exists to draw.
+  assert.match(message, /wrote nothing at all/);
+  assert.match(message, /stalled or still-working call/);
+});
+
+test('formatCliTimeout includes the tails when the child did write something', () => {
+  const message = formatCliTimeout({
+    timeoutMs: 5000,
+    stdout: '{"result":"partial',
+    stderr: 'progress: thinking',
+  });
+
+  assert.match(message, /stdout 18B, stderr 18B/);
+  assert.match(message, /\{"result":"partial/);
+  assert.match(message, /progress: thinking/);
+  // The empty-output explanation must NOT appear when output exists.
+  assert.doesNotMatch(message, /wrote nothing at all/);
+});
+
+test('formatCliTimeout clips long output so an Error message cannot flood a CI log', () => {
+  const huge = 'x'.repeat(50_000);
+  const message = formatCliTimeout({ timeoutMs: 5000, stdout: huge, tailChars: 100 });
+
+  assert.match(message, /stdout 50000B/, 'the true size must still be reported');
+  assert.match(message, /last 100 chars of 50000/);
+  assert.ok(message.length < 1000, `expected a clipped message, got ${message.length} chars`);
+});
+
+test('formatCliTimeout counts UTF-8 bytes, not UTF-16 code units', () => {
+  // '😀' is one code point, String#length 2, and 4 bytes on the wire. Reporting
+  // 2 under a "B" label under-reports what the child actually wrote — and the
+  // clipping line must stay in its own unit rather than silently mixing the two.
+  const message = formatCliTimeout({ timeoutMs: 5000, stdout: '😀', stderr: 'café' });
+
+  assert.match(message, /stdout 4B/);
+  assert.match(message, /stderr 5B/, "'café' is 4 code units but 5 UTF-8 bytes");
+  assert.doesNotMatch(message, /stdout 2B/);
+});
+
+test('formatCliProgress reports elapsed time and bytes received so far', () => {
+  const line = formatCliProgress({ elapsedMs: 120_000, stdoutBytes: 0, stderrBytes: 42 });
+
+  assert.match(line, /still running after 120s/);
+  assert.match(line, /stdout 0B, stderr 42B/);
+});
+
+test('callViaCli timeout error carries what the child actually wrote before the kill', async () => {
+  process.env.FAKE_CLAUDE_MODE = 'hang';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+
+  // Proves the forensics reach the real rejection path, not just the pure
+  // formatter: without them this error message is the bare one-liner that
+  // made impl-agent runs 30761885485 and 31039877104 undiagnosable.
+  await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 2500 }), (err) => {
+    assert.match(err.message, /claude CLI timed out after 2500ms/);
+    assert.match(err.message, /received: stdout \d+B, stderr \d+B/);
+    assert.match(err.message, /PARTIAL_ENVELOPE_MARKER/);
+    assert.doesNotMatch(err.message, /wrote nothing at all/);
+    return true;
+  });
 });
 
 test('callViaCli strips ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN from the spawned child env, keeps other vars', async () => {
