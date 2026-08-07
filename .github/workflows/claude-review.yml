@@ -160,8 +160,10 @@ jobs:
           # one of the two secrets for this repo, never both.
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            The complete diff for this PR is already saved at `${{ steps.diff.outputs.path }}`.
-            Read that file FIRST, and treat it as the authoritative list of what changed.
+            The diff for this PR is already saved at `${{ steps.diff.outputs.path }}`. Read
+            that file FIRST and treat it as the authoritative list of what changed. Very
+            large diffs are capped, in which case the file ends with a `[TRUNCATED: ...]`
+            marker - if you see it, review what is there and say your coverage was partial.
             Do NOT run `gh pr diff`, `git diff`, or otherwise re-derive the diff - that is
             the single most common way this review exhausts its turn budget and posts
             nothing. Open individual source files only when the diff alone is not enough
@@ -178,7 +180,8 @@ jobs:
 
             ${{ github.event_name == 'pull_request' && 'Output rules: inline comments only — no top-level summary. If nothing substantive, exit silently (this is an automatic per-push review; silence is the right default).' || 'Output rules: this review was triggered explicitly by a human via @claude — they need to know the action ran and what you concluded. Post inline comments for any real-impact issues you find, then ALWAYS post exactly ONE short top-level comment via `gh pr comment` summarising the outcome (e.g. "Reviewed N files; no real-impact issues found." or "Posted N inline comments — see threads above."). Never exit silently on a human-triggered review.' }}
 
-            Process: read the full diff in one `gh pr diff` call. Use `Grep`
+            Process: the saved diff file above is the source of truth for what
+            changed - do not re-derive it. Use `Grep`
             across the working tree only when a comment would otherwise be
             inaccurate without the surrounding context. Don't enumerate every
             file; pick the riskiest spots. Post inline comments on at most
