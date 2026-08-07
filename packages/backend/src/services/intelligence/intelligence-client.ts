@@ -310,14 +310,11 @@ export class IntelligenceClient {
       return await this.circuitBreaker.execute(
         async () => this.requestWithRetry<T>(method, path, data, extraConfig),
         // Only trip the breaker on server/network/rate-limit errors — client errors (4xx)
-        // indicate the service is healthy, just rejecting our input.
-        // Note: requestWithRetry wraps errors into IntelligenceError, so we check that.
-        (error) => {
-          if (error instanceof IntelligenceError) {
-            return error.code !== 'client_error';
-          }
-          return true;
-        }
+        // indicate the service is healthy, just rejecting our input, and
+        // `llm_unavailable` means the service is healthy but its LLM backend is
+        // transiently down. Note: requestWithRetry wraps errors into
+        // IntelligenceError, so the predicate checks that.
+        shouldTripCircuitBreaker
       );
     } catch (error) {
       // Re-throw IntelligenceError as-is — it's already wrapped
@@ -425,44 +422,7 @@ export class IntelligenceClient {
   }
 
   private wrapError(error: unknown, method: string, path: string): IntelligenceError {
-    if (error instanceof CircuitOpenError) {
-      return new IntelligenceError(error.message, 'circuit_open', 503);
-    }
-
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status ?? 0;
-      const rawDetail =
-        typeof error.response?.data === 'object' && error.response?.data !== null
-          ? (error.response.data as Record<string, unknown>).detail
-          : undefined;
-      // detail could be a string or an object — coerce to string safely
-      const detail =
-        typeof rawDetail === 'string'
-          ? rawDetail
-          : rawDetail !== undefined
-            ? JSON.stringify(rawDetail)
-            : error.message;
-
-      const code =
-        status === 0
-          ? 'network_error'
-          : status === 429
-            ? 'rate_limit_error'
-            : status >= 500
-              ? 'server_error'
-              : 'client_error';
-      return new IntelligenceError(
-        `Intelligence ${method} ${path} failed: ${detail}`,
-        code,
-        status
-      );
-    }
-
-    return new IntelligenceError(
-      `Intelligence ${method} ${path} failed: ${error instanceof Error ? error.message : String(error)}`,
-      'unknown',
-      0
-    );
+    return mapIntelligenceError(error, method, path);
   }
 }
 
@@ -471,12 +431,115 @@ export class IntelligenceClient {
  * Used to distinguish intelligence failures from other errors in handlers.
  */
 export class IntelligenceError extends Error {
+  /**
+   * Seconds the upstream asked us to wait, parsed from `Retry-After`. Metadata
+   * only: no caller reads it yet. `IntelligenceClient` is shared by a queue
+   * worker that could absorb the wait and by request-path routes that cannot,
+   * so honouring the hint belongs to the caller, not to the client.
+   */
+  public readonly retryAfter?: number;
+  /**
+   * Whether this error should count against the circuit breaker. Left undefined
+   * by every error that does not opt out, so `shouldTripCircuitBreaker` falls
+   * back to the code-based default rather than needing a per-code string check.
+   */
+  public readonly tripCircuitBreaker?: boolean;
+
   constructor(
     message: string,
     public readonly code: string,
-    public readonly statusCode: number
+    public readonly statusCode: number,
+    options?: { retryAfter?: number; tripCircuitBreaker?: boolean }
   ) {
     super(message);
     this.name = 'IntelligenceError';
+    this.retryAfter = options?.retryAfter;
+    this.tripCircuitBreaker = options?.tripCircuitBreaker;
   }
+}
+
+/**
+ * Maps an arbitrary thrown value onto an `IntelligenceError`.
+ *
+ * Exported (and taking `method`/`path` explicitly, which is how the message
+ * prefix is built) so unit tests can drive the mapping directly instead of
+ * staging a full retry sequence through a public client method.
+ */
+export function mapIntelligenceError(
+  error: unknown,
+  method: string,
+  path: string
+): IntelligenceError {
+  if (error instanceof CircuitOpenError) {
+    return new IntelligenceError(error.message, 'circuit_open', 503);
+  }
+
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status ?? 0;
+    const body =
+      typeof error.response?.data === 'object' && error.response?.data !== null
+        ? (error.response.data as Record<string, unknown>)
+        : undefined;
+    const rawDetail = body?.detail;
+    // detail could be a string or an object — coerce to string safely
+    const detail =
+      typeof rawDetail === 'string'
+        ? rawDetail
+        : rawDetail !== undefined
+          ? JSON.stringify(rawDetail)
+          : error.message;
+
+    // A 503 carrying code `llm_unavailable` is the intelligence service telling
+    // us its LLM backend is transiently down, not that the service itself is
+    // broken. Treating it like any other 5xx trips the breaker and degrades
+    // every intelligence feature for what is usually a cold start.
+    if (status === 503 && body?.code === 'llm_unavailable') {
+      const raw = parseInt(
+        typeof error.response?.headers?.['retry-after'] === 'string'
+          ? error.response.headers['retry-after']
+          : '30',
+        10
+      );
+      // Clamp both ends: a malformed negative header would otherwise survive as
+      // a negative duration, and this field exists to be turned into a delay.
+      const retryAfter = Math.max(0, Math.min(Number.isNaN(raw) ? 30 : raw, 120));
+      return new IntelligenceError(
+        `Intelligence ${method} ${path} failed: ${detail}`,
+        'llm_unavailable',
+        503,
+        { retryAfter, tripCircuitBreaker: false }
+      );
+    }
+
+    const code =
+      status === 0
+        ? 'network_error'
+        : status === 429
+          ? 'rate_limit_error'
+          : status >= 500
+            ? 'server_error'
+            : 'client_error';
+    return new IntelligenceError(`Intelligence ${method} ${path} failed: ${detail}`, code, status);
+  }
+
+  return new IntelligenceError(
+    `Intelligence ${method} ${path} failed: ${error instanceof Error ? error.message : String(error)}`,
+    'unknown',
+    0
+  );
+}
+
+/**
+ * Whether an error should count as a circuit-breaker failure.
+ *
+ * Takes `unknown` rather than `IntelligenceError` because the predicate this
+ * replaces also had to handle values that were never wrapped, which it counted
+ * as failures. Reads the opt-out flag first so no per-code string check is
+ * needed here as new recoverable conditions are added.
+ */
+export function shouldTripCircuitBreaker(error: unknown): boolean {
+  if (error instanceof IntelligenceError) {
+    return error.tripCircuitBreaker ?? error.code !== 'client_error';
+  }
+  return true;
 }
