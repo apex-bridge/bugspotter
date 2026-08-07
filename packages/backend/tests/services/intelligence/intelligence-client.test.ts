@@ -8,6 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   IntelligenceClient,
   IntelligenceError,
+  mapIntelligenceError,
+  shouldTripCircuitBreaker,
 } from '../../../src/services/intelligence/intelligence-client.js';
 import type { IntelligenceClientConfig } from '../../../src/services/intelligence/types.js';
 
@@ -29,19 +31,23 @@ vi.mock('axios', async () => {
   };
 });
 
-function createAxiosError(
-  status: number,
-  detail?: string
-): Error & { isAxiosError: boolean; response?: unknown } {
+// Takes an object rather than positional args so a test can set both a body
+// `code` and response headers, which the 503 `llm_unavailable` mapping reads.
+function createAxiosError({
+  status,
+  data = {},
+  headers = {},
+}: {
+  status: number;
+  data?: unknown;
+  headers?: Record<string, string>;
+}): Error & { isAxiosError: boolean; response?: unknown } {
   const error = new Error(`Request failed with status ${status}`) as Error & {
     isAxiosError: boolean;
-    response?: { status: number; data: unknown };
+    response?: { status: number; data: unknown; headers: Record<string, string> };
   };
   error.isAxiosError = true;
-  error.response = {
-    status,
-    data: detail ? { detail } : {},
-  };
+  error.response = { status, data, headers };
   return error;
 }
 
@@ -83,7 +89,9 @@ describe('IntelligenceClient', () => {
 
   describe('wrapError classification', () => {
     it('should classify 5xx as server_error', async () => {
-      mockAxiosInstance.request.mockRejectedValue(createAxiosError(500, 'Internal error'));
+      mockAxiosInstance.request.mockRejectedValue(
+        createAxiosError({ status: 500, data: { detail: 'Internal error' } })
+      );
 
       await expect(client.analyzeBug({ bug_id: '1', title: 'test' })).rejects.toThrow(
         IntelligenceError
@@ -99,7 +107,9 @@ describe('IntelligenceClient', () => {
     });
 
     it('should classify 4xx as client_error', async () => {
-      mockAxiosInstance.request.mockRejectedValue(createAxiosError(404, 'Not found'));
+      mockAxiosInstance.request.mockRejectedValue(
+        createAxiosError({ status: 404, data: { detail: 'Not found' } })
+      );
 
       try {
         await client.analyzeBug({ bug_id: '1', title: 'test' });
@@ -111,7 +121,9 @@ describe('IntelligenceClient', () => {
     });
 
     it('should classify 429 as rate_limit_error', async () => {
-      mockAxiosInstance.request.mockRejectedValue(createAxiosError(429, 'Rate limited'));
+      mockAxiosInstance.request.mockRejectedValue(
+        createAxiosError({ status: 429, data: { detail: 'Rate limited' } })
+      );
 
       try {
         await client.analyzeBug({ bug_id: '1', title: 'test' });
@@ -135,7 +147,7 @@ describe('IntelligenceClient', () => {
     });
 
     it('should handle object detail in error response', async () => {
-      const error = createAxiosError(400);
+      const error = createAxiosError({ status: 400 });
       (error.response as { data: unknown }).data = {
         detail: { field: 'title', reason: 'required' },
       };
@@ -152,10 +164,95 @@ describe('IntelligenceClient', () => {
     });
   });
 
+  describe('503 llm_unavailable mapping', () => {
+    const map = (e: unknown) => mapIntelligenceError(e, 'POST', '/analyze');
+
+    const llmUnavailable = (retryAfterHeader?: string) =>
+      createAxiosError({
+        status: 503,
+        data: { code: 'llm_unavailable', detail: 'LLM backend unavailable' },
+        headers: retryAfterHeader === undefined ? {} : { 'retry-after': retryAfterHeader },
+      });
+
+    it('maps 503 + llm_unavailable to a distinct code, not server_error', () => {
+      expect(map(llmUnavailable('30')).code).toBe('llm_unavailable');
+    });
+
+    it('keeps the same message prefix the generic >=500 branch uses', () => {
+      expect(map(llmUnavailable('30')).message).toBe(
+        'Intelligence POST /analyze failed: LLM backend unavailable'
+      );
+    });
+
+    it('reads Retry-After, caps it at 120 s, and defaults to 30 s', () => {
+      expect(map(llmUnavailable('45')).retryAfter).toBe(45);
+      expect(map(llmUnavailable('999')).retryAfter).toBe(120);
+      expect(map(llmUnavailable()).retryAfter).toBe(30);
+      expect(map(llmUnavailable('not-a-number')).retryAfter).toBe(30);
+    });
+
+    it('floors a negative Retry-After at 0 rather than passing it through', () => {
+      expect(map(llmUnavailable('-5')).retryAfter).toBe(0);
+      expect(map(llmUnavailable('-999')).retryAfter).toBe(0);
+    });
+
+    it('leaves a plain 500 mapping exactly as before', () => {
+      const err = map(createAxiosError({ status: 500, data: { detail: 'Internal error' } }));
+      expect(err.code).toBe('server_error');
+      expect(err.statusCode).toBe(500);
+      expect(err.retryAfter).toBeUndefined();
+      expect(err.tripCircuitBreaker).toBeUndefined();
+    });
+
+    it('falls a 503 without the llm_unavailable body code through to server_error', () => {
+      const err = map(createAxiosError({ status: 503, data: { detail: 'Service unavailable' } }));
+      expect(err.code).toBe('server_error');
+      expect(err.retryAfter).toBeUndefined();
+    });
+
+    it('does not treat a non-object body as carrying the code', () => {
+      // Upstream error pages arrive as an HTML string, not an object. Reading
+      // `.code` off it must not throw and must not match.
+      const err = map(createAxiosError({ status: 503, data: '<html>502 Bad Gateway</html>' }));
+      expect(err.code).toBe('server_error');
+    });
+  });
+
+  describe('shouldTripCircuitBreaker', () => {
+    const map = (e: unknown) => mapIntelligenceError(e, 'POST', '/analyze');
+
+    it('does not trip for llm_unavailable, which carries the opt-out flag', () => {
+      const err = map(
+        createAxiosError({
+          status: 503,
+          data: { code: 'llm_unavailable', detail: 'LLM backend unavailable' },
+          headers: { 'retry-after': '30' },
+        })
+      );
+      expect(err.tripCircuitBreaker).toBe(false);
+      expect(shouldTripCircuitBreaker(err)).toBe(false);
+    });
+
+    // The three below pin the behaviour of the predicate that was extracted
+    // from the inline lambda, so the extraction cannot silently change it.
+    it('does not trip for client errors', () => {
+      expect(shouldTripCircuitBreaker(map(createAxiosError({ status: 404 })))).toBe(false);
+    });
+
+    it('trips for server errors', () => {
+      expect(shouldTripCircuitBreaker(map(createAxiosError({ status: 500 })))).toBe(true);
+    });
+
+    it('trips for values that were never wrapped into an IntelligenceError', () => {
+      expect(shouldTripCircuitBreaker(new Error('boom'))).toBe(true);
+      expect(shouldTripCircuitBreaker(undefined)).toBe(true);
+    });
+  });
+
   describe('retry behavior', () => {
     it('should retry on 5xx errors', async () => {
       mockAxiosInstance.request
-        .mockRejectedValueOnce(createAxiosError(502, 'Bad gateway'))
+        .mockRejectedValueOnce(createAxiosError({ status: 502, data: { detail: 'Bad gateway' } }))
         .mockResolvedValueOnce({ status: 200, data: { bug_id: '1' } });
 
       const result = await client.analyzeBug({ bug_id: '1', title: 'test' });
@@ -165,7 +262,7 @@ describe('IntelligenceClient', () => {
 
     it('should retry on 429 errors', async () => {
       mockAxiosInstance.request
-        .mockRejectedValueOnce(createAxiosError(429, 'Rate limited'))
+        .mockRejectedValueOnce(createAxiosError({ status: 429, data: { detail: 'Rate limited' } }))
         .mockResolvedValueOnce({ status: 200, data: { bug_id: '1' } });
 
       const result = await client.analyzeBug({ bug_id: '1', title: 'test' });
@@ -174,7 +271,9 @@ describe('IntelligenceClient', () => {
     });
 
     it('should not retry on 4xx client errors', async () => {
-      mockAxiosInstance.request.mockRejectedValue(createAxiosError(400, 'Bad request'));
+      mockAxiosInstance.request.mockRejectedValue(
+        createAxiosError({ status: 400, data: { detail: 'Bad request' } })
+      );
 
       await expect(client.analyzeBug({ bug_id: '1', title: 'test' })).rejects.toThrow(
         IntelligenceError
@@ -195,7 +294,9 @@ describe('IntelligenceClient', () => {
 
     it('should respect maxRetries limit', async () => {
       // maxRetries=2 means initial + 2 retries = 3 total attempts
-      mockAxiosInstance.request.mockRejectedValue(createAxiosError(500, 'Server error'));
+      mockAxiosInstance.request.mockRejectedValue(
+        createAxiosError({ status: 500, data: { detail: 'Server error' } })
+      );
 
       await expect(client.analyzeBug({ bug_id: '1', title: 'test' })).rejects.toThrow(
         IntelligenceError
@@ -223,7 +324,9 @@ describe('IntelligenceClient', () => {
 
   describe('circuit breaker integration', () => {
     it('should not trip circuit on 4xx errors', async () => {
-      mockAxiosInstance.request.mockRejectedValue(createAxiosError(400, 'Bad request'));
+      mockAxiosInstance.request.mockRejectedValue(
+        createAxiosError({ status: 400, data: { detail: 'Bad request' } })
+      );
 
       // Make many 4xx calls — circuit should NOT open
       for (let i = 0; i < 10; i++) {
@@ -267,7 +370,9 @@ describe('IntelligenceClient', () => {
     });
 
     it('propagates an IntelligenceError on upstream failure', async () => {
-      mockAxiosInstance.request.mockRejectedValue(createAxiosError(503, 'unavailable'));
+      mockAxiosInstance.request.mockRejectedValue(
+        createAxiosError({ status: 503, data: { detail: 'unavailable' } })
+      );
       await expect(client.getServiceStatus()).rejects.toThrow(IntelligenceError);
     });
   });
