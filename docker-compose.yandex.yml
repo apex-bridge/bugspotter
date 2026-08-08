@@ -1,22 +1,80 @@
 # ============================================================================
 # BugSpotter - Yandex Cloud KZ overrides
 # ============================================================================
-# Applied on top of the base and monitoring files by the production deploy
-# (see .github/workflows/deploy-yandex.yml):
+# NOT applied by anything today. This is the worked example of running against
+# a KZ provider's *managed* Postgres/Valkey - pooler ports, private-CA TLS -
+# which is the shape any future managed-service migration takes. Several other
+# files still describe production as using managed services; treat none of them,
+# including this one, as the record of where production runs.
+#
+# What it covers: TLS plumbing and DSNs for the two metrics exporters, and the
+# CA path for the Node services. It does NOT redirect the application's own
+# DATABASE_URL / REDIS_URL at a managed endpoint - that lives in .env, and the
+# base default carries no sslmode at all, so set one there or the app talks
+# plaintext to a managed database while the exporters use verify-full.
+#
+# The base and monitoring files default to the single-box topology - containers
+# on the compose bridge, plaintext, no CA - so these settings cannot live there:
+# an unconditional bind mount makes Docker create a directory at
+# /opt/bugspotter/yandex-ca.pem on any host that has no such file, which then
+# breaks the very services it was meant to configure.
+#
+# Apply it on top of the base and monitoring files. The profile flags are not
+# optional: every service this file configures (both exporters) sits behind
+# `profiles: [monitoring]`, so a bare `up -d` starts none of them and the whole
+# overlay silently does nothing.
 #
 #   docker compose -f docker-compose.yml \
 #                  -f docker-compose.monitoring.yml \
-#                  -f docker-compose.yandex.yml up -d
+#                  -f docker-compose.yandex.yml \
+#                  --profile monitoring --profile host-metrics up -d
 #
-# Everything here is specific to running against Yandex Cloud KZ managed
-# Postgres/Valkey, which answer on pooler ports and terminate TLS with a
-# private CA. The base and monitoring files default to the single-box
-# topology - containers on the compose bridge, plaintext, no CA - so these
-# settings cannot live there: an unconditional bind mount makes Docker create
-# a directory at /opt/bugspotter/yandex-ca.pem on any host that has no such
-# file, which then breaks the very services it was meant to configure.
+# Prerequisites, all of which fail the command outright if missing:
+# POSTGRES_HOST, POSTGRES_PASSWORD, REDIS_HOST, REDIS_PASSWORD and
+# GRAFANA_ADMIN_PASSWORD in .env; the directory /opt/bugspotter; and the CA file
+# below.
 #
-# The cert is downloaded during VM setup (see YANDEX_CLOUD_DEPLOYMENT_GUIDE.md).
+# ---------------------------------------------------------------------------
+# CA certificate
+# ---------------------------------------------------------------------------
+# The CA has to be at /opt/bugspotter/yandex-ca.pem before this file is applied.
+# No guide in this repo ever documented fetching it, so it is spelled out here.
+#
+# Verify what you install. This PEM is not only the Postgres trust root: the
+# services below also pass it as NODE_EXTRA_CA_CERTS, which makes it an
+# *additional* trust anchor for every outbound TLS connection those processes
+# make - the LLM API, payment endpoints, SMTP, object storage. A substituted
+# certificate here is not a database problem, it is a trust-store compromise.
+#
+#   sudo sh -c '
+#     curl --fail --show-error --silent \
+#          --proto "=https" --proto-redir "=https" \
+#          --output /opt/bugspotter/yandex-ca.pem.new \
+#          https://storage.yandexcloud.kz/cloud-certs/RootCA.pem \
+#       && echo "baea5633a4183b564947d8c4e296d3ab4d4665261a4c132011c99944a1d30c0c  /opt/bugspotter/yandex-ca.pem.new" \
+#          | sha256sum -c - \
+#       && openssl x509 -in /opt/bugspotter/yandex-ca.pem.new -noout -subject \
+#       && install -m 0644 /opt/bugspotter/yandex-ca.pem.new \
+#            /opt/bugspotter/yandex-ca.pem \
+#       && rm /opt/bugspotter/yandex-ca.pem.new'
+#
+# Notes on the shape of that command:
+#
+# - `sudo sh -c '...'`, not `sudo curl ...`: sudo would elevate only the first
+#   command, so install and rm would run unprivileged against a directory you
+#   just said you do not own - the download succeeds, the install fails, and the
+#   old CA stays in place while it looks like it rotated.
+# - The checksum is the load-bearing check. `--fail` only rejects HTTP >= 400,
+#   so a captive portal or an origin returning an HTML notice with status 200
+#   passes it; the digest is what rejects a body that is not this certificate.
+#   Recorded 2026-08-08 for CN=YCKZInternalRootCA (expires 2043-09-04). If it
+#   stops matching, confirm the new digest against the provider's published
+#   value before touching it - do not just update this line.
+# - `--proto-redir "=https"` keeps a redirect from downgrading the fetch;
+#   `openssl x509` rejects anything that is not a parseable certificate.
+# - One `&&` chain on purpose: any step failing short-circuits it and the chain
+#   exits non-zero, so this stays honest when pasted into a script. Cleanup runs
+#   only on success, leaving the `.pem.new` behind as evidence on failure.
 
 services:
   # Managed Postgres is reached through the pooler behind TLS signed by the
@@ -35,11 +93,13 @@ services:
     volumes:
       - /opt/bugspotter/yandex-ca.pem:/etc/ssl/certs/yandex-ca.pem:ro
 
-  # NODE_EXTRA_CA_CERTS is set in the production .env and passed through by the
-  # base file, but nothing else mounts the file it names. Node does not fail on
-  # a missing path - it starts and silently keeps only the default trust store -
-  # so without these mounts TLS to managed Postgres, Valkey and Object Storage
-  # fails at connection time rather than at boot.
+  # This file sets NODE_EXTRA_CA_CERTS itself (below) and mounts the PEM it
+  # names; nothing else does. Node does not fail on a missing path - it starts
+  # and silently keeps only the default trust store - so without these mounts
+  # TLS to managed Postgres, Valkey and Object Storage fails at connection time
+  # rather than at boot. Note the variable is process-wide: it adds a trust
+  # anchor for every outbound TLS connection, not just the managed ones, which
+  # is why the fetch above verifies a digest.
   api:
     environment:
       NODE_EXTRA_CA_CERTS: /app/certs/yandex-ca.pem

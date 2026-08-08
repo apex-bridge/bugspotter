@@ -1,9 +1,10 @@
 /**
  * Validates that all monitoring config files referenced by
  * docker-compose.monitoring.yml volume mounts exist in the repository.
- * These files are synced to the production VM during deploy (see
- * deploy-yandex.yml) and are required for Prometheus, Grafana, and
- * Alertmanager containers to start.
+ * They have to be present on the host before the stack comes up - a missing
+ * mount source makes Docker create a directory in its place, which then fails
+ * the Prometheus, Grafana or Alertmanager container that was meant to read it.
+ * Deployment is manual, so nothing else checks this.
  */
 
 import { describe, it, expect } from 'vitest';

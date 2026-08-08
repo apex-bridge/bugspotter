@@ -14,12 +14,26 @@ route:
       repeat_interval: 1h
 
 receivers:
-  # bot_token comes from /etc/alertmanager/telegram_token (mounted file
-  # populated by the deploy workflow from the TELEGRAM_BOT_TOKEN secret).
-  # chat_id is substituted at deploy time from TELEGRAM_ALERT_CHAT_ID
-  # — the marker comment below is matched by sed; do not edit it.
-  # For local dev: replace both with your own values, or skip the
-  # `monitoring` compose profile if you don't need Telegram delivery.
+  # bot_token comes from /etc/alertmanager/telegram_token, a host file that must
+  # be created by hand - see the note in docker-compose.monitoring.yml for the
+  # ownership it needs.
+  #
+  # chat_id below ships as 0 and MUST be edited on the host. A deploy workflow
+  # used to sed it in from a TELEGRAM_ALERT_CHAT_ID secret; that workflow is
+  # gone and nothing replaced it. Alertmanager starts and reports healthy with
+  # chat_id 0, so a host that re-syncs this file from the repo without editing
+  # it drops every alert silently. The marker comment is what that sed matched
+  # and is kept only so an existing substitution stays recognisable.
+  #
+  # On the host. Anchored so that only the setting is rewritten and never these
+  # comment lines - every loose form of this substitution, including one
+  # addressed on the marker, also edits the example that documents it:
+  #   sed -i 's/^\([[:space:]]*\)chat_id: 0\b/\1chat_id: <id>/' \
+  #     /opt/bugspotter/monitoring/alertmanager.yml
+  #   docker kill --signal=HUP bugspotter-alertmanager
+  #
+  # For local dev: set both to your own values, or skip the `monitoring`
+  # compose profile if you don't need Telegram delivery.
   - name: telegram
     telegram_configs:
       - bot_token_file: /etc/alertmanager/telegram_token

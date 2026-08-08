@@ -749,8 +749,10 @@ jobs:
           GRAFANA_ADMIN_PASSWORD: test
 
       - name: Validate compose with monitoring + yandex overrides
-        # The production deploy applies all three files, so the merged result
-        # is what actually runs there - validate that combination too.
+        # Nothing applies this combination today - production is single-box and
+        # deployed by hand. It is validated because docker-compose.yandex.yml is
+        # kept as the managed-services reference, and a reference that no longer
+        # merges cleanly is worse than none.
         run: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml -f docker-compose.yandex.yml config --quiet
         env:
           JWT_SECRET: test

@@ -131,11 +131,30 @@ services:
       - '--storage.path=/alertmanager'
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      # bot_token is read from this file; populated by the deploy workflow
-      # from TELEGRAM_BOT_TOKEN. The file MUST exist before the monitoring
-      # profile starts — Docker creates a directory at the bind-mount source
-      # path otherwise, and alertmanager fails with "is a directory". For
-      # local dev: `printf 'placeholder' > monitoring/telegram_token` (an
+      # bot_token is read from this file. It is created by hand on the host - a
+      # deploy workflow used to write it from a TELEGRAM_BOT_TOKEN secret, and
+      # that workflow is gone.
+      #
+      # It MUST exist before the monitoring profile starts — Docker creates a
+      # directory at the bind-mount source path otherwise, and alertmanager
+      # fails with "is a directory".
+      #
+      # It MUST also be readable by uid 65534: the alertmanager image runs as
+      # `nobody`, so a root-owned mode-0600 file (what `cp`/`scp` as root
+      # leaves behind) is unreadable to it. Nothing surfaces that - the
+      # container passes its healthcheck and logs nothing until an alert
+      # actually fires, at which point delivery fails. This exact state was
+      # live in production after the 2026-08-04 host move.
+      #
+      #   printf '%s' '<bot-token>' > /opt/bugspotter/monitoring/telegram_token
+      #   chown 65534:65534 /opt/bugspotter/monitoring/telegram_token
+      #   chmod 600 /opt/bugspotter/monitoring/telegram_token
+      #
+      # Verify it is actually readable, rather than trusting the healthcheck:
+      #   docker exec bugspotter-alertmanager \
+      #     wc -c < /etc/alertmanager/telegram_token
+      #
+      # For local dev: `printf 'placeholder' > monitoring/telegram_token` (an
       # empty file lets alertmanager start, but Telegram delivery silently
       # fails with an empty-body API call; a placeholder string at least
       # surfaces a clear bad-token error from Telegram).
