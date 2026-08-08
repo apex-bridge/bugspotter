@@ -1,8 +1,13 @@
 # ============================================================================
 # BugSpotter - Yandex Cloud KZ overrides
 # ============================================================================
-# Applied on top of the base and monitoring files by the production deploy
-# (see .github/workflows/deploy-yandex.yml):
+# NOT the current production topology. Production moved off Yandex Cloud KZ on
+# 2026-08-04 and now runs every dependency as a container on one host, so
+# nothing applies this file today. It is kept as the worked example of running
+# against a KZ provider's *managed* Postgres/Valkey - pooler ports, private-CA
+# TLS - which is the shape any future managed-service migration takes.
+#
+# Apply it on top of the base and monitoring files:
 #
 #   docker compose -f docker-compose.yml \
 #                  -f docker-compose.monitoring.yml \
@@ -16,7 +21,13 @@
 # a directory at /opt/bugspotter/yandex-ca.pem on any host that has no such
 # file, which then breaks the very services it was meant to configure.
 #
-# The cert is downloaded during VM setup (see YANDEX_CLOUD_DEPLOYMENT_GUIDE.md).
+# The CA has to be on the host at /opt/bugspotter/yandex-ca.pem before this file
+# is applied. It used to be fetched by a deployment guide that no longer exists,
+# so fetch it directly:
+#
+#   curl -o /opt/bugspotter/yandex-ca.pem \
+#     https://storage.yandexcloud.net/cloud-certs/RootCA.pem
+#   chmod 0644 /opt/bugspotter/yandex-ca.pem
 
 services:
   # Managed Postgres is reached through the pooler behind TLS signed by the
