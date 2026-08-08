@@ -22,7 +22,11 @@ import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select-radix';
 import { Textarea } from '../ui/textarea';
 import { Checkbox } from '../ui/checkbox';
+import { buildChannelConfigUpdate, toFormConfig } from './channel-config-helpers';
 import type { NotificationChannel } from '../../types';
+
+/** Shown under every field the API withholds, so a blank one reads as intent. */
+const KEEP_STORED_HINT = 'Leave blank to keep the stored value';
 
 interface EditChannelDialogProps {
   channel: NotificationChannel | null;
@@ -55,7 +59,7 @@ export function EditChannelDialog({
       setFormData({
         name: channel.name,
         active: channel.active,
-        config: channel.config as Record<string, string>,
+        config: toFormConfig(channel.config as Record<string, unknown>),
       });
     }
   }, [channel]);
@@ -85,12 +89,18 @@ export function EditChannelDialog({
       return;
     }
 
+    const configUpdate = buildChannelConfigUpdate(formData.config);
+    if (!configUpdate.ok) {
+      toast.error('Custom headers must be valid JSON');
+      return;
+    }
+
     updateMutation.mutate({
       id: channel.id,
       data: {
         name: formData.name,
         active: formData.active,
-        config: formData.config,
+        config: configUpdate.config,
       },
     });
   };
@@ -161,6 +171,7 @@ export function EditChannelDialog({
                 }
                 placeholder="••••••••"
               />
+              <p className="text-xs text-gray-500">{KEEP_STORED_HINT}</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="from_address">From Address *</Label>
@@ -225,6 +236,7 @@ export function EditChannelDialog({
                 }
                 placeholder="https://hooks.slack.com/services/..."
               />
+              <p className="text-xs text-gray-500">{KEEP_STORED_HINT}</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="channel">Channel</Label>
@@ -292,6 +304,7 @@ export function EditChannelDialog({
                 placeholder='{"Authorization": "Bearer token"}'
                 rows={3}
               />
+              <p className="text-xs text-gray-500">{KEEP_STORED_HINT}</p>
             </div>
           </>
         );
@@ -311,6 +324,7 @@ export function EditChannelDialog({
               }
               placeholder="https://discord.com/api/webhooks/..."
             />
+            <p className="text-xs text-gray-500">{KEEP_STORED_HINT}</p>
           </div>
         );
 
@@ -329,6 +343,7 @@ export function EditChannelDialog({
               }
               placeholder="https://outlook.office.com/webhook/..."
             />
+            <p className="text-xs text-gray-500">{KEEP_STORED_HINT}</p>
           </div>
         );
 
