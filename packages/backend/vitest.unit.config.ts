@@ -36,6 +36,7 @@ export default defineConfig({
       'tests/api/auth-handlers.test.ts',
       'tests/api/trust-proxy.test.ts',
       'tests/api/analytics-routes.test.ts',
+      'tests/api/media-urls.test.ts',
       // Pure unit (mocked DB) — no testcontainer needed.
       'tests/analytics/analytics-scope.test.ts',
       'tests/analytics/analytics-auth.test.ts',

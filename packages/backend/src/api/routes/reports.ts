@@ -25,6 +25,7 @@ import { buildPagination, buildSort, parseDateFilter } from '../utils/query-buil
 import { buildAccessFilters, validateProjectAccess } from '../utils/bug-report-access.js';
 import { triggerBugReportNotification } from '../utils/notification-trigger.js';
 import { triggerBugReportIntegrations } from '../utils/integration-trigger.js';
+import { withFreshMediaUrls, withFreshMediaUrlsMany } from '../utils/media-urls.js';
 import { triggerBugAnalysis } from '../utils/intelligence-trigger.js';
 import { triggerBugEnrichment } from '../utils/enrichment-trigger.js';
 import { triggerBugMitigation } from '../utils/mitigation-trigger.js';
@@ -407,7 +408,11 @@ export function bugReportRoutes(
       const pagination = buildPagination(page, limit);
       const result = await db.bugReports.list(filters, sort, pagination);
 
-      return sendPaginated(reply, result.data, result.pagination);
+      // Media URLs are derived from keys here rather than read from the
+      // stored *_url columns, which hold expiring, host-specific presigned
+      // values (issue #291).
+      const withUrls = await withFreshMediaUrlsMany(result.data, storage);
+      return sendPaginated(reply, withUrls, result.pagination);
     }
   );
 
@@ -438,7 +443,7 @@ export function bugReportRoutes(
         metadata: bugReport.metadata as BugReportMetadata,
       };
 
-      return sendSuccess(reply, typedReport);
+      return sendSuccess(reply, await withFreshMediaUrls(typedReport, storage));
     }
   );
 
