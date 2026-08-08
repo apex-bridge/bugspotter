@@ -54,12 +54,25 @@ single-box topology, or a provider's object storage. Both speak S3, so `aws s3`
 with an explicit `--endpoint-url` covers either; no provider CLI is needed.
 
 - Read the source endpoint and bucket from the deployment's `.env`: `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`. These are the source credentials, distinct from the `BACKUP_S3_*` set used for the off-site side.
+- **The `aws` CLI does not read those names.** It looks for `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, so each command below must be given the right pair explicitly. Leaving them unset does not fail cleanly: the CLI falls back to whatever profile, instance role or `~/.aws/credentials` the machine happens to have, and can return an object count for a completely different account - a wrong parity number is worse than a missing one. The two sides use different credentials, so never export one pair for both.
 - **Do not skip this check when a provider CLI is absent.** A skipped parity check reports as "not verified" and is easy to read as "fine", which is how a backup stream that copies nothing looks identical to one that is healthy. If `aws` is unavailable locally, output the command for the user to run on the host rather than dropping the check.
 - MinIO's own client (`mc`) is an alternative when it is already installed on the host: `mc ls --recursive --summarize <alias>/<bucket> | tail -1`.
 
 ## Procedure
 
 Check three backup sources in order. For each, report Status (OK / STALE / MISSING / CORRUPT), latest file, age, size.
+
+Every command below reads the off-site bucket, so each needs the `BACKUP_S3_*`
+credentials passed under the names the `aws` CLI actually reads (Step 4). To
+avoid repeating them, set them once for the off-site side of this session:
+
+```bash
+export AWS_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY}"
+export AWS_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_KEY}"
+```
+
+The parity check later reads the _source_ bucket, which uses different
+credentials - it passes them inline rather than relying on this export.
 
 ### A. Main Postgres backup
 
@@ -98,17 +111,29 @@ Validate:
     --endpoint-url=${BACKUP_S3_ENDPOINT}
   ```
   A missing or stale `.last-sync` means the sync stream is not completing; investigate its logs.
-- **Object-count parity:** backup count should be 99% of source or more. Count both sides the same way, over S3, so the numbers are comparable (see Step 4):
+- **Object-count parity:** backup count should be 99% of source or more. Count both sides the same way, over S3, so the numbers are comparable.
+
+  Each side passes its own credentials inline, so the source side cannot pick
+  up the off-site export set above, and neither can fall back to an ambient
+  profile (see Step 4):
 
   ```bash
-  # source (S3_ENDPOINT / S3_BUCKET, e.g. MinIO on the app host)
-  aws s3 ls "s3://${S3_BUCKET}/" --recursive --summarize \
-    --endpoint-url="${S3_ENDPOINT}" | tail -2
+  # source (MinIO on the app host, or the provider's object storage)
+  AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY}" \
+  AWS_SECRET_ACCESS_KEY="${S3_SECRET_KEY}" \
+    aws s3 ls "s3://${S3_BUCKET}/" --recursive --summarize \
+      --endpoint-url="${S3_ENDPOINT}" | tail -2
 
   # off-site copy
-  aws s3 ls "s3://${BACKUP_S3_BUCKET}/storage/" --recursive --summarize \
-    --endpoint-url="${BACKUP_S3_ENDPOINT}" | tail -2
+  AWS_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY}" \
+  AWS_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_KEY}" \
+    aws s3 ls "s3://${BACKUP_S3_BUCKET}/storage/" --recursive --summarize \
+      --endpoint-url="${BACKUP_S3_ENDPOINT}" | tail -2
   ```
+
+  If the two counts are identical to the object, be suspicious rather than
+  satisfied: the most common cause is both commands having hit the same bucket
+  because one side's credentials or endpoint did not take effect.
 
   Compare "Total Objects". Report the two counts and the ratio, never just a
   verdict - a parity check whose numbers are not shown cannot be sanity-checked
