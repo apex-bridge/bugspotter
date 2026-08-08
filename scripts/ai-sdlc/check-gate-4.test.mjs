@@ -184,3 +184,30 @@ test('the needs-deploy restore comment does not claim the gate was never reached
   // The #298 case: the keyword was quoted while describing the bug, not issued.
   assert.match(body, /quoting/);
 });
+
+test('reports every stale pre-deploy label, not just the earliest', () => {
+  // Gates are meant to be exclusive but nothing enforces it. Restoring only the
+  // earliest would reopen the issue still wearing the other one, which reads as
+  // two gates at once.
+  const d = decideGateAction({
+    labels: ['needs-review', 'needs-spec', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.equal(d.gate, 'needs-spec', 'the comment describes the earliest gate');
+  assert.deepEqual(d.stale, ['needs-spec', 'needs-review'], 'in pipeline order');
+});
+
+test('stale is empty when the issue was already at the deploy gate', () => {
+  // Drives the workflow branch that only re-adds the label.
+  const d = decideGateAction({
+    labels: ['needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.deepEqual(d.stale, []);
+});

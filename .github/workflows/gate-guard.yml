@@ -100,20 +100,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          GATE: ${{ steps.decide.outputs.gate }}
+          REMOVE_LABELS: ${{ steps.decide.outputs.remove_labels }}
           BODY: ${{ steps.decide.outputs.comment }}
         run: |
           set -euo pipefail
           gh issue reopen "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"
-          # An issue auto-closed while already at needs-deploy keeps the label it
-          # has; passing --remove-label and --add-label for the same name in one
-          # call is at best a no-op and at worst order-dependent.
-          if [ "$GATE" = "needs-deploy" ]; then
+          # REMOVE_LABELS is every pre-deploy label the issue actually carries,
+          # so an issue that somehow held two does not come back still wearing
+          # one of them. It is empty when the issue was already at needs-deploy,
+          # in which case the label is only re-added: passing --remove-label and
+          # --add-label for the same name in one call is at best a no-op.
+          if [ -n "$REMOVE_LABELS" ]; then
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --add-label needs-deploy
+              --remove-label "$REMOVE_LABELS" --add-label needs-deploy
           else
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --remove-label "$GATE" --add-label needs-deploy
+              --add-label needs-deploy
           fi
           printf '%s' "$BODY" | gh issue comment "$ISSUE_NUMBER" \
             --repo "$GITHUB_REPOSITORY" --body-file -

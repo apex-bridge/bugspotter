@@ -44,17 +44,22 @@ export const DEPLOY_GATE = 'needs-deploy';
  * @param {string[]} input.labels        - label names on the issue at close time
  * @param {string|null} input.stateReason - GitHub's `completed` | `not_planned` | null
  * @param {boolean} input.closedByMerge  - true if a merged PR closed it, not a person
- * @returns {{action: 'ignore'|'comment'|'restore', gate: string|null, reason: string}}
+ * @returns {{action: 'ignore'|'comment'|'restore', gate: string|null,
+ *            stale: string[], reason: string}} `stale` is every pre-deploy label
+ *            present, so the restore can strip all of them, not just `gate`.
  */
 export function decideGateAction({ labels = [], stateReason = null, closedByMerge = false }) {
-  // A stale earlier label alongside `needs-deploy` is treated as the earlier
-  // gate, so the restore also cleans it up. Gates are meant to be exclusive.
-  const gate =
-    PRE_DEPLOY_GATES.find((g) => labels.includes(g)) ??
-    (labels.includes(DEPLOY_GATE) ? DEPLOY_GATE : null);
+  // Gates are meant to be exclusive, but nothing enforces that and a human can
+  // apply two by hand. Collect every pre-deploy label present so the restore can
+  // strip all of them; leaving one behind would reopen the issue into a mixed
+  // state that reads as two gates at once.
+  const stale = PRE_DEPLOY_GATES.filter((g) => labels.includes(g));
+
+  // Reported gate is the earliest, since that is the one the comment describes.
+  const gate = stale[0] ?? (labels.includes(DEPLOY_GATE) ? DEPLOY_GATE : null);
 
   if (gate === null) {
-    return { action: 'ignore', gate: null, reason: 'not a gated pipeline issue' };
+    return { action: 'ignore', gate: null, stale: [], reason: 'not a gated pipeline issue' };
   }
 
   // `not_planned` is a deliberate judgment that the work should not happen -
@@ -62,7 +67,7 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
   // built on a hallucinated package. Gate 4 does not apply to work that is not
   // being done, and second-guessing that call would make this guard a nuisance.
   if (stateReason === 'not_planned') {
-    return { action: 'ignore', gate, reason: 'closed as not planned' };
+    return { action: 'ignore', gate, stale, reason: 'closed as not planned' };
   }
 
   // A person closing an issue by hand is making a decision. Say the gate was
@@ -77,15 +82,16 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
       return {
         action: 'ignore',
         gate,
+        stale,
         reason: 'closed by a person at the deploy gate: Gate 4 done',
       };
     }
-    return { action: 'comment', gate, reason: 'closed by a person, not by a merge' };
+    return { action: 'comment', gate, stale, reason: 'closed by a person, not by a merge' };
   }
 
   // Closed as a side effect of a merge: nobody decided this, a keyword did.
   // Restoring is the whole point of the guard.
-  return { action: 'restore', gate, reason: 'auto-closed by a merged PR' };
+  return { action: 'restore', gate, stale, reason: 'auto-closed by a merged PR' };
 }
 
 /**
@@ -164,7 +170,14 @@ function main() {
   // Consumed by the workflow via $GITHUB_OUTPUT.
   const out = process.env.GITHUB_OUTPUT;
   if (out) {
-    appendFileSync(out, `action=${decision.action}\ngate=${decision.gate ?? ''}\n`);
+    // Comma-joined is safe for this one value: it only ever holds names from
+    // PRE_DEPLOY_GATES, which are ours and contain no commas. The raw-JSON
+    // handling above is for arbitrary issue labels, which are not.
+    appendFileSync(
+      out,
+      `action=${decision.action}\ngate=${decision.gate ?? ''}\n` +
+        `remove_labels=${decision.stale.join(',')}\n`
+    );
     if (decision.action !== 'ignore') {
       // Randomised heredoc delimiter, same reason as generate-impl.mjs: the
       // comment body is partly issue-derived, and a fixed delimiter appearing
