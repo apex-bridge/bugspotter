@@ -31,6 +31,10 @@ import { pathToFileURL } from 'node:url';
 // still carrying one of these never reached the deploy gate.
 export const PRE_DEPLOY_GATES = ['needs-spec', 'needs-adr', 'agent-working', 'needs-review'];
 
+// Gate 4 itself. Handled separately rather than appended to the list above,
+// because the two close causes mean opposite things here: a person closing an
+// issue at this label IS the gate completing, while a merge closing it means
+// the deploy never happened. Everywhere else, both causes are a skipped gate.
 export const DEPLOY_GATE = 'needs-deploy';
 
 /**
@@ -43,12 +47,14 @@ export const DEPLOY_GATE = 'needs-deploy';
  * @returns {{action: 'ignore'|'comment'|'restore', gate: string|null, reason: string}}
  */
 export function decideGateAction({ labels = [], stateReason = null, closedByMerge = false }) {
-  const gate = PRE_DEPLOY_GATES.find((g) => labels.includes(g)) ?? null;
+  // A stale earlier label alongside `needs-deploy` is treated as the earlier
+  // gate, so the restore also cleans it up. Gates are meant to be exclusive.
+  const gate =
+    PRE_DEPLOY_GATES.find((g) => labels.includes(g)) ??
+    (labels.includes(DEPLOY_GATE) ? DEPLOY_GATE : null);
 
   if (gate === null) {
-    // Either not a pipeline issue at all, or it already reached `needs-deploy`
-    // and closing it is the expected end of the line.
-    return { action: 'ignore', gate: null, reason: 'no pre-deploy gate label' };
+    return { action: 'ignore', gate: null, reason: 'not a gated pipeline issue' };
   }
 
   // `not_planned` is a deliberate judgment that the work should not happen -
@@ -63,6 +69,17 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
   // skipped, then leave it alone - reopening under someone would be fighting
   // the human this pipeline exists to keep in the loop.
   if (!closedByMerge) {
+    // Except at the deploy gate, where a person closing the issue IS Gate 4
+    // completing. This is the pipeline's normal happy ending, and commenting
+    // "the gate was skipped" on it would make the guard noise on every
+    // successful delivery - which is how guards get muted.
+    if (gate === DEPLOY_GATE) {
+      return {
+        action: 'ignore',
+        gate,
+        reason: 'closed by a person at the deploy gate: Gate 4 done',
+      };
+    }
     return { action: 'comment', gate, reason: 'closed by a person, not by a merge' };
   }
 
@@ -76,6 +93,21 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
  * Written to be useful to a human reading it cold on the issue.
  */
 export function buildComment({ action, gate }) {
+  // At the deploy gate the issue did reach Gate 4; what it never got is the
+  // human action the gate stands for. Saying "never reached needs-deploy"
+  // there would be plainly false to anyone reading the labels.
+  if (gate === DEPLOY_GATE) {
+    return (
+      `This issue was at \`${DEPLOY_GATE}\` and was closed automatically by a merged ` +
+      `PR. **Gate 4 (deploy) is a human action**, so a merge cannot complete it - ` +
+      `nothing here confirms the change is deployed and verified.\n\n` +
+      `A closing keyword does this, and it does not have to be a deliberate one: ` +
+      `GitHub reads \`Closes #NNN\` the same way whether the PR body is instructing ` +
+      `it or merely quoting it while describing something.\n\n` +
+      `Reopened, still at \`${DEPLOY_GATE}\`. Close it again once it actually is deployed.`
+    );
+  }
+
   const skipped =
     `This issue closed while still labelled \`${gate}\`, so it never reached ` +
     `\`${DEPLOY_GATE}\` and **Gate 4 (deploy) was skipped**.`;

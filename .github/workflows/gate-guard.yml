@@ -105,8 +105,16 @@ jobs:
         run: |
           set -euo pipefail
           gh issue reopen "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"
-          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --remove-label "$GATE" --add-label needs-deploy
+          # An issue auto-closed while already at needs-deploy keeps the label it
+          # has; passing --remove-label and --add-label for the same name in one
+          # call is at best a no-op and at worst order-dependent.
+          if [ "$GATE" = "needs-deploy" ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --add-label needs-deploy
+          else
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --remove-label "$GATE" --add-label needs-deploy
+          fi
           printf '%s' "$BODY" | gh issue comment "$ISSUE_NUMBER" \
             --repo "$GITHUB_REPOSITORY" --body-file -
 
