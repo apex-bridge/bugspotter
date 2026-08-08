@@ -51,16 +51,18 @@ describe('withFreshMediaUrls', () => {
     expect(result.thumbnail_url).toBeNull();
   });
 
-  it('fails soft to null when the object is gone', async () => {
-    // Lifecycle rules expire replays at 30 days while the row keeps its key,
-    // so signing a dangling key must not fail the whole request.
+  it('fails soft to null when the signer itself throws', async () => {
+    // Not the expired-object case: signing is a local HMAC, so a deleted object
+    // signs fine and 404s on use (#287). What is exercised here is a signer that
+    // cannot produce a URL at all - missing credentials, a malformed key - which
+    // must not take down a listing page over one bad row.
     const storage = fakeStorage({
       getSignedUrl: vi.fn(async () => {
-        throw new Error('NoSuchKey');
+        throw new Error('Resolved credential object is not valid');
       }),
     });
 
-    const result = await withFreshMediaUrls({ screenshot_key: 'gone.png' }, storage);
+    const result = await withFreshMediaUrls({ screenshot_key: 'unsignable.png' }, storage);
     expect(result.screenshot_url).toBeNull();
   });
 
