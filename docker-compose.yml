@@ -84,7 +84,7 @@ x-common-env: &common-env
   # Production (Yandex Managed PostgreSQL):
   #   DATABASE_URL=postgresql://bugspotter:password@<cluster-id>.mdb.yandexcloud.net:6432/bugspotter?sslmode=require
   #
-  # See MANAGED_DATABASE_GUIDE.md for migration instructions
+  # See DOCKER.md, "Using External Services", for migration instructions
   # ============================================================================
   DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-bugspotter}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-bugspotter}}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
@@ -170,7 +170,8 @@ services:
   # 3. Optional: Remove postgres from depends_on sections in api/worker services
   # 4. Run: docker compose down && docker compose up -d
   #
-  # See MANAGED_DATABASE_GUIDE.md for complete migration guide
+  # See DOCKER.md, "Using External Services"; docker-compose.yandex.yml is a
+  # worked example of the TLS and pooler-port plumbing a managed provider needs
   # ==========================================================================
   postgres:
     <<: *default-logging
