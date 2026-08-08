@@ -289,20 +289,39 @@ JWT_SECRET=EXAMPLE_dev_jwt_key_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6      # 32+ chara
 ENCRYPTION_KEY=EXAMPLE_dev_enc_key_x9y8z7w6v5u4t3s2r1q0p9o8n7m6l5k4  # 32+ characters required
 ```
 
-#### Content Security Policy (CSP) Domains (Optional)
+#### Content Security Policy (CSP) Domains
 
-Control which external domains are allowed in the admin panel CSP headers:
+These are read by two different deployment modes, and the sets do not overlap -
+check which one you are running before copying values.
+
+**Unified image** (`Dockerfile`, one container running API + admin, via
+`scripts/unified-entrypoint.sh`). All three have defaults, so an unset value is
+not an unconfigured one:
 
 ```bash
-# CDN for static assets (screenshots, assets)
-CDN_DOMAIN=https://cdn.bugspotter.io  # Default
-
-# Storage backend (R2, S3) for uploaded files
-STORAGE_DOMAIN=https://*.r2.cloudflarestorage.com  # Default
-
-# Application domains for cross-origin resources (fonts, images)
-APP_DOMAIN=https://*.demo.bugspotter.io  # Default
+CDN_DOMAIN=https://cdn.bugspotter.io                    # Default
+STORAGE_DOMAIN=https://*.r2.cloudflarestorage.com       # Default
+APP_DOMAIN=https://*.demo.bugspotter.io                 # Default
 ```
+
+The `STORAGE_DOMAIN` default only fits a deployment on Cloudflare R2. On any
+other object store it produces a CSP that allows a host you do not use and
+blocks the one you do, which surfaces only in the browser - screenshots render
+blank and session replay fails with `Failed to fetch` while every server-side
+check passes. Set it explicitly.
+
+**Compose stack** (`docker-compose.yml`, separate admin container). Only
+`STORAGE_DOMAIN` applies, and it has **no** default - empty means same-origin
+storage only:
+
+```bash
+STORAGE_DOMAIN=storage.example.com   # bare host defaults to https
+```
+
+Here the admin entrypoint cross-checks it against `S3_ENDPOINT` and refuses to
+start if the CSP would not cover the host presigned URLs resolve to. See
+`.env.example` for the addressing-style and wildcard rules, and ADR-0016 for why
+this coupling exists at all.
 
 **When to customize:**
 

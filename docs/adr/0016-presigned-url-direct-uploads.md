@@ -25,6 +25,7 @@ A **three-request flow**: (1) `POST /api/v1/reports` with flags → returns the 
 
 - Requires backend object storage and presigned-URL generation.
 - The client must handle gzip content-type and parallel blob uploads.
+- **The object store becomes a browser-facing dependency, so where it lives is now client-visible configuration.** Because the bytes bypass the API, the browser resolves the storage host itself, and every browser-side control over that host applies: it must be publicly resolvable, it must be HTTPS (`isSecureEndpoint` in `@bugspotter/common` rejects anything else outside localhost), it must answer CORS preflights for the replay `fetch`, and the admin's CSP must name it in both `img-src` and `connect-src`. That last one is the trap, because `S3_ENDPOINT` and the CSP's `STORAGE_DOMAIN` are separate settings describing one fact, and nothing server-side notices when they disagree: signing still succeeds, uploads still get a URL, and every health check stays green while the browser silently refuses the request. Both halves have bitten production - `S3_ENDPOINT=http://minio:9000` broke uploads (#289) and an empty `STORAGE_DOMAIN` broke replay and screenshot reads (#302). The admin entrypoint now cross-checks the two and refuses to start on a mismatch (`scripts/shared/validate-api-domain.sh`), which is a guard against this consequence, not a removal of it: any new client that reaches storage directly inherits the same requirement.
 
 ## Alternatives considered
 

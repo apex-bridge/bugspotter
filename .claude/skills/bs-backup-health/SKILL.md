@@ -46,12 +46,16 @@ Report which provider/endpoint is being used so the user has context.
 
 **Never** print full secret keys back to the user.
 
-### Step 4 — Source-side tooling (`yc` CLI)
+### Step 4 — Source-side tooling
 
-The object-count parity check (below) reads the source bucket via the Yandex Cloud CLI.
+The object-count parity check (below) counts objects in the **source** bucket,
+which is whatever `S3_ENDPOINT` points at - MinIO on the application host in the
+single-box topology, or a provider's object storage. Both speak S3, so `aws s3`
+with an explicit `--endpoint-url` covers either; no provider CLI is needed.
 
-- Verify it is installed and authenticated first: `yc --version` and `yc config list` (or `yc iam create-token`).
-- **If `yc` is missing or unauthenticated** → skip the parity check and report it as "not verified (yc unavailable)" rather than failing; the freshness check still stands. Fallback: read object count from the YC console or the Object Storage REST API.
+- Read the source endpoint and bucket from the deployment's `.env`: `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`. These are the source credentials, distinct from the `BACKUP_S3_*` set used for the off-site side.
+- **Do not skip this check when a provider CLI is absent.** A skipped parity check reports as "not verified" and is easy to read as "fine", which is how a backup stream that copies nothing looks identical to one that is healthy. If `aws` is unavailable locally, output the command for the user to run on the host rather than dropping the check.
+- MinIO's own client (`mc`) is an alternative when it is already installed on the host: `mc ls --recursive --summarize <alias>/<bucket> | tail -1`.
 
 ## Procedure
 
@@ -94,11 +98,21 @@ Validate:
     --endpoint-url=${BACKUP_S3_ENDPOINT}
   ```
   A missing or stale `.last-sync` means the sync stream is not completing; investigate its logs.
-- **Object-count parity:** backup count should be 99% of source or more. Requires `yc` when the source is Yandex Object Storage (see Step 4); skip if unavailable. Get source count:
+- **Object-count parity:** backup count should be 99% of source or more. Count both sides the same way, over S3, so the numbers are comparable (see Step 4):
+
   ```bash
-  yc storage bucket get <source-bucket> --format json | jq '{size_bytes, object_count}'
+  # source (S3_ENDPOINT / S3_BUCKET, e.g. MinIO on the app host)
+  aws s3 ls "s3://${S3_BUCKET}/" --recursive --summarize \
+    --endpoint-url="${S3_ENDPOINT}" | tail -2
+
+  # off-site copy
+  aws s3 ls "s3://${BACKUP_S3_BUCKET}/storage/" --recursive --summarize \
+    --endpoint-url="${BACKUP_S3_ENDPOINT}" | tail -2
   ```
-  Then compare.
+
+  Compare "Total Objects". Report the two counts and the ratio, never just a
+  verdict - a parity check whose numbers are not shown cannot be sanity-checked
+  by the reader.
 
 ## Output format
 

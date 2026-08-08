@@ -8,11 +8,18 @@ on:
   push:
     branches: [main]
     paths:
+      # Must stay in step with the COPY inputs of packages/backend/Dockerfile -
+      # see the note in deploy-admin.yml for what a missing path costs.
       - 'packages/backend/**'
       - 'packages/types/**'
       - 'packages/utils/**'
       - 'packages/billing/**'
       - 'packages/message-broker/**'
+      - 'pnpm-lock.yaml' # Dependency resolution is baked at build time
+      - 'pnpm-workspace.yaml'
+      - 'package.json' # Root manifest, COPYd for the workspace install
+      - '.npmrc'
+      - 'tsconfig.json' # Root config the package tsconfigs extend
       - '.github/workflows/deploy-api.yml'
   workflow_dispatch:
     inputs:
