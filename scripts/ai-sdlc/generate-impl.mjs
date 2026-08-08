@@ -389,10 +389,16 @@ try {
   //
   // The deeper cost driver is the response schema: {path, content} means the
   // model re-emits every declared file IN FULL, so editing three ~500-line
-  // files costs ~15K output tokens of mostly-unchanged text against a 16384
-  // cap. That's the real scaling limit here, and a diff/patch-shaped schema
-  // would be the structural fix — deliberately not attempted in this change,
-  // which is scoped to making the current shape work.
+  // files costs ~15K output tokens of mostly-unchanged text. A diff/patch-shaped
+  // schema would be the structural fix — deliberately not attempted in this
+  // change, which is scoped to making the current shape work.
+  //
+  // MAX_TOKENS below binds on LLM_BACKEND=api only. The live backend is `cli`,
+  // which has no per-call output cap, so on the path this actually runs the
+  // ceiling is the model's own limit and the real constraint is the timeout.
+  // An earlier version of this comment called 16384 "the real scaling limit
+  // here"; a run under that nominal cap emitted 50,304 output tokens without
+  // truncating, which is what makes #296's 8.5x budget gap look the way it does.
   ({ text, stopReason } = await callClaude({
     prompt,
     maxTokens: MAX_TOKENS,
@@ -406,9 +412,15 @@ try {
 
 // Fail fast if truncated — a partial JSON response will always cause a parse error downstream
 if (stopReason === 'max_tokens') {
-  console.error(
-    `Claude response truncated (stop_reason=max_tokens). Raise max_tokens in generate-impl.mjs.`
-  );
+  // Both backends surface this, so the advice has to name a lever that exists
+  // on the one in use. Raising MAX_TOKENS does nothing under `cli`: it is never
+  // forwarded, and the response was bounded by the model's own limit.
+  const remedy =
+    (process.env.LLM_BACKEND || 'api') === 'cli'
+      ? `LLM_BACKEND=cli ignores MAX_TOKENS, so raising it will not help. The response hit the ` +
+        `model's own output limit: narrow the spec's declared file set, or split the issue.`
+      : `Raise MAX_TOKENS in generate-impl.mjs (currently ${MAX_TOKENS}).`;
+  console.error(`Claude response truncated (stop_reason=max_tokens). ${remedy}`);
   process.exit(1);
 }
 
