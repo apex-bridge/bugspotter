@@ -4,6 +4,12 @@
 # Stage 1: Dependencies - Install all dependencies including dev dependencies
 # Stage 2: Builder - Build TypeScript code
 # Stage 3: Production - Minimal runtime image with only production dependencies
+#
+# Adding a COPY from the build context here also requires a matching entry in
+# the `paths:` filter of .github/workflows/deploy-api.yml. That filter is what
+# decides whether a change republishes this image; a build input missing from it
+# means the registry copy silently keeps the old file (#303). Nothing checks the
+# two agree - see #310.
 # ============================================================================
 
 # ============================================================================

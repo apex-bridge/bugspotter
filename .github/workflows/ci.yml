@@ -79,6 +79,22 @@ jobs:
       - name: Run AI-SDLC script tests
         run: node --test scripts/ai-sdlc/*.test.mjs
 
+      # Covers the container entrypoints' env validation, including the
+      # STORAGE_DOMAIN vs S3_ENDPOINT CSP cross-check. Pure POSIX shell with no
+      # dependencies, and nothing else exercises it - the code only runs inside
+      # a built image, so a regression here surfaces as a broken deployment.
+      - name: Run entrypoint env validation tests
+        run: sh scripts/test-validate-api-domain.sh
+
+      # The step above runs under the runner's dash. In production this script
+      # is sourced by the admin image's entrypoint, which is nginx:alpine, so
+      # the shell that actually executes it is busybox ash - a different
+      # implementation with its own gaps. Run the suite there too.
+      - name: Run entrypoint env validation tests under busybox ash
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w alpine:3 \
+            sh scripts/test-validate-api-domain.sh
+
   test-backend-db:
     name: Backend Database Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
@@ -733,8 +749,10 @@ jobs:
           GRAFANA_ADMIN_PASSWORD: test
 
       - name: Validate compose with monitoring + yandex overrides
-        # The production deploy applies all three files, so the merged result
-        # is what actually runs there - validate that combination too.
+        # Nothing applies this combination today - production is single-box and
+        # deployed by hand. It is validated because docker-compose.yandex.yml is
+        # kept as the managed-services reference, and a reference that no longer
+        # merges cleanly is worse than none.
         run: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml -f docker-compose.yandex.yml config --quiet
         env:
           JWT_SECRET: test

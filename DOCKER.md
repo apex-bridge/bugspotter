@@ -244,7 +244,10 @@ In production, payment providers (Kaspi, Stripe, YooKassa) need to reach the web
          - '3002:3002' # Only if firewall/security group restricts to provider IPs
    ```
 
-See [YANDEX_CLOUD_RESOURCES.md](./YANDEX_CLOUD_RESOURCES.md) for security group configuration.
+Firewall note: Docker publishes ports by writing nftables rules directly, so a
+host firewall like ufw does not filter them. Published ports therefore bind to
+loopback by default in `docker-compose.yml`; put a reverse proxy or the
+provider's own network ACLs in front of anything that must be reachable.
 
 ## Available Commands
 
@@ -289,20 +292,64 @@ JWT_SECRET=EXAMPLE_dev_jwt_key_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6      # 32+ chara
 ENCRYPTION_KEY=EXAMPLE_dev_enc_key_x9y8z7w6v5u4t3s2r1q0p9o8n7m6l5k4  # 32+ characters required
 ```
 
-#### Content Security Policy (CSP) Domains (Optional)
+#### Content Security Policy (CSP) Domains
 
-Control which external domains are allowed in the admin panel CSP headers:
+The two deployment modes read different variables, and `STORAGE_DOMAIN` behaves
+differently in each. Check which one you are running before copying values.
+
+**Unified image** (`Dockerfile`, one container running API + admin, via
+`scripts/unified-entrypoint.sh`). Three variables, all with defaults, so an
+unset value is not an unconfigured one:
 
 ```bash
-# CDN for static assets (screenshots, assets)
-CDN_DOMAIN=https://cdn.bugspotter.io  # Default
-
-# Storage backend (R2, S3) for uploaded files
-STORAGE_DOMAIN=https://*.r2.cloudflarestorage.com  # Default
-
-# Application domains for cross-origin resources (fonts, images)
-APP_DOMAIN=https://*.demo.bugspotter.io  # Default
+CDN_DOMAIN=https://cdn.bugspotter.io                    # Default
+STORAGE_DOMAIN=https://*.r2.cloudflarestorage.com       # Default
+APP_DOMAIN=https://*.demo.bugspotter.io                 # Default
 ```
+
+The `STORAGE_DOMAIN` default only fits a deployment on Cloudflare R2. On any
+other object store it produces a CSP that allows a host you do not use and
+blocks the one you do, which surfaces only in the browser - screenshots render
+blank and session replay fails with `Failed to fetch` while every server-side
+check passes. Set it explicitly. In this mode the value is interpolated into the
+header as given: no validation, no normalization, and none of the cross-checks
+described below (see #307). `API_DOMAIN` is ignored here.
+
+**Compose stack** (`docker-compose.yml`, separate admin container). A different
+set - `CDN_DOMAIN` and `APP_DOMAIN` do nothing here:
+
+```bash
+# Object storage. No default; empty means same-origin storage only, which is
+# what silently broke screenshots and replay in production (#302).
+STORAGE_DOMAIN=bugspotter.storage.example.com
+
+# Required whenever the API is on a different host from the admin (Pattern B).
+# Empty gives connect-src 'self', and the dashboard cannot reach the API at all
+# - a worse failure than the media one above, and nothing guards it.
+API_DOMAIN=https://api.example.com
+
+# Optional: drops the Jira avatar CDNs from img-src on a data-localized deploy.
+DISABLE_INTEGRATION_AVATAR_CSP=true
+```
+
+`STORAGE_DOMAIN` here must name the host **presigned URLs actually resolve to**,
+which is not always `S3_ENDPOINT`'s host. With `S3_FORCE_PATH_STYLE=true` the
+bucket stays in the path and the endpoint host is correct. Otherwise - the
+default - the bucket becomes a subdomain, so you need `<bucket>.<endpoint-host>`
+or `*.<endpoint-host>`. A bare host defaults to `https`. `.env.example` has the
+full rules.
+
+The admin entrypoint cross-checks the two and refuses to start on a mismatch,
+with two gaps worth knowing:
+
+- It only runs when `S3_ENDPOINT` is set. **AWS S3 deployments usually leave it
+  unset**, so the check is skipped entirely and an empty `STORAGE_DOMAIN` boots
+  clean into the #302 outage. Set `STORAGE_DOMAIN` by hand there -
+  `*.s3.<region>.amazonaws.com`, or the bucket's own host.
+- If `S3_BUCKET` is not passed to the admin container it cannot construct the
+  virtual-hosted host, so it accepts a wildcard and warns instead of failing.
+
+ADR-0016 explains why this coupling exists at all.
 
 **When to customize:**
 
@@ -442,6 +489,12 @@ S3_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
 S3_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 S3_BUCKET=bugspotter-prod
 S3_FORCE_PATH_STYLE=false
+# Required, and nothing will remind you: with S3_ENDPOINT unset the admin's
+# CSP cross-check has nothing to compare against and stays silent, so an
+# empty value here boots clean and then blocks every screenshot and replay
+# in the browser. Must cover the host presigned URLs resolve to, which with
+# path style off is <bucket>.<endpoint-host>.
+STORAGE_DOMAIN=*.s3.us-east-1.amazonaws.com
 
 # Cloudflare R2
 STORAGE_BACKEND=r2
@@ -450,6 +503,11 @@ S3_REGION=auto
 S3_ACCESS_KEY=your-r2-access-key
 S3_SECRET_KEY=your-r2-secret-key
 S3_BUCKET=bugspotter
+# S3_ENDPOINT is set here, so the admin refuses to start until this covers it.
+# The wildcard suits virtual-hosted addressing (<bucket>.<endpoint-host>); with
+# S3_FORCE_PATH_STYLE=true use the bare endpoint host instead. If you get it
+# wrong the startup error names the exact value to use.
+STORAGE_DOMAIN=*.account-id.r2.cloudflarestorage.com
 ```
 
 Then update `docker-compose.yml` to remove unused services.
