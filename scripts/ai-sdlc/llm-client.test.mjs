@@ -405,3 +405,52 @@ test('callViaApi falls back to the hardcoded default model when none is supplied
     globalThis.fetch = originalFetch;
   }
 });
+
+// --- maxTokens visibility on the CLI backend (#313) ---
+//
+// All four generators pass a maxTokens they believe bounds the response, and
+// callViaCli cannot honour it. Dropping it silently is how generate-impl.mjs
+// came to reason about a "16384 cap" that was never in force, and how a run
+// emitting 50,304 output tokens against that nominal cap did not look
+// anomalous (#296). These assert the drop is announced, and only when it
+// actually happens.
+
+async function captureWarnings(fn) {
+  const original = console.warn;
+  const seen = [];
+  console.warn = (...args) => seen.push(args.join(' '));
+  try {
+    await fn();
+  } finally {
+    console.warn = original;
+  }
+  return seen;
+}
+
+test('callClaude warns that maxTokens is ignored on the CLI backend', async () => {
+  process.env.FAKE_CLAUDE_MODE = 'success';
+
+  const warnings = await captureWarnings(() =>
+    callClaude({ prompt: 'hi', maxTokens: 16384, timeoutMs: 10000 })
+  );
+
+  const hit = warnings.find((w) => w.includes('maxTokens'));
+  assert.ok(hit, 'a silently-dropped parameter must say so');
+  assert.match(hit, /16384/, 'the warning names the value that was discarded');
+  assert.match(hit, /ignored/);
+  assert.match(hit, /LLM_BACKEND=cli/);
+});
+
+test('callClaude stays quiet when no maxTokens was passed', async () => {
+  // Not vacuous: without this the warning could be unconditional, which would
+  // train the reader to ignore it.
+  process.env.FAKE_CLAUDE_MODE = 'success';
+
+  const warnings = await captureWarnings(() => callClaude({ prompt: 'hi', timeoutMs: 10000 }));
+
+  assert.equal(
+    warnings.filter((w) => w.includes('maxTokens')).length,
+    0,
+    'nothing was dropped, so there is nothing to report'
+  );
+});

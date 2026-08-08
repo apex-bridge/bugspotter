@@ -353,6 +353,22 @@ async function callViaCli({ prompt, timeoutMs, model }) {
 // before this option existed.
 export async function callClaude({ prompt, maxTokens, timeoutMs, model }) {
   if (LLM_BACKEND === 'cli') {
+    // Say so rather than dropping it silently. All four generators pass a
+    // maxTokens they believe bounds the response, and on this backend none of
+    // them do - which is how `generate-impl.mjs` came to reason about a "16384
+    // cap" that was never in force, and how a run emitting 50,304 output tokens
+    // against that nominal cap did not look anomalous (#296, #313).
+    //
+    // Warn, do not throw: the parameter is correct for the API backend, callers
+    // are right to pass it, and this module must never be the reason a pipeline
+    // run fails.
+    if (maxTokens != null) {
+      console.warn(
+        `llm-client: maxTokens=${maxTokens} is ignored on LLM_BACKEND=cli ` +
+          `(the CLI has no per-call output cap). Output length is unbounded here; ` +
+          `budget and timeouts accordingly.`
+      );
+    }
     return callViaCli({ prompt, timeoutMs, model });
   }
   return callViaApi({ prompt, maxTokens, timeoutMs, model });
