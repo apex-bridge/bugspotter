@@ -414,6 +414,19 @@ services:
       # https, or an explicit http(s):// scheme is preserved for HTTP-only
       # stores). Empty => only same-origin storage is allowed. See .env.example.
       STORAGE_DOMAIN: ${STORAGE_DOMAIN:-}
+      # Read-only cross-check input, not a second storage setting: the
+      # entrypoint refuses to start when a public S3_ENDPOINT is not covered by
+      # STORAGE_DOMAIN, because the browser fetches presigned URLs from that
+      # host directly and a CSP that omits it breaks replay and screenshots
+      # with no server-side symptom. Loopback / compose-service endpoints are
+      # skipped. See scripts/shared/validate-api-domain.sh.
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      # Same cross-check: these two decide which host presigned URLs actually
+      # resolve to. Path-style leaves the endpoint host alone, virtual-hosted
+      # addressing puts the bucket in front of it, and only the second form is
+      # covered by a "*.endpoint" CSP source.
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-}
+      S3_BUCKET: ${S3_BUCKET:-}
       # Set to true to drop the Jira avatar CDNs (secure.gravatar.com,
       # *.atl-paas.net) from the admin CSP on a strictly data-localized
       # deployment. Empty/unset keeps them allowed. See .env.example.
