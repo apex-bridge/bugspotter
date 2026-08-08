@@ -78,9 +78,15 @@ describe('Share Token Routes', () => {
 
   afterAll(async () => {
     // Cleanup
-    if (testBugReport?.id) await db.bugReports.delete(testBugReport.id);
-    if (testProject?.id) await db.projects.delete(testProject.id);
-    if (testUser?.id) await db.users.delete(testUser.id);
+    if (testBugReport?.id) {
+      await db.bugReports.delete(testBugReport.id);
+    }
+    if (testProject?.id) {
+      await db.projects.delete(testProject.id);
+    }
+    if (testUser?.id) {
+      await db.users.delete(testUser.id);
+    }
     await server.close();
     await db.close();
   });
@@ -270,6 +276,14 @@ describe('Share Token Routes', () => {
         priority: testBugReport.priority,
       });
       expect(body.data.bug_report).toHaveProperty('created_at');
+
+      // Presence, not value: the route signs these from the report's keys, but
+      // Fastify drops any property the response schema does not declare, so an
+      // undeclared field arrives as absent rather than null. Asserting the key
+      // exists is what catches that, and it holds whether or not this fixture
+      // has a screenshot.
+      expect(body.data.bug_report).toHaveProperty('screenshot_url');
+      expect(body.data.bug_report).toHaveProperty('thumbnail_url');
 
       // Verify share_info structure
       expect(body.data.share_info).toMatchObject({

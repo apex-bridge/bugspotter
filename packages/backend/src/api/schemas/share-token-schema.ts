@@ -126,6 +126,12 @@ export const getSharedReplaySchema = {
                 status: { type: 'string' },
                 priority: { type: 'string' },
                 created_at: { type: 'string', format: 'date-time' },
+                // The route computes these presigned URLs, but Fastify strips any
+                // property a response schema does not declare - so without these two
+                // lines the screenshot silently never reaches the shared view,
+                // however healthy storage is.
+                screenshot_url: { type: 'string', format: 'uri', nullable: true },
+                thumbnail_url: { type: 'string', format: 'uri', nullable: true },
               },
             },
             session: {
@@ -176,7 +182,12 @@ export const getSharedReplaySchema = {
                 },
               },
             },
-            replay_url: { type: 'string', format: 'uri' },
+            // nullable because the route returns null for a share with no
+            // replay - metadata-only shares are supported (session-service
+            // hasShareableContent). Without it fast-json-stringify coerces the
+            // null to "", so the endpoint advertised a URI and sent an empty
+            // string.
+            replay_url: { type: 'string', format: 'uri', nullable: true },
             share_info: {
               type: 'object',
               required: ['view_count', 'expires_at', 'password_protected'],
