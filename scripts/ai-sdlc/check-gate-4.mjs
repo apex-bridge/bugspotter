@@ -45,8 +45,10 @@ export const DEPLOY_GATE = 'needs-deploy';
  * @param {string|null} input.stateReason - GitHub's `completed` | `not_planned` | null
  * @param {boolean} input.closedByMerge  - true if a merged PR closed it, not a person
  * @returns {{action: 'ignore'|'comment'|'restore', gate: string|null,
- *            stale: string[], reason: string}} `stale` is every pre-deploy label
- *            present, so the restore can strip all of them, not just `gate`.
+ *            stale: string[], atDeployGate: boolean, reason: string}} `stale` is
+ *            every pre-deploy label present, so the restore can strip all of
+ *            them, not just `gate`. `atDeployGate` is whether the issue reached
+ *            Gate 4, which is not the same question as which gate `gate` names.
  */
 export function decideGateAction({ labels = [], stateReason = null, closedByMerge = false }) {
   // Gates are meant to be exclusive, but nothing enforces that and a human can
@@ -55,11 +57,23 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
   // state that reads as two gates at once.
   const stale = PRE_DEPLOY_GATES.filter((g) => labels.includes(g));
 
+  // Tracked separately from `gate` on purpose. `gate` is the earliest label, so
+  // a stale pre-deploy label sitting next to `needs-deploy` makes `gate` name
+  // the stale one - and then `gate === DEPLOY_GATE` would answer "did this
+  // issue reach Gate 4?" with a flat no while the label is right there.
+  const atDeployGate = labels.includes(DEPLOY_GATE);
+
   // Reported gate is the earliest, since that is the one the comment describes.
-  const gate = stale[0] ?? (labels.includes(DEPLOY_GATE) ? DEPLOY_GATE : null);
+  const gate = stale[0] ?? (atDeployGate ? DEPLOY_GATE : null);
 
   if (gate === null) {
-    return { action: 'ignore', gate: null, stale: [], reason: 'not a gated pipeline issue' };
+    return {
+      action: 'ignore',
+      gate: null,
+      stale: [],
+      atDeployGate: false,
+      reason: 'not a gated pipeline issue',
+    };
   }
 
   // `not_planned` is a deliberate judgment that the work should not happen -
@@ -67,7 +81,7 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
   // built on a hallucinated package. Gate 4 does not apply to work that is not
   // being done, and second-guessing that call would make this guard a nuisance.
   if (stateReason === 'not_planned') {
-    return { action: 'ignore', gate, stale, reason: 'closed as not planned' };
+    return { action: 'ignore', gate, stale, atDeployGate, reason: 'closed as not planned' };
   }
 
   // A person closing an issue by hand is making a decision. Say the gate was
@@ -77,32 +91,43 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
     // Except at the deploy gate, where a person closing the issue IS Gate 4
     // completing. This is the pipeline's normal happy ending, and commenting
     // "the gate was skipped" on it would make the guard noise on every
-    // successful delivery - which is how guards get muted.
-    if (gate === DEPLOY_GATE) {
+    // successful delivery - which is how guards get muted. Keyed off the label
+    // rather than off `gate`, so a leftover pre-deploy label cannot turn the
+    // happy ending back into noise.
+    if (atDeployGate) {
       return {
         action: 'ignore',
         gate,
         stale,
+        atDeployGate,
         reason: 'closed by a person at the deploy gate: Gate 4 done',
       };
     }
-    return { action: 'comment', gate, stale, reason: 'closed by a person, not by a merge' };
+    return {
+      action: 'comment',
+      gate,
+      stale,
+      atDeployGate,
+      reason: 'closed by a person, not by a merge',
+    };
   }
 
   // Closed as a side effect of a merge: nobody decided this, a keyword did.
   // Restoring is the whole point of the guard.
-  return { action: 'restore', gate, stale, reason: 'auto-closed by a merged PR' };
+  return { action: 'restore', gate, stale, atDeployGate, reason: 'auto-closed by a merged PR' };
 }
 
 /**
  * The comment body posted for the `comment` and `restore` actions.
  * Written to be useful to a human reading it cold on the issue.
  */
-export function buildComment({ action, gate }) {
+export function buildComment({ action, gate, atDeployGate = gate === DEPLOY_GATE }) {
   // At the deploy gate the issue did reach Gate 4; what it never got is the
   // human action the gate stands for. Saying "never reached needs-deploy"
-  // there would be plainly false to anyone reading the labels.
-  if (gate === DEPLOY_GATE) {
+  // there would be plainly false to anyone reading the labels - including when
+  // `gate` names a stale pre-deploy label carried alongside `needs-deploy`,
+  // which is why this asks the label and not `gate`.
+  if (atDeployGate) {
     return (
       `This issue was at \`${DEPLOY_GATE}\` and was closed automatically by a merged ` +
       `PR. **Gate 4 (deploy) is a human action**, so a merge cannot complete it - ` +

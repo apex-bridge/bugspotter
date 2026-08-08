@@ -200,6 +200,46 @@ test('reports every stale pre-deploy label, not just the earliest', () => {
   assert.deepEqual(d.stale, ['needs-spec', 'needs-review'], 'in pipeline order');
 });
 
+test('a stale pre-deploy label does not turn a human close at needs-deploy into a skip', () => {
+  // `gate` is the earliest label, so testing `gate === DEPLOY_GATE` here asked
+  // "did this reach Gate 4?" and got a flat no while `needs-deploy` was on the
+  // issue. The guard then posted "the gate was skipped" on a delivery that had
+  // in fact been deployed - the exact noise the deploy-gate branch exists to
+  // avoid, just hidden behind a leftover label.
+  const d = decideGateAction({
+    labels: ['needs-review', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: false,
+  });
+
+  assert.equal(d.action, 'ignore');
+  assert.equal(d.atDeployGate, true);
+});
+
+test('the mixed-state restore comment does not claim the gate was never reached', () => {
+  // Same predicate, other caller: the body is chosen by whether the issue was
+  // at the gate, not by which label `gate` happens to name.
+  const d = decideGateAction({
+    labels: ['needs-review', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.doesNotMatch(buildComment(d), /never reached/);
+});
+
+test('atDeployGate is false when no deploy label is present', () => {
+  const d = decideGateAction({
+    labels: ['needs-review'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.atDeployGate, false);
+  assert.match(buildComment(d), /never reached/);
+});
+
 test('stale is empty when the issue was already at the deploy gate', () => {
   // Drives the workflow branch that only re-adds the label.
   const d = decideGateAction({
