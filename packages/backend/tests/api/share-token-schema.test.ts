@@ -45,14 +45,14 @@ function sharedReplayPayload() {
 
 // The schema validates the request too: params require a >=32-char token.
 const TOKEN = 'a'.repeat(43);
-const URL = `/replays/shared/${TOKEN}`;
+const SHARE_PATH = `/replays/shared/${TOKEN}`;
 
 async function serializeThroughSchema(
   payload: ReturnType<typeof sharedReplayPayload> = sharedReplayPayload()
 ) {
   const app = Fastify();
   app.get('/replays/shared/:token', { schema: getSharedReplaySchema }, async () => payload);
-  const response = await app.inject({ method: 'GET', url: URL });
+  const response = await app.inject({ method: 'GET', url: SHARE_PATH });
   await app.close();
   return { statusCode: response.statusCode, body: JSON.parse(response.body) };
 }
@@ -72,11 +72,28 @@ describe('getSharedReplaySchema', () => {
   });
 
   it('still returns replay_url and the rest of the bug report', async () => {
-    const { body } = await serializeThroughSchema();
+    const { statusCode, body } = await serializeThroughSchema();
 
+    expect(statusCode).toBe(200);
     expect(body.data.replay_url).toBe(sharedReplayPayload().data.replay_url);
     expect(body.data.bug_report.id).toBe(sharedReplayPayload().data.bug_report.id);
     expect(body.data.bug_report.title).toBe('Checkout crash');
+  });
+
+  it('returns null replay_url for a metadata-only share, not an empty string', async () => {
+    // The route returns null when replay_key is absent, and metadata-only
+    // shares are supported. While replay_url was declared non-nullable,
+    // fast-json-stringify coerced that null to "" - the endpoint promised a
+    // URI and sent an empty string, which no consumer could tell apart from a
+    // signing failure.
+    const payload = sharedReplayPayload();
+    payload.data.replay_url = null as unknown as string;
+
+    const { statusCode, body } = await serializeThroughSchema(payload);
+
+    expect(statusCode).toBe(200);
+    expect(body.data.replay_url).toBeNull();
+    expect(body.data.replay_url).not.toBe('');
   });
 
   it('accepts null media URLs, for a report that has no screenshot', async () => {

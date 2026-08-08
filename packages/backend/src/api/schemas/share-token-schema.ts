@@ -182,7 +182,12 @@ export const getSharedReplaySchema = {
                 },
               },
             },
-            replay_url: { type: 'string', format: 'uri' },
+            // nullable because the route returns null for a share with no
+            // replay - metadata-only shares are supported (session-service
+            // hasShareableContent). Without it fast-json-stringify coerces the
+            // null to "", so the endpoint advertised a URI and sent an empty
+            // string.
+            replay_url: { type: 'string', format: 'uri', nullable: true },
             share_info: {
               type: 'object',
               required: ['view_count', 'expires_at', 'password_protected'],
