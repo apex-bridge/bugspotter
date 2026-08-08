@@ -149,4 +149,193 @@ validate_storage_domain() {
         export STORAGE_CSP=""
         echo "STORAGE_DOMAIN not set - only same-origin storage allowed in CSP"
     fi
+
+    validate_storage_csp_covers_endpoint
+}
+
+# Split "http(s)://[userinfo@]host[:port][/path]" into _origin_scheme +
+# _origin_host, dropping a default port so https://x and https://x:443 compare
+# equal. A bare host defaults to https, matching how STORAGE_DOMAIN is
+# documented.
+_split_origin() {
+    case "$1" in
+        https://*) _origin_scheme="https://"; _origin_host="${1#https://}" ;;
+        http://*)  _origin_scheme="http://";  _origin_host="${1#http://}" ;;
+        *)         _origin_scheme="https://"; _origin_host="$1" ;;
+    esac
+
+    _origin_host="${_origin_host%%/*}"
+
+    # Drop userinfo. A CSP host-source never carries one, so keeping it would
+    # fail an otherwise-correct endpoint, and it is the one part of an
+    # S3_ENDPOINT that can hold a secret - these values are echoed into the
+    # container log on mismatch. Strip through the LAST "@": a host cannot
+    # contain one, so greedy is right even for an unencoded password.
+    _origin_host="${_origin_host##*@}"
+
+    if [ "$_origin_scheme" = "https://" ]; then
+        _origin_host="${_origin_host%:443}"
+    else
+        _origin_host="${_origin_host%:80}"
+    fi
+
+    # CSP matches hosts ASCII case-insensitively, and the URL parser lowercases
+    # a URL's host before the CSP is consulted, so "STORAGE.example.com" and
+    # "storage.example.com" are one host. Shell comparison is case-sensitive;
+    # without this a working deployment fails the check below.
+    _origin_host=$(printf '%s' "$_origin_host" | tr 'A-Z' 'a-z')
+}
+
+# Cross-check the storage CSP against the endpoint the browser is actually sent
+# to, and refuse to start when it is not covered.
+#
+# The admin never proxies object storage: it asks the API for a presigned URL
+# and the browser talks to the store directly, so the CSP must name that host
+# in img-src (screenshots) and connect-src (the replay fetch). That makes
+# STORAGE_DOMAIN and S3_ENDPOINT two settings for one fact, and a host
+# migration moves only S3_ENDPOINT. Production drifted exactly that way: the
+# admin served "connect-src 'self'" against storage.kz.bugspotter.io, so the
+# replay player showed a bare "Failed to fetch" and screenshots rendered blank
+# while every health check stayed green. A CSP-blocked fetch rejects with an
+# opaque TypeError, so nothing in the logs points at the CSP - hence failing
+# here, at deploy time, where the operator is still watching.
+#
+# Only public endpoints are checked. A compose service name or a loopback
+# address is unreachable from the browser whatever the CSP says (that is the
+# separate failure docker-compose.storage.yml documents), so dev stacks running
+# S3_ENDPOINT=http://minio:9000 are left alone.
+validate_storage_csp_covers_endpoint() {
+    [ -n "$S3_ENDPOINT" ] || return 0
+
+    _split_origin "$S3_ENDPOINT"
+    _endpoint_scheme="$_origin_scheme"
+    _endpoint_host="$_origin_host"
+
+    case "$_endpoint_host" in
+        localhost|localhost:*|\[::1\]|\[::1\]:*) return 0 ;;
+        # An IPv6 literal is bracketed and carries no dot, so it has to be
+        # matched before the dotted-host test or it reads as a bare service name
+        # and is skipped instead of rejected below.
+        \[*\]|\[*\]:*) ;;
+        *.*) ;;
+        *) return 0 ;;
+    esac
+
+    # Loopback is all of 127.0.0.0/8, not just 127.0.0.1. Any of it is
+    # unreachable from a browser on another machine whatever the CSP says, so it
+    # belongs with the skips above rather than with the IP rejection below - it
+    # is tested here only because a loopback literal is dotted and would
+    # otherwise have to be spelled out in the arm above.
+    if printf '%s' "${_endpoint_host%%:*}" | grep -qE '^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        return 0
+    fi
+
+    # CSP cannot express a public IP literal. The grammar accepts one, but
+    # matching is defined so that "only 127.0.0.1 will actually match a URL when
+    # used in a source expression" (CSP3, host-part matching) - so no
+    # STORAGE_DOMAIN value can unblock storage addressed by IP, and accepting
+    # one here would pass a deployment the browser still breaks. Loopback is
+    # already returned above.
+    if _is_ip_literal "$_endpoint_host"; then
+        echo "ERROR: S3_ENDPOINT addresses storage by IP (${_endpoint_scheme}${_endpoint_host})" >&2
+        echo "A CSP source expression only ever matches the IP literal 127.0.0.1, so no" >&2
+        echo "STORAGE_DOMAIN can allow this host and screenshots and replay stay blocked." >&2
+        echo "Give the object store a DNS hostname and point S3_ENDPOINT at that." >&2
+        exit 1
+    fi
+
+    # Which host the browser is actually sent to depends on the addressing
+    # style, so the CSP has to be checked against that host, not the endpoint.
+    # Path-style keeps the bucket in the path and leaves the host alone;
+    # virtual-hosted-style moves the bucket in front of it. Mirrors the
+    # backend's parsing: only the literal "true" enables path style
+    # (parseBooleanEnv in packages/backend/src/config/validators.ts), and
+    # forcePathStyle defaults to false.
+    _request_host="$_endpoint_host"
+    _wildcard_covers_base="no"
+    if [ "$S3_FORCE_PATH_STYLE" != "true" ]; then
+        if [ -n "$S3_BUCKET" ]; then
+            _request_host="${S3_BUCKET}.${_endpoint_host}"
+        else
+            # No bucket, so the real host cannot be built. Both readings stay
+            # open here: a wildcard on the endpoint host, which is what covers
+            # <bucket>.<endpoint>, and the endpoint host itself, because a
+            # container that was given neither variable may simply be running
+            # against a compose file that predates them while addressing storage
+            # path-style. Refusing to boot on that guess would take down a
+            # working admin over configuration it was never handed, which is a
+            # worse failure than the one this guard exists to catch. Say so
+            # rather than passing quietly.
+            _wildcard_covers_base="yes"
+            echo "WARNING: S3_BUCKET is not set, so the storage CSP could only be checked against" >&2
+            echo "the endpoint host. With virtual-hosted-style addressing the bucket becomes a" >&2
+            echo "subdomain of it, and that host was not verified. Pass S3_BUCKET and" >&2
+            echo "S3_FORCE_PATH_STYLE to check the host presigned URLs actually resolve to." >&2
+        fi
+    fi
+
+    if [ -z "$STORAGE_DOMAIN" ]; then
+        echo "ERROR: S3_ENDPOINT is ${_endpoint_scheme}${_endpoint_host} but STORAGE_DOMAIN is empty" >&2
+        echo "The admin CSP would allow same-origin storage only: session replay fails with a bare" >&2
+        echo "'Failed to fetch' and screenshots render blank, with nothing failing server-side." >&2
+        echo "Set STORAGE_DOMAIN=${_request_host} (or the wildcard covering it, e.g. *.${_request_host#*.})." >&2
+        echo "Storage served from the admin's own origin is the one case to set it to that host too." >&2
+        exit 1
+    fi
+
+    _split_origin "$STORAGE_DOMAIN"
+    _csp_scheme="$_origin_scheme"
+    _csp_host="$_origin_host"
+
+    # A CSP host-source carrying a scheme only matches that scheme, so an
+    # http:// source against an https:// endpoint blocks every request.
+    if [ "$_csp_scheme" != "$_endpoint_scheme" ]; then
+        echo "ERROR: STORAGE_DOMAIN scheme ($_csp_scheme) does not match S3_ENDPOINT ($_endpoint_scheme)" >&2
+        # Report the parsed origin, never the raw endpoint: userinfo is stripped
+        # by then, and the log is readable to anyone with `docker logs`.
+        echo "endpoint=${_endpoint_scheme}${_endpoint_host}, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
+        echo "A CSP host-source with a scheme matches only that scheme, so the admin would block" >&2
+        echo "every screenshot and replay request. Set STORAGE_DOMAIN=${_endpoint_scheme}${_csp_host}." >&2
+        exit 1
+    fi
+
+    case "$_request_host" in
+        "$_csp_host") return 0 ;;
+    esac
+
+    # Plain CSP wildcard semantics: "*.X" covers a subdomain of X, not X itself.
+    # The one exception is the unknown-bucket case above, where "*.X" is the
+    # correct value for a host this container cannot construct.
+    case "$_csp_host" in
+        \*.*)
+            _csp_base="${_csp_host#\*.}"
+            case "$_request_host" in
+                *".$_csp_base") return 0 ;;
+            esac
+            if [ "$_wildcard_covers_base" = "yes" ] && [ "$_request_host" = "$_csp_base" ]; then
+                return 0
+            fi
+            ;;
+    esac
+
+    echo "ERROR: STORAGE_DOMAIN does not cover the host presigned URLs point at" >&2
+    echo "endpoint=${_endpoint_scheme}${_endpoint_host}, request host=${_request_host}, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
+    if [ "$_request_host" != "$_endpoint_host" ]; then
+        echo "S3_FORCE_PATH_STYLE is not true, so the bucket is addressed as a subdomain." >&2
+    fi
+    echo "The admin CSP would block screenshots (img-src) and the replay fetch (connect-src)," >&2
+    echo "which surfaces in the browser as 'Failed to fetch' and nowhere else." >&2
+    echo "Set STORAGE_DOMAIN=${_request_host} or a wildcard that covers it." >&2
+    exit 1
+}
+
+# True when the host (with any port or IPv6 brackets) is an IP literal rather
+# than a DNS name. IPv4 only needs the dotted-quad shape; anything in brackets
+# is an IPv6 literal by URL syntax.
+_is_ip_literal() {
+    case "$1" in
+        \[*\]|\[*\]:*) return 0 ;;
+    esac
+
+    printf '%s' "${1%%:*}" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
 }
