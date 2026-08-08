@@ -253,11 +253,17 @@ test_storage_pair() {
     local test_name="$1"
     local endpoint="$2"
     local domain="$3"
-    local expect="$4" # "pass" or "fail"
+    local expect="$4"          # "pass" or "fail"
+    # "-" not ":-": an explicitly passed empty path-style is a case under test
+    # (unset means virtual-hosted), so it must not collapse to the default.
+    local path_style="${5-true}" # default: bucket in the path, host untouched
+    local bucket="${6-}"
 
     (
         export S3_ENDPOINT="$endpoint"
         export STORAGE_DOMAIN="$domain"
+        export S3_FORCE_PATH_STYLE="$path_style"
+        export S3_BUCKET="$bucket"
         . ./scripts/shared/validate-api-domain.sh
         validate_storage_domain
     ) > /dev/null 2>&1
@@ -284,14 +290,56 @@ test_storage_pair "Public endpoint covered by exact host" \
 test_storage_pair "Unrelated STORAGE_DOMAIN is rejected" \
     "https://storage.kz.bugspotter.io" "s3.other-cloud.example" "fail"
 
-# Virtual-hosted-style addressing puts the bucket in front of the endpoint
-# host, so "*.X" has to cover both X itself and <bucket>.X.
-test_storage_pair "Wildcard covers the endpoint host itself" \
-    "https://s3.example.com" "*.s3.example.com" "pass"
-test_storage_pair "Wildcard covers a bucket subdomain" \
+# Wildcards follow plain CSP semantics against the host the browser is sent to.
+test_storage_pair "Wildcard covers a subdomain of its base" \
     "https://bucket.s3.example.com" "*.s3.example.com" "pass"
 test_storage_pair "Wildcard does not cover an unrelated host" \
     "https://s3.evil.example" "*.s3.example.com" "fail"
+
+# Which host that is depends on the addressing style. Path-style keeps the
+# bucket in the path, so "*.X" does NOT cover an endpoint of X - accepting it
+# would pass a deployment the browser still blocks.
+test_storage_pair "Path-style: wildcard does not cover the endpoint host" \
+    "https://s3.example.com" "*.s3.example.com" "fail" "true" "bucket"
+test_storage_pair "Path-style: exact endpoint host is covered" \
+    "https://s3.example.com" "s3.example.com" "pass" "true" "bucket"
+
+# Virtual-hosted-style moves the bucket in front of the host, so the reverse
+# holds: the wildcard is required and the bare endpoint host is not enough.
+test_storage_pair "Virtual-hosted: wildcard covers <bucket>.<endpoint>" \
+    "https://s3.example.com" "*.s3.example.com" "pass" "false" "bucket"
+test_storage_pair "Virtual-hosted: bare endpoint host is not enough" \
+    "https://s3.example.com" "s3.example.com" "fail" "false" "bucket"
+test_storage_pair "Virtual-hosted: the bucket subdomain itself is covered" \
+    "https://s3.example.com" "bucket.s3.example.com" "pass" "false" "bucket"
+
+# Anything other than the literal "true" means virtual-hosted, matching
+# parseBooleanEnv on the backend side.
+test_storage_pair "Unset path-style is treated as virtual-hosted" \
+    "https://s3.example.com" "*.s3.example.com" "pass" "" "bucket"
+
+# Without a bucket the real host cannot be built, so a wildcard on the endpoint
+# host is accepted rather than failing on a value the container never got.
+test_storage_pair "Virtual-hosted with no bucket accepts the endpoint wildcard" \
+    "https://s3.example.com" "*.s3.example.com" "pass" "false" ""
+
+# CSP matches hosts case-insensitively and the URL parser lowercases the host
+# before the CSP is consulted, so a mixed-case endpoint is the same deployment.
+test_storage_pair "Mixed-case endpoint matches a lowercase STORAGE_DOMAIN" \
+    "https://STORAGE.Example.COM" "storage.example.com" "pass"
+test_storage_pair "Mixed-case STORAGE_DOMAIN matches a lowercase endpoint" \
+    "https://storage.example.com" "STORAGE.example.com" "pass"
+
+# A CSP source expression only ever matches the IP literal 127.0.0.1 (CSP3),
+# so storage addressed by a public IP cannot be unblocked by any value here.
+test_storage_pair "Public IPv4 endpoint is rejected" \
+    "https://198.51.100.10" "198.51.100.10" "fail"
+test_storage_pair "Public IPv4 endpoint with a port is rejected" \
+    "https://198.51.100.10:9000" "198.51.100.10:9000" "fail"
+test_storage_pair "Public IPv6 endpoint is rejected" \
+    "https://[2001:db8::1]" "storage.example.com" "fail"
+test_storage_pair "Loopback IP is still skipped, not rejected" \
+    "http://127.0.0.1:9000" "" "pass"
 
 # A CSP host-source with a scheme matches only that scheme, and a bare
 # STORAGE_DOMAIN means https - so an HTTP-only store must say so.

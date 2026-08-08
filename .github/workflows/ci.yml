@@ -86,6 +86,15 @@ jobs:
       - name: Run entrypoint env validation tests
         run: sh scripts/test-validate-api-domain.sh
 
+      # The step above runs under the runner's dash. In production this script
+      # is sourced by the admin image's entrypoint, which is nginx:alpine, so
+      # the shell that actually executes it is busybox ash - a different
+      # implementation with its own gaps. Run the suite there too.
+      - name: Run entrypoint env validation tests under busybox ash
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w alpine:3 \
+            sh scripts/test-validate-api-domain.sh
+
   test-backend-db:
     name: Backend Database Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
