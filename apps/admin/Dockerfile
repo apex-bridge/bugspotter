@@ -1,4 +1,14 @@
 # ============================================================================
+# BugSpotter Admin UI image
+# ============================================================================
+# Adding a COPY from the build context here also requires a matching entry in
+# the `paths:` filter of .github/workflows/deploy-admin.yml. That filter is what
+# decides whether a change republishes this image; a build input missing from it
+# means the registry copy silently keeps the old file (#303). Nothing checks the
+# two agree - see #310.
+# ============================================================================
+
+# ============================================================================
 # Stage 1: Dependencies
 # ============================================================================
 FROM node:22.12.0-alpine@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd AS dependencies
