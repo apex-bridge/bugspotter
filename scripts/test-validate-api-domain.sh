@@ -158,6 +158,11 @@ PASSED=$((PASSED + 1))
 echo ""
 echo "${YELLOW}=== Testing validate_storage_domain() ===${NC}"
 
+# validate_storage_domain() now cross-checks against S3_ENDPOINT. Clear it so
+# an inherited value from the caller's shell cannot skew the cases below, which
+# are about STORAGE_DOMAIN alone.
+unset S3_ENDPOINT
+
 # Valid STORAGE_DOMAIN hosts (bare host, no scheme; wildcard allowed)
 test_valid "Wildcard host" "STORAGE_DOMAIN" "*.storage.yandexcloud.kz" "validate_storage_domain"
 test_valid "Plain host" "STORAGE_DOMAIN" "s3.your-cloud.example" "validate_storage_domain"
@@ -237,6 +242,101 @@ else
     FAILED=$((FAILED + 1))
 fi
 unset STORAGE_CSP
+
+echo ""
+echo "${YELLOW}=== Testing storage CSP vs S3_ENDPOINT cross-check ===${NC}"
+
+# Run the full validate_storage_domain() path in a subshell, since the guard
+# exits rather than returning. Asserting through the public entry point also
+# proves the cross-check is actually wired into it.
+test_storage_pair() {
+    local test_name="$1"
+    local endpoint="$2"
+    local domain="$3"
+    local expect="$4" # "pass" or "fail"
+
+    (
+        export S3_ENDPOINT="$endpoint"
+        export STORAGE_DOMAIN="$domain"
+        . ./scripts/shared/validate-api-domain.sh
+        validate_storage_domain
+    ) > /dev/null 2>&1
+    local exit_code=$?
+
+    if [ "$expect" = "pass" ] && [ $exit_code -eq 0 ]; then
+        echo "${GREEN}✓${NC} PASS: $test_name"
+        PASSED=$((PASSED + 1))
+    elif [ "$expect" = "fail" ] && [ $exit_code -ne 0 ]; then
+        echo "${GREEN}✓${NC} PASS: $test_name"
+        PASSED=$((PASSED + 1))
+    else
+        echo "${RED}✗${NC} FAIL: $test_name (expected $expect, exit $exit_code)"
+        FAILED=$((FAILED + 1))
+    fi
+}
+
+# The production regression this guard exists for: storage moved to a public
+# host, STORAGE_DOMAIN stayed empty, and the admin served connect-src 'self'.
+test_storage_pair "Public endpoint with empty STORAGE_DOMAIN is rejected" \
+    "https://storage.kz.bugspotter.io" "" "fail"
+test_storage_pair "Public endpoint covered by exact host" \
+    "https://storage.kz.bugspotter.io" "storage.kz.bugspotter.io" "pass"
+test_storage_pair "Unrelated STORAGE_DOMAIN is rejected" \
+    "https://storage.kz.bugspotter.io" "s3.other-cloud.example" "fail"
+
+# Virtual-hosted-style addressing puts the bucket in front of the endpoint
+# host, so "*.X" has to cover both X itself and <bucket>.X.
+test_storage_pair "Wildcard covers the endpoint host itself" \
+    "https://s3.example.com" "*.s3.example.com" "pass"
+test_storage_pair "Wildcard covers a bucket subdomain" \
+    "https://bucket.s3.example.com" "*.s3.example.com" "pass"
+test_storage_pair "Wildcard does not cover an unrelated host" \
+    "https://s3.evil.example" "*.s3.example.com" "fail"
+
+# A CSP host-source with a scheme matches only that scheme, and a bare
+# STORAGE_DOMAIN means https - so an HTTP-only store must say so.
+test_storage_pair "Scheme mismatch is rejected" \
+    "http://storage.example.com" "storage.example.com" "fail"
+test_storage_pair "Matching http scheme is accepted" \
+    "http://storage.example.com" "http://storage.example.com" "pass"
+
+# Ports: the default port is implicit in a CSP host-source, a custom one is not.
+test_storage_pair "Explicit default port matches an omitted one" \
+    "https://storage.example.com:443" "storage.example.com" "pass"
+test_storage_pair "Custom port must be declared" \
+    "https://storage.example.com:9000" "storage.example.com" "fail"
+test_storage_pair "Custom port declared on both sides" \
+    "https://storage.example.com:9000" "storage.example.com:9000" "pass"
+
+# A path on the endpoint is not part of the CSP host-source.
+test_storage_pair "Endpoint path is ignored" \
+    "https://storage.example.com/bucket" "storage.example.com" "pass"
+
+# Dev stacks must not be caught by this: a compose service name or loopback is
+# unreachable from the browser whatever the CSP says.
+test_storage_pair "Compose service endpoint is skipped" \
+    "http://minio:9000" "" "pass"
+test_storage_pair "localhost endpoint is skipped" \
+    "http://localhost:9000" "" "pass"
+test_storage_pair "127.0.0.1 endpoint is skipped" \
+    "http://127.0.0.1:9000" "" "pass"
+
+# Unset S3_ENDPOINT keeps the pre-existing behaviour exactly (local disk
+# storage, or an admin container not given the endpoint).
+(
+    unset S3_ENDPOINT STORAGE_DOMAIN
+    . ./scripts/shared/validate-api-domain.sh
+    validate_storage_domain
+) > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "${GREEN}✓${NC} PASS: No S3_ENDPOINT leaves the empty case untouched"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: No S3_ENDPOINT should not fail validation"
+    FAILED=$((FAILED + 1))
+fi
+
+unset S3_ENDPOINT STORAGE_DOMAIN STORAGE_CSP
 
 echo ""
 echo "${YELLOW}=== Test Summary ===${NC}"

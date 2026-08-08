@@ -149,4 +149,105 @@ validate_storage_domain() {
         export STORAGE_CSP=""
         echo "STORAGE_DOMAIN not set - only same-origin storage allowed in CSP"
     fi
+
+    validate_storage_csp_covers_endpoint
+}
+
+# Split "http(s)://host[:port][/path]" into _origin_scheme + _origin_host,
+# dropping a default port so https://x and https://x:443 compare equal. A bare
+# host defaults to https, matching how STORAGE_DOMAIN is documented.
+_split_origin() {
+    case "$1" in
+        https://*) _origin_scheme="https://"; _origin_host="${1#https://}" ;;
+        http://*)  _origin_scheme="http://";  _origin_host="${1#http://}" ;;
+        *)         _origin_scheme="https://"; _origin_host="$1" ;;
+    esac
+
+    _origin_host="${_origin_host%%/*}"
+
+    if [ "$_origin_scheme" = "https://" ]; then
+        _origin_host="${_origin_host%:443}"
+    else
+        _origin_host="${_origin_host%:80}"
+    fi
+}
+
+# Cross-check the storage CSP against the endpoint the browser is actually sent
+# to, and refuse to start when it is not covered.
+#
+# The admin never proxies object storage: it asks the API for a presigned URL
+# and the browser talks to the store directly, so the CSP must name that host
+# in img-src (screenshots) and connect-src (the replay fetch). That makes
+# STORAGE_DOMAIN and S3_ENDPOINT two settings for one fact, and a host
+# migration moves only S3_ENDPOINT. Production drifted exactly that way: the
+# admin served "connect-src 'self'" against storage.kz.bugspotter.io, so the
+# replay player showed a bare "Failed to fetch" and screenshots rendered blank
+# while every health check stayed green. A CSP-blocked fetch rejects with an
+# opaque TypeError, so nothing in the logs points at the CSP - hence failing
+# here, at deploy time, where the operator is still watching.
+#
+# Only public endpoints are checked. A compose service name or a loopback
+# address is unreachable from the browser whatever the CSP says (that is the
+# separate failure docker-compose.storage.yml documents), so dev stacks running
+# S3_ENDPOINT=http://minio:9000 are left alone.
+validate_storage_csp_covers_endpoint() {
+    [ -n "$S3_ENDPOINT" ] || return 0
+
+    _split_origin "$S3_ENDPOINT"
+    _endpoint_scheme="$_origin_scheme"
+    _endpoint_host="$_origin_host"
+
+    case "$_endpoint_host" in
+        localhost|localhost:*|127.0.0.1|127.0.0.1:*|\[::1\]|\[::1\]:*) return 0 ;;
+        *.*) ;;
+        *) return 0 ;;
+    esac
+
+    if [ -z "$STORAGE_DOMAIN" ]; then
+        echo "ERROR: S3_ENDPOINT is ${_endpoint_scheme}${_endpoint_host} but STORAGE_DOMAIN is empty" >&2
+        echo "The admin CSP would allow same-origin storage only: session replay fails with a bare" >&2
+        echo "'Failed to fetch' and screenshots render blank, with nothing failing server-side." >&2
+        echo "Set STORAGE_DOMAIN=${_endpoint_host} (or the wildcard covering it, e.g. *.${_endpoint_host#*.})." >&2
+        echo "Storage served from the admin's own origin is the one case to set it to that host too." >&2
+        exit 1
+    fi
+
+    _split_origin "$STORAGE_DOMAIN"
+    _csp_scheme="$_origin_scheme"
+    _csp_host="$_origin_host"
+
+    # A CSP host-source carrying a scheme only matches that scheme, so an
+    # http:// source against an https:// endpoint blocks every request.
+    if [ "$_csp_scheme" != "$_endpoint_scheme" ]; then
+        echo "ERROR: STORAGE_DOMAIN scheme ($_csp_scheme) does not match S3_ENDPOINT ($_endpoint_scheme)" >&2
+        echo "S3_ENDPOINT=$S3_ENDPOINT, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
+        echo "A CSP host-source with a scheme matches only that scheme, so the admin would block" >&2
+        echo "every screenshot and replay request. Set STORAGE_DOMAIN=${_endpoint_scheme}${_csp_host}." >&2
+        exit 1
+    fi
+
+    case "$_endpoint_host" in
+        "$_csp_host") return 0 ;;
+    esac
+
+    case "$_csp_host" in
+        \*.*)
+            _csp_base="${_csp_host#\*.}"
+            # "*.X" also covers X itself: with virtual-hosted-style addressing
+            # the presigned URL host is <bucket>.X, a subdomain of the endpoint.
+            if [ "$_endpoint_host" = "$_csp_base" ]; then
+                return 0
+            fi
+            case "$_endpoint_host" in
+                *".$_csp_base") return 0 ;;
+            esac
+            ;;
+    esac
+
+    echo "ERROR: STORAGE_DOMAIN does not cover S3_ENDPOINT" >&2
+    echo "S3_ENDPOINT=$S3_ENDPOINT, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
+    echo "The admin CSP would block screenshots (img-src) and the replay fetch (connect-src)," >&2
+    echo "which surfaces in the browser as 'Failed to fetch' and nowhere else." >&2
+    echo "Set STORAGE_DOMAIN=${_endpoint_host} or a wildcard that covers it." >&2
+    exit 1
 }

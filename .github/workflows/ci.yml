@@ -79,6 +79,13 @@ jobs:
       - name: Run AI-SDLC script tests
         run: node --test scripts/ai-sdlc/*.test.mjs
 
+      # Covers the container entrypoints' env validation, including the
+      # STORAGE_DOMAIN vs S3_ENDPOINT CSP cross-check. Pure POSIX shell with no
+      # dependencies, and nothing else exercises it - the code only runs inside
+      # a built image, so a regression here surfaces as a broken deployment.
+      - name: Run entrypoint env validation tests
+        run: sh scripts/test-validate-api-domain.sh
+
   test-backend-db:
     name: Backend Database Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
