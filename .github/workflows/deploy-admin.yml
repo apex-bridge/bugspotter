@@ -331,7 +331,7 @@ jobs:
       # - Object Storage (S3/Yandex Object Storage, not local MinIO)
       # - Load balancer with multiple API instances
       #
-      # See MANAGED_DATABASE_GUIDE.md for database migration
+      # See DOCKER.md, "Using External Services", for database migration
       # See DEPLOYMENT_PATTERNS.md for complete deployment guide
 
       - name: ⚠️ Deployment Step Missing

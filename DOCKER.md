@@ -244,7 +244,10 @@ In production, payment providers (Kaspi, Stripe, YooKassa) need to reach the web
          - '3002:3002' # Only if firewall/security group restricts to provider IPs
    ```
 
-See [YANDEX_CLOUD_RESOURCES.md](./YANDEX_CLOUD_RESOURCES.md) for security group configuration.
+Firewall note: Docker publishes ports by writing nftables rules directly, so a
+host firewall like ufw does not filter them. Published ports therefore bind to
+loopback by default in `docker-compose.yml`; put a reverse proxy or the
+provider's own network ACLs in front of anything that must be reachable.
 
 ## Available Commands
 
