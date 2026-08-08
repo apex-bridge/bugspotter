@@ -37,6 +37,19 @@ export interface MediaKeyed {
   replay_url?: string | null;
 }
 
+/**
+ * `T` with the three URL fields present rather than optional.
+ *
+ * They are optional on {@link MediaKeyed} because a row arrives without them,
+ * but this module always writes all three, so returning a bare `T` would make
+ * callers narrow fields that are guaranteed to be there.
+ */
+export type WithMediaUrls<T> = Omit<T, 'screenshot_url' | 'thumbnail_url' | 'replay_url'> & {
+  screenshot_url: string | null;
+  thumbnail_url: string | null;
+  replay_url: string | null;
+};
+
 async function sign(
   storage: IStorageService,
   key: string | null | undefined,
@@ -48,9 +61,12 @@ async function sign(
   try {
     return await storage.getSignedUrl(key, { expiresIn });
   } catch (err) {
-    // A missing object is expected: lifecycle rules expire replays at 30 days
-    // and screenshots at 60, while the row keeps its key. Fail soft to null so
-    // the UI can show "expired" instead of the request failing outright.
+    // Signing is a local HMAC, so this does not fire for an object that no
+    // longer exists - that URL signs fine and 404s on use, which is #287 and
+    // needs a HEAD before signing or a UI-side empty state, not a change here.
+    // What this catches is a signer that cannot produce a URL at all (missing
+    // credentials, a malformed key). Fail soft to null: a listing page should
+    // render without the thumbnail rather than 500 on one bad row.
     logger.warn('Could not sign media URL', {
       key,
       error: err instanceof Error ? err.message : String(err),
@@ -68,7 +84,7 @@ async function sign(
 export async function withFreshMediaUrls<T extends MediaKeyed>(
   report: T,
   storage: IStorageService
-): Promise<T> {
+): Promise<WithMediaUrls<T>> {
   const expiresIn = config.shareToken.presignedUrlExpirationSeconds;
   const [screenshot_url, thumbnail_url, replay_url] = await Promise.all([
     sign(storage, report.screenshot_key, expiresIn),
@@ -82,6 +98,6 @@ export async function withFreshMediaUrls<T extends MediaKeyed>(
 export async function withFreshMediaUrlsMany<T extends MediaKeyed>(
   reports: T[],
   storage: IStorageService
-): Promise<T[]> {
+): Promise<WithMediaUrls<T>[]> {
   return Promise.all(reports.map((r) => withFreshMediaUrls(r, storage)));
 }
