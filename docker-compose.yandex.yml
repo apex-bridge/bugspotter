@@ -23,11 +23,18 @@
 #
 # The CA has to be on the host at /opt/bugspotter/yandex-ca.pem before this file
 # is applied. It used to be fetched by a deployment guide that no longer exists,
-# so fetch it directly:
+# so fetch it directly. Download to a temp file and install only on success:
+# a bare `curl -o` writes an error or redirect body straight to the
+# destination, and postgres then fails TLS against an HTML page, which reads as
+# a certificate problem rather than a download that never happened.
 #
-#   curl -o /opt/bugspotter/yandex-ca.pem \
-#     https://storage.yandexcloud.net/cloud-certs/RootCA.pem
-#   chmod 0644 /opt/bugspotter/yandex-ca.pem
+#   tmp=$(mktemp)
+#   curl --fail --location --show-error --silent --output "$tmp" \
+#     https://storage.yandexcloud.kz/cloud-certs/RootCA.pem \
+#     && install -m 0644 "$tmp" /opt/bugspotter/yandex-ca.pem
+#   rm -f "$tmp"
+#
+# Prefix the install with sudo if you do not own /opt/bugspotter.
 
 services:
   # Managed Postgres is reached through the pooler behind TLS signed by the
