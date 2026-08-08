@@ -130,8 +130,8 @@ export const getSharedReplaySchema = {
                 // property a response schema does not declare - so without these two
                 // lines the screenshot silently never reaches the shared view,
                 // however healthy storage is.
-                screenshot_url: { type: 'string', nullable: true },
-                thumbnail_url: { type: 'string', nullable: true },
+                screenshot_url: { type: 'string', format: 'uri', nullable: true },
+                thumbnail_url: { type: 'string', format: 'uri', nullable: true },
               },
             },
             session: {
