@@ -153,9 +153,10 @@ validate_storage_domain() {
     validate_storage_csp_covers_endpoint
 }
 
-# Split "http(s)://host[:port][/path]" into _origin_scheme + _origin_host,
-# dropping a default port so https://x and https://x:443 compare equal. A bare
-# host defaults to https, matching how STORAGE_DOMAIN is documented.
+# Split "http(s)://[userinfo@]host[:port][/path]" into _origin_scheme +
+# _origin_host, dropping a default port so https://x and https://x:443 compare
+# equal. A bare host defaults to https, matching how STORAGE_DOMAIN is
+# documented.
 _split_origin() {
     case "$1" in
         https://*) _origin_scheme="https://"; _origin_host="${1#https://}" ;;
@@ -164,6 +165,13 @@ _split_origin() {
     esac
 
     _origin_host="${_origin_host%%/*}"
+
+    # Drop userinfo. A CSP host-source never carries one, so keeping it would
+    # fail an otherwise-correct endpoint, and it is the one part of an
+    # S3_ENDPOINT that can hold a secret - these values are echoed into the
+    # container log on mismatch. Strip through the LAST "@": a host cannot
+    # contain one, so greedy is right even for an unencoded password.
+    _origin_host="${_origin_host##*@}"
 
     if [ "$_origin_scheme" = "https://" ]; then
         _origin_host="${_origin_host%:443}"
@@ -220,7 +228,9 @@ validate_storage_csp_covers_endpoint() {
     # http:// source against an https:// endpoint blocks every request.
     if [ "$_csp_scheme" != "$_endpoint_scheme" ]; then
         echo "ERROR: STORAGE_DOMAIN scheme ($_csp_scheme) does not match S3_ENDPOINT ($_endpoint_scheme)" >&2
-        echo "S3_ENDPOINT=$S3_ENDPOINT, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
+        # Report the parsed origin, never the raw endpoint: userinfo is stripped
+        # by then, and the log is readable to anyone with `docker logs`.
+        echo "endpoint=${_endpoint_scheme}${_endpoint_host}, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
         echo "A CSP host-source with a scheme matches only that scheme, so the admin would block" >&2
         echo "every screenshot and replay request. Set STORAGE_DOMAIN=${_endpoint_scheme}${_csp_host}." >&2
         exit 1
@@ -245,7 +255,7 @@ validate_storage_csp_covers_endpoint() {
     esac
 
     echo "ERROR: STORAGE_DOMAIN does not cover S3_ENDPOINT" >&2
-    echo "S3_ENDPOINT=$S3_ENDPOINT, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
+    echo "endpoint=${_endpoint_scheme}${_endpoint_host}, STORAGE_DOMAIN=$STORAGE_DOMAIN" >&2
     echo "The admin CSP would block screenshots (img-src) and the replay fetch (connect-src)," >&2
     echo "which surfaces in the browser as 'Failed to fetch' and nowhere else." >&2
     echo "Set STORAGE_DOMAIN=${_endpoint_host} or a wildcard that covers it." >&2

@@ -312,6 +312,35 @@ test_storage_pair "Custom port declared on both sides" \
 test_storage_pair "Endpoint path is ignored" \
     "https://storage.example.com/bucket" "storage.example.com" "pass"
 
+# Userinfo is not part of a CSP host-source either, so an endpoint carrying one
+# must still be recognised as covered rather than failing the deploy.
+test_storage_pair "Endpoint userinfo is ignored" \
+    "https://key:secret@storage.example.com" "storage.example.com" "pass"
+test_storage_pair "Endpoint userinfo does not mask a real mismatch" \
+    "https://key:secret@storage.example.com" "s3.other-cloud.example" "fail"
+
+# ... and the diagnostics printed on that mismatch must not echo the secret:
+# the entrypoint's output is readable to anyone with `docker logs`.
+storage_leak_output=$(
+    export S3_ENDPOINT="https://key:sup3rs3cret@storage.example.com"
+    export STORAGE_DOMAIN="s3.other-cloud.example"
+    . ./scripts/shared/validate-api-domain.sh
+    # Inside the substitution, or the guard's stderr escapes to the terminal
+    # and this assertion passes against empty output.
+    validate_storage_domain 2>&1
+)
+case "$storage_leak_output" in
+    *sup3rs3cret*)
+        echo "${RED}✗${NC} FAIL: endpoint credentials leaked into the error output"
+        FAILED=$((FAILED + 1))
+        ;;
+    *)
+        echo "${GREEN}✓${NC} PASS: endpoint credentials are not echoed on mismatch"
+        PASSED=$((PASSED + 1))
+        ;;
+esac
+unset storage_leak_output
+
 # Dev stacks must not be caught by this: a compose service name or loopback is
 # unreachable from the browser whatever the CSP says.
 test_storage_pair "Compose service endpoint is skipped" \
