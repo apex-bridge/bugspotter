@@ -182,3 +182,70 @@ test('unreadable --message file exits 1 with a clean error', () => {
     assert.match(`${e.stdout || ''}${e.stderr || ''}`, /cannot read/);
   }
 });
+
+// --- Gate-4 advisory warning ---
+//
+// An implementation PR using a closing keyword auto-closes its issue on merge,
+// so the issue never reaches `needs-deploy` and Gate 4 is silently skipped
+// (PR #283, caught by hand). These assert the warning fires without ever
+// changing the exit code - the hard guard is gate-guard.yml, on the issue.
+
+// Same as runEnv, but with a branch name, which is what selects impl PRs.
+function runBranch(body, headRef) {
+  try {
+    const out = execFileSync('node', [SCRIPT], {
+      encoding: 'utf8',
+      env: { ...process.env, PR_BODY: body, HEAD_REF: headRef },
+    });
+    return { code: 0, out };
+  } catch (e) {
+    return { code: e.status, out: `${e.stdout || ''}${e.stderr || ''}` };
+  }
+}
+
+test('warns, but still passes, when an impl PR uses a closing keyword', () => {
+  const r = runBranch('Closes #269', 'impl/issue-269-llm-unavailable');
+  assert.equal(r.code, 0, 'the warning must never fail the required check');
+  assert.match(r.out, /::warning::/);
+  assert.match(r.out, /Gate 4/);
+  assert.match(r.out, /Refs #NNN/);
+});
+
+test('does not warn when an impl PR uses Refs', () => {
+  const r = runBranch('Refs #269', 'impl/issue-269-llm-unavailable');
+  assert.equal(r.code, 0);
+  assert.doesNotMatch(r.out, /::warning::/);
+});
+
+test('does not warn on a non-impl branch, even with a closing keyword', () => {
+  // Ordinary PRs legitimately close issues; only the pipeline's impl PRs are
+  // subject to Gate 4.
+  const r = runBranch('Closes #123', 'fix/some-bug');
+  assert.equal(r.code, 0);
+  assert.doesNotMatch(r.out, /::warning::/);
+});
+
+test('warns on closing keyword forms the accept-list itself does not take', () => {
+  // "Fixed"/"Closed"/"Resolved" still auto-close on GitHub but are not in
+  // REFERENCE, so the body needs a separate valid reference to pass at all.
+  for (const kw of ['Fixed', 'Closed', 'Resolved']) {
+    const r = runBranch(`Refs #1\n${kw} #269`, 'impl/x');
+    assert.equal(r.code, 0);
+    assert.match(r.out, /::warning::/, `${kw} must be recognised as closing`);
+  }
+});
+
+test('warns on the colon form, which GitHub also treats as closing', () => {
+  // GitHub's docs: the keyword "can be followed by colons", so `Closes: #10`
+  // closes the issue. REFERENCE does not accept that form, hence the separate
+  // `Refs #1` that gets the body past the blocking check.
+  const r = runBranch('Refs #1\nCloses: #269', 'impl/issue-269-llm-unavailable');
+  assert.equal(r.code, 0);
+  assert.match(r.out, /::warning::/);
+});
+
+test('no branch name means no warning', () => {
+  const r = runBranch('Closes #269', '');
+  assert.equal(r.code, 0);
+  assert.doesNotMatch(r.out, /::warning::/);
+});
