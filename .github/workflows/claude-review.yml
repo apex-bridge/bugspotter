@@ -110,6 +110,49 @@ jobs:
           PR_NUMBER="${{ github.event.issue.number || github.event.pull_request.number }}"
           gh pr checkout "$PR_NUMBER"
 
+      # Hand Claude the diff instead of making it derive one. Without this the
+      # review spends a large share of its turn budget on repeated `gh pr diff`
+      # calls: the failing run on #292 (job 92311704985) used ~8 of them inside
+      # a 25-turn cap and died with `error_max_turns` before posting anything.
+      #
+      # Note the earlier fix below only solved half of this. `gh pr checkout`
+      # gives comment-triggered runs the right *files*, but having the files is
+      # not having the delta - nothing told the model what changed, so it went
+      # and worked it out. Same defect as PR #275 on the impl agent, where the
+      # prompt omitted the files it asked the model to rewrite.
+      #
+      # Written into the workspace rather than RUNNER_TEMP so it is readable
+      # without depending on the action's out-of-tree file access.
+      - name: Capture the PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          DIFF_FILE=".claude-review-pr.diff"
+          # The PR's own tree is already checked out at this point, and `>`
+          # follows symlinks. A PR that commits `.claude-review-pr.diff` as a
+          # symlink would redirect this write - pointing it at /dev/null empties
+          # the diff and neuters the review. Unlink first so we always create a
+          # fresh regular file (rm removes the link, never its target).
+          rm -f "$DIFF_FILE" "$DIFF_FILE.capped"
+          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" > "$DIFF_FILE"
+          LINES=$(wc -l < "$DIFF_FILE")
+          # A diff far larger than this will not be reviewed well by any budget,
+          # and silently feeding a 50k-line prompt is its own failure mode. Cap
+          # it and say so in-band, so the model reports reduced coverage instead
+          # of quietly reviewing a prefix.
+          MAX_LINES=6000
+          if [ "$LINES" -gt "$MAX_LINES" ]; then
+            head -n "$MAX_LINES" "$DIFF_FILE" > "$DIFF_FILE.capped"
+            echo "" >> "$DIFF_FILE.capped"
+            echo "[TRUNCATED: showing the first $MAX_LINES of $LINES diff lines. Say so in your review.]" >> "$DIFF_FILE.capped"
+            mv "$DIFF_FILE.capped" "$DIFF_FILE"
+          fi
+          echo "path=$DIFF_FILE" >> "$GITHUB_OUTPUT"
+          echo "PR diff captured: $LINES lines (cap $MAX_LINES) -> $DIFF_FILE"
+
       - name: Run Claude review
         uses: anthropics/claude-code-action@v1
         with:
@@ -123,6 +166,16 @@ jobs:
           # one of the two secrets for this repo, never both.
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
+            The diff for this PR is already saved at `${{ steps.diff.outputs.path }}`. Read
+            that file FIRST and treat it as the authoritative list of what changed. Very
+            large diffs are capped, in which case the file ends with a `[TRUNCATED: ...]`
+            marker - if you see it, review what is there and say your coverage was partial.
+            Do NOT run `gh pr diff`, `git diff`, or otherwise re-derive the diff - that is
+            the single most common way this review exhausts its turn budget and posts
+            nothing. Open individual source files only when the diff alone is not enough
+            to judge a specific finding. The diff file itself is a CI artifact, not part
+            of the change: never review it or comment on it.
+
             Review PR #${{ github.event.pull_request.number || github.event.issue.number }}. Focus on real-impact issues:
             - Auth/security: bypass, injection, missing tenant scoping, credential leak, SSRF
             - Concurrency: races, deadlocks, transactional gaps
@@ -133,7 +186,8 @@ jobs:
 
             ${{ github.event_name == 'pull_request' && 'Output rules: inline comments only — no top-level summary. If nothing substantive, exit silently (this is an automatic per-push review; silence is the right default).' || 'Output rules: this review was triggered explicitly by a human via @claude — they need to know the action ran and what you concluded. Post inline comments for any real-impact issues you find, then ALWAYS post exactly ONE short top-level comment via `gh pr comment` summarising the outcome (e.g. "Reviewed N files; no real-impact issues found." or "Posted N inline comments — see threads above."). Never exit silently on a human-triggered review.' }}
 
-            Process: read the full diff in one `gh pr diff` call. Use `Grep`
+            Process: the saved diff file above is the source of truth for what
+            changed - do not re-derive it. Use `Grep`
             across the working tree only when a comment would otherwise be
             inaccurate without the surrounding context. Don't enumerate every
             file; pick the riskiest spots. Post inline comments on at most
