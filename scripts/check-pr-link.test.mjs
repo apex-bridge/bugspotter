@@ -235,6 +235,15 @@ test('warns on closing keyword forms the accept-list itself does not take', () =
   }
 });
 
+test('warns on the colon form, which GitHub also treats as closing', () => {
+  // GitHub's docs: the keyword "can be followed by colons", so `Closes: #10`
+  // closes the issue. REFERENCE does not accept that form, hence the separate
+  // `Refs #1` that gets the body past the blocking check.
+  const r = runBranch('Refs #1\nCloses: #269', 'impl/issue-269-llm-unavailable');
+  assert.equal(r.code, 0);
+  assert.match(r.out, /::warning::/);
+});
+
 test('no branch name means no warning', () => {
   const r = runBranch('Closes #269', '');
   assert.equal(r.code, 0);

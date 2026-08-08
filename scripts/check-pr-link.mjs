@@ -49,8 +49,15 @@ function hasReference(body) {
 // accept-list (it takes `Closes`/`Fixes`/`Resolves` but not `Closed`/`Fixed`/
 // `Resolved`). Matched in full here so the warning below is not blind to a
 // form that still auto-closes an issue.
+//
+// `:?` because GitHub's docs state the keyword "can be followed by colons",
+// so `Closes: #10` closes the issue exactly like `Closes #10`. REFERENCE above
+// deliberately does not accept that form: it is the blocking check, a body
+// carrying only `Closes: #10` fails it and the author is told to add a
+// reference, which is a safe direction to be wrong in. This one is advisory,
+// so the cost of missing a form is a warning that never fires.
 const CLOSING =
-  /(?<!\p{L})(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[0-9]+(?![0-9\p{L}])/iu;
+  /(?<!\p{L})(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[0-9]+(?![0-9\p{L}])/iu;
 
 /**
  * Warn - never fail - when an implementation PR uses a closing keyword.

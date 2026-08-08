@@ -59,12 +59,30 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          CLOSED_BY_MERGE="$(gh api \
+          # `--paginate` applies `--jq` to each page separately, not to the
+          # concatenated result, so any expression that aggregates (`last`,
+          # `length`, a wrapping `[...]`) silently aggregates per page and emits
+          # one line per page. On an issue with over 100 timeline events - easy
+          # for a pipeline issue that moved through several gates - that wrote a
+          # multi-line value into $GITHUB_OUTPUT and the runner rejected it.
+          # So: emit one token per `closed` event and aggregate in the shell,
+          # where `tail -n 1` sees every page. The timeline is chronological, so
+          # the last such token is the close that is being handled now.
+          LAST_CLOSE="$(gh api \
             "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/timeline?per_page=100" \
             --paginate \
-            --jq '[.[] | select(.event == "closed") | .commit_id] | last | if . == null then "false" else "true" end')"
+            --jq '.[] | select(.event == "closed") | if .commit_id == null then "human" else "merge" end' \
+            | tail -n 1)"
+          # No token at all means the timeline has not caught up with the event
+          # that triggered this run. Treated as "not a merge", which downgrades
+          # the outcome to a comment rather than reopening an issue on a guess.
+          if [ "$LAST_CLOSE" = "merge" ]; then
+            CLOSED_BY_MERGE=true
+          else
+            CLOSED_BY_MERGE=false
+          fi
           echo "closed_by_merge=${CLOSED_BY_MERGE}" >> "$GITHUB_OUTPUT"
-          echo "closed_by_merge=${CLOSED_BY_MERGE}"
+          echo "closed_by_merge=${CLOSED_BY_MERGE} (last close event: ${LAST_CLOSE:-none})"
 
       - name: Decide
         id: decide
