@@ -365,8 +365,9 @@ export async function callClaude({ prompt, maxTokens, timeoutMs, model }) {
     if (maxTokens != null) {
       console.warn(
         `llm-client: maxTokens=${maxTokens} is ignored on LLM_BACKEND=cli ` +
-          `(the CLI has no per-call output cap). Output length is unbounded here; ` +
-          `budget and timeouts accordingly.`
+          `(the CLI has no per-call output cap). The model's own output limit still ` +
+          `applies, so a response can still stop at stop_reason=max_tokens - it just ` +
+          `will not stop at ${maxTokens}. Budget and time out accordingly.`
       );
     }
     return callViaCli({ prompt, timeoutMs, model });

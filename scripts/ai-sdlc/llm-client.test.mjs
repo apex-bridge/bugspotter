@@ -439,6 +439,11 @@ test('callClaude warns that maxTokens is ignored on the CLI backend', async () =
   assert.match(hit, /16384/, 'the warning names the value that was discarded');
   assert.match(hit, /ignored/);
   assert.match(hit, /LLM_BACKEND=cli/);
+  // Not "unbounded": generate-impl.mjs's truncation guard tells the reader the
+  // response hit the model's own limit, and a warning claiming no limit exists
+  // would contradict it. Two places, one fact.
+  assert.doesNotMatch(hit, /unbounded/);
+  assert.match(hit, /model's own output limit still applies/);
 });
 
 test('callClaude stays quiet when no maxTokens was passed', async () => {
