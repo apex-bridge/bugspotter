@@ -46,15 +46,20 @@ test('ignores an issue closed as not planned', () => {
   assert.equal(d.action, 'ignore');
 });
 
-test('ignores an issue that already reached needs-deploy', () => {
+// This test used to assert `ignore` here, on the reasoning that reaching
+// `needs-deploy` means closing is the expected end of the line. That is true
+// only when a person closes it. A merge closing it means nobody deployed, which
+// is precisely the failure Gate 4 exists to prevent - see #300 and the
+// deploy-gate block at the end of this file. The assertion was the bug.
+test('does not ignore a merge-close at needs-deploy', () => {
   const d = decideGateAction({
     labels: [DEPLOY_GATE, 'enhancement'],
     stateReason: 'completed',
     closedByMerge: true,
   });
 
-  assert.equal(d.action, 'ignore');
-  assert.equal(d.gate, null);
+  assert.equal(d.action, 'restore');
+  assert.equal(d.gate, DEPLOY_GATE);
 });
 
 test('ignores an issue carrying no gate label at all', () => {
@@ -108,4 +113,141 @@ test('the comment-only body does not claim the issue was reopened', () => {
 
   assert.match(body, /Left as-is/);
   assert.doesNotMatch(body, /Reopened/);
+});
+
+// --- The deploy gate itself ---
+//
+// The original version listed only the four PRE_DEPLOY_GATES, so an issue
+// closed while sitting AT `needs-deploy` fell through to `ignore` - the one
+// state where Gate 4 is actually pending. Demonstrated by the guard's own merge
+// (#298, `b475dfb`) auto-closing #269 five seconds after it went live, then
+// logging `ignore (no pre-deploy gate label)` against an issue labelled
+// `needs-deploy`. See #300.
+
+test('restores an issue auto-closed by a merge while at needs-deploy', () => {
+  const d = decideGateAction({
+    labels: ['ai-sdlc', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.equal(d.gate, 'needs-deploy');
+});
+
+test('a person closing at needs-deploy is Gate 4 completing, not a skip', () => {
+  // The pipeline's happy ending. Commenting here would put "the gate was
+  // skipped" on every successful delivery, which is how a guard gets muted.
+  const d = decideGateAction({
+    labels: ['needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: false,
+  });
+
+  assert.equal(d.action, 'ignore');
+  assert.equal(d.gate, 'needs-deploy');
+});
+
+test('not_planned still wins at needs-deploy', () => {
+  const d = decideGateAction({
+    labels: ['needs-deploy'],
+    stateReason: 'not_planned',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'ignore');
+});
+
+test('an earlier gate alongside needs-deploy is treated as the earlier one', () => {
+  // So the restore also strips the stale label rather than leaving both.
+  const d = decideGateAction({
+    labels: ['needs-review', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.equal(d.gate, 'needs-review');
+});
+
+test('the needs-deploy restore comment does not claim the gate was never reached', () => {
+  const body = buildComment({ action: 'restore', gate: 'needs-deploy' });
+
+  assert.doesNotMatch(
+    body,
+    /never reached/,
+    'it did reach the gate; the deploy is what is missing'
+  );
+  assert.doesNotMatch(body, /was skipped/);
+  assert.match(body, /Gate 4 \(deploy\) is a human action/);
+  assert.match(body, /Reopened, still at `needs-deploy`/);
+  // The #298 case: the keyword was quoted while describing the bug, not issued.
+  assert.match(body, /quoting/);
+});
+
+test('reports every stale pre-deploy label, not just the earliest', () => {
+  // Gates are meant to be exclusive but nothing enforces it. Restoring only the
+  // earliest would reopen the issue still wearing the other one, which reads as
+  // two gates at once.
+  const d = decideGateAction({
+    labels: ['needs-review', 'needs-spec', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.equal(d.gate, 'needs-spec', 'the comment describes the earliest gate');
+  assert.deepEqual(d.stale, ['needs-spec', 'needs-review'], 'in pipeline order');
+});
+
+test('a stale pre-deploy label does not turn a human close at needs-deploy into a skip', () => {
+  // `gate` is the earliest label, so testing `gate === DEPLOY_GATE` here asked
+  // "did this reach Gate 4?" and got a flat no while `needs-deploy` was on the
+  // issue. The guard then posted "the gate was skipped" on a delivery that had
+  // in fact been deployed - the exact noise the deploy-gate branch exists to
+  // avoid, just hidden behind a leftover label.
+  const d = decideGateAction({
+    labels: ['needs-review', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: false,
+  });
+
+  assert.equal(d.action, 'ignore');
+  assert.equal(d.atDeployGate, true);
+});
+
+test('the mixed-state restore comment does not claim the gate was never reached', () => {
+  // Same predicate, other caller: the body is chosen by whether the issue was
+  // at the gate, not by which label `gate` happens to name.
+  const d = decideGateAction({
+    labels: ['needs-review', 'needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.doesNotMatch(buildComment(d), /never reached/);
+});
+
+test('atDeployGate is false when no deploy label is present', () => {
+  const d = decideGateAction({
+    labels: ['needs-review'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.atDeployGate, false);
+  assert.match(buildComment(d), /never reached/);
+});
+
+test('stale is empty when the issue was already at the deploy gate', () => {
+  // Drives the workflow branch that only re-adds the label.
+  const d = decideGateAction({
+    labels: ['needs-deploy'],
+    stateReason: 'completed',
+    closedByMerge: true,
+  });
+
+  assert.equal(d.action, 'restore');
+  assert.deepEqual(d.stale, []);
 });

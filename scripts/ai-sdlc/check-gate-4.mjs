@@ -31,6 +31,10 @@ import { pathToFileURL } from 'node:url';
 // still carrying one of these never reached the deploy gate.
 export const PRE_DEPLOY_GATES = ['needs-spec', 'needs-adr', 'agent-working', 'needs-review'];
 
+// Gate 4 itself. Handled separately rather than appended to the list above,
+// because the two close causes mean opposite things here: a person closing an
+// issue at this label IS the gate completing, while a merge closing it means
+// the deploy never happened. Everywhere else, both causes are a skipped gate.
 export const DEPLOY_GATE = 'needs-deploy';
 
 /**
@@ -40,15 +44,36 @@ export const DEPLOY_GATE = 'needs-deploy';
  * @param {string[]} input.labels        - label names on the issue at close time
  * @param {string|null} input.stateReason - GitHub's `completed` | `not_planned` | null
  * @param {boolean} input.closedByMerge  - true if a merged PR closed it, not a person
- * @returns {{action: 'ignore'|'comment'|'restore', gate: string|null, reason: string}}
+ * @returns {{action: 'ignore'|'comment'|'restore', gate: string|null,
+ *            stale: string[], atDeployGate: boolean, reason: string}} `stale` is
+ *            every pre-deploy label present, so the restore can strip all of
+ *            them, not just `gate`. `atDeployGate` is whether the issue reached
+ *            Gate 4, which is not the same question as which gate `gate` names.
  */
 export function decideGateAction({ labels = [], stateReason = null, closedByMerge = false }) {
-  const gate = PRE_DEPLOY_GATES.find((g) => labels.includes(g)) ?? null;
+  // Gates are meant to be exclusive, but nothing enforces that and a human can
+  // apply two by hand. Collect every pre-deploy label present so the restore can
+  // strip all of them; leaving one behind would reopen the issue into a mixed
+  // state that reads as two gates at once.
+  const stale = PRE_DEPLOY_GATES.filter((g) => labels.includes(g));
+
+  // Tracked separately from `gate` on purpose. `gate` is the earliest label, so
+  // a stale pre-deploy label sitting next to `needs-deploy` makes `gate` name
+  // the stale one - and then `gate === DEPLOY_GATE` would answer "did this
+  // issue reach Gate 4?" with a flat no while the label is right there.
+  const atDeployGate = labels.includes(DEPLOY_GATE);
+
+  // Reported gate is the earliest, since that is the one the comment describes.
+  const gate = stale[0] ?? (atDeployGate ? DEPLOY_GATE : null);
 
   if (gate === null) {
-    // Either not a pipeline issue at all, or it already reached `needs-deploy`
-    // and closing it is the expected end of the line.
-    return { action: 'ignore', gate: null, reason: 'no pre-deploy gate label' };
+    return {
+      action: 'ignore',
+      gate: null,
+      stale: [],
+      atDeployGate: false,
+      reason: 'not a gated pipeline issue',
+    };
   }
 
   // `not_planned` is a deliberate judgment that the work should not happen -
@@ -56,26 +81,64 @@ export function decideGateAction({ labels = [], stateReason = null, closedByMerg
   // built on a hallucinated package. Gate 4 does not apply to work that is not
   // being done, and second-guessing that call would make this guard a nuisance.
   if (stateReason === 'not_planned') {
-    return { action: 'ignore', gate, reason: 'closed as not planned' };
+    return { action: 'ignore', gate, stale, atDeployGate, reason: 'closed as not planned' };
   }
 
   // A person closing an issue by hand is making a decision. Say the gate was
   // skipped, then leave it alone - reopening under someone would be fighting
   // the human this pipeline exists to keep in the loop.
   if (!closedByMerge) {
-    return { action: 'comment', gate, reason: 'closed by a person, not by a merge' };
+    // Except at the deploy gate, where a person closing the issue IS Gate 4
+    // completing. This is the pipeline's normal happy ending, and commenting
+    // "the gate was skipped" on it would make the guard noise on every
+    // successful delivery - which is how guards get muted. Keyed off the label
+    // rather than off `gate`, so a leftover pre-deploy label cannot turn the
+    // happy ending back into noise.
+    if (atDeployGate) {
+      return {
+        action: 'ignore',
+        gate,
+        stale,
+        atDeployGate,
+        reason: 'closed by a person at the deploy gate: Gate 4 done',
+      };
+    }
+    return {
+      action: 'comment',
+      gate,
+      stale,
+      atDeployGate,
+      reason: 'closed by a person, not by a merge',
+    };
   }
 
   // Closed as a side effect of a merge: nobody decided this, a keyword did.
   // Restoring is the whole point of the guard.
-  return { action: 'restore', gate, reason: 'auto-closed by a merged PR' };
+  return { action: 'restore', gate, stale, atDeployGate, reason: 'auto-closed by a merged PR' };
 }
 
 /**
  * The comment body posted for the `comment` and `restore` actions.
  * Written to be useful to a human reading it cold on the issue.
  */
-export function buildComment({ action, gate }) {
+export function buildComment({ action, gate, atDeployGate = gate === DEPLOY_GATE }) {
+  // At the deploy gate the issue did reach Gate 4; what it never got is the
+  // human action the gate stands for. Saying "never reached needs-deploy"
+  // there would be plainly false to anyone reading the labels - including when
+  // `gate` names a stale pre-deploy label carried alongside `needs-deploy`,
+  // which is why this asks the label and not `gate`.
+  if (atDeployGate) {
+    return (
+      `This issue was at \`${DEPLOY_GATE}\` and was closed automatically by a merged ` +
+      `PR. **Gate 4 (deploy) is a human action**, so a merge cannot complete it - ` +
+      `nothing here confirms the change is deployed and verified.\n\n` +
+      `A closing keyword does this, and it does not have to be a deliberate one: ` +
+      `GitHub reads \`Closes #NNN\` the same way whether the PR body is instructing ` +
+      `it or merely quoting it while describing something.\n\n` +
+      `Reopened, still at \`${DEPLOY_GATE}\`. Close it again once it actually is deployed.`
+    );
+  }
+
   const skipped =
     `This issue closed while still labelled \`${gate}\`, so it never reached ` +
     `\`${DEPLOY_GATE}\` and **Gate 4 (deploy) was skipped**.`;
@@ -132,7 +195,14 @@ function main() {
   // Consumed by the workflow via $GITHUB_OUTPUT.
   const out = process.env.GITHUB_OUTPUT;
   if (out) {
-    appendFileSync(out, `action=${decision.action}\ngate=${decision.gate ?? ''}\n`);
+    // Comma-joined is safe for this one value: it only ever holds names from
+    // PRE_DEPLOY_GATES, which are ours and contain no commas. The raw-JSON
+    // handling above is for arbitrary issue labels, which are not.
+    appendFileSync(
+      out,
+      `action=${decision.action}\ngate=${decision.gate ?? ''}\n` +
+        `remove_labels=${decision.stale.join(',')}\n`
+    );
     if (decision.action !== 'ignore') {
       // Randomised heredoc delimiter, same reason as generate-impl.mjs: the
       // comment body is partly issue-derived, and a fixed delimiter appearing
