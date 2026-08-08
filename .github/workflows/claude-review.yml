@@ -131,6 +131,12 @@ jobs:
         run: |
           set -euo pipefail
           DIFF_FILE=".claude-review-pr.diff"
+          # The PR's own tree is already checked out at this point, and `>`
+          # follows symlinks. A PR that commits `.claude-review-pr.diff` as a
+          # symlink would redirect this write - pointing it at /dev/null empties
+          # the diff and neuters the review. Unlink first so we always create a
+          # fresh regular file (rm removes the link, never its target).
+          rm -f "$DIFF_FILE" "$DIFF_FILE.capped"
           gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" > "$DIFF_FILE"
           LINES=$(wc -l < "$DIFF_FILE")
           # A diff far larger than this will not be reviewed well by any budget,
