@@ -254,9 +254,10 @@ test_storage_pair() {
     local endpoint="$2"
     local domain="$3"
     local expect="$4"          # "pass" or "fail"
-    # "-" not ":-": an explicitly passed empty path-style is a case under test
-    # (unset means virtual-hosted), so it must not collapse to the default.
-    local path_style="${5-true}" # default: bucket in the path, host untouched
+    # Default to the product's own default rather than to path-style, so a case
+    # that omits these exercises what a real deployment does. "-" not ":-": an
+    # explicitly passed empty path-style is itself a case under test.
+    local path_style="${5-}" # unset => virtual-hosted, as the backend reads it
     local bucket="${6-}"
 
     (
@@ -340,6 +341,17 @@ test_storage_pair "Public IPv6 endpoint is rejected" \
     "https://[2001:db8::1]" "storage.example.com" "fail"
 test_storage_pair "Loopback IP is still skipped, not rejected" \
     "http://127.0.0.1:9000" "" "pass"
+# Loopback is 127.0.0.0/8, not one address.
+test_storage_pair "Any 127.0.0.0/8 address is skipped" \
+    "http://127.0.0.2:9000" "" "pass"
+# A host that merely starts with "127." is a DNS name, not loopback.
+test_storage_pair "A DNS name starting with 127. is not treated as loopback" \
+    "https://127.storage.example.com" "" "fail"
+
+# The wildcard match is anchored on a label boundary: "*.s3.example.com" must
+# not swallow "buckets3.example.com".
+test_storage_pair "Wildcard does not match across a label boundary" \
+    "https://buckets3.example.com" "*.s3.example.com" "fail"
 
 # A CSP host-source with a scheme matches only that scheme, and a bare
 # STORAGE_DOMAIN means https - so an HTTP-only store must say so.

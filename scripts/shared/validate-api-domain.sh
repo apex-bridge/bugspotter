@@ -212,7 +212,7 @@ validate_storage_csp_covers_endpoint() {
     _endpoint_host="$_origin_host"
 
     case "$_endpoint_host" in
-        localhost|localhost:*|127.0.0.1|127.0.0.1:*|\[::1\]|\[::1\]:*) return 0 ;;
+        localhost|localhost:*|\[::1\]|\[::1\]:*) return 0 ;;
         # An IPv6 literal is bracketed and carries no dot, so it has to be
         # matched before the dotted-host test or it reads as a bare service name
         # and is skipped instead of rejected below.
@@ -220,6 +220,15 @@ validate_storage_csp_covers_endpoint() {
         *.*) ;;
         *) return 0 ;;
     esac
+
+    # Loopback is all of 127.0.0.0/8, not just 127.0.0.1. Any of it is
+    # unreachable from a browser on another machine whatever the CSP says, so it
+    # belongs with the skips above rather than with the IP rejection below - it
+    # is tested here only because a loopback literal is dotted and would
+    # otherwise have to be spelled out in the arm above.
+    if printf '%s' "${_endpoint_host%%:*}" | grep -qE '^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        return 0
+    fi
 
     # CSP cannot express a public IP literal. The grammar accepts one, but
     # matching is defined so that "only 127.0.0.1 will actually match a URL when
@@ -248,11 +257,20 @@ validate_storage_csp_covers_endpoint() {
         if [ -n "$S3_BUCKET" ]; then
             _request_host="${S3_BUCKET}.${_endpoint_host}"
         else
-            # Virtual-hosted, but the bucket was not passed in, so the real host
-            # cannot be built. Accept a wildcard on the endpoint host, which is
-            # what would cover <bucket>.<endpoint>, rather than fail a
-            # deployment on a value this container was never given.
+            # No bucket, so the real host cannot be built. Both readings stay
+            # open here: a wildcard on the endpoint host, which is what covers
+            # <bucket>.<endpoint>, and the endpoint host itself, because a
+            # container that was given neither variable may simply be running
+            # against a compose file that predates them while addressing storage
+            # path-style. Refusing to boot on that guess would take down a
+            # working admin over configuration it was never handed, which is a
+            # worse failure than the one this guard exists to catch. Say so
+            # rather than passing quietly.
             _wildcard_covers_base="yes"
+            echo "WARNING: S3_BUCKET is not set, so the storage CSP could only be checked against" >&2
+            echo "the endpoint host. With virtual-hosted-style addressing the bucket becomes a" >&2
+            echo "subdomain of it, and that host was not verified. Pass S3_BUCKET and" >&2
+            echo "S3_FORCE_PATH_STYLE to check the host presigned URLs actually resolve to." >&2
         fi
     fi
 
