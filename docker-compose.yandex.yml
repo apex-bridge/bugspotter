@@ -28,13 +28,19 @@
 # destination, and postgres then fails TLS against an HTML page, which reads as
 # a certificate problem rather than a download that never happened.
 #
-#   tmp=$(mktemp)
-#   curl --fail --location --show-error --silent --output "$tmp" \
+#   curl --fail --location --show-error --silent \
+#     --output /opt/bugspotter/yandex-ca.pem.new \
 #     https://storage.yandexcloud.kz/cloud-certs/RootCA.pem \
-#     && install -m 0644 "$tmp" /opt/bugspotter/yandex-ca.pem
-#   rm -f "$tmp"
+#     && install -m 0644 /opt/bugspotter/yandex-ca.pem.new \
+#          /opt/bugspotter/yandex-ca.pem \
+#     && rm /opt/bugspotter/yandex-ca.pem.new
 #
-# Prefix the install with sudo if you do not own /opt/bugspotter.
+# One `&&` chain on purpose: any step failing short-circuits it and the chain
+# exits non-zero, so this stays honest when pasted into a script. Cleanup runs
+# only on success, which leaves the `.pem.new` behind as evidence on failure and
+# never overwrites a good cert with an error page.
+#
+# Prefix with sudo if you do not own /opt/bugspotter.
 
 services:
   # Managed Postgres is reached through the pooler behind TLS signed by the
