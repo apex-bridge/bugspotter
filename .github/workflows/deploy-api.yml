@@ -20,6 +20,7 @@ on:
       - 'package.json' # Root manifest, COPYd for the workspace install
       - '.npmrc'
       - 'tsconfig.json' # Root config the package tsconfigs extend
+      - '.dockerignore' # Shapes the build context; see deploy-admin.yml
       - '.github/workflows/deploy-api.yml'
   workflow_dispatch:
     inputs:

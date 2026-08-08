@@ -62,13 +62,33 @@ with an explicit `--endpoint-url` covers either; no provider CLI is needed.
 
 Check three backup sources in order. For each, report Status (OK / STALE / MISSING / CORRUPT), latest file, age, size.
 
-Every command below reads the off-site bucket, so each needs the `BACKUP_S3_*`
-credentials passed under the names the `aws` CLI actually reads (Step 4). To
-avoid repeating them, set them once for the off-site side of this session:
+**Run these inside the backup container, not on the host.** `pg-backup` already
+holds both credential sets, the region, and `aws-cli`, so the commands below
+work without exporting anything:
+
+```bash
+docker compose --profile backup exec pg-backup sh -lc '...'
+```
+
+If you run them on the host instead, three things bite, and none fail loudly:
+
+- The `BACKUP_S3_*` / `S3_*` variables live in the deployment's `.env`, which
+  compose reads - they are **not** in your login shell. Load it first:
+  `set -a; . /opt/bugspotter/.env; set +a`.
+- An unset variable expands to an empty string, and an empty access key is not
+  a credential: the CLI moves on to `~/.aws/credentials` or an instance role
+  and lists whatever that account can see. Check before trusting any output:
+  `[ -n "$BACKUP_S3_ACCESS_KEY" ] || echo 'NOT SET - results are meaningless'`.
+- `aws` needs a region. `scripts/backup/lib.sh` sets
+  `AWS_DEFAULT_REGION="${BACKUP_S3_REGION:-us-east-1}"`; without it every
+  command dies with `NoRegionError`.
+
+Off-site credentials, if you are running on the host:
 
 ```bash
 export AWS_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY}"
 export AWS_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_KEY}"
+export AWS_DEFAULT_REGION="${BACKUP_S3_REGION:-us-east-1}"
 ```
 
 The parity check later reads the _source_ bucket, which uses different
@@ -100,7 +120,7 @@ This is the embeddings DB — losing it means hours of LLM re-computation on rec
 ```bash
 aws s3 ls s3://${BACKUP_S3_BUCKET}/storage/ \
   --endpoint-url=${BACKUP_S3_ENDPOINT} \
-  --summarize | tail -5
+  --recursive --summarize | tail -5
 ```
 
 Validate:
@@ -117,27 +137,51 @@ Validate:
   up the off-site export set above, and neither can fall back to an ambient
   profile (see Step 4):
 
+  MinIO is addressed path-style (`S3_FORCE_PATH_STYLE=true`), but the `aws` CLI
+  defaults to virtual-host addressing and will try `https://<bucket>.<host>/`,
+  which fails to resolve or fails SigV4. Force path style for the source side:
+
   ```bash
-  # source (MinIO on the app host, or the provider's object storage)
-  AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY}" \
-  AWS_SECRET_ACCESS_KEY="${S3_SECRET_KEY}" \
+  set -o pipefail   # or `tail` masks a failed aws call with exit 0
+
+  # source (MinIO on the app host, or the provider's object storage).
+  # The :- fallbacks mirror docker-compose.yml, which resolves S3_ACCESS_KEY to
+  # MINIO_APP_ACCESS_KEY - without them a deployment that only sets the MINIO_*
+  # pair silently authenticates as nobody.
+  AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY:-${MINIO_APP_ACCESS_KEY:-}}" \
+  AWS_SECRET_ACCESS_KEY="${S3_SECRET_KEY:-${MINIO_APP_SECRET_KEY:-}}" \
+  AWS_DEFAULT_REGION="${S3_REGION:-us-east-1}" \
     aws s3 ls "s3://${S3_BUCKET}/" --recursive --summarize \
-      --endpoint-url="${S3_ENDPOINT}" | tail -2
+      --endpoint-url="${S3_ENDPOINT}" \
+      --cli-connect-timeout 10 | tail -2
 
   # off-site copy
   AWS_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY}" \
   AWS_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_KEY}" \
+  AWS_DEFAULT_REGION="${BACKUP_S3_REGION:-us-east-1}" \
     aws s3 ls "s3://${BACKUP_S3_BUCKET}/storage/" --recursive --summarize \
-      --endpoint-url="${BACKUP_S3_ENDPOINT}" | tail -2
+      --endpoint-url="${BACKUP_S3_ENDPOINT}" \
+      --cli-connect-timeout 10 | tail -2
   ```
 
-  If the two counts are identical to the object, be suspicious rather than
-  satisfied: the most common cause is both commands having hit the same bucket
-  because one side's credentials or endpoint did not take effect.
+  If the source command needs path style (it does against this stack's MinIO),
+  set it first in the same shell:
+  `aws configure set default.s3.addressing_style path`.
 
-  Compare "Total Objects". Report the two counts and the ratio, never just a
+  **A failed count is not a passed check.** Both commands end in a pipe, so the
+  pipeline exits 0 even when `aws` writes an error to stderr and prints nothing.
+  Read the actual numbers: if either side is absent or zero, report the parity
+  line as `UNVERIFIED` and the overall run as `⚠ ATTENTION`, never `✓ ALL OK`.
+  An unverified check before a migration is a reason to stop, not a detail.
+
+  Compare "Total Objects". Report both counts and the ratio, never just a
   verdict - a parity check whose numbers are not shown cannot be sanity-checked
-  by the reader.
+  by the reader. Expect off-site to be slightly **higher** than source: the sync
+  is an additive `rclone copy` that never deletes, and `.last-sync` lives inside
+  the prefix. That also means parity alone cannot prove recent objects arrived -
+  a sync broken weeks ago still shows a healthy ratio while every new object is
+  missing, so treat the `.last-sync` age above as the load-bearing check and
+  parity as corroboration.
 
 ## Output format
 
@@ -163,13 +207,17 @@ OBJECT STORAGE
   Last sync: 26h ago  (expected 12h or less)
   Source:    <S3_BUCKET>  (4,892 objects, 12.4 GB)
   Backup:    <BACKUP_S3_BUCKET>/storage  (4,591 objects, 11.8 GB)
+  Ratio:     0.938  (backup ÷ source; UNVERIFIED if either count is
+             missing or source is 0 - never report a ratio you did not
+             compute from two real numbers)
   Delta:     301 missing objects, 600 MB
 
 ═══════════════════════════════════════════════════════
 Verdict: ⚠ ATTENTION — Object Storage sync stale (others OK)
 Action:  SSH prod →
-         docker compose --profile backup logs --tail=200 storage-sync
-         Check for rclone errors (auth, network, quota)
+         docker compose --profile backup logs --tail=200 pg-backup
+         Check for rclone errors (auth, network, quota). pg-backup runs
+         all three streams; there is no separate storage-sync service.
 ═══════════════════════════════════════════════════════
 ```
 

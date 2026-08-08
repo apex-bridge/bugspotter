@@ -8,12 +8,16 @@ on:
   push:
     branches: [main]
     paths:
-      # Every path here must be an input to apps/admin/Dockerfile, and every
-      # input to that Dockerfile must be here. A build input missing from this
-      # list means a change to it publishes nothing, and the image on the
-      # registry silently lags the source - which is what happened to
-      # scripts/shared/validate-api-domain.sh in #303: the entrypoint changed,
-      # no path matched, and the published admin kept the old one.
+      # Every input to apps/admin/Dockerfile must appear here, or a change to it
+      # publishes nothing and the registry image silently lags the source -
+      # which is what happened to scripts/shared/validate-api-domain.sh in #303:
+      # the entrypoint changed, no path matched, and the published admin kept
+      # the old one.
+      #
+      # The converse is looser: this workflow file is listed so it can redeploy
+      # itself, and .dockerignore shapes the context rather than being copied,
+      # so neither is a Dockerfile input. Nothing enforces any of this - see the
+      # note at the top of apps/admin/Dockerfile.
       - 'apps/admin/**'
       - 'packages/types/**' # Types are required by admin
       - 'scripts/shared/**' # COPYd into the image, runs at container start
@@ -21,6 +25,11 @@ on:
       - 'pnpm-workspace.yaml'
       - 'package.json' # Root manifest, COPYd for the workspace install
       - 'tsconfig.json' # Root config the admin tsconfig extends
+      # Decides what the build context contains at all: it excludes **/scripts/
+      # and then whitelists !scripts/shared/, which is the only reason the COPY
+      # above resolves. Editing it changes or breaks the image with no other
+      # path matching.
+      - '.dockerignore'
       - '.github/workflows/deploy-admin.yml'
   workflow_dispatch:
     inputs:
