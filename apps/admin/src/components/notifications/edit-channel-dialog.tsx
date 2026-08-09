@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { notificationService, projectService } from '../../services/api';
@@ -22,6 +23,7 @@ import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select-radix';
 import { Textarea } from '../ui/textarea';
 import { Checkbox } from '../ui/checkbox';
+import { buildChannelConfigUpdate, toFormConfig } from './channel-config-helpers';
 import type { NotificationChannel } from '../../types';
 
 interface EditChannelDialogProps {
@@ -37,7 +39,10 @@ export function EditChannelDialog({
   onOpenChange,
   onSuccess,
 }: EditChannelDialogProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
+  /** Shown under every field the API withholds, so a blank one reads as intent. */
+  const keepStoredHint = t('notifications.editChannel.keepStoredHint');
   const [formData, setFormData] = useState({
     name: '',
     active: true,
@@ -55,7 +60,7 @@ export function EditChannelDialog({
       setFormData({
         name: channel.name,
         active: channel.active,
-        config: channel.config as Record<string, string>,
+        config: toFormConfig(channel.config as Record<string, unknown>),
       });
     }
   }, [channel]);
@@ -85,12 +90,18 @@ export function EditChannelDialog({
       return;
     }
 
+    const configUpdate = buildChannelConfigUpdate(formData.config);
+    if (!configUpdate.ok) {
+      toast.error(t('notifications.editChannel.invalidHeadersJson'));
+      return;
+    }
+
     updateMutation.mutate({
       id: channel.id,
       data: {
         name: formData.name,
         active: formData.active,
-        config: formData.config,
+        config: configUpdate.config,
       },
     });
   };
@@ -161,6 +172,7 @@ export function EditChannelDialog({
                 }
                 placeholder="••••••••"
               />
+              <p className="text-xs text-gray-500">{keepStoredHint}</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="from_address">From Address *</Label>
@@ -225,6 +237,7 @@ export function EditChannelDialog({
                 }
                 placeholder="https://hooks.slack.com/services/..."
               />
+              <p className="text-xs text-gray-500">{keepStoredHint}</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="channel">Channel</Label>
@@ -292,6 +305,7 @@ export function EditChannelDialog({
                 placeholder='{"Authorization": "Bearer token"}'
                 rows={3}
               />
+              <p className="text-xs text-gray-500">{keepStoredHint}</p>
             </div>
           </>
         );
@@ -311,6 +325,7 @@ export function EditChannelDialog({
               }
               placeholder="https://discord.com/api/webhooks/..."
             />
+            <p className="text-xs text-gray-500">{keepStoredHint}</p>
           </div>
         );
 
@@ -329,6 +344,7 @@ export function EditChannelDialog({
               }
               placeholder="https://outlook.office.com/webhook/..."
             />
+            <p className="text-xs text-gray-500">{keepStoredHint}</p>
           </div>
         );
 

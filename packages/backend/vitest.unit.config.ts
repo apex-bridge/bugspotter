@@ -38,6 +38,7 @@ export default defineConfig({
       'tests/api/analytics-routes.test.ts',
       'tests/api/media-urls.test.ts',
       'tests/api/share-token-schema.test.ts',
+      'tests/api/notification-channel-schema.test.ts',
       // Pure unit (mocked DB) — no testcontainer needed.
       'tests/analytics/analytics-scope.test.ts',
       'tests/analytics/analytics-auth.test.ts',
@@ -49,6 +50,7 @@ export default defineConfig({
       'tests/api/routes/rbac-regression.test.ts',
       'tests/api/routes/signup.route.test.ts',
       'tests/api/routes/dedup-rules.route.test.ts',
+      'tests/api/routes/notification-channels.route.test.ts',
       // Intelligence proxy routes (mocked IntelligenceClient + mocked DB)
       'tests/api/intelligence-routes.test.ts',
       'tests/api/services/**/*.test.ts',

@@ -16,6 +16,61 @@ const PRIORITY_LEVELS = ['critical', 'high', 'medium', 'low'] as const;
 // CHANNEL SCHEMAS
 // ============================================================================
 
+/**
+ * Channel config as clients are allowed to see it.
+ *
+ * Fastify serializes responses through the schema and removes every property
+ * the schema does not declare, so this list is the whole of what a client can
+ * ever receive. Both halves of that are deliberate:
+ *
+ * - The non-secret fields of all five channel types are declared. `config` used
+ *   to be a bare `{ type: 'object' }`, which declares no properties at all and
+ *   therefore serialized to `{}` on every read. The admin's edit dialog seeds
+ *   its form from that `{}` and PATCHes it back, so opening a channel and
+ *   changing its name replaced the stored credentials with nothing.
+ *
+ * - The credential-bearing fields are absent on purpose: `smtp_pass`,
+ *   `webhook_url` (an incoming-webhook URL is itself the bearer credential for
+ *   Slack, Discord and Teams), `auth_value`, `signature_secret`, and a
+ *   webhook's `headers`, which routinely carries an Authorization value. A
+ *   viewer-role read reaches this schema, so these must not travel.
+ *
+ * `additionalProperties: false` keeps the omission fail-closed: a config key
+ * added to the types later is dropped rather than leaked, and shows up as a
+ * blank field rather than as a silent disclosure. The PATCH route merges
+ * incoming config over the stored config, so a client that cannot see these
+ * fields cannot destroy them either.
+ */
+const channelConfigResponseSchema = {
+  type: 'object',
+  properties: {
+    type: { type: 'string', enum: CHANNEL_TYPES },
+    // email
+    smtp_host: { type: 'string' },
+    smtp_port: { type: 'number' },
+    smtp_secure: { type: 'boolean' },
+    smtp_user: { type: 'string' },
+    from_address: { type: 'string' },
+    from_name: { type: 'string' },
+    tls_reject_unauthorized: { type: 'boolean' },
+    // slack / discord / teams
+    channel: { type: 'string' },
+    username: { type: 'string' },
+    icon_emoji: { type: 'string' },
+    avatar_url: { type: 'string' },
+    mentions: { type: 'object', additionalProperties: true },
+    mention_roles: { type: 'object', additionalProperties: true },
+    card_template: { type: 'string' },
+    // webhook
+    url: { type: 'string' },
+    method: { type: 'string' },
+    auth_type: { type: 'string' },
+    retry_policy: { type: 'object', additionalProperties: true },
+    timeout_ms: { type: 'number' },
+  },
+  additionalProperties: false,
+} as const;
+
 const notificationChannelSchema = {
   type: 'object',
   required: [
@@ -34,7 +89,7 @@ const notificationChannelSchema = {
     project_id: { type: 'string', format: 'uuid' },
     name: { type: 'string' },
     type: { type: 'string', enum: CHANNEL_TYPES },
-    config: { type: 'object' }, // Specific validation in business logic
+    config: channelConfigResponseSchema,
     active: { type: 'boolean' },
     last_success_at: { type: ['string', 'null'], format: 'date-time' },
     last_failure_at: { type: ['string', 'null'], format: 'date-time' },

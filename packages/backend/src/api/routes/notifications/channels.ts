@@ -166,7 +166,7 @@ export function registerChannelRoutes(fastify: FastifyInstance, db: DatabaseClie
       const { id } = request.params;
       const updates = request.body;
 
-      await findChannelAndCheckAccess(
+      const existing = await findChannelAndCheckAccess(
         id,
         request.authUser,
         request.authProject,
@@ -175,9 +175,21 @@ export function registerChannelRoutes(fastify: FastifyInstance, db: DatabaseClie
         'admin'
       );
 
+      // Merge rather than replace. The response schema withholds the
+      // credential-bearing config fields (notification-schema.ts), so an edit
+      // round-trip through any client cannot carry them back - a replacing
+      // write would drop the SMTP password or webhook URL on every save.
+      // Merging is also what PATCH means: a key the client did not send keeps
+      // its stored value. Removing a config key now takes a channel rebuild,
+      // which is the safer direction to be wrong in.
+      const config =
+        updates.config === undefined
+          ? undefined
+          : ({ ...existing.config, ...updates.config } as unknown as ChannelConfig);
+
       const updatedChannel = await db.notificationChannels.update(id, {
         ...updates,
-        config: updates.config as unknown as ChannelConfig | undefined,
+        config,
       });
 
       logResourceOperation('updated', 'channel', id, getAuditUserId(request), {
