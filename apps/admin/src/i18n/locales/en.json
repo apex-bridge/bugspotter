@@ -771,6 +771,10 @@
       "button": "Create Channel",
       "createdSuccess": "Notification channel created successfully",
       "fillAllFields": "Please fill in all required fields"
+    },
+    "editChannel": {
+      "keepStoredHint": "Leave blank to keep the stored value",
+      "invalidHeadersJson": "Custom headers must be a valid JSON object"
     }
   },
   "settings": {
