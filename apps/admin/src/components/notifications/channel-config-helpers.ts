@@ -98,11 +98,28 @@ export function buildChannelConfigUpdate(formConfig: Record<string, string>): Ch
     }
 
     if (key === 'headers') {
+      // Whitespace is insignificant in JSON, so a textarea holding only spaces
+      // is "untouched" for the same reason an empty one is.
+      if (value.trim() === '') {
+        continue;
+      }
+
+      let parsed: unknown;
       try {
-        config.headers = JSON.parse(value);
+        parsed = JSON.parse(value);
       } catch {
         return { ok: false, error: 'invalid-headers' };
       }
+
+      // The webhook handler spreads this straight into the outgoing request
+      // headers, so anything that is not a plain object - `null`, `[...]`,
+      // `"x"`, `5` - parses fine and then corrupts every delivery. Reject it
+      // here rather than store it.
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { ok: false, error: 'invalid-headers' };
+      }
+
+      config.headers = parsed;
       continue;
     }
 

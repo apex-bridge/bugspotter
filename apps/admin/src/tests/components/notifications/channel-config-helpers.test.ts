@@ -125,8 +125,20 @@ describe('buildChannelConfigUpdate', () => {
     });
   });
 
+  it('rejects header JSON that parses but is not a plain object', () => {
+    // All of these parse cleanly and would then be spread into the outgoing
+    // request headers by the webhook handler, corrupting every delivery.
+    for (const headers of ['null', '[]', '["X-Token"]', '"abc"', '5', 'true']) {
+      expect(buildChannelConfigUpdate({ headers })).toEqual({
+        ok: false,
+        error: 'invalid-headers',
+      });
+    }
+  });
+
   it('treats blank headers as unchanged, not as an empty object', () => {
     expect(buildChannelConfigUpdate({ headers: '' })).toEqual({ ok: true, config: {} });
+    expect(buildChannelConfigUpdate({ headers: '  \n ' })).toEqual({ ok: true, config: {} });
   });
 
   it('turns a form seeded from a withheld config into a no-op update', () => {
