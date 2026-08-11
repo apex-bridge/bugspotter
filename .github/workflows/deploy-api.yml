@@ -290,7 +290,10 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
-          IMAGE_REF=$(printf '%s\n' "$ALL_TAGS" | grep -- ':sha-')
+          # `|| true` matters: this shell runs with -e (GitHub Actions'
+          # default), so a no-match grep inside the assignment would abort
+          # the step right here and skip the message below.
+          IMAGE_REF=$(printf '%s\n' "$ALL_TAGS" | grep -- ':sha-' || true)
           if [ -z "$IMAGE_REF" ]; then
             echo "::error::No sha-tagged image found in: $ALL_TAGS" >&2
             exit 1
@@ -303,6 +306,7 @@ jobs:
 
           echo "Deploying $IMAGE_REF to $DEPLOY_HOST"
           ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
             "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF"
 
       - name: Verify deployment health
