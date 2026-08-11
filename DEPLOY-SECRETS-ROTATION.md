@@ -15,12 +15,12 @@ to leave as-is, since that job only runs on `workflow_dispatch` with
 Two ways to rotate. They produce a materially different security posture,
 not just different secret values - read both before picking.
 
-|                                  | Path A: dedicated deploy user (recommended)                                                                                                             | Path B: reuse the admin key                            |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Setup                            | New user, new keypair, a forced SSH command                                                                                                             | None - use what already exists                         |
-| A leaked `SSH_DEPLOY_KEY` grants | Exactly one operation: pull + redeploy `api`/`worker` from a validated GHCR image ref. Nothing else - not a shell, not other commands, not other hosts. | Full root on the production host                       |
-| Workflow change needed           | Yes - simplify `deploy-api.yml`'s SSH step (shown below)                                                                                                | No - the step already committed in PR #323 works as-is |
-| Time                             | ~20 minutes                                                                                                                                             | ~2 minutes                                             |
+|                                  | Path A: dedicated deploy user (recommended)                                                                                                             | Path B: reuse the admin key                                                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setup                            | New user, new keypair, a forced SSH command                                                                                                             | None - use what already exists                                                                                                              |
+| A leaked `SSH_DEPLOY_KEY` grants | Exactly one operation: pull + redeploy `api`/`worker` from a validated GHCR image ref. Nothing else - not a shell, not other commands, not other hosts. | Full root on the production host                                                                                                            |
+| Workflow change needed           | No - `deploy-api.yml` as committed in this PR already sends only the image ref (step 6 documents the shape it's already in)                             | Yes - revert the SSH step to run the full login/pull/tag/compose sequence inline; a bare image ref sent to an unrestricted shell just fails |
+| Time                             | ~20 minutes                                                                                                                                             | ~2 minutes                                                                                                                                  |
 
 **Why "add the deploy user to the `docker` group" alone is not real scoping**,
 if you've seen this pattern before and are tempted to stop there: Docker group
@@ -55,8 +55,19 @@ useradd -m -s /bin/bash deploy
 # exits, silently breaking every deploy - the forced-command restriction
 # below is what actually limits this account, not the shell.
 usermod -aG docker deploy
+# root:root, not deploy:deploy: the forced command below is what restricts
+# this key to one script, not file permissions - but if `deploy` could write
+# its own .ssh, anything that ever runs as `deploy` (docker-group membership
+# is already root-equivalent, see above) could replace authorized_keys or
+# the script and remove that restriction. StrictModes (sshd's default)
+# rejects group/world-writable auth files, not root ownership - a root-owned,
+# non-writable-by-deploy authorized_keys is a standard hardening pattern, not
+# a login blocker. Still: this touches the auth path directly, so repeat the
+# same "benign command over the new key" check described under "Verifying,
+# either path" below after applying this, the same way the current live
+# setup was verified before being trusted.
 mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
-chown deploy:deploy /home/deploy/.ssh
+chown root:root /home/deploy/.ssh
 ```
 
 ### 3. Write the forced-command script
@@ -80,15 +91,34 @@ case "$sha" in
   *[!0-9a-f]*|"") echo "rejected: malformed sha" >&2; exit 1 ;;
 esac
 
+# Same lock poll-deploy.sh uses - both paths retag the same
+# bugspotter-api:latest and recreate the same containers, so they must not
+# run concurrently. See RUNBOOK.md's "Interaction with path (2)".
+exec 9>/opt/bugspotter/scripts/.poll-deploy.lock
+flock -n 9 || { echo "rejected: poll-deploy.sh is mid-run, retry" >&2; exit 1; }
+
 docker pull "$IMAGE_REF"
-docker tag bugspotter-api:latest "bugspotter-api:pre-$sha" 2>/dev/null || true
+new_id=$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")
+old_id=$(docker image inspect --format '{{.Id}}' bugspotter-api:latest 2>/dev/null || true)
+# Only back up an existing :latest, and only when it isn't already this same
+# content - a retried run would otherwise clobber the real pre-<sha> rollback
+# target with itself. No `|| true` on the tag itself: a genuine failure here
+# should abort the deploy, not be silently swallowed.
+if [ -n "$old_id" ] && [ "$new_id" != "$old_id" ]; then
+  docker tag bugspotter-api:latest "bugspotter-api:pre-$sha"
+fi
 docker tag "$IMAGE_REF" bugspotter-api:latest
 cd /opt/bugspotter
 docker compose up -d --no-build api worker
 SCRIPT
 
-chmod +x /opt/bugspotter/scripts/ci-deploy.sh
-chown deploy:deploy /opt/bugspotter/scripts/ci-deploy.sh
+chmod 755 /opt/bugspotter/scripts/ci-deploy.sh
+chown root:root /opt/bugspotter/scripts/ci-deploy.sh
+# /opt/bugspotter/scripts/ is itself deploy-owned (poll-deploy.sh's cron job
+# needs to create its own state/lock/log files there) - without the sticky
+# bit, that directory-write access would let `deploy` delete and replace
+# this root-owned script outright, regardless of the file's own permissions.
+chmod +t /opt/bugspotter/scripts
 ```
 
 ### 4. Registry auth - not needed
@@ -107,13 +137,14 @@ simplest option then.
 echo 'command="/opt/bugspotter/scripts/ci-deploy.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA...<paste public key>... ci-deploy@bugspotter' \
   >> /home/deploy/.ssh/authorized_keys
 chmod 600 /home/deploy/.ssh/authorized_keys
+chown root:root /home/deploy/.ssh/authorized_keys
 ```
 
-### 6. Simplify the workflow step (Path A only)
+### 6. Workflow step (already matches Path A, shown for reference)
 
-`deploy-api.yml`'s SSH step currently sends the whole deploy sequence as the
-command - a forced command ignores that and always runs the script above
-instead, so the step only needs to send the image ref:
+`deploy-api.yml`'s SSH step, as committed in this PR, already sends only the
+image ref - a forced command ignores whatever it's sent and always runs the
+script above instead, so there's nothing left to simplify:
 
 ```yaml
 - name: Deploy to production host
@@ -134,28 +165,45 @@ instead, so the step only needs to send the image ref:
 ### 7. Set the secrets
 
 ```bash
-gh secret set DEPLOY_HOST --repo apex-bridge/bugspotter --body "159.195.212.239"
-gh secret set DEPLOY_USER --repo apex-bridge/bugspotter --body "deploy"
-gh secret set SSH_DEPLOY_KEY --repo apex-bridge/bugspotter --body "$(cat ~/.ssh/bugspotter-ci-deploy)"
-gh secret set SSH_KNOWN_HOSTS --repo apex-bridge/bugspotter --body "$(ssh-keyscan -t ed25519 159.195.212.239 2>/dev/null)"
+gh secret set DEPLOY_HOST --repo apex-bridge/bugspotter --env production --body "159.195.212.239"
+gh secret set DEPLOY_USER --repo apex-bridge/bugspotter --env production --body "deploy"
+gh secret set SSH_DEPLOY_KEY --repo apex-bridge/bugspotter --env production --body "$(cat ~/.ssh/bugspotter-ci-deploy)"
+# ssh-keyscan collects whatever key the host presents - it does not verify
+# it. Before trusting the output, compare its fingerprint
+# (ssh-keygen -lf <(ssh-keyscan -t ed25519 159.195.212.239)) against netcup's
+# console or another trusted channel, not just what came back over this
+# connection.
+gh secret set SSH_KNOWN_HOSTS --repo apex-bridge/bugspotter --env production --body "$(ssh-keyscan -t ed25519 159.195.212.239 2>/dev/null)"
 ```
 
 (Windows git-bash: always `--body "$VAR"`, never pipe to stdin - a pipe
 silently corrupts multi-line values.)
 
+`--env production` scopes these to the `production` environment `deploy-api.yml`
+declares on the `deploy-production` job - without it, `gh secret set` creates
+repository-level secrets that any workflow in the repo can read via
+`secrets.<NAME>`, regardless of environment gating.
+
 ---
 
 ## Path B: reuse the existing admin key
 
-No new user, no script, no workflow change - the SSH step already
-committed in PR #323 runs `docker login`/`pull`/`tag`/`compose up` directly
-as whatever user these secrets name.
+No new user, no script - but not a drop-in with the workflow as currently
+committed either. `deploy-api.yml`'s SSH step now sends only the bare image
+ref (Path A's forced-command contract, see step 6 above); a plain,
+unrestricted SSH session doesn't interpret that specially and just fails
+trying to execute it as a command. Using Path B requires reverting that step
+to run the full `docker login`/`pull`/`tag`/`compose up` sequence inline -
+the shape it had before Path A's scoping replaced it - not "works as-is."
 
 ```bash
-gh secret set DEPLOY_HOST --repo apex-bridge/bugspotter --body "159.195.212.239"
-gh secret set DEPLOY_USER --repo apex-bridge/bugspotter --body "root"
-gh secret set SSH_DEPLOY_KEY --repo apex-bridge/bugspotter --body "$(cat ~/.ssh/bugspotter-netcup)"
-gh secret set SSH_KNOWN_HOSTS --repo apex-bridge/bugspotter --body "$(ssh-keyscan -t ed25519 159.195.212.239 2>/dev/null)"
+gh secret set DEPLOY_HOST --repo apex-bridge/bugspotter --env production --body "159.195.212.239"
+gh secret set DEPLOY_USER --repo apex-bridge/bugspotter --env production --body "root"
+gh secret set SSH_DEPLOY_KEY --repo apex-bridge/bugspotter --env production --body "$(cat ~/.ssh/bugspotter-netcup)"
+# ssh-keyscan collects whatever key the host presents - it does not verify
+# it. Compare the fingerprint against netcup's console or another trusted
+# channel before trusting this.
+gh secret set SSH_KNOWN_HOSTS --repo apex-bridge/bugspotter --env production --body "$(ssh-keyscan -t ed25519 159.195.212.239 2>/dev/null)"
 ```
 
 Accept this only with the tradeoff in the table above in mind: any workflow
@@ -172,10 +220,17 @@ production deploy. Reduce first-run risk by dispatching against a commit
 that's already running, so a failure means "the step doesn't work," not
 "bad code just shipped":
 
+Without `--ref`, `gh workflow run` uses the default branch (`main`), which
+can be ahead of what's actually live - pin it to the commit currently
+serving production so a "just verify the step works" run can't
+accidentally deploy newer, unreviewed code:
+
 ```bash
-gh workflow run deploy-api.yml --repo apex-bridge/bugspotter -f environment=production
+gh workflow run deploy-api.yml --repo apex-bridge/bugspotter \
+  --ref <commit-or-tag-currently-serving-production> \
+  -f environment=production
 gh run watch --repo apex-bridge/bugspotter
-curl -s -o /dev/null -w 'HTTP %{http_code}\n' https://app.kz.bugspotter.io/ready
+curl -fsS -o /dev/null -w 'HTTP %{http_code}\n' https://app.kz.bugspotter.io/ready
 ```
 
 **What was actually verified for Path A (2026-08-11):** before wiring the
@@ -192,10 +247,18 @@ externally. Only after that did the four GitHub secrets get set. The
 that's the one remaining step to close the loop end-to-end through Actions
 itself rather than a direct SSH test.
 
-Rollback is the same either way - re-tag and recreate, per `RUNBOOK.md`:
+Rollback needs the **admin key** (`~/.ssh/bugspotter-netcup`, `root@...`),
+not the Path A deploy key - `ci-deploy.sh`'s forced command only accepts a
+validated `sha-<hex>` image ref as `$SSH_ORIGINAL_COMMAND`, so this
+multi-line command would be rejected outright over the restricted key.
+Otherwise the same re-tag-and-recreate as `RUNBOOK.md`, with `set -e` added
+so a failed `docker tag` (no such rollback tag, typo'd sha, etc.) stops the
+command instead of silently falling through to a `compose up` that
+"succeeds" without having restored anything:
 
 ```bash
-ssh -i <key> <user>@159.195.212.239 "
+ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
+  set -e
   docker tag bugspotter-api:pre-<sha> bugspotter-api:latest
   cd /opt/bugspotter && docker compose up -d --no-build api worker
 "

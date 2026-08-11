@@ -12,14 +12,14 @@ reconstructing it from memory.
 
 `/opt/bugspotter/`:
 
-| Path                                                                                | What                                                                                                                                                                                   | Origin                                                                                                              |
-| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `src/`                                                                              | Application source at the last-synced commit                                                                                                                                           | `git archive <ref> \| ssh ... tar -x` from a local clone - **not** a git clone on the host, there is no `.git` here |
-| `docker-compose.yml`, `docker-compose.monitoring.yml`, `docker-compose.storage.yml` | The compose files actually in effect                                                                                                                                                   | Synced from the repo **by hand**, separately from `src/` - see "Compose file drift" below                           |
-| `.env`                                                                              | Runtime config + secrets                                                                                                                                                               | Hand-maintained on the host; never committed                                                                        |
-| `monitoring/`                                                                       | Grafana/Prometheus/Alertmanager config, including hand-provisioned secret files                                                                                                        | Partly synced, partly hand-created - see below                                                                      |
-| `scripts/`                                                                          | `init-minio.sh`, `reset-demo-data.sh`, `seed-demo-data.sh` (synced) plus `ci-deploy.sh`, `poll-deploy.sh` and their state/lock/log files (host-only, `deploy`-owned - not in the repo) | Mixed: repo-synced files and hand-created ops tooling share this directory                                          |
-| `intelligence-src/`                                                                 | Separate source tree for the `bugspotter-intelligence` service                                                                                                                         | Same pattern as `src/`, different repo                                                                              |
+| Path                                                                                | What                                                                                                                                                                                                                                                                                                             | Origin                                                                                                              |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `src/`                                                                              | Application source at the last-synced commit                                                                                                                                                                                                                                                                     | `git archive <ref> \| ssh ... tar -x` from a local clone - **not** a git clone on the host, there is no `.git` here |
+| `docker-compose.yml`, `docker-compose.monitoring.yml`, `docker-compose.storage.yml` | The compose files actually in effect                                                                                                                                                                                                                                                                             | Synced from the repo **by hand**, separately from `src/` - see "Compose file drift" below                           |
+| `.env`                                                                              | Runtime config + secrets                                                                                                                                                                                                                                                                                         | Hand-maintained on the host; never committed                                                                        |
+| `monitoring/`                                                                       | Grafana/Prometheus/Alertmanager config, including hand-provisioned secret files                                                                                                                                                                                                                                  | Partly synced, partly hand-created - see below                                                                      |
+| `scripts/`                                                                          | `init-minio.sh`, `reset-demo-data.sh`, `seed-demo-data.sh` (synced) plus `poll-deploy.sh` and its state/lock/log files (`deploy`-owned), and `ci-deploy.sh` (`root:root` - directory has the sticky bit so `deploy`'s own write access can't be used to replace it) - none of the host-only ones are in the repo | Mixed: repo-synced files and hand-created ops tooling share this directory                                          |
+| `intelligence-src/`                                                                 | Separate source tree for the `bugspotter-intelligence` service                                                                                                                                                                                                                                                   | Same pattern as `src/`, different repo                                                                              |
 
 `docker-compose.yandex.yml` no longer applies - it carried managed-Postgres
 TLS/pooler plumbing for the decommissioned Yandex host and has no netcup
@@ -48,11 +48,18 @@ one image (`bugspotter-api:latest`); rebuilding it without recreating both
 leaves them on different code.
 
 ```bash
-# 1. From a local clone at the target commit, sync source to the host.
-#    git archive only includes tracked files - untracked cruft never leaks in.
-#    This does NOT delete files removed from the repo since the last sync.
-git archive main | ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
-  "tar -x -C /opt/bugspotter/src"
+# 1. From a local clone at the target commit, sync source to the host into a
+#    clean temp directory, then swap it in. <ref> must be the actual target
+#    commit/tag - not a branch name that can move under you between "sync"
+#    and "build". Archiving into a fresh directory and swapping, rather than
+#    extracting straight into the existing src/, also removes files deleted
+#    from the repo since the last sync (a plain tar -x into src/ would not).
+ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
+  "rm -rf /opt/bugspotter/src.new && mkdir -p /opt/bugspotter/src.new"
+git archive <ref> | ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
+  "tar -x -C /opt/bugspotter/src.new"
+ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
+  "rm -rf /opt/bugspotter/src && mv /opt/bugspotter/src.new /opt/bugspotter/src"
 
 # 2. Build. The image is built directly with `docker build`, NOT `docker
 #    compose build` - the live docker-compose.yml's `build.context: .` can't
@@ -68,6 +75,9 @@ ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
 # 3. Tag the OLD image for rollback before overwriting :latest. This
 #    pre-<ref>/build-<ref> convention already existed on the host (pre-290,
 #    build-290, pre-292, build-292) before this runbook documented it.
+#    Skip this on a retry of the same deploy: if :latest is already
+#    build-<short-ref>, re-running it overwrites the real rollback target
+#    with the thing you'd be rolling back from.
 ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
   "docker tag bugspotter-api:latest bugspotter-api:pre-<short-ref>"
 
@@ -95,6 +105,7 @@ ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
 
 ```bash
 ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
+  set -e
   docker tag bugspotter-api:pre-<short-ref> bugspotter-api:latest
   cd /opt/bugspotter && docker compose up -d --no-build api worker
 "
@@ -168,10 +179,41 @@ old_digest=$(cat "$STATE_FILE" 2>/dev/null || true)
 echo "$(date -Iseconds) deploying $new_digest (was: ${old_digest:-none})" >> "$LOG_FILE"
 
 short=$(printf '%s' "$new_digest" | cut -c1-12)
-docker tag bugspotter-api:latest "bugspotter-api:pre-$short" 2>/dev/null || true
+new_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+old_id=$(docker image inspect --format '{{.Id}}' bugspotter-api:latest 2>/dev/null || true)
+# Only back up an existing :latest, and only when it isn't already this same
+# content - a retry that lands here with :latest already == $IMAGE would
+# otherwise clobber the real pre-<sha> rollback target with itself. No
+# `|| true` on the tag itself: a genuine failure here should abort the
+# deploy, not be silently swallowed the way "no previous image yet" is.
+if [ -n "$old_id" ] && [ "$new_id" != "$old_id" ]; then
+  docker tag bugspotter-api:latest "bugspotter-api:pre-$short"
+fi
 docker tag "$IMAGE" bugspotter-api:latest
 cd /opt/bugspotter
 docker compose up -d --no-build api worker
+
+# `docker compose up -d` returns once containers are started, not once
+# they're healthy - nothing gates on worker's own healthcheck the way worker
+# gates on api's, so a clean `up -d` exit does not mean the rollout is good.
+# Poll both before recording this digest as deployed; on timeout, leave
+# STATE_FILE untouched so the next poll retries instead of treating a broken
+# rollout as done.
+ok=0
+for _ in $(seq 1 15); do
+  api_health=$(docker inspect --format '{{.State.Health.Status}}' bugspotter-api 2>/dev/null || echo unknown)
+  worker_health=$(docker inspect --format '{{.State.Health.Status}}' bugspotter-worker 2>/dev/null || echo unknown)
+  if [ "$api_health" = healthy ] && [ "$worker_health" = healthy ]; then
+    ok=1
+    break
+  fi
+  sleep 10
+done
+
+if [ "$ok" -ne 1 ]; then
+  echo "$(date -Iseconds) deployed $new_digest but api/worker did not report healthy (api=$api_health worker=$worker_health), not recording as deployed" >> "$LOG_FILE"
+  exit 1
+fi
 
 printf '%s' "$new_digest" > "$STATE_FILE"
 echo "$(date -Iseconds) deployed $new_digest" >> "$LOG_FILE"
@@ -179,7 +221,7 @@ echo "$(date -Iseconds) deployed $new_digest" >> "$LOG_FILE"
 
 Crontab (installed for the `deploy` user, not root):
 
-```
+```text
 */3 * * * * /opt/bugspotter/scripts/poll-deploy.sh
 ```
 
@@ -189,7 +231,9 @@ script is ever touched again:**
 - `deploy` cannot create files directly in `/opt/bugspotter/` - that
   directory is `root:root` mode `755`. State/lock/log files live in
   `/opt/bugspotter/scripts/` instead, which `deploy` owns (same directory
-  `ci-deploy.sh` already lives in).
+  `ci-deploy.sh` lives in, though that specific file is `root:root` with the
+  directory's sticky bit set - see `DEPLOY-SECRETS-ROTATION.md` - so `deploy`
+  can create its own files there but can't touch that one).
 - The digest **must** come from `docker pull`'s own `Digest: sha256:...`
   output line, not from `docker inspect --format='{{index .RepoDigests 0}}'`.
   `RepoDigests` is an unordered list of every repo@digest pairing a locally
@@ -204,12 +248,18 @@ actually rebuild the backend move it - `docker/metadata-action`'s
 `type=ref,event=branch` only retags `:main` when a real build runs, same
 gating as everything else in `deploy-api.yml`.
 
-**Interaction with path (2):** unaffected. If netcup's firewall question ever
-gets resolved, both paths can run side by side - the SSH path deploys
-on-demand and immediately; the poller deploys automatically within its
-interval. They converge on the same state (`bugspotter-api:latest`) via the
-same underlying tag-and-recreate pattern, so there's no conflict between
-them, only redundancy.
+**Interaction with path (2):** serialized, not conflict-free by accident -
+both paths retag the same `bugspotter-api:latest` and recreate the same
+containers, so running them concurrently could interleave. `ci-deploy.sh` now
+takes the same `.poll-deploy.lock` this script holds (`flock -n`, see
+`DEPLOY-SECRETS-ROTATION.md`); if a poll and an on-demand SSH deploy land in
+the same window, whichever loses the lock exits with a "try again" rejection
+instead of racing - just retry it. What's still separate on purpose: `ci-deploy.sh`
+does not write `.last-deployed-digest`, so a deploy through path (2) doesn't
+change what this poller considers current - the next poll still compares
+against `:main`'s digest independently, which is correct given the two paths
+track different image references (`:main` vs a specific `sha-<hex>`), not a
+gap.
 
 ## Full stack bring-up / restore
 
