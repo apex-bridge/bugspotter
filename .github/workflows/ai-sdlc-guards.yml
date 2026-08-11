@@ -8,7 +8,7 @@ name: AI-SDLC Guards
 #  - the spec ratification PR (Gate 1) did not re-run ownership on the version a
 #    human edits and merges;
 #  - PR #283, the delivery for issue #269, was written by hand and therefore
-#    passed through none of them, as did 13b3f6b and c0af5ec.
+#    passed through none of them, as did 13bf6b3 and c0af5ec.
 #
 # The guardrails were attached to the machine path; the delivery went down the
 # human path. This puts the spec-side guards on the PR, where the change is.
@@ -41,6 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Collect spec files changed by this PR
         id: specs
@@ -49,13 +50,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Added or modified only. A deleted spec has nothing to verify, and
-          # feeding a deleted path to the guards would fail on the read rather
-          # than on the rule, which is a misleading way to go red.
-          files=$(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA" -- 'docs/specs/*.md' || true)
+          # Added, modified, or renamed only. A deleted spec has nothing to
+          # verify, and feeding a deleted path to the guards would fail on the
+          # read rather than on the rule, which is a misleading way to go red.
+          # R is included because a rename that also edits content (e.g. a
+          # spec renumbered alongside a wording fix) would otherwise be
+          # invisible to AM and skip both guards silently.
+          files=$(git diff --name-only --diff-filter=AMR "$BASE_SHA" "$HEAD_SHA" -- 'docs/specs/*.md')
           if [ -z "$files" ]; then
             echo "count=0" >> "$GITHUB_OUTPUT"
-            echo "No added or modified spec files; nothing to check."
+            echo "No added, modified, or renamed spec files; nothing to check."
             exit 0
           fi
           echo "count=$(printf '%s\n' "$files" | wc -l)" >> "$GITHUB_OUTPUT"
@@ -84,12 +88,12 @@ jobs:
             echo "::endgroup::"
           done <<< "$SPECS"
           [ "$failed" -eq 0 ] || {
-            echo "::error::Spec path ownership check failed. A spec declares files owned by an ADR it does not cite."
+            echo "::error::Spec path ownership check failed. A spec declares a new path under a component name that docs/adr/README.md attributes to a different repo. See the group log above for the specific path(s)."
             exit 1
           }
 
       - name: Check spec scope (advisory)
-        if: steps.specs.outputs.count != '0'
+        if: ${{ !cancelled() && steps.specs.outputs.count != '0' }}
         env:
           SPECS: ${{ steps.specs.outputs.files }}
         run: |
@@ -100,6 +104,8 @@ jobs:
           while IFS= read -r spec; do
             [ -n "$spec" ] || continue
             echo "::group::check-spec-scope $spec"
-            SPEC_FILE="$spec" node scripts/ai-sdlc/check-spec-scope.mjs || true
+            if ! SPEC_FILE="$spec" node scripts/ai-sdlc/check-spec-scope.mjs; then
+              echo "::warning::check-spec-scope crashed for $spec instead of reporting advisory output - this is a launch/script failure, not a scope finding"
+            fi
             echo "::endgroup::"
           done <<< "$SPECS"
