@@ -281,10 +281,21 @@ jobs:
       # not silently declared done.
       - name: Deploy to production host
         env:
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          # docker/metadata-action's `type=sha` uses git's abbreviated (7-char)
+          # sha by default - `github.sha` is the full 40-char sha, so
+          # reconstructing the tag from it produces a ref that was never
+          # pushed. Extract the real tag from the same output the build step
+          # actually used, instead of a second, divergent computation of it.
+          ALL_TAGS: ${{ needs.build.outputs.image_tag }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
+          IMAGE_REF=$(printf '%s\n' "$ALL_TAGS" | grep -- ':sha-')
+          if [ -z "$IMAGE_REF" ]; then
+            echo "::error::No sha-tagged image found in: $ALL_TAGS" >&2
+            exit 1
+          fi
+
           install -m 600 /dev/null "$RUNNER_TEMP/deploy_key"
           printf '%s\n' "${{ secrets.SSH_DEPLOY_KEY }}" > "$RUNNER_TEMP/deploy_key"
           install -m 600 /dev/null "$RUNNER_TEMP/known_hosts"
