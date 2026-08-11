@@ -445,6 +445,11 @@ Rules:
 - This trailer is the attribution key for the code-metrics layer
   (agent-vs-human change-failure rate). It cannot be backfilled onto old
   history, so start using it now.
+- `Assisted-by` is the **only** attribution trailer this repo reads - nothing
+  here consumes `Co-Authored-By:`, which appears above purely as an example of
+  trailer syntax. `.claude/settings.json` therefore clears Claude Code's own
+  commit attribution (`attribution.commit`), so agent commits carry one
+  format-checked line instead of two that can drift apart.
 
 ## ❓ Questions?
 
