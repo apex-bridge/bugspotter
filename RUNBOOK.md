@@ -12,14 +12,14 @@ reconstructing it from memory.
 
 `/opt/bugspotter/`:
 
-| Path                                                                                | What                                                                            | Origin                                                                                                              |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `src/`                                                                              | Application source at the last-synced commit                                    | `git archive <ref> \| ssh ... tar -x` from a local clone - **not** a git clone on the host, there is no `.git` here |
-| `docker-compose.yml`, `docker-compose.monitoring.yml`, `docker-compose.storage.yml` | The compose files actually in effect                                            | Synced from the repo **by hand**, separately from `src/` - see "Compose file drift" below                           |
-| `.env`                                                                              | Runtime config + secrets                                                        | Hand-maintained on the host; never committed                                                                        |
-| `monitoring/`                                                                       | Grafana/Prometheus/Alertmanager config, including hand-provisioned secret files | Partly synced, partly hand-created - see below                                                                      |
-| `scripts/`                                                                          | `init-minio.sh`, `reset-demo-data.sh`, `seed-demo-data.sh`                      | Synced from repo                                                                                                    |
-| `intelligence-src/`                                                                 | Separate source tree for the `bugspotter-intelligence` service                  | Same pattern as `src/`, different repo                                                                              |
+| Path                                                                                | What                                                                                                                                                                                   | Origin                                                                                                              |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `src/`                                                                              | Application source at the last-synced commit                                                                                                                                           | `git archive <ref> \| ssh ... tar -x` from a local clone - **not** a git clone on the host, there is no `.git` here |
+| `docker-compose.yml`, `docker-compose.monitoring.yml`, `docker-compose.storage.yml` | The compose files actually in effect                                                                                                                                                   | Synced from the repo **by hand**, separately from `src/` - see "Compose file drift" below                           |
+| `.env`                                                                              | Runtime config + secrets                                                                                                                                                               | Hand-maintained on the host; never committed                                                                        |
+| `monitoring/`                                                                       | Grafana/Prometheus/Alertmanager config, including hand-provisioned secret files                                                                                                        | Partly synced, partly hand-created - see below                                                                      |
+| `scripts/`                                                                          | `init-minio.sh`, `reset-demo-data.sh`, `seed-demo-data.sh` (synced) plus `ci-deploy.sh`, `poll-deploy.sh` and their state/lock/log files (host-only, `deploy`-owned - not in the repo) | Mixed: repo-synced files and hand-created ops tooling share this directory                                          |
+| `intelligence-src/`                                                                 | Separate source tree for the `bugspotter-intelligence` service                                                                                                                         | Same pattern as `src/`, different repo                                                                              |
 
 `docker-compose.yandex.yml` no longer applies - it carried managed-Postgres
 TLS/pooler plumbing for the decommissioned Yandex host and has no netcup
@@ -110,6 +110,106 @@ actually changed:
 | `apps/admin/**`                                                                                                      | `admin` (separate image, separate Dockerfile - **not covered by this runbook**, no automated path exists for it either)                       |
 | `docker-compose*.yml` only, no code change                                                                           | `docker compose up -d` for the affected service, no rebuild                                                                                   |
 | `.env` only                                                                                                          | Depends on the variable - compose bakes interpolated env at container-**create** time, so most changes need `up -d` (recreate), not `restart` |
+
+## Three deploy paths now exist - which one actually runs
+
+The manual procedure above is one of three. As of 2026-08-11/12, in order of
+how automatic each is:
+
+1. **Manual** (above) - a human runs it by hand. Always works, always current.
+2. **SSH forced-command, CI-triggered** - `deploy-api.yml`'s `deploy-production`
+   job SSHes in as a dedicated `deploy` account restricted to one script
+   (`ci-deploy.sh`); see `DEPLOY-SECRETS-ROTATION.md`. **Currently non-functional**:
+   GitHub-hosted runner IPs time out reaching `159.195.212.239:22`, blocked
+   somewhere upstream of the host's own firewall (`ufw` allows it; the block
+   isn't visible from inside the VM). `workflow_dispatch`-only, never fires on
+   push, so this is safe to leave broken - it just means it isn't doing
+   anything, not that it's doing the wrong thing.
+3. **Poll-based, host-side** (`poll-deploy.sh`, this section) - the fix for
+   (2)'s blocker: instead of GitHub reaching in, the host reaches out. No
+   inbound network dependency at all.
+
+### Poll-based auto-deploy
+
+`ghcr.io/apex-bridge/bugspotter/api` is a **public** package - confirmed
+2026-08-11 via `docker manifest inspect` with zero credentials. Combined with
+the host already having working outbound internet (proven the same day: it
+pulled from GHCR fine during manual testing), there is no reason to fight the
+inbound-firewall problem at all for routine deploys. The host can just check
+the registry itself.
+
+`/opt/bugspotter/scripts/poll-deploy.sh`, owned by `deploy`, run every 3
+minutes via that user's crontab:
+
+```sh
+#!/bin/sh
+set -eu
+
+IMAGE="ghcr.io/apex-bridge/bugspotter/api:main"
+STATE_FILE="/opt/bugspotter/scripts/.last-deployed-digest"
+LOCK_FILE="/opt/bugspotter/scripts/.poll-deploy.lock"
+LOG_FILE="/opt/bugspotter/scripts/.poll-deploy.log"
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+pull_output=$(docker pull "$IMAGE")
+new_digest=$(printf '%s\n' "$pull_output" | awk '/^Digest: sha256:/{print $2}')
+
+if [ -z "$new_digest" ]; then
+  echo "$(date -Iseconds) could not parse a digest from docker pull output, skipping" >> "$LOG_FILE"
+  exit 1
+fi
+
+old_digest=$(cat "$STATE_FILE" 2>/dev/null || true)
+
+[ "$new_digest" = "$old_digest" ] && exit 0
+
+echo "$(date -Iseconds) deploying $new_digest (was: ${old_digest:-none})" >> "$LOG_FILE"
+
+short=$(printf '%s' "$new_digest" | cut -c1-12)
+docker tag bugspotter-api:latest "bugspotter-api:pre-$short" 2>/dev/null || true
+docker tag "$IMAGE" bugspotter-api:latest
+cd /opt/bugspotter
+docker compose up -d --no-build api worker
+
+printf '%s' "$new_digest" > "$STATE_FILE"
+echo "$(date -Iseconds) deployed $new_digest" >> "$LOG_FILE"
+```
+
+Crontab (installed for the `deploy` user, not root):
+
+```
+*/3 * * * * /opt/bugspotter/scripts/poll-deploy.sh
+```
+
+**Two bugs found and fixed while building this, both worth knowing if this
+script is ever touched again:**
+
+- `deploy` cannot create files directly in `/opt/bugspotter/` - that
+  directory is `root:root` mode `755`. State/lock/log files live in
+  `/opt/bugspotter/scripts/` instead, which `deploy` owns (same directory
+  `ci-deploy.sh` already lives in).
+- The digest **must** come from `docker pull`'s own `Digest: sha256:...`
+  output line, not from `docker inspect --format='{{index .RepoDigests 0}}'`.
+  `RepoDigests` is an unordered list of every repo@digest pairing a locally
+  cached image is known under - if the same image content is ever reachable
+  through more than one tag, index `0` is not guaranteed to be the one
+  belonging to `$IMAGE`. Caught this the hard way: a second run that should
+  have been a silent no-op instead redeployed, because the wrong list entry
+  won the race.
+
+Deploying `:main` specifically (not `:latest`) means only pushes that
+actually rebuild the backend move it - `docker/metadata-action`'s
+`type=ref,event=branch` only retags `:main` when a real build runs, same
+gating as everything else in `deploy-api.yml`.
+
+**Interaction with path (2):** unaffected. If netcup's firewall question ever
+gets resolved, both paths can run side by side - the SSH path deploys
+on-demand and immediately; the poller deploys automatically within its
+interval. They converge on the same state (`bugspotter-api:latest`) via the
+same underlying tag-and-recreate pattern, so there's no conflict between
+them, only redundancy.
 
 ## Full stack bring-up / restore
 
