@@ -262,17 +262,18 @@ jobs:
           echo "Image: ${{ needs.build.outputs.image_tag }}"
           echo "Digest: ${{ needs.build.outputs.image_digest }}"
 
-      # SSH to the single production host and recreate `api` + `worker` from
-      # the image this run just pushed - pinned to the run's sha tag, never
+      # SSH to the single production host as a dedicated `deploy` account
+      # restricted by a forced SSH command (see DEPLOY-SECRETS-ROTATION.md) -
+      # the key can run exactly one operation, not a shell. All this step
+      # does is send the image ref as the "command"; the host-side script
+      # validates it, pulls, retags :latest (keeping the previous tag for
+      # instant rollback), and recreates `api` + `worker` - both, since they
+      # share one image and rebuilding it without recreating both leaves them
+      # on different code (found the hard way during the manual deploy this
+      # replaces, see RUNBOOK.md). Pinned to the run's sha tag, never
       # `latest`, so "deployed" and "the health check below passed" refer to
-      # the same build. Mirrors the manual procedure in RUNBOOK.md: pull,
-      # retag :latest (keeping the previous tag for instant rollback), then
-      # `compose up -d --no-build` both services that share the image.
-      #
-      # `api` and `worker` MUST be recreated together - they share one image,
-      # and rebuilding it without recreating both leaves them on different
-      # code (found the hard way during the first manual deploy this
-      # replaces, see RUNBOOK.md).
+      # the same build. GHCR packages here are public, so no registry login
+      # is needed to pull.
       #
       # Known gap vs #318's stated acceptance bar: this verifies the deployed
       # container answers healthy, not that its image digest equals the one
@@ -291,15 +292,7 @@ jobs:
 
           echo "Deploying $IMAGE_REF to $DEPLOY_HOST"
           ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
-            "$DEPLOY_USER@$DEPLOY_HOST" "
-              set -euo pipefail
-              echo '${{ secrets.GITHUB_TOKEN }}' | docker login ${{ env.REGISTRY }} -u '${{ github.actor }}' --password-stdin
-              docker pull '$IMAGE_REF'
-              docker tag bugspotter-api:latest bugspotter-api:pre-${{ github.sha }} || true
-              docker tag '$IMAGE_REF' bugspotter-api:latest
-              cd /opt/bugspotter
-              docker compose up -d --no-build api worker
-            "
+            "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF"
 
       - name: Verify deployment health
         if: vars.PRODUCTION_API_URL != ''
