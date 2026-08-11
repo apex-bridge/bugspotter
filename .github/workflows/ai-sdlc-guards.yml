@@ -1,0 +1,116 @@
+name: AI-SDLC Guards
+
+# The scope and ownership guards used to run ONLY inside spec-agent.yml and
+# impl-agent.yml, which meant they guarded the machine path and not the change.
+# ci.yml runs `node --test scripts/ai-sdlc/*.test.mjs` - it tests the guards, it
+# never invokes them. Consequences, all real:
+#
+#  - the spec ratification PR (Gate 1) did not re-run ownership on the version a
+#    human edits and merges;
+#  - PR #283, the delivery for issue #269, was written by hand and therefore
+#    passed through none of them, as did 13bf6b3 and c0af5ec.
+#
+# The guardrails were attached to the machine path; the delivery went down the
+# human path. This puts the spec-side guards on the PR, where the change is.
+#
+# Scope, stated honestly: spec-side only. The impl-side equivalent needs a
+# PR-diff-level comparison that check-impl-scope.mjs explicitly does not attempt
+# (see its own header) plus spec resolution from the linked issue. That is new
+# logic rather than a relocation, and it is filed separately.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'docs/specs/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-guards-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  spec-guards:
+    name: Spec guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR merge result
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Collect spec files changed by this PR
+        id: specs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Added, modified, or renamed only. A deleted spec has nothing to
+          # verify, and feeding a deleted path to the guards would fail on the
+          # read rather than on the rule, which is a misleading way to go red.
+          # R is included because a rename that also edits content (e.g. a
+          # spec renumbered alongside a wording fix) would otherwise be
+          # invisible to AM and skip both guards silently.
+          files=$(git diff --name-only --diff-filter=AMR "$BASE_SHA" "$HEAD_SHA" -- 'docs/specs/*.md')
+          if [ -z "$files" ]; then
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            echo "No added, modified, or renamed spec files; nothing to check."
+            exit 0
+          fi
+          echo "count=$(printf '%s\n' "$files" | wc -l)" >> "$GITHUB_OUTPUT"
+          # Multi-line value needs a heredoc delimiter, or the runner rejects
+          # the whole step.
+          {
+            echo 'files<<SPECS_EOF'
+            printf '%s\n' "$files"
+            echo 'SPECS_EOF'
+          } >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$files" | sed 's/^/  /'
+
+      - name: Verify spec path ownership (deterministic, hard)
+        if: steps.specs.outputs.count != '0'
+        env:
+          SPECS: ${{ steps.specs.outputs.files }}
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r spec; do
+            [ -n "$spec" ] || continue
+            echo "::group::verify-spec-ownership $spec"
+            # Run every spec before failing, so one PR touching two specs
+            # reports both rather than only the first.
+            SPEC_FILE="$spec" node scripts/ai-sdlc/verify-spec-ownership.mjs || failed=1
+            echo "::endgroup::"
+          done <<< "$SPECS"
+          [ "$failed" -eq 0 ] || {
+            echo "::error::Spec path ownership check failed. A spec declares a new path under a component name that docs/adr/README.md attributes to a different repo. See the group log above for the specific path(s)."
+            exit 1
+          }
+
+      - name: Check spec scope (advisory)
+        if: ${{ !cancelled() && steps.specs.outputs.count != '0' }}
+        env:
+          SPECS: ${{ steps.specs.outputs.files }}
+        run: |
+          set -euo pipefail
+          # Advisory by design - the cap is uncalibrated. It runs here rather
+          # than in the agent job specifically so its output lands on the PR the
+          # reviewer is reading, instead of in a step summary nobody opens.
+          while IFS= read -r spec; do
+            [ -n "$spec" ] || continue
+            echo "::group::check-spec-scope $spec"
+            if ! SPEC_FILE="$spec" node scripts/ai-sdlc/check-spec-scope.mjs; then
+              echo "::warning::check-spec-scope crashed for $spec instead of reporting advisory output - this is a launch/script failure, not a scope finding"
+            fi
+            echo "::endgroup::"
+          done <<< "$SPECS"
