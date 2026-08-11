@@ -43,6 +43,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Collect spec files changed by this PR
         id: specs
         env:
