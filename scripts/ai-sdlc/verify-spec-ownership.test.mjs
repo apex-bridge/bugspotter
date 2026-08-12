@@ -82,6 +82,46 @@ describe('extractDeclaredPaths', () => {
     const spec = '**Files touched:**\n\n- `packages/a/one.ts`';
     assert.deepEqual(extractDeclaredPaths(spec), ['packages/a/one.ts']);
   });
+
+  test('ignores backtick terms in a trailing description and in prose after the list', () => {
+    // Real shape from docs/specs/0297-*.md: each bullet's path is followed
+    // by " — <prose with its own `backtick` terms>", and the whole list is
+    // followed by a scope-explanation paragraph before the next `**` field
+    // - both used to leak into the result (19 "paths" instead of 5), because
+    // the old regex only knew to stop at the next heading, not at the end
+    // of the list itself.
+    const spec = [
+      '**Files touched:**',
+      '',
+      '- `packages/a/one.ts`',
+      '- `packages/a/two.ts` — `IJobHandle` has no `moveToDelayed` member today; add one.',
+      '',
+      'The scope grew beyond the original file: `job` is typed `IJobHandle<Data, Result>`,',
+      'not the raw `Job`, and it exposes only `id`, `name`, `log()`.',
+      '',
+      '**Blocking prerequisites:** none',
+    ].join('\n');
+    assert.deepEqual(extractDeclaredPaths(spec), ['packages/a/one.ts', 'packages/a/two.ts']);
+  });
+
+  test('stops the list at prose that follows a bullet with no blank line separator', () => {
+    // The previous test's prose paragraph is preceded by a blank line (the
+    // real docs/specs/0297 shape), so it's the "blank line after list"
+    // branch that ends the scan there, not the "prose after list" branch.
+    // This fixture drops that blank line so a non-bulleted, non-blank line
+    // immediately follows the bullets, exercising that second branch
+    // directly.
+    const spec = [
+      '**Files touched:**',
+      '',
+      '- `packages/a/one.ts`',
+      '- `packages/a/two.ts` — `IJobHandle` has no `moveToDelayed` member today; add one.',
+      'The scope grew beyond the original file: `job` is typed `IJobHandle<Data, Result>`,',
+      'not the raw `Job`, and it exposes only `id`, `name`, `log()`.',
+      '**Blocking prerequisites:** none',
+    ].join('\n');
+    assert.deepEqual(extractDeclaredPaths(spec), ['packages/a/one.ts', 'packages/a/two.ts']);
+  });
 });
 
 describe('extractOutOfScopeText', () => {
