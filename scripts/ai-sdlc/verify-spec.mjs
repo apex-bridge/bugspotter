@@ -80,6 +80,7 @@ ${
     : ''
 }
 Check for:
+0. A method called on a type imported from another package (\`import type { X } from '@bugspotter/other-pkg'\`) where that package's defining file is NOT among the source files above. You cannot confirm or deny the method exists without that file - flag this explicitly as "unverified: <package>'s defining file for <type> was not available to check" rather than assuming it's correct because nothing else looks wrong. This is not the same failure as item 1 below: item 1 is a check you can actually perform; this is a check you structurally cannot perform yet, and saying so is the correct output, not a cop-out. The same applies when that file IS listed above but is marked "[… truncated at 1000 lines]" and the method does not appear before the cutoff - the untruncated file may still define it beyond that point, so report it as unverified rather than as missing under item 1.
 1. Method or function names called in the spec that don't exist in the source files
 2. File paths in the spec that don't match actual paths
 3. TypeScript type errors — e.g. accessing a property typed as non-optional with optional chaining, or vice versa
