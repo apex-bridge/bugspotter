@@ -210,39 +210,18 @@ jobs:
           echo "Image: ${{ needs.build.outputs.image_tag }}"
           echo "Digest: ${{ needs.build.outputs.image_digest }}"
 
-      # ⚠️ REQUIRED: Add your actual deployment steps here
-      # The workflow builds and pushes Docker images, but YOU must deploy them.
-      # Without deployment steps, the health check below verifies the OLD deployment!
-      #
-      # Example deployment steps:
-      #
-      # - Railway:
-      #   - name: Deploy to Railway
-      #     run: |
-      #       railway service update bugspotter-api \
-      #         --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-      #     env:
-      #       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      #
-      # - Kubernetes:
-      #   - name: Deploy to Kubernetes
-      #     run: |
-      #       kubectl set image deployment/api \
-      #         api=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
-      #         --namespace=staging
-      #
-      # - Docker Swarm:
-      #   - name: Deploy to Swarm
-      #     run: |
-      #       docker service update \
-      #         --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} \
-      #         bugspotter_api
-
-      - name: ⚠️ Deployment Step Missing
+      # There is no staging environment. Production (see the job below) is a
+      # single Docker Compose host - see RUNBOOK.md. A second host for staging
+      # has never been provisioned; this job exists (kept for the
+      # workflow_dispatch environment choice, and to gate deploy-production
+      # via `needs:`) but has nothing to deploy to. Wiring a fake deploy step
+      # here would either target the SAME production host under a misleading
+      # label, or silently no-op - the exact "fired, passed, protected
+      # nothing" shape #318 exists to fix, not repeat.
+      - name: ℹ️ No staging environment
         run: |
-          echo "::warning::No deployment step configured - health check will verify existing deployment"
-          echo "::warning::Add deployment steps above this step to deploy the new Docker image"
-          echo "::warning::See comments above for platform-specific examples"
+          echo "::notice::There is no staging host - production is a single Docker Compose VM (see RUNBOOK.md)."
+          echo "::notice::This job intentionally deploys nothing. See deploy-production for the real deploy step."
 
       - name: Verify deployment health
         if: vars.STAGING_API_URL != ''
@@ -283,15 +262,58 @@ jobs:
           echo "Image: ${{ needs.build.outputs.image_tag }}"
           echo "Digest: ${{ needs.build.outputs.image_digest }}"
 
-      # ⚠️ REQUIRED: Add your actual deployment steps here
-      # Should mirror staging deployment with production credentials/namespace.
-      # See staging deployment section above for platform-specific examples.
-
-      - name: ⚠️ Deployment Step Missing
+      # SSH to the single production host as a dedicated `deploy` account
+      # restricted by a forced SSH command (see DEPLOY-SECRETS-ROTATION.md) -
+      # the key can run exactly one operation, not a shell. All this step
+      # does is send the image ref as the "command"; the host-side script
+      # validates it, pulls, retags :latest (keeping the previous tag for
+      # instant rollback), and recreates `api` + `worker` - both, since they
+      # share one image and rebuilding it without recreating both leaves them
+      # on different code (found the hard way during the manual deploy this
+      # replaces, see RUNBOOK.md). Pinned to the run's sha tag, never
+      # `latest`, so "deployed" and "the health check below passed" refer to
+      # the same build. GHCR packages here are public, so no registry login
+      # is needed to pull.
+      #
+      # Known gap vs #318's stated acceptance bar: this verifies the deployed
+      # container answers healthy, not that its image digest equals the one
+      # this run pushed - /ready exposes no build identifier yet. Tracked,
+      # not silently declared done.
+      - name: Deploy to production host
+        env:
+          # docker/metadata-action's `type=sha` uses git's abbreviated (7-char)
+          # sha by default - `github.sha` is the full 40-char sha, so
+          # reconstructing the tag from it produces a ref that was never
+          # pushed. Extract the real tag from the same output the build step
+          # actually used, instead of a second, divergent computation of it.
+          ALL_TAGS: ${{ needs.build.outputs.image_tag }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          # Passed through env, not interpolated into the run: script text
+          # below, so a secret value containing shell metacharacters can't
+          # become shell syntax at execution time - the same injection shape
+          # GitHub's hardening docs warn against for untrusted `run:` input.
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
-          echo "::warning::No deployment step configured - health check will verify existing deployment"
-          echo "::warning::Add deployment steps above this step to deploy the new Docker image"
-          echo "::warning::Use production credentials/namespace (not staging)"
+          # `|| true` matters: this shell runs with -e (GitHub Actions'
+          # default), so a no-match grep inside the assignment would abort
+          # the step right here and skip the message below.
+          IMAGE_REF=$(printf '%s\n' "$ALL_TAGS" | grep -- ':sha-' || true)
+          if [ -z "$IMAGE_REF" ]; then
+            echo "::error::No sha-tagged image found in: $ALL_TAGS" >&2
+            exit 1
+          fi
+
+          install -m 600 /dev/null "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$SSH_DEPLOY_KEY" > "$RUNNER_TEMP/deploy_key"
+          install -m 600 /dev/null "$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+
+          echo "Deploying $IMAGE_REF to $DEPLOY_HOST"
+          ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF"
 
       - name: Verify deployment health
         if: vars.PRODUCTION_API_URL != ''
