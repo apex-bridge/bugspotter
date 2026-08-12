@@ -61,12 +61,93 @@ export function parseAdrOwnership(adrIndexText) {
  * the same line, so this must capture the whole block up to the next
  * "**"-prefixed field or "##" heading, not just the first line.
  */
-export function extractDeclaredPaths(specText) {
-  const filesTouchedMatch = specText.match(/\*\*Files touched:\*\*\s*([\s\S]*?)(?=\n\*\*|\n##|$)/);
-  if (!filesTouchedMatch) {
+// First backtick-quoted span in `text`, or null if there isn't a complete
+// pair. Pure string scanning, no regex - a lookahead-based section boundary
+// is exactly what let #297's real spec leak 14 extra "paths" (IJobHandle,
+// moveToDelayed, id, name, log()...) out of a prose paragraph sitting
+// between the bullet list and the next `**` field, because the boundary
+// pattern only knew to stop at the next heading, not at the end of the list.
+function firstBacktickSpan(text) {
+  const start = text.indexOf('`');
+  if (start === -1) {
     return null;
   }
-  return [...filesTouchedMatch[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  const end = text.indexOf('`', start + 1);
+  if (end === -1) {
+    return null;
+  }
+  return text.slice(start + 1, end);
+}
+
+// Every backtick-quoted span in `text`, left to right.
+function allBacktickSpans(text) {
+  const spans = [];
+  let i = 0;
+  for (;;) {
+    const start = text.indexOf('`', i);
+    if (start === -1) {
+      break;
+    }
+    const end = text.indexOf('`', start + 1);
+    if (end === -1) {
+      break;
+    }
+    spans.push(text.slice(start + 1, end));
+    i = end + 1;
+  }
+  return spans;
+}
+
+export function extractDeclaredPaths(specText) {
+  const marker = '**Files touched:**';
+  const markerIdx = specText.indexOf(marker);
+  if (markerIdx === -1) {
+    return null;
+  }
+
+  const lines = specText.slice(markerIdx + marker.length).split('\n');
+  const paths = [];
+  let sawBullet = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    if (i === 0) {
+      // The inline form puts every path on the marker's own line, comma-
+      // separated ("**Files touched:** `a.ts`, `b.ts`") - nothing precedes
+      // them to be a trailing description, so every span here is a path.
+      paths.push(...allBacktickSpans(line));
+      continue;
+    }
+
+    if (line.startsWith('**') || line.startsWith('##')) {
+      break; // the next field or section heading - the list is over
+    }
+    if (line === '') {
+      if (sawBullet) {
+        break; // a blank line after the list ends it
+      }
+      continue; // a blank line before the list starts - keep scanning
+    }
+    if (!line.startsWith('- ') && !line.startsWith('* ')) {
+      if (sawBullet) {
+        break; // prose after the list (e.g. a scope-explanation paragraph)
+      }
+      continue;
+    }
+
+    // A bullet line: only the FIRST backtick span is the declared path.
+    // Anything after it - " — `IJobHandle` has no `moveToDelayed`..." - is
+    // a trailing description, not another declared file, even though it
+    // has its own backtick-quoted terms.
+    const path = firstBacktickSpan(line);
+    if (path !== null) {
+      paths.push(path);
+      sawBullet = true;
+    }
+  }
+
+  return paths;
 }
 
 /** Extract the lowercased body text of the spec's "## Out of scope" section. */
