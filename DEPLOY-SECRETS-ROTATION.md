@@ -4,6 +4,13 @@
 "Verifying" below for what was actually tested rather than only planned.
 Kept as the reference for the next time this key needs rotating.
 
+**Correction, 2026-08-12:** a later hardening pass (merged in PR #323) added
+`chown root:root` on `.ssh`/`authorized_keys`, citing general OpenSSH
+guidance. Applying it to the live host broke authentication outright -
+caught immediately by re-running the same benign-command check this doc
+already prescribes, exactly why that check exists. Reverted on the host and
+in this doc; see the notes under steps 2 and 5 below.
+
 `DEPLOY_HOST`, `DEPLOY_USER`, `SSH_DEPLOY_KEY`, `SSH_KNOWN_HOSTS` in
 `apex-bridge/bugspotter` were set 2026-04-09, four months before the
 2026-08-04 netcup migration. They hold Yandex-era values and will fail
@@ -55,20 +62,23 @@ useradd -m -s /bin/bash deploy
 # exits, silently breaking every deploy - the forced-command restriction
 # below is what actually limits this account, not the shell.
 usermod -aG docker deploy
-# root:root, not deploy:deploy: the forced command below is what restricts
-# this key to one script, not file permissions - but if `deploy` could write
-# its own .ssh, anything that ever runs as `deploy` (docker-group membership
-# is already root-equivalent, see above) could replace authorized_keys or
-# the script and remove that restriction. StrictModes (sshd's default)
-# rejects group/world-writable auth files, not root ownership - a root-owned,
-# non-writable-by-deploy authorized_keys is a standard hardening pattern, not
-# a login blocker. Still: this touches the auth path directly, so repeat the
-# same "benign command over the new key" check described under "Verifying,
-# either path" below after applying this, the same way the current live
-# setup was verified before being trusted.
 mkdir -p /home/deploy/.ssh && chmod 700 /home/deploy/.ssh
-chown root:root /home/deploy/.ssh
+chown deploy:deploy /home/deploy/.ssh
 ```
+
+**Do not `chown root:root` this directory**, despite it being a documented
+hardening pattern in general OpenSSH guidance (StrictModes is supposed to
+reject only group/world-writable auth files, not root ownership). Tried it
+here on 2026-08-12 and it broke authentication outright - `ssh -vvv` showed
+the client correctly offering the key, but sshd rejected it at the
+`publickey` stage every time (`Authentications that can continue: publickey`
+looping, never accepted), on this host's OpenSSH_10.0p2 (Debian 13). Reverting
+to `deploy:deploy` fixed it immediately, reproduced twice. Whatever the exact
+mechanism, treat the general guidance as wrong for this specific host until
+proven otherwise - verify empirically, don't cite documentation for a claim
+this easy to test. `ci-deploy.sh` itself staying `root:root` (below) is a
+separate, unaffected mechanism - that regression was isolated specifically
+to `.ssh`/`authorized_keys` ownership, not the script.
 
 ### 3. Write the forced-command script
 
@@ -137,8 +147,13 @@ simplest option then.
 echo 'command="/opt/bugspotter/scripts/ci-deploy.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA...<paste public key>... ci-deploy@bugspotter' \
   >> /home/deploy/.ssh/authorized_keys
 chmod 600 /home/deploy/.ssh/authorized_keys
-chown root:root /home/deploy/.ssh/authorized_keys
+chown deploy:deploy /home/deploy/.ssh/authorized_keys
 ```
+
+`deploy:deploy`, not `root:root` - see the note under step 2. The forced
+command is what actually restricts this key to one script; ownership here
+only needs to satisfy StrictModes (not group/world-writable), which
+`deploy:deploy` at these permissions already does.
 
 ### 6. Workflow step (already matches Path A, shown for reference)
 
