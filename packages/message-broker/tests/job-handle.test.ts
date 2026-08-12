@@ -9,6 +9,7 @@ function createMockJob(overrides: Record<string, unknown> = {}) {
     attemptsMade: 2,
     updateProgress: vi.fn().mockResolvedValue(undefined),
     log: vi.fn().mockResolvedValue(undefined),
+    moveToDelayed: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -62,6 +63,24 @@ describe('BullMQJobHandle', () => {
 
     await handle.log('Processing started');
     expect(job.log).toHaveBeenCalledWith('Processing started');
+  });
+
+  it('should delegate moveToDelayed to underlying job', async () => {
+    const job = createMockJob();
+    const handle = new BullMQJobHandle(job as any);
+
+    const timestamp = Date.now() + 30_000;
+    await handle.moveToDelayed(timestamp, 'lock-token');
+    expect(job.moveToDelayed).toHaveBeenCalledWith(timestamp, 'lock-token');
+  });
+
+  it('should delegate moveToDelayed with an undefined token', async () => {
+    const job = createMockJob();
+    const handle = new BullMQJobHandle(job as any);
+
+    const timestamp = Date.now() + 30_000;
+    await handle.moveToDelayed(timestamp);
+    expect(job.moveToDelayed).toHaveBeenCalledWith(timestamp, undefined);
   });
 
   it('should have readonly properties (snapshot at construction)', () => {

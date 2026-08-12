@@ -20,6 +20,7 @@ describe('ProgressTracker', () => {
       data: {},
       attemptsMade: 0,
       log: vi.fn().mockResolvedValue(undefined),
+      moveToDelayed: vi.fn().mockResolvedValue(undefined),
     };
   });
 

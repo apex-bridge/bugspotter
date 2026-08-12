@@ -17,6 +17,13 @@ export interface IJobHandle<D = unknown, _R = unknown> {
   readonly attemptsMade: number;
   updateProgress(value: number | object): Promise<void>;
   log(message: string): Promise<void>;
+  /**
+   * Reschedule the job to run again at `timestamp` instead of consuming a
+   * retry attempt now. Mirrors BullMQ's `Job.moveToDelayed(timestamp, token)` -
+   * `token` is the worker lock token BullMQ passes to a registered processor,
+   * required to prove the caller still holds the job's lock.
+   */
+  moveToDelayed(timestamp: number, token?: string): Promise<void>;
 }
 
 // ============================================================================
