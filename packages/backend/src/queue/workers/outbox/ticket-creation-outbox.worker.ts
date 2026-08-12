@@ -453,6 +453,7 @@ function createSyntheticJobHandle(entryId: string): IJobHandle<OutboxProcessorJo
     attemptsMade: 0,
     updateProgress: async () => {},
     log: async () => {},
+    moveToDelayed: async () => {},
   };
 }
 
