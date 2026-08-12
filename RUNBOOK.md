@@ -54,12 +54,16 @@ leaves them on different code.
 #    and "build". Archiving into a fresh directory and swapping, rather than
 #    extracting straight into the existing src/, also removes files deleted
 #    from the repo since the last sync (a plain tar -x into src/ would not).
+#    The previous src/ is kept as src.bak, not deleted outright - if the
+#    build in step 2 or the deploy in step 4 fails, the last-known-good
+#    source tree is still there. Remove src.bak only after step 5 confirms
+#    the new deploy is healthy.
 ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
-  "rm -rf /opt/bugspotter/src.new && mkdir -p /opt/bugspotter/src.new"
+  "rm -rf /opt/bugspotter/src.new /opt/bugspotter/src.bak && mkdir -p /opt/bugspotter/src.new"
 git archive <ref> | ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
   "tar -x -C /opt/bugspotter/src.new"
 ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
-  "rm -rf /opt/bugspotter/src && mv /opt/bugspotter/src.new /opt/bugspotter/src"
+  "mv /opt/bugspotter/src /opt/bugspotter/src.bak 2>/dev/null; mv /opt/bugspotter/src.new /opt/bugspotter/src"
 
 # 2. Build. The image is built directly with `docker build`, NOT `docker
 #    compose build` - the live docker-compose.yml's `build.context: .` can't
@@ -75,11 +79,18 @@ ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
 # 3. Tag the OLD image for rollback before overwriting :latest. This
 #    pre-<ref>/build-<ref> convention already existed on the host (pre-290,
 #    build-290, pre-292, build-292) before this runbook documented it.
-#    Skip this on a retry of the same deploy: if :latest is already
-#    build-<short-ref>, re-running it overwrites the real rollback target
-#    with the thing you'd be rolling back from.
-ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
-  "docker tag bugspotter-api:latest bugspotter-api:pre-<short-ref>"
+#    Guarded, not just noted: skips the tag when :latest already IS
+#    build-<short-ref> (a retry of this same deploy) - otherwise it would
+#    overwrite the real rollback target with the thing you'd be rolling back
+#    from. Mirrors the check ci-deploy.sh/poll-deploy.sh apply automatically
+#    (see DEPLOY-SECRETS-ROTATION.md).
+ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 '
+  new_id=$(docker image inspect --format "{{.Id}}" bugspotter-api:build-<short-ref>)
+  old_id=$(docker image inspect --format "{{.Id}}" bugspotter-api:latest 2>/dev/null || true)
+  if [ -n "$old_id" ] && [ "$new_id" != "$old_id" ]; then
+    docker tag bugspotter-api:latest bugspotter-api:pre-<short-ref>
+  fi
+'
 
 # 4. Retag the new build as :latest and recreate both containers that use it.
 ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
@@ -93,6 +104,11 @@ ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
 curl -s -o /dev/null -w 'HTTP %{http_code}\n' https://app.kz.bugspotter.io/ready
 ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 \
   "docker ps --format '{{.Names}}\t{{.Image}}\t{{.Status}}' | grep -E 'bugspotter-api|bugspotter-worker'"
+
+# Only now, with the new deploy confirmed healthy, drop the source backup
+# from step 1 - if anything above failed instead, src.bak is the last-known-
+# good tree to recover from.
+ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "rm -rf /opt/bugspotter/src.bak"
 
 # 6. Record what's deployed.
 ssh -i ~/.ssh/bugspotter-netcup root@159.195.212.239 "
