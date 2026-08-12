@@ -25,4 +25,8 @@ export class BullMQJobHandle<D = unknown, R = unknown> implements IJobHandle<D, 
   async log(message: string): Promise<void> {
     await this.job.log(message);
   }
+
+  async moveToDelayed(timestamp: number, token?: string): Promise<void> {
+    await this.job.moveToDelayed(timestamp, token);
+  }
 }
