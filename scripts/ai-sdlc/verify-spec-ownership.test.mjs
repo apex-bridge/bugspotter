@@ -103,6 +103,25 @@ describe('extractDeclaredPaths', () => {
     ].join('\n');
     assert.deepEqual(extractDeclaredPaths(spec), ['packages/a/one.ts', 'packages/a/two.ts']);
   });
+
+  test('stops the list at prose that follows a bullet with no blank line separator', () => {
+    // The previous test's prose paragraph is preceded by a blank line (the
+    // real docs/specs/0297 shape), so it's the "blank line after list"
+    // branch that ends the scan there, not the "prose after list" branch.
+    // This fixture drops that blank line so a non-bulleted, non-blank line
+    // immediately follows the bullets, exercising that second branch
+    // directly.
+    const spec = [
+      '**Files touched:**',
+      '',
+      '- `packages/a/one.ts`',
+      '- `packages/a/two.ts` — `IJobHandle` has no `moveToDelayed` member today; add one.',
+      'The scope grew beyond the original file: `job` is typed `IJobHandle<Data, Result>`,',
+      'not the raw `Job`, and it exposes only `id`, `name`, `log()`.',
+      '**Blocking prerequisites:** none',
+    ].join('\n');
+    assert.deepEqual(extractDeclaredPaths(spec), ['packages/a/one.ts', 'packages/a/two.ts']);
+  });
 });
 
 describe('extractOutOfScopeText', () => {
