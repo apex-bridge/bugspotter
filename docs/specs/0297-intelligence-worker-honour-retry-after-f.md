@@ -7,11 +7,17 @@ ADR: n/a
 
 - `packages/backend/src/queue/workers/intelligence-worker.ts`
 - `packages/backend/tests/queue/intelligence-worker.test.ts`
-- `packages/message-broker/src/interfaces.ts` — `IJobHandle` has no `moveToDelayed` member today; add one.
-- `packages/message-broker/src/adapters/bullmq/job-handle.ts` — implement it on `BullMQJobHandle` by delegating to the wrapped BullMQ `Job.moveToDelayed`.
-- `packages/message-broker/tests/job-handle.test.ts` — cover the new delegation, matching the existing per-method test convention in that file.
 
-The scope grew beyond the original two backend files: `job` in `processIntelligenceJob` is typed `IJobHandle<IntelligenceJobData, IntelligenceJobResult>`, not the raw BullMQ `Job`, and that interface currently exposes only `id`, `name`, `data`, `attemptsMade`, `updateProgress()`, and `log()` — no reschedule method. The mechanism this spec depends on does not exist in the abstraction layer yet; it has to be added there before the worker-level change can even compile.
+Amended 2026-08-13: this spec originally also declared
+`packages/message-broker/src/interfaces.ts`,
+`packages/message-broker/src/adapters/bullmq/job-handle.ts`, and
+`packages/message-broker/tests/job-handle.test.ts`, since `IJobHandle` had
+no `moveToDelayed` member when this spec was ratified. That prerequisite
+already landed on `main` (the `moveToDelayed` addition described in
+Constraint 1 and the "Changes" section below is done, not proposed) — the
+three message-broker files are dropped from "Files touched" because there
+is nothing left in them for an implementer to change. Only the two backend
+files above remain in scope.
 
 **Blocking prerequisites:** none — `IntelligenceError.retryAfter` was parsed and `llm_unavailable` was excluded from the circuit breaker in #283 (merged).
 
@@ -28,7 +34,7 @@ When the intelligence service responds with `llm_unavailable` and a `Retry-After
 
 ## Constraints
 
-1. `job` in `processIntelligenceJob` is `IJobHandle<IntelligenceJobData, IntelligenceJobResult>` (`packages/message-broker/src/interfaces.ts`), not the raw BullMQ `Job`, and `IJobHandle` does not expose a reschedule method today. Add `moveToDelayed(timestamp: number, token?: string): Promise<void>` to `IJobHandle` and implement it on `BullMQJobHandle` (`packages/message-broker/src/adapters/bullmq/job-handle.ts`) by delegating to the wrapped job's own `moveToDelayed`. This is a prerequisite for constraint 2, not an afterthought — the worker-level change cannot compile without it.
+1. `job` in `processIntelligenceJob` is `IJobHandle<IntelligenceJobData, IntelligenceJobResult>` (`packages/message-broker/src/interfaces.ts`). **Already done, not part of this spec's remaining scope**: `IJobHandle` now has `moveToDelayed(timestamp: number, token?: string): Promise<void>`, implemented on `BullMQJobHandle` (`packages/message-broker/src/adapters/bullmq/job-handle.ts`) by delegating to the wrapped job's own `moveToDelayed`. Treat this as an existing capability to call, not a prerequisite to build.
 2. BullMQ v5 `Job.moveToDelayed(timestamp: number, token?: string): Promise<void>` requires the worker token. The processor at `intelligence-worker.ts:588` currently receives only `(job)` — widening to `(job, token)` and threading the token through `processIntelligenceJob` down to `job.moveToDelayed` is required.
 3. `DelayedError` must be thrown after `moveToDelayed`; throwing any other error consumes an attempt and re-applies exponential backoff, defeating the purpose.
 4. The fallback when `err.retryAfter` is absent or zero must be 30 s (matching the minimum the LLM proxy enforces). Use `err.retryAfter || 30`, not `err.retryAfter ?? 30` — `??` only falls through on `null`/`undefined`, so `0 ?? 30` evaluates to `0`, silently violating this constraint for an explicit `retryAfter: 0` response. `||` treats `0` as falsy and falls through correctly.
@@ -110,33 +116,9 @@ try {
 }
 ```
 
-### `packages/message-broker/src/interfaces.ts`
+### `packages/message-broker/src/interfaces.ts` and `packages/message-broker/src/adapters/bullmq/job-handle.ts` (already done, not in scope)
 
-Add a `moveToDelayed` member to `IJobHandle`, matching BullMQ's own `Job.moveToDelayed(timestamp: number, token?: string): Promise<void>` signature:
-
-```ts
-export interface IJobHandle<D = unknown, _R = unknown> {
-  readonly id: string;
-  readonly name: string;
-  readonly data: D;
-  readonly attemptsMade: number;
-  updateProgress(value: number | object): Promise<void>;
-  log(message: string): Promise<void>;
-  moveToDelayed(timestamp: number, token?: string): Promise<void>;
-}
-```
-
-### `packages/message-broker/src/adapters/bullmq/job-handle.ts`
-
-Implement it on `BullMQJobHandle` by delegating to the wrapped job, following the existing `updateProgress`/`log` delegation pattern:
-
-```ts
-async moveToDelayed(timestamp: number, token?: string): Promise<void> {
-  await this.job.moveToDelayed(timestamp, token);
-}
-```
-
-Any other `IJobHandle` implementer (in-repo: only `BullMQJobHandle`; check for synthetic/literal `IJobHandle`-shaped objects built without an `as` cast, e.g. `createSyntheticJobHandle` in `packages/backend/src/queue/workers/outbox/ticket-creation-outbox.worker.ts`) must be updated with a `moveToDelayed` member too, or `typecheck` fails.
+`IJobHandle.moveToDelayed` and its `BullMQJobHandle` delegation already exist on `main`, along with the `moveToDelayed` stub on `createSyntheticJobHandle` in `packages/backend/src/queue/workers/outbox/ticket-creation-outbox.worker.ts` that keeps it compiling against the widened interface. Do not regenerate these files — they are not declared under "Files touched" and are already at their target state. Call `job.moveToDelayed(timestamp, token)` in the worker change below as an existing method.
 
 ## Tests
 
@@ -295,4 +277,4 @@ pnpm --filter @bugspotter/backend test:unit
 pnpm --filter @bugspotter/backend typecheck
 ```
 
-Rollback: Revert the diff to `intelligence-worker.ts`, `intelligence-worker.test.ts`, and the `packages/message-broker` files (`interfaces.ts`, `adapters/bullmq/job-handle.ts`, `tests/job-handle.test.ts`), plus the `moveToDelayed` stub added to `createSyntheticJobHandle` in `ticket-creation-outbox.worker.ts` to keep that file compiling against the widened interface. No schema change, no migration, no config change. Jobs already sitting in the BullMQ delayed set at rollback time drain normally under the reverted code, since `moveToDelayed` uses the standard BullMQ delayed queue mechanism.
+Rollback: Revert the diff to `intelligence-worker.ts` and `intelligence-worker.test.ts`. The `packages/message-broker` changes (`interfaces.ts`, `adapters/bullmq/job-handle.ts`, `tests/job-handle.test.ts`) and the `ticket-creation-outbox.worker.ts` stub are already on `main` from earlier work and are out of this spec's scope — do not revert them as part of rolling back this change. No schema change, no migration, no config change. Jobs already sitting in the BullMQ delayed set at rollback time drain normally under the reverted code, since `moveToDelayed` uses the standard BullMQ delayed queue mechanism.
