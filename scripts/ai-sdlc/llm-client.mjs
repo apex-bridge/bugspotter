@@ -92,7 +92,8 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
   return { text: data.content[0].text, stopReason: data.stop_reason };
 }
 
-// The CLI's `--output-format json` envelope carries operational fields this
+// The CLI's terminal `result` event (now under `--output-format stream-json`,
+// originally the whole `json` envelope) carries operational fields this
 // module used to discard: turn count, wall time, and token usage. Without them
 // a slow call is a black box. impl-agent run 30761885485 spent its entire 780s
 // timeout on a response the script itself had measured at ~6594 output tokens,
@@ -119,11 +120,22 @@ export function logCliTelemetry(data, log = console) {
   if (typeof data?.duration_api_ms === 'number') {
     parts.push(`api=${Math.round(data.duration_api_ms / 1000)}s`);
   }
+  // Time to first (visible, non-thinking) token — only carried in the
+  // `stream-json` envelope, not the buffered `json` one this function
+  // originally supported. The 2026-08-13 diagnostic found this split matters:
+  // a real reproduction spent 59% of its total wall time in extended thinking
+  // before ttft, a proportion no other field here can show on its own.
+  if (typeof data?.ttft_ms === 'number') {
+    parts.push(`ttft=${Math.round(data.ttft_ms / 1000)}s`);
+  }
   if (typeof data?.usage?.input_tokens === 'number') {
     parts.push(`in=${data.usage.input_tokens}`);
   }
   if (typeof data?.usage?.output_tokens === 'number') {
     parts.push(`out=${data.usage.output_tokens}`);
+  }
+  if (typeof data?.usage?.output_tokens_details?.thinking_tokens === 'number') {
+    parts.push(`thinking=${data.usage.output_tokens_details.thinking_tokens}`);
   }
   if (typeof data?.total_cost_usd === 'number') {
     parts.push(`cost=$${data.total_cost_usd.toFixed(4)}`);
@@ -139,9 +151,10 @@ export function logCliTelemetry(data, log = console) {
   }
 }
 
-// How often callViaCli reports that a call is still in flight. The CLI buffers
-// its whole `--output-format json` envelope to the end, so a long call is
-// otherwise indistinguishable from a hung one until the timeout fires.
+// How often callViaCli reports that a call is still in flight. Under
+// `stream-json`, thinking-token progress events arrive throughout the call
+// (see consumeLine below), so this heartbeat can now show real signs of
+// life instead of just elapsed time and silence.
 const CLI_HEARTBEAT_MS = 60_000;
 
 // logCliTelemetry only ever runs on the success path — it needs a parsed
@@ -151,12 +164,15 @@ const CLI_HEARTBEAT_MS = 60_000;
 // logged exactly one line, `claude CLI timed out after 780000ms`, discarding
 // every byte the child had written.
 //
-// The byte counts are the load-bearing part, not the tails. `stdout 0B` after
-// 780s means the CLI never emitted its envelope — it was still working, or
-// wedged, and the timeout is the symptom rather than the cause. Non-zero
-// stdout means it produced something we then threw away, which is a parsing
-// or size problem instead. Those need opposite fixes, and today's log cannot
-// tell them apart.
+// The byte counts were the load-bearing part when this only ran against
+// buffered `json` output — `stdout 0B` after 780s meant the CLI never
+// emitted its envelope, and nothing distinguished "still working" from
+// "wedged". Under `stream-json`, a non-null `thinkingTokens` closes most of
+// that gap directly: it's evidence the call produced real output at some
+// point, not a parsing or sizing problem — though it's a last-known
+// snapshot, not proof the call was still active at the moment of the kill.
+// Zero bytes of any kind remains the one case this still can't fully
+// explain (nothing streamed yet at all).
 //
 // Tails are bounded because stderr can carry progress spew and this string
 // goes into an Error message that lands in a CI log.
@@ -166,6 +182,7 @@ export function formatCliTimeout({
   stdout = '',
   stderr = '',
   tailChars = 1500,
+  thinkingTokens = null,
 }) {
   // Keep this exact prefix: it is the string the run logs have been
   // identified by across every timeout so far.
@@ -180,6 +197,23 @@ export function formatCliTimeout({
   const stderrBytes = Buffer.byteLength(stderr, 'utf8');
 
   message += `\n  received: stdout ${stdoutBytes}B, stderr ${stderrBytes}B`;
+
+  // The single most direct answer to "was this a hang or genuine work": a
+  // 2026-08-13 diagnostic reproduction of a real dead-at-780s run found the
+  // model was still in extended thinking for 59% of its (successful) 337s
+  // total wall time, invisible under the buffered `json` format this
+  // function was originally written for. Under `stream-json`, a
+  // thinking-token count is evidence the call produced real output at some
+  // point — but this is a single last-known snapshot, not a trend: nothing
+  // here tracks event timing or prior counts, so one early event followed by
+  // total silence for the rest of the timeout looks identical to one
+  // received seconds before the kill. Don't claim "still climbing" or "not
+  // a hang" from this alone.
+  if (thinkingTokens !== null) {
+    message +=
+      `\n  last known thinking-token count: ~${thinkingTokens} ` +
+      `(thinking progress was observed before termination)`;
+  }
 
   if (stdoutBytes === 0 && stderrBytes === 0) {
     message +=
@@ -208,12 +242,29 @@ export function formatCliTimeout({
 // Emitted every CLI_HEARTBEAT_MS while a call is in flight. Byte counts make
 // the difference between "streaming, just slow" and "silent since the first
 // second" visible while the run is still happening, instead of only in the
-// post-mortem.
-export function formatCliProgress({ elapsedMs, stdoutBytes, stderrBytes }) {
-  return (
+// post-mortem. `thinkingTokens` (from the most recent `stream-json`
+// thinking_tokens event, if any have arrived yet) adds the one signal that
+// distinguishes "extended thinking, genuinely still working" from every
+// other kind of silence.
+export function formatCliProgress({ elapsedMs, stdoutBytes, stderrBytes, thinkingTokens = null }) {
+  const base =
     `claude CLI: still running after ${Math.round(elapsedMs / 1000)}s ` +
-    `(stdout ${stdoutBytes}B, stderr ${stderrBytes}B)`
-  );
+    `(stdout ${stdoutBytes}B, stderr ${stderrBytes}B)`;
+  return thinkingTokens === null ? base : `${base}, ~${thinkingTokens} thinking tokens so far`;
+}
+
+// Bounds a raw stdout/stderr dump before it lands in a thrown Error message.
+// Under `stream-json --verbose`, a failing or malformed call can have far
+// more in stdout by the time it dies than the old buffered `json` format
+// ever produced (every NDJSON event streamed so far, not one envelope
+// written once at the end), so the two dumps in callViaCli's close handler
+// need the same clipping discipline formatCliTimeout already applies to its
+// tails, or a single bad run can flood a CI log.
+function clipDump(text, tailChars = 1500) {
+  const trimmed = text.trim();
+  return trimmed.length > tailChars
+    ? `(showing last ${tailChars} of ${trimmed.length} chars)\n${trimmed.slice(-tailChars)}`
+    : trimmed;
 }
 
 // No `maxTokens` param here (deliberately) — the CLI has no per-call
@@ -250,10 +301,23 @@ async function callViaCli({ prompt, timeoutMs, model }) {
       // Confirmed empirically on both Windows (shell: true) and POSIX
       // (shell: false, tested under WSL) that '--tools=' parses correctly
       // and disables tools, so one token form is used unconditionally.
+      //
+      // stream-json (not json): buffered `json` output means a healthy-but-
+      // slow call and a genuinely wedged one both look like silence until
+      // the timeout fires — impl-agent runs 30761885485/31039877104/#297 all
+      // died this way, 0 bytes received. A 2026-08-13 diagnostic reproducing
+      // #297's exact prompt under stream-json found the call was NOT stuck —
+      // it finished in 337s, 443s under budget — but 59% of that was extended
+      // thinking with no visible output token yet, a phase `json` cannot
+      // show at all. `--verbose` is not optional alongside `stream-json`
+      // under `-p`: confirmed empirically, omitting it fails outright with
+      // "Error: When using --print, --output-format=stream-json requires
+      // --verbose".
       [
         '-p',
         '--output-format',
-        'json',
+        'stream-json',
+        '--verbose',
         '--model',
         model || CLI_MODEL,
         '--tools=',
@@ -268,7 +332,37 @@ async function callViaCli({ prompt, timeoutMs, model }) {
 
     let stdout = '';
     let stderr = '';
+    let lineBuf = '';
+    let resultEvent = null;
+    // Most recent estimated_tokens from a `system`/`thinking_tokens` event —
+    // the one number that distinguishes "still working" from "wedged" while
+    // a call is in flight or right up to the moment it's killed.
+    let lastThinkingTokens = null;
     const startedAt = Date.now();
+
+    function consumeLine(line) {
+      if (!line.trim()) {
+        return;
+      }
+      let evt;
+      try {
+        evt = JSON.parse(line);
+      } catch {
+        // --verbose can interleave non-JSON debug output on some CLI
+        // versions; a line that isn't a JSON event is not fatal, the byte
+        // count already reflects it either way.
+        return;
+      }
+      if (
+        evt?.type === 'system' &&
+        evt.subtype === 'thinking_tokens' &&
+        typeof evt.estimated_tokens === 'number'
+      ) {
+        lastThinkingTokens = evt.estimated_tokens;
+      } else if (evt?.type === 'result') {
+        resultEvent = evt;
+      }
+    }
 
     // unref'd so a stray interval can never hold the process open on a path
     // that forgets to clear it; every exit path below clears it anyway.
@@ -278,6 +372,7 @@ async function callViaCli({ prompt, timeoutMs, model }) {
           elapsedMs: Date.now() - startedAt,
           stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
           stderrBytes: Buffer.byteLength(stderr, 'utf8'),
+          thinkingTokens: lastThinkingTokens,
         })
       );
     }, CLI_HEARTBEAT_MS);
@@ -288,7 +383,13 @@ async function callViaCli({ prompt, timeoutMs, model }) {
       child.kill('SIGKILL');
       reject(
         new Error(
-          formatCliTimeout({ timeoutMs, elapsedMs: Date.now() - startedAt, stdout, stderr })
+          formatCliTimeout({
+            timeoutMs,
+            elapsedMs: Date.now() - startedAt,
+            stdout,
+            stderr,
+            thinkingTokens: lastThinkingTokens,
+          })
         )
       );
     }, timeoutMs);
@@ -297,6 +398,12 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (d) => {
       stdout += d;
+      lineBuf += d;
+      let idx;
+      while ((idx = lineBuf.indexOf('\n')) !== -1) {
+        consumeLine(lineBuf.slice(0, idx));
+        lineBuf = lineBuf.slice(idx + 1);
+      }
     });
     child.stderr.on('data', (d) => {
       stderr += d;
@@ -309,35 +416,39 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       clearInterval(heartbeat);
+      if (lineBuf.trim()) {
+        consumeLine(lineBuf); // a final line with no trailing newline
+      }
       if (code !== 0 || signal) {
         const reason = code !== null ? `code ${code}` : `signal ${signal}`;
         // The claude CLI's error detail (e.g. a billing/auth failure) lands
-        // in the JSON on stdout, not stderr — include both.
+        // in the JSON on stdout, not stderr - include both, clipped (see
+        // clipDump above).
         const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
-        reject(new Error(`claude CLI exited with ${reason}${detail ? `: ${detail}` : ''}`));
+        reject(
+          new Error(`claude CLI exited with ${reason}${detail ? `: ${clipDump(detail)}` : ''}`)
+        );
         return;
       }
-      let data;
-      try {
-        data = JSON.parse(stdout);
-      } catch (err) {
-        reject(new Error(`Failed to parse claude CLI JSON output: ${err.message}\n${stdout}`));
+      if (!resultEvent) {
+        reject(
+          new Error(
+            `claude CLI exited cleanly but no "result" event was found in its stream-json ` +
+              `output:\n${clipDump(stdout)}`
+          )
+        );
         return;
       }
-      if (!data || typeof data !== 'object') {
-        reject(new Error(`Unexpected claude CLI JSON output (not an object): ${stdout}`));
+      if (resultEvent.is_error) {
+        reject(new Error(`claude CLI reported an error: ${JSON.stringify(resultEvent)}`));
         return;
       }
-      if (data.is_error) {
-        reject(new Error(`claude CLI reported an error: ${JSON.stringify(data)}`));
+      if (typeof resultEvent.result !== 'string') {
+        reject(new Error(`Unexpected claude CLI response shape: ${JSON.stringify(resultEvent)}`));
         return;
       }
-      if (typeof data.result !== 'string') {
-        reject(new Error(`Unexpected claude CLI response shape: ${JSON.stringify(data)}`));
-        return;
-      }
-      logCliTelemetry(data);
-      resolve({ text: data.result, stopReason: data.stop_reason });
+      logCliTelemetry(resultEvent);
+      resolve({ text: resultEvent.result, stopReason: resultEvent.stop_reason });
     });
 
     child.stdin.on('error', () => {});
