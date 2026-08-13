@@ -44,10 +44,14 @@ writeFileSync(
     // (['-p', '--output-format', ...]).
     'if (argvDumpPath) fs.writeFileSync(argvDumpPath, JSON.stringify(process.argv.slice(2)));',
     "const mode = process.env.FAKE_CLAUDE_MODE || 'success';",
-    // Writes a partial (unparseable) envelope and then never finishes, so the
-    // parent's timeout path fires with real bytes already buffered. `return`
-    // is legal here: CommonJS wraps the module body in a function.
+    // Writes one real NDJSON thinking_tokens event (so callViaCli's line
+    // parser has something to pick up), then a partial/unparseable trailing
+    // envelope and never finishes — the parent's timeout path fires with
+    // both a known thinking-token count AND raw undecodable bytes already
+    // buffered. `return` is legal here: CommonJS wraps the module body in a
+    // function.
     "if (mode === 'hang') {",
+    "  process.stdout.write(JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 42 }) + '\\n');",
     "  process.stdout.write('PARTIAL_ENVELOPE_MARKER');",
     "  process.stderr.write('FAKE_STDERR_PROGRESS');",
     '  setTimeout(function () { process.exit(0); }, 5000);',
@@ -57,7 +61,10 @@ writeFileSync(
     "  process.stdout.write('FAKE_STDOUT_MARKER: upstream billing failure detail');",
     '  process.exit(2);',
     '}',
-    "process.stdout.write(JSON.stringify({ result: 'fake cli response', stop_reason: 'end_turn' }));",
+    // stream-json shape: one or more NDJSON lines, the terminal one typed
+    // "result" — mirrors the real CLI's `--output-format stream-json` output.
+    "process.stdout.write(JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 7 }) + '\\n');",
+    "process.stdout.write(JSON.stringify({ type: 'result', result: 'fake cli response', stop_reason: 'end_turn' }) + '\\n');",
     'process.exit(0);',
     '',
   ].join('\n')
@@ -117,6 +124,34 @@ test('logCliTelemetry surfaces turns, wall time, tokens and cost from the CLI en
   assert.match(lines.log[0], /out=6594/);
   assert.match(lines.log[0], /cost=\$0\.1234/);
   assert.equal(lines.warn.length, 0, 'a single-turn call must not warn');
+});
+
+test('logCliTelemetry surfaces ttft and the thinking/output token split when present', () => {
+  const { lines, logger } = captureLog();
+
+  logCliTelemetry(
+    {
+      num_turns: 1,
+      duration_ms: 337_000,
+      ttft_ms: 198_642,
+      usage: { output_tokens: 23_209, output_tokens_details: { thinking_tokens: 12_954 } },
+    },
+    logger
+  );
+
+  assert.equal(lines.log.length, 1);
+  assert.match(lines.log[0], /ttft=199s/);
+  assert.match(lines.log[0], /out=23209/);
+  assert.match(lines.log[0], /thinking=12954/);
+});
+
+test('logCliTelemetry omits ttft/thinking fields when the envelope lacks them', () => {
+  const { lines, logger } = captureLog();
+
+  logCliTelemetry({ num_turns: 1, duration_ms: 1000, usage: { output_tokens: 4 } }, logger);
+
+  assert.doesNotMatch(lines.log[0], /ttft=/);
+  assert.doesNotMatch(lines.log[0], /thinking=/);
 });
 
 test('logCliTelemetry warns when the CLI reports more than one turn despite --tools=', () => {
@@ -197,17 +232,52 @@ test('formatCliProgress reports elapsed time and bytes received so far', () => {
   assert.match(line, /stdout 0B, stderr 42B/);
 });
 
+test('formatCliProgress includes the thinking-token count when known', () => {
+  const withTokens = formatCliProgress({
+    elapsedMs: 60_000,
+    stdoutBytes: 500,
+    stderrBytes: 0,
+    thinkingTokens: 1200,
+  });
+  assert.match(withTokens, /~1200 thinking tokens so far/);
+
+  // Not vacuous: the field must actually be omittable, not just non-throwing.
+  const withoutTokens = formatCliProgress({ elapsedMs: 60_000, stdoutBytes: 0, stderrBytes: 0 });
+  assert.doesNotMatch(withoutTokens, /thinking tokens/);
+});
+
+test('formatCliTimeout reports the last known thinking-token count when present', () => {
+  const message = formatCliTimeout({
+    timeoutMs: 780_000,
+    elapsedMs: 780_050,
+    stdout: '{"type":"system","subtype":"thinking_tokens","estimated_tokens":900}\n',
+    thinkingTokens: 900,
+  });
+
+  assert.match(message, /last known thinking-token count: ~900/);
+  assert.match(message, /this was a working call, not a hang/);
+});
+
+test('formatCliTimeout omits the thinking-token line when none arrived', () => {
+  const message = formatCliTimeout({ timeoutMs: 780_000, elapsedMs: 780_050 });
+  assert.doesNotMatch(message, /thinking-token count/);
+});
+
 test('callViaCli timeout error carries what the child actually wrote before the kill', async () => {
   process.env.FAKE_CLAUDE_MODE = 'hang';
   process.env.FAKE_CLAUDE_ENV_DUMP = '';
 
   // Proves the forensics reach the real rejection path, not just the pure
   // formatter: without them this error message is the bare one-liner that
-  // made impl-agent runs 30761885485 and 31039877104 undiagnosable.
+  // made impl-agent runs 30761885485 and 31039877104 undiagnosable. The
+  // thinking-token assertion proves callViaCli's own NDJSON line parser
+  // (not just formatCliTimeout in isolation) picked up the real event the
+  // fake CLI streamed before hanging.
   await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 2500 }), (err) => {
     assert.match(err.message, /claude CLI timed out after 2500ms/);
     assert.match(err.message, /received: stdout \d+B, stderr \d+B/);
     assert.match(err.message, /PARTIAL_ENVELOPE_MARKER/);
+    assert.match(err.message, /last known thinking-token count: ~42/);
     assert.doesNotMatch(err.message, /wrote nothing at all/);
     return true;
   });
@@ -294,7 +364,8 @@ test('callViaCli invokes claude with --tools= and --strict-mcp-config, not --all
     assert.deepEqual(argv, [
       '-p',
       '--output-format',
-      'json',
+      'stream-json',
+      '--verbose',
       '--model',
       'claude-sonnet-4-6',
       '--tools=',

@@ -66,7 +66,7 @@ writeFileSync(
     "    files: [{ path: 'packages/generated.ts', content: 'export const generated = true;\\n' }],",
     "    summary: 'fake impl',",
     '  };',
-    "  process.stdout.write(JSON.stringify({ result: JSON.stringify(payload), stop_reason: 'end_turn' }));",
+    "  process.stdout.write(JSON.stringify({ type: 'result', result: JSON.stringify(payload), stop_reason: 'end_turn' }) + '\\n');",
     '});',
     '',
   ].join('\n')
