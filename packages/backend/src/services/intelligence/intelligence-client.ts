@@ -432,10 +432,12 @@ export class IntelligenceClient {
  */
 export class IntelligenceError extends Error {
   /**
-   * Seconds the upstream asked us to wait, parsed from `Retry-After`. Metadata
-   * only: no caller reads it yet. `IntelligenceClient` is shared by a queue
-   * worker that could absorb the wait and by request-path routes that cannot,
-   * so honouring the hint belongs to the caller, not to the client.
+   * Seconds the upstream asked us to wait, parsed from `Retry-After`.
+   * `IntelligenceClient` is shared by a queue worker that can absorb the
+   * wait and by request-path routes that cannot, so honouring the hint
+   * belongs to the caller, not to the client - `intelligence-worker.ts`
+   * reads it on `llm_unavailable` to reschedule via `job.moveToDelayed`
+   * instead of consuming a retry attempt (issue #297).
    */
   public readonly retryAfter?: number;
   /**

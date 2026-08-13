@@ -13,9 +13,17 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { processAnalyzeJob } from '../../src/queue/workers/intelligence-worker.js';
+import { DelayedError } from 'bullmq';
+import {
+  processAnalyzeJob,
+  processIntelligenceJob,
+} from '../../src/queue/workers/intelligence-worker.js';
 import type { DatabaseClient } from '../../src/db/client.js';
-import type { IntelligenceClient } from '../../src/services/intelligence/intelligence-client.js';
+import {
+  IntelligenceError,
+  type IntelligenceClient,
+} from '../../src/services/intelligence/intelligence-client.js';
+import type { IntelligenceClientFactory } from '../../src/services/intelligence/tenant-config.js';
 import type { DedupRuleExecutor } from '../../src/services/rules/executor.js';
 
 describe('Intelligence Worker - processAnalyzeJob org threshold', () => {
@@ -147,5 +155,116 @@ describe('Intelligence Worker - processAnalyzeJob org threshold', () => {
     ).rejects.toThrow('db unavailable');
 
     expect(mockClient.getSimilarBugs).not.toHaveBeenCalled();
+  });
+});
+
+describe('Intelligence Worker - processIntelligenceJob llm_unavailable rescheduling', () => {
+  let mockJob: any;
+  let mockClient: any;
+  let mockClientFactory: IntelligenceClientFactory;
+  let mockDb: DatabaseClient;
+  let mockRuleExecutor: DedupRuleExecutor;
+
+  beforeEach(() => {
+    mockJob = {
+      id: 'job-1',
+      data: {
+        type: 'analyze',
+        bugReportId: 'bug-1',
+        projectId: 'proj-1',
+        payload: { bug_id: 'bug-1' },
+      },
+      updateProgress: vi.fn(),
+      moveToDelayed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    mockClient = {
+      analyzeBug: vi.fn(),
+      getSimilarBugs: vi.fn().mockResolvedValue({ is_duplicate: false, similar_bugs: [] }),
+    };
+
+    // resolveClient falls through to getGlobalClient() when the project has
+    // no organization_id (self-hosted path).
+    mockClientFactory = {
+      getGlobalClient: vi.fn().mockReturnValue(mockClient),
+      getClientForOrg: vi.fn(),
+    } as unknown as IntelligenceClientFactory;
+
+    mockDb = {
+      projects: {
+        findById: vi.fn().mockResolvedValue({ id: 'proj-1', organization_id: null }),
+      },
+    } as unknown as DatabaseClient;
+
+    mockRuleExecutor = {} as DedupRuleExecutor;
+  });
+
+  // AC #1 — retryAfter present reschedules at the server-supplied delay
+  it('moves job to delayed using retryAfter when llm_unavailable', async () => {
+    const retryAfter = 45;
+    mockClient.analyzeBug.mockRejectedValueOnce(
+      new IntelligenceError('LLM unavailable', 'llm_unavailable', 503, { retryAfter })
+    );
+
+    const before = Date.now();
+    await expect(
+      processIntelligenceJob(mockJob, 'test-token', mockClientFactory, mockDb, mockRuleExecutor)
+    ).rejects.toBeInstanceOf(DelayedError);
+    const after = Date.now();
+
+    expect(mockJob.moveToDelayed).toHaveBeenCalledOnce();
+    const [calledAt, calledToken] = mockJob.moveToDelayed.mock.calls[0];
+    expect(calledAt).toBeGreaterThanOrEqual(before + retryAfter * 1000);
+    expect(calledAt).toBeLessThanOrEqual(after + retryAfter * 1000);
+    expect(calledToken).toBe('test-token');
+  });
+
+  // AC #2 — retryAfter absent falls back to the 30s floor
+  it('falls back to 30s delay when retryAfter is absent', async () => {
+    mockClient.analyzeBug.mockRejectedValueOnce(
+      new IntelligenceError('LLM unavailable', 'llm_unavailable', 503)
+    );
+
+    const before = Date.now();
+    await expect(
+      processIntelligenceJob(mockJob, 'test-token', mockClientFactory, mockDb, mockRuleExecutor)
+    ).rejects.toBeInstanceOf(DelayedError);
+    const after = Date.now();
+
+    const [calledAt] = mockJob.moveToDelayed.mock.calls[0];
+    expect(calledAt).toBeGreaterThanOrEqual(before + 30_000);
+    expect(calledAt).toBeLessThanOrEqual(after + 30_000);
+  });
+
+  // AC #3 — retryAfter explicitly 0 also falls back to the 30s floor.
+  // Distinct from the absent case: proves `||` handles an explicit falsy 0
+  // where `??` would not (`0 ?? 30` evaluates to `0`).
+  it('falls back to 30s delay when retryAfter is explicitly 0', async () => {
+    mockClient.analyzeBug.mockRejectedValueOnce(
+      new IntelligenceError('LLM unavailable', 'llm_unavailable', 503, { retryAfter: 0 })
+    );
+
+    const before = Date.now();
+    await expect(
+      processIntelligenceJob(mockJob, 'test-token', mockClientFactory, mockDb, mockRuleExecutor)
+    ).rejects.toBeInstanceOf(DelayedError);
+    const after = Date.now();
+
+    const [calledAt] = mockJob.moveToDelayed.mock.calls[0];
+    expect(calledAt).toBeGreaterThanOrEqual(before + 30_000);
+    expect(calledAt).toBeLessThanOrEqual(after + 30_000);
+  });
+
+  // AC #4 — a non-llm_unavailable error propagates normally, no reschedule
+  it('does not call moveToDelayed for non-llm_unavailable errors', async () => {
+    mockClient.analyzeBug.mockRejectedValueOnce(
+      new IntelligenceError('Service error', 'server_error', 500)
+    );
+
+    await expect(
+      processIntelligenceJob(mockJob, 'test-token', mockClientFactory, mockDb, mockRuleExecutor)
+    ).rejects.not.toBeInstanceOf(DelayedError);
+
+    expect(mockJob.moveToDelayed).not.toHaveBeenCalled();
   });
 });

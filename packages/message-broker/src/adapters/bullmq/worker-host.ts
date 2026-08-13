@@ -9,7 +9,12 @@ import { BullMQJobHandle } from './job-handle.js';
 
 export interface BullMQWorkerHostConfig<D, R> extends WorkerHostOptions {
   queue: string;
-  processor: (job: IJobHandle<D, R>) => Promise<R>;
+  /**
+   * BullMQ's own processor callback receives `(job, token)` - `token` is the
+   * worker lock token, required to call `job.moveToDelayed`. Optional so
+   * existing processors that ignore it keep compiling unchanged.
+   */
+  processor: (job: IJobHandle<D, R>, token?: string) => Promise<R>;
   connection: Redis;
   customOptions?: Partial<WorkerOptions>;
 }
@@ -27,9 +32,9 @@ export class BullMQWorkerHost<D = unknown, R = unknown> implements IWorkerHost<D
 
     this.worker = new Worker<D, R>(
       config.queue,
-      async (job) => {
+      async (job, token) => {
         const handle = new BullMQJobHandle<D, R>(job);
-        return config.processor(handle);
+        return config.processor(handle, token);
       },
       opts
     );
