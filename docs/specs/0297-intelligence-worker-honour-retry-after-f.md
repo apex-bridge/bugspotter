@@ -116,9 +116,9 @@ try {
 }
 ```
 
-### `packages/message-broker/src/interfaces.ts` and `packages/message-broker/src/adapters/bullmq/job-handle.ts` (already done, not in scope)
+### `packages/message-broker/src/interfaces.ts`, `packages/message-broker/src/adapters/bullmq/job-handle.ts`, and `packages/message-broker/tests/job-handle.test.ts` (already done, not in scope)
 
-`IJobHandle.moveToDelayed` and its `BullMQJobHandle` delegation already exist on `main`, along with the `moveToDelayed` stub on `createSyntheticJobHandle` in `packages/backend/src/queue/workers/outbox/ticket-creation-outbox.worker.ts` that keeps it compiling against the widened interface. Do not regenerate these files — they are not declared under "Files touched" and are already at their target state. Call `job.moveToDelayed(timestamp, token)` in the worker change below as an existing method.
+`IJobHandle.moveToDelayed`, its `BullMQJobHandle` delegation, and the delegation test in `tests/job-handle.test.ts` already exist on `main`, along with the `moveToDelayed` stub on `createSyntheticJobHandle` in `packages/backend/src/queue/workers/outbox/ticket-creation-outbox.worker.ts` that keeps it compiling against the widened interface. Do not regenerate these files — they are not declared under "Files touched" and are already at their target state. Call `job.moveToDelayed(timestamp, token)` in the worker change below as an existing method.
 
 ## Tests
 
