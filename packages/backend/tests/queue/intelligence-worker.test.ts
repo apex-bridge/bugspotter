@@ -172,7 +172,10 @@ describe('Intelligence Worker - processIntelligenceJob llm_unavailable reschedul
         type: 'analyze',
         bugReportId: 'bug-1',
         projectId: 'proj-1',
-        payload: { bug_id: 'bug-1' },
+        // validateIntelligenceJobData requires title for type 'analyze', not
+        // just bug_id - omitting it fails validation before the job ever
+        // reaches client.analyzeBug, let alone the reschedule path.
+        payload: { bug_id: 'bug-1', title: 'Test bug' },
       },
       updateProgress: vi.fn(),
       moveToDelayed: vi.fn().mockResolvedValue(undefined),
