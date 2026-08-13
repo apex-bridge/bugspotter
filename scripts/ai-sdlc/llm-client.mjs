@@ -247,6 +247,20 @@ export function formatCliProgress({ elapsedMs, stdoutBytes, stderrBytes, thinkin
   return thinkingTokens === null ? base : `${base}, ~${thinkingTokens} thinking tokens so far`;
 }
 
+// Bounds a raw stdout/stderr dump before it lands in a thrown Error message.
+// Under `stream-json --verbose`, a failing or malformed call can have far
+// more in stdout by the time it dies than the old buffered `json` format
+// ever produced (every NDJSON event streamed so far, not one envelope
+// written once at the end), so the two dumps in callViaCli's close handler
+// need the same clipping discipline formatCliTimeout already applies to its
+// tails, or a single bad run can flood a CI log.
+function clipDump(text, tailChars = 1500) {
+  const trimmed = text.trim();
+  return trimmed.length > tailChars
+    ? `(showing last ${tailChars} of ${trimmed.length} chars)\n${trimmed.slice(-tailChars)}`
+    : trimmed;
+}
+
 // No `maxTokens` param here (deliberately) — the CLI has no per-call
 // output-token cap to forward it to. See the module header comment.
 async function callViaCli({ prompt, timeoutMs, model }) {
@@ -402,16 +416,19 @@ async function callViaCli({ prompt, timeoutMs, model }) {
       if (code !== 0 || signal) {
         const reason = code !== null ? `code ${code}` : `signal ${signal}`;
         // The claude CLI's error detail (e.g. a billing/auth failure) lands
-        // in the JSON on stdout, not stderr — include both.
+        // in the JSON on stdout, not stderr - include both, clipped (see
+        // clipDump above).
         const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
-        reject(new Error(`claude CLI exited with ${reason}${detail ? `: ${detail}` : ''}`));
+        reject(
+          new Error(`claude CLI exited with ${reason}${detail ? `: ${clipDump(detail)}` : ''}`)
+        );
         return;
       }
       if (!resultEvent) {
         reject(
           new Error(
             `claude CLI exited cleanly but no "result" event was found in its stream-json ` +
-              `output:\n${stdout}`
+              `output:\n${clipDump(stdout)}`
           )
         );
         return;
