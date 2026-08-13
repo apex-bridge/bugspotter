@@ -255,7 +255,7 @@ test('formatCliTimeout reports the last known thinking-token count when present'
   });
 
   assert.match(message, /last known thinking-token count: ~900/);
-  assert.match(message, /this was a working call, not a hang/);
+  assert.match(message, /thinking progress was observed before termination/);
 });
 
 test('formatCliTimeout omits the thinking-token line when none arrived', () => {

@@ -168,9 +168,11 @@ const CLI_HEARTBEAT_MS = 60_000;
 // buffered `json` output — `stdout 0B` after 780s meant the CLI never
 // emitted its envelope, and nothing distinguished "still working" from
 // "wedged". Under `stream-json`, a non-null `thinkingTokens` closes most of
-// that gap directly: a growing count is direct evidence of a working call,
-// not a parsing or sizing problem. Zero bytes of any kind remains the one
-// case this still can't fully explain (nothing streamed yet at all).
+// that gap directly: it's evidence the call produced real output at some
+// point, not a parsing or sizing problem — though it's a last-known
+// snapshot, not proof the call was still active at the moment of the kill.
+// Zero bytes of any kind remains the one case this still can't fully
+// explain (nothing streamed yet at all).
 //
 // Tails are bounded because stderr can carry progress spew and this string
 // goes into an Error message that lands in a CI log.
@@ -200,13 +202,17 @@ export function formatCliTimeout({
   // 2026-08-13 diagnostic reproduction of a real dead-at-780s run found the
   // model was still in extended thinking for 59% of its (successful) 337s
   // total wall time, invisible under the buffered `json` format this
-  // function was originally written for. Under `stream-json`, a growing
-  // thinking-token count observed right up to the kill is direct evidence
-  // the call was progressing, not wedged.
+  // function was originally written for. Under `stream-json`, a
+  // thinking-token count is evidence the call produced real output at some
+  // point — but this is a single last-known snapshot, not a trend: nothing
+  // here tracks event timing or prior counts, so one early event followed by
+  // total silence for the rest of the timeout looks identical to one
+  // received seconds before the kill. Don't claim "still climbing" or "not
+  // a hang" from this alone.
   if (thinkingTokens !== null) {
     message +=
-      `\n  last known thinking-token count: ~${thinkingTokens} (still climbing when killed — ` +
-      `this was a working call, not a hang)`;
+      `\n  last known thinking-token count: ~${thinkingTokens} ` +
+      `(thinking progress was observed before termination)`;
   }
 
   if (stdoutBytes === 0 && stderrBytes === 0) {
