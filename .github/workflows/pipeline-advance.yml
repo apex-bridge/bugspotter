@@ -1,0 +1,119 @@
+name: Pipeline Advance
+
+# Auto-advances a pipeline issue's gate label when one of the AI-SDLC stage
+# PRs (spec/, adr/, impl/) merges, so a human doesn't have to hand-run
+# `gh issue edit --remove-label X --add-label Y` after every merge - done by
+# hand for issues #297 and #227, an entire session each.
+#
+# Deliberately narrow: this only ever flips a label after a human has already
+# merged the stage PR - which IS the judgment call each gate exists to
+# require. It never opens a PR, never ratifies a spec or ADR, never decides
+# content is good enough. See scripts/ai-sdlc/advance-gate.mjs for the full
+# decision logic (and its tests) - fails closed (skips silently-ish, just
+# logs + no-ops) on anything it can't parse confidently, rather than guessing
+# at a label change.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+concurrency:
+  group: pipeline-advance-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  advance:
+    name: Advance pipeline gate
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test the decision logic
+        run: node --test scripts/ai-sdlc/advance-gate.test.mjs
+
+      # The issue number for adr/ branches only comes from the PR body (their
+      # branch name is the ADR number, not the issue's) - resolved first so
+      # the next step knows which issue's labels to fetch.
+      - name: Resolve stage and issue number
+        id: resolve
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/ai-sdlc/advance-gate.mjs resolve-issue
+
+      - name: Read ADR field from the merged spec (spec-stage merges only)
+        id: adr_field
+        if: steps.resolve.outputs.stage == 'spec'
+        env:
+          ISSUE_NUMBER: ${{ steps.resolve.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          PADDED=$(printf '%04d' "$ISSUE_NUMBER")
+          SPEC_FILE=$(ls "docs/specs/${PADDED}-"*.md 2>/dev/null | head -1) || true
+          VALUE=""
+          if [ -n "$SPEC_FILE" ] && [ -f "$SPEC_FILE" ]; then
+            VALUE=$(grep -m1 -E '^ADR:' "$SPEC_FILE" | sed -E 's/^ADR:[[:space:]]*//') || true
+          fi
+          echo "value=$VALUE" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the issue's current labels
+        id: current_labels
+        if: steps.resolve.outputs.issue_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.resolve.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          LABELS_JSON=$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name]')
+          {
+            echo "json<<EOF_LABELS"
+            echo "$LABELS_JSON"
+            echo "EOF_LABELS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide
+        id: decide
+        if: steps.resolve.outputs.issue_number != ''
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          ISSUE_LABELS_JSON: ${{ steps.current_labels.outputs.json }}
+          ADR_FIELD: ${{ steps.adr_field.outputs.value }}
+        run: node scripts/ai-sdlc/advance-gate.mjs decide
+
+      - name: Advance the label
+        if: steps.decide.outputs.action == 'advance'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.decide.outputs.issue_number }}
+          FROM_LABELS: ${{ steps.decide.outputs.from_labels }}
+          TO_LABEL: ${{ steps.decide.outputs.to_label }}
+          REASON: ${{ steps.decide.outputs.reason }}
+        run: |
+          set -euo pipefail
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --remove-label "$FROM_LABELS" --add-label "$TO_LABEL"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body "Auto-advanced to \`${TO_LABEL}\` (${REASON})."
+
+      - name: Log why nothing was advanced
+        if: steps.decide.outputs.action != 'advance'
+        env:
+          REASON: ${{ steps.decide.outputs.reason || 'not an AI-SDLC stage branch (spec/, adr/, impl/)' }}
+        run: |
+          echo "pipeline-advance: no-op - ${REASON}"
