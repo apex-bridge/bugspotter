@@ -1,6 +1,6 @@
 # ADR-0043: Intelligence — surface current match score and threshold in duplicate bug detail view
 
-- Status: Proposed
+- Status: Accepted
 - Area: admin UI / intelligence
 - Date: 2026-08-14
 - Refs: #227; ADR-0028 (tunable similarity thresholds); #226, #237 (threshold end-to-end plumbing, closed)
@@ -100,9 +100,9 @@ be tracked as a separate issue if the audit-trail need becomes concrete.
 
 **Neutral:**
 
-- The admin app makes one additional call to `/similar` when a duplicate
-  detail view is opened; this is already the pattern for the widget in other
-  contexts and adds no new load profile.
+- No additional network call: the "Duplicate match details" section is
+  derived from the same `/similar` response the widget already fetches on
+  mount, so opening a duplicate's detail view adds no new request.
 - Top-3 ranking in the display is by descending `similarity` score from the
   recomputed response; if the corpus changes between page loads the ordering
   can shift, which is consistent with the "current match" framing.
