@@ -104,7 +104,7 @@ jobs:
           IMPL_MODEL_HIGH: ${{ vars.IMPL_MODEL_HIGH }}
           IMPL_MODEL_DEFAULT: ${{ vars.IMPL_MODEL_DEFAULT }}
           IMPL_MODEL_LOW: ${{ vars.IMPL_MODEL_LOW }}
-          # llm-client.mjs writes the CLI's full raw NDJSON stream here on any
+          # llm-client.mjs writes the CLI's full raw stdout/stderr here on any
           # failure (timeout, non-zero exit, malformed envelope) - never on
           # success. formatCliTimeout's own error message clips to 1500 chars
           # to keep this log readable, which is exactly what makes a real
@@ -112,7 +112,7 @@ jobs:
           # count jump in the final 60s that the clipped tail alone couldn't
           # explain). The "Upload CLI transcript on failure" step below
           # attaches the full file as a build artifact.
-          AI_SDLC_CLI_TRANSCRIPT_PATH: ${{ github.workspace }}/cli-transcript-impl.ndjson
+          AI_SDLC_CLI_TRANSCRIPT_PATH: ${{ github.workspace }}/cli-transcript-impl.log
         run: node scripts/ai-sdlc/generate-impl.mjs
 
       # `always()`, not `failure()`: llm-client.mjs writes this file whenever
@@ -121,12 +121,15 @@ jobs:
       # spec-agent.yml). Tying the upload to this step's own pass/fail would
       # silently miss those cases. if-no-files-found: ignore makes the normal
       # (no failure, no file) case a no-op instead of an error.
+      # .log, not .ndjson: dumpCliTranscriptOnFailure wraps the raw stdout in
+      # human-readable "=== stdout/stderr ===" headers and appends stderr, so
+      # the file as a whole is not valid NDJSON even though stdout itself is.
       - name: Upload CLI transcript if one was written
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cli-transcript-impl-issue-${{ github.event.issue.number }}
-          path: cli-transcript-impl.ndjson
+          path: cli-transcript-impl.log
           if-no-files-found: ignore
           retention-days: 14
 
