@@ -79,7 +79,23 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           SPEC_CONTENT: ${{ steps.spec.outputs.spec_content }}
+          # llm-client.mjs writes the CLI's full raw NDJSON stream here on any
+          # failed call (never on success) - the "Upload CLI transcript"
+          # step below attaches it as a build artifact.
+          AI_SDLC_CLI_TRANSCRIPT_PATH: ${{ github.workspace }}/cli-transcript-adr.ndjson
         run: node scripts/ai-sdlc/generate-adr.mjs
+
+      # `always()`: llm-client.mjs writes this file whenever its own call
+      # rejects, independent of whether the surrounding script exits 0 or
+      # not. if-no-files-found: ignore makes the normal case a no-op.
+      - name: Upload CLI transcript if one was written
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-transcript-adr-issue-${{ github.event.issue.number }}
+          path: cli-transcript-adr.ndjson
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Format generated files
         env:
