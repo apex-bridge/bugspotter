@@ -13,6 +13,7 @@
 
 import type { IJobHandle } from '@bugspotter/message-broker';
 import type { Redis } from 'ioredis';
+import { DelayedError } from 'bullmq';
 import { getLogger } from '../../logger.js';
 import {
   validateIntelligenceJobData,
@@ -128,10 +129,16 @@ async function resolveClient(
 }
 
 /**
- * Process intelligence analysis job
+ * Process intelligence analysis job.
+ *
+ * `token` is BullMQ's worker lock token, threaded through from the processor
+ * registration below. It is only used on the `llm_unavailable` reschedule
+ * path, where it proves this call still holds the job's lock before asking
+ * BullMQ to delay it (issue #297).
  */
-async function processIntelligenceJob(
+export async function processIntelligenceJob(
   job: IJobHandle<IntelligenceJobData, IntelligenceJobResult>,
+  token: string | undefined,
   clientFactory: IntelligenceClientFactory,
   db: DatabaseClient,
   ruleExecutor: DedupRuleExecutor
@@ -158,27 +165,40 @@ async function processIntelligenceJob(
 
   const { client, orgId } = await resolveClient(job, clientFactory, db);
 
-  if (type === 'analyze') {
-    return processAnalyzeJob(job, client, db, orgId, startTime, ruleExecutor);
-  }
+  try {
+    if (type === 'analyze') {
+      return await processAnalyzeJob(job, client, db, orgId, startTime, ruleExecutor);
+    }
 
-  if (type === 'resolution') {
-    return processResolutionJob(job, client, startTime);
-  }
+    if (type === 'resolution') {
+      return await processResolutionJob(job, client, startTime);
+    }
 
-  if (type === 'enrich') {
-    return processEnrichJob(job, client, db, orgId, startTime);
-  }
+    if (type === 'enrich') {
+      return await processEnrichJob(job, client, db, orgId, startTime);
+    }
 
-  if (type === 'mitigation') {
-    return processMitigationJob(job, client, db, startTime);
-  }
+    if (type === 'mitigation') {
+      return await processMitigationJob(job, client, db, startTime);
+    }
 
-  // Unsupported type — shouldn't happen if validation is correct
-  throw new JobProcessingError(job.id || 'unknown', `Unsupported intelligence job type: ${type}`, {
-    type,
-    bugReportId,
-  });
+    // Unsupported type — shouldn't happen if validation is correct
+    throw new JobProcessingError(
+      job.id || 'unknown',
+      `Unsupported intelligence job type: ${type}`,
+      { type, bugReportId }
+    );
+  } catch (err) {
+    if (err instanceof IntelligenceError && err.code === 'llm_unavailable') {
+      // `||`, not `??` — retryAfter can be an explicit 0, and `0 ?? 30`
+      // evaluates to `0` since `0` is not nullish. `||` treats `0` as falsy
+      // and falls through to the 30s floor as intended.
+      const ms = (err.retryAfter || 30) * 1000;
+      await job.moveToDelayed(Date.now() + ms, token);
+      throw new DelayedError();
+    }
+    throw err;
+  }
 }
 
 /**
@@ -585,7 +605,8 @@ export function createIntelligenceWorker(
     typeof QUEUE_NAMES.INTELLIGENCE
   >({
     name: QUEUE_NAMES.INTELLIGENCE,
-    processor: async (job) => processIntelligenceJob(job, clientFactory, db, ruleExecutor),
+    processor: async (job, token) =>
+      processIntelligenceJob(job, token, clientFactory, db, ruleExecutor),
     connection,
     workerType: QUEUE_NAMES.INTELLIGENCE,
   });

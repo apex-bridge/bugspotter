@@ -42,8 +42,12 @@ interface CreateWorkerOptions<D = unknown, R = unknown, N extends QueueName = Qu
   /** Queue name (must match job name) */
   name: N;
 
-  /** Job processor function */
-  processor: (job: IJobHandle<D, R>) => Promise<R>;
+  /**
+   * Job processor function. `token` is BullMQ's worker lock token, present
+   * whenever a registered processor is invoked - only needed by processors
+   * that call `job.moveToDelayed`.
+   */
+  processor: (job: IJobHandle<D, R>, token?: string) => Promise<R>;
 
   /** Redis connection */
   connection: Redis;
