@@ -116,7 +116,8 @@ describe('BullMQWorkerHost', () => {
           name: 'test-job',
           data: { key: 'value' },
           attemptsMade: 1,
-        })
+        }),
+        undefined
       );
     });
 
@@ -132,6 +133,25 @@ describe('BullMQWorkerHost', () => {
 
       const result = await capturedProcessor(mockBullJob);
       expect(result).toEqual({ result: 'done' });
+    });
+
+    it('should forward BullMQ-supplied token as the processor second argument', async () => {
+      // BullMQ's own Processor type is (job, token?) => Promise<R> - the
+      // worker's real callback receives a lock token, and a wrapper that
+      // drops it silently breaks any processor calling job.moveToDelayed,
+      // which requires that exact token (issue #297).
+      const mockBullJob = {
+        id: 'j2',
+        name: 'n',
+        data: { key: 'k' },
+        attemptsMade: 0,
+        updateProgress: vi.fn(),
+        log: vi.fn(),
+      };
+
+      await capturedProcessor(mockBullJob, 'lock-token-abc');
+
+      expect(processor).toHaveBeenCalledWith(expect.anything(), 'lock-token-abc');
     });
   });
 
