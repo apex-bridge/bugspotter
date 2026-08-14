@@ -104,7 +104,11 @@ export function parseStageAndBranchIssue(headRef) {
  * @returns {string|null} null if the file has no such line at all
  */
 export function readAdrField(specContent) {
-  const m = /^ADR:\s*(.+)$/m.exec(specContent ?? '');
+  // [ \t]* (not \s*) keeps the optional leading whitespace on the ADR line
+  // itself - \s matches a newline too, so \s* would happily skip a blank
+  // `ADR:` line and capture the next line's text as the value instead of
+  // reporting no value at all.
+  const m = /^ADR:[ \t]*(\S.*)$/m.exec(specContent ?? '');
   return m ? m[1].trim() : null;
 }
 
@@ -229,10 +233,19 @@ function writeOutputs(pairs) {
   if (!out) {
     return;
   }
-  const lines = Object.entries(pairs)
-    .map(([k, v]) => `${k}=${v ?? ''}`)
-    .join('\n');
-  appendFileSync(out, `${lines}\n`);
+  const lines = Object.entries(pairs).map(([k, v]) => {
+    const value = String(v ?? '');
+    if (!/[\r\n]/.test(value)) {
+      return `${k}=${value}`;
+    }
+    // Randomised delimiter, same reason as check-gate-4.mjs's comment output:
+    // `reason` carries the spec's own ADR field text today, which the bash
+    // step guarantees is single-line - but that guarantee lives outside this
+    // file, so the delimiter form is what actually holds if it ever doesn't.
+    const delimiter = `EOF_${k.toUpperCase()}_${Math.random().toString(36).slice(2)}`;
+    return `${k}<<${delimiter}\n${value}\n${delimiter}`;
+  });
+  appendFileSync(out, `${lines.join('\n')}\n`);
 }
 
 // Two modes because the issue number for adr/ branches is only knowable

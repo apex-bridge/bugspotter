@@ -48,10 +48,21 @@ test('does not match a bare #NNN with no keyword', () => {
   assert.equal(extractIssueNumber('See #227 for background.'), null);
 });
 
+test('accepts an owner/repo-qualified reference and keeps the number', () => {
+  assert.equal(extractIssueNumber('Refs some-org/some-repo#227'), 227);
+});
+
 test('reads the ADR field from a spec file', () => {
   assert.equal(readAdrField('Linked issue: Refs #227\nADR: n/a\n\n## Problem'), 'n/a');
   assert.equal(readAdrField('ADR: docs/adr/0043-slug.md\n'), 'docs/adr/0043-slug.md');
   assert.equal(readAdrField('no ADR line here'), null);
+});
+
+test('a blank ADR line reports no value, not the next line', () => {
+  // Regression: \s* in the old pattern matched the newline too, so a blank
+  // `ADR:` line captured whatever text followed it on the next line.
+  assert.equal(readAdrField('ADR:\n\n## Problem'), null);
+  assert.equal(readAdrField('ADR: \nSome unrelated text'), null);
 });
 
 test('spec merge with ADR: n/a advances straight to agent-working', () => {
@@ -64,6 +75,17 @@ test('spec merge with ADR: n/a advances straight to agent-working', () => {
   assert.equal(d.action, 'advance');
   assert.equal(d.issueNumber, 227);
   assert.deepEqual(d.fromLabels, [GATE_LABELS.spec]);
+  assert.equal(d.toLabel, GATE_LABELS.agentWorking);
+});
+
+test('treats an uppercase ADR: N/A the same as n/a', () => {
+  const d = decideAdvance({
+    headRef: 'spec/issue-227-intelligence-show-match-score-threshold-',
+    prBody: 'Refs #227',
+    issueLabels: [GATE_LABELS.spec],
+    adrField: 'N/A',
+  });
+  assert.equal(d.action, 'advance');
   assert.equal(d.toLabel, GATE_LABELS.agentWorking);
 });
 
