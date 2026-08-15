@@ -27,7 +27,7 @@ describe('useIntelligenceStatus', () => {
   it('uses orgIdOverride and returns isEnabled true when override resolves an enabled org', async () => {
     vi.mocked(useOrganization).mockReturnValue({
       currentOrganization: { id: 'org-viewer' },
-    } as any);
+    } as unknown as ReturnType<typeof useOrganization>);
     vi.mocked(intelligenceService.getStatus).mockResolvedValue({ intelligence_enabled: true });
 
     const { result } = renderHook(() => useIntelligenceStatus('org-enabled'), {
@@ -40,7 +40,9 @@ describe('useIntelligenceStatus', () => {
   });
 
   it('returns isEnabled false when override resolves a disabled org', async () => {
-    vi.mocked(useOrganization).mockReturnValue({ currentOrganization: null } as any);
+    vi.mocked(useOrganization).mockReturnValue({
+      currentOrganization: null,
+    } as unknown as ReturnType<typeof useOrganization>);
     vi.mocked(intelligenceService.getStatus).mockResolvedValue({ intelligence_enabled: false });
 
     const { result } = renderHook(() => useIntelligenceStatus('org-disabled'), {
@@ -53,7 +55,7 @@ describe('useIntelligenceStatus', () => {
   it('falls back to currentOrganization.id when no override is provided', async () => {
     vi.mocked(useOrganization).mockReturnValue({
       currentOrganization: { id: 'org-member' },
-    } as any);
+    } as unknown as ReturnType<typeof useOrganization>);
     vi.mocked(intelligenceService.getStatus).mockResolvedValue({ intelligence_enabled: true });
 
     const { result } = renderHook(() => useIntelligenceStatus(), {
@@ -65,7 +67,9 @@ describe('useIntelligenceStatus', () => {
   });
 
   it('returns isEnabled null and does not fire a query when no override and no currentOrganization', () => {
-    vi.mocked(useOrganization).mockReturnValue({ currentOrganization: null } as any);
+    vi.mocked(useOrganization).mockReturnValue({
+      currentOrganization: null,
+    } as unknown as ReturnType<typeof useOrganization>);
 
     const { result } = renderHook(() => useIntelligenceStatus(), {
       wrapper: queryClientWrapper,
@@ -78,7 +82,7 @@ describe('useIntelligenceStatus', () => {
   it('does not fall back to currentOrganization when override is explicitly null', () => {
     vi.mocked(useOrganization).mockReturnValue({
       currentOrganization: { id: 'org-viewer' },
-    } as any);
+    } as unknown as ReturnType<typeof useOrganization>);
 
     const { result } = renderHook(() => useIntelligenceStatus(null), {
       wrapper: queryClientWrapper,
