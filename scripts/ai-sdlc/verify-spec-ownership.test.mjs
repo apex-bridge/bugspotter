@@ -69,6 +69,15 @@ describe('expandBraceGroup', () => {
   test('leaves an unclosed brace unchanged', () => {
     assert.deepEqual(expandBraceGroup('a/{en,ru.json'), ['a/{en,ru.json']);
   });
+
+  test('leaves a nested brace group unchanged rather than emitting malformed paths', () => {
+    // Regression: the first `}` in a nested group like {en,{ru,kk}} is the
+    // INNER close, so a second-group check that only looked *after* that
+    // close missed the nested `{` sitting between open and close, sliced
+    // "en,{ru,kk" as if it were flat, and emitted garbled paths like
+    // "a/en}.json" and "a/{ru}.json" instead of failing closed.
+    assert.deepEqual(expandBraceGroup('a/{en,{ru,kk}}.json'), ['a/{en,{ru,kk}}.json']);
+  });
 });
 
 describe('extractDeclaredPaths', () => {

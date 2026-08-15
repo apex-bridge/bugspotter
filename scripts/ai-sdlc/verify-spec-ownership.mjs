@@ -122,7 +122,14 @@ export function expandBraceGroup(path) {
   if (close === -1) {
     return [path];
   }
-  if (path.indexOf('{', close + 1) !== -1) {
+  // A second `{` anywhere after the first one — not just after its close —
+  // catches both a separate second group ("{a,b}/{c,d}") AND a nested one
+  // ("{en,{ru,kk}}"). The latter matters because `close` above is the FIRST
+  // `}`, which for a nested group is the inner one: checking only after
+  // `close` would miss the nested `{` sitting between `open` and `close`,
+  // slice a malformed alternative list, and silently emit garbled paths
+  // instead of failing closed on a shape this function doesn't handle.
+  if (path.indexOf('{', open + 1) !== -1) {
     return [path];
   }
   const alternatives = path
