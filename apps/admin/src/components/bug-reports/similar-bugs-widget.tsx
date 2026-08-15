@@ -8,11 +8,13 @@ import { SuggestionFeedback } from './suggestion-feedback';
 interface SimilarBugsWidgetProps {
   bugReportId: string;
   projectId: string;
+  /** The bug this report was auto-closed as a duplicate of, if any. */
+  duplicateOf?: string | null;
 }
 
 // Mounted by bug-report-detail only when intelligence_enabled is
 // true, so no self-gating here.
-export function SimilarBugsWidget({ bugReportId, projectId }: SimilarBugsWidgetProps) {
+export function SimilarBugsWidget({ bugReportId, projectId, duplicateOf }: SimilarBugsWidgetProps) {
   const { t } = useTranslation();
 
   const { data, isLoading, isError } = useQuery({
@@ -46,6 +48,15 @@ export function SimilarBugsWidget({ bugReportId, projectId }: SimilarBugsWidgetP
   if (!data || data.similar_bugs.length === 0) {
     return null;
   }
+
+  const matchedBug =
+    duplicateOf != null ? data.similar_bugs.find((bug) => bug.bug_id === duplicateOf) : undefined;
+  const sortedBySimilarity = [...data.similar_bugs].sort((a, b) => b.similarity - a.similarity);
+  // Prefer the similarity of the bug actually marked as duplicate; fall back
+  // to the top match if it's no longer in the response (corpus/threshold
+  // changed since auto-close — see spec Constraint 1).
+  const currentMatchScore = matchedBug?.similarity ?? sortedBySimilarity[0]?.similarity ?? 0;
+  const top3 = sortedBySimilarity.slice(0, 3);
 
   return (
     <div className="border rounded-lg p-4 bg-purple-50 border-purple-100">
@@ -98,6 +109,27 @@ export function SimilarBugsWidget({ bugReportId, projectId }: SimilarBugsWidgetP
           </div>
         ))}
       </div>
+
+      {duplicateOf != null && (
+        <details open className="duplicate-match-details mt-3 pt-3 border-t border-purple-100">
+          <summary className="text-sm font-medium text-purple-900 cursor-pointer">
+            {t('intelligence.duplicateDetails.title')}
+          </summary>
+          <p className="text-sm text-purple-800 mt-2">
+            {t('intelligence.duplicateDetails.score', {
+              score: currentMatchScore.toFixed(2),
+              threshold: data.threshold_used.toFixed(2),
+            })}
+          </p>
+          <ul className="mt-1 space-y-1">
+            {top3.map((bug) => (
+              <li key={bug.bug_id} className="text-sm text-gray-700">
+                {bug.title} — {bug.similarity.toFixed(2)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
