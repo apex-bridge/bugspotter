@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   parseAdrOwnership,
   extractDeclaredPaths,
+  expandBraceGroup,
   extractOutOfScopeText,
   checkOwnership,
 } from './verify-spec-ownership.mjs';
@@ -37,6 +38,45 @@ describe('parseAdrOwnership', () => {
 
   test('empty index yields an empty map', () => {
     assert.equal(parseAdrOwnership('no table here').size, 0);
+  });
+});
+
+describe('expandBraceGroup', () => {
+  test('expands a brace-alternation group into one path per alternative', () => {
+    assert.deepEqual(expandBraceGroup('apps/admin/src/i18n/locales/{en,ru,kk}.json'), [
+      'apps/admin/src/i18n/locales/en.json',
+      'apps/admin/src/i18n/locales/ru.json',
+      'apps/admin/src/i18n/locales/kk.json',
+    ]);
+  });
+
+  test('trims whitespace inside the group', () => {
+    assert.deepEqual(expandBraceGroup('a/{one, two}.ts'), ['a/one.ts', 'a/two.ts']);
+  });
+
+  test('leaves a path with no braces unchanged', () => {
+    assert.deepEqual(expandBraceGroup('packages/a/b.ts'), ['packages/a/b.ts']);
+  });
+
+  test('leaves a path with a single-element group unchanged (not a real alternation)', () => {
+    assert.deepEqual(expandBraceGroup('a/{en}.json'), ['a/{en}.json']);
+  });
+
+  test('leaves a path with more than one brace group unchanged rather than guessing', () => {
+    assert.deepEqual(expandBraceGroup('a/{en,ru}/{v1,v2}.json'), ['a/{en,ru}/{v1,v2}.json']);
+  });
+
+  test('leaves an unclosed brace unchanged', () => {
+    assert.deepEqual(expandBraceGroup('a/{en,ru.json'), ['a/{en,ru.json']);
+  });
+
+  test('leaves a nested brace group unchanged rather than emitting malformed paths', () => {
+    // Regression: the first `}` in a nested group like {en,{ru,kk}} is the
+    // INNER close, so a second-group check that only looked *after* that
+    // close missed the nested `{` sitting between open and close, sliced
+    // "en,{ru,kk" as if it were flat, and emitted garbled paths like
+    // "a/en}.json" and "a/{ru}.json" instead of failing closed.
+    assert.deepEqual(expandBraceGroup('a/{en,{ru,kk}}.json'), ['a/{en,{ru,kk}}.json']);
   });
 });
 
@@ -121,6 +161,29 @@ describe('extractDeclaredPaths', () => {
       '**Blocking prerequisites:** none',
     ].join('\n');
     assert.deepEqual(extractDeclaredPaths(spec), ['packages/a/one.ts', 'packages/a/two.ts']);
+  });
+
+  test('expands a brace-alternation path into its concrete files (issue #227)', () => {
+    // Real shape from docs/specs/0227-*.md: one bullet declaring an i18n
+    // edit across three locale files via `{en,ru,kk}.json` shorthand. Before
+    // expandBraceGroup, this returned the literal unexpanded string as a
+    // single "path" - check-impl-scope.mjs then flagged the three real files
+    // the model correctly wrote as undeclared, and the literal brace string
+    // as declared-but-never-written, failing a scaffold that was right.
+    const spec = [
+      '**Files touched:**',
+      '',
+      '- `apps/admin/src/components/bug-reports/similar-bugs-widget.tsx`',
+      '- `apps/admin/src/i18n/locales/{en,ru,kk}.json` — add `intelligence.duplicateDetails.{title,score}` keys.',
+      '',
+      '**Blocking prerequisites:** none',
+    ].join('\n');
+    assert.deepEqual(extractDeclaredPaths(spec), [
+      'apps/admin/src/components/bug-reports/similar-bugs-widget.tsx',
+      'apps/admin/src/i18n/locales/en.json',
+      'apps/admin/src/i18n/locales/ru.json',
+      'apps/admin/src/i18n/locales/kk.json',
+    ]);
   });
 });
 
