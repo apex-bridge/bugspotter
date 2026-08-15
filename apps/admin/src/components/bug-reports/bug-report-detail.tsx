@@ -224,7 +224,11 @@ export function BugReportDetail({ reportId, onClose, onNavigateToBug }: BugRepor
               {intelligenceEnabled === true && (
                 <>
                   <AIEnrichmentCard bugReportId={report.id} />
-                  <SimilarBugsWidget bugReportId={report.id} projectId={report.project_id} />
+                  <SimilarBugsWidget
+                    bugReportId={report.id}
+                    projectId={report.project_id}
+                    duplicateOf={report.duplicate_of}
+                  />
                   <SuggestFixButton bugReportId={report.id} projectId={report.project_id} />
                 </>
               )}

@@ -1945,6 +1945,10 @@
       "loading": "Finding similar bugs...",
       "error": "Failed to find similar bugs"
     },
+    "duplicateDetails": {
+      "title": "Duplicate match details",
+      "score": "Current match: {{score}} (threshold: {{threshold}})"
+    },
     "mitigation": {
       "suggestFix": "Suggest Fix",
       "suggestion": "AI Suggestion",
