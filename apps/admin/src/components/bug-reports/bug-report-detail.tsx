@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { X, Image as ImageIcon, Download, ExternalLink } from 'lucide-react';
 import { Button } from '../ui/button';
 import { bugReportService, storageService } from '../../services/api';
+import { projectService } from '../../services/project-service';
 import { formatDate } from '../../utils/format';
 import { SessionReplayPlayer } from './session-replay-player';
 import { BugReportStatusControls } from './bug-report-status-controls';
@@ -34,12 +35,22 @@ export function BugReportDetail({ reportId, onClose, onNavigateToBug }: BugRepor
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'replay' | 'details' | 'logs'>('replay');
   const [isDownloading, setIsDownloading] = useState(false);
-  const { isEnabled: intelligenceEnabled } = useIntelligenceStatus();
 
   const { data: report, isLoading } = useQuery({
     queryKey: ['bugReport', reportId],
     queryFn: () => bugReportService.getById(reportId),
   });
+
+  const { data: project } = useQuery({
+    queryKey: ['project', report?.project_id],
+    queryFn: () => projectService.getById(report!.project_id),
+    enabled: !!report?.project_id,
+  });
+
+  // null (not undefined) while unresolved/errored/no-org, so the hook never
+  // falls back to the viewer's own currentOrganization for this call site.
+  const bugOrgId: string | null = project?.organization_id ?? null;
+  const { isEnabled: intelligenceEnabled } = useIntelligenceStatus(bugOrgId);
 
   const handleDownloadScreenshot = async () => {
     if (!report) {
