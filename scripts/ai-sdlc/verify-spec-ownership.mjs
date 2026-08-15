@@ -98,6 +98,46 @@ function allBacktickSpans(text) {
   return spans;
 }
 
+// Expands a single {a,b,c} brace-alternation group into multiple concrete
+// paths - shorthand a spec can reach for when several files get the same
+// one-line edit (e.g. i18n locale bundles:
+// `apps/admin/src/i18n/locales/{en,ru,kk}.json`). Without this,
+// extractDeclaredPaths returned that string as one literal, unexpanded path -
+// which check-impl-scope.mjs then compared byte-for-byte against the three
+// real files the model correctly wrote, and failed a scaffold that was
+// actually right (issue #227, 2026-08-15: three genuinely-declared locale
+// edits flagged as "not declared", plus a phantom "declared but never
+// written" file for the literal brace string itself).
+//
+// Only one group per path, no nesting - that covers every real spec seen so
+// far. A path with more than one brace group, or a `{...}` that turns out not
+// to be a >=2-way alternation (no comma), is returned unexpanded rather than
+// guessing at a shape this hasn't seen.
+export function expandBraceGroup(path) {
+  const open = path.indexOf('{');
+  if (open === -1) {
+    return [path];
+  }
+  const close = path.indexOf('}', open + 1);
+  if (close === -1) {
+    return [path];
+  }
+  if (path.indexOf('{', close + 1) !== -1) {
+    return [path];
+  }
+  const alternatives = path
+    .slice(open + 1, close)
+    .split(',')
+    .map((a) => a.trim())
+    .filter(Boolean);
+  if (alternatives.length < 2) {
+    return [path];
+  }
+  const prefix = path.slice(0, open);
+  const suffix = path.slice(close + 1);
+  return alternatives.map((alt) => `${prefix}${alt}${suffix}`);
+}
+
 export function extractDeclaredPaths(specText) {
   const marker = '**Files touched:**';
   const markerIdx = specText.indexOf(marker);
@@ -116,7 +156,9 @@ export function extractDeclaredPaths(specText) {
       // The inline form puts every path on the marker's own line, comma-
       // separated ("**Files touched:** `a.ts`, `b.ts`") - nothing precedes
       // them to be a trailing description, so every span here is a path.
-      paths.push(...allBacktickSpans(line));
+      for (const span of allBacktickSpans(line)) {
+        paths.push(...expandBraceGroup(span));
+      }
       continue;
     }
 
@@ -142,7 +184,7 @@ export function extractDeclaredPaths(specText) {
     // has its own backtick-quoted terms.
     const path = firstBacktickSpan(line);
     if (path !== null) {
-      paths.push(path);
+      paths.push(...expandBraceGroup(path));
       sawBullet = true;
     }
   }
