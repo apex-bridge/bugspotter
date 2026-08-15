@@ -48,7 +48,15 @@ deploy_one() {
 
   echo "$(date -Iseconds) [$name] deploying $new_digest (was: ${old_digest:-none})" >>"$LOG_FILE"
 
-  short=$(printf '%s' "$new_digest" | cut -c1-19)
+  # Strip the "sha256:" prefix before truncating - a Docker tag can't contain
+  # a second colon, and the untruncated digest always has one right after
+  # the algorithm name. The original single-image script truncated the raw
+  # digest (`cut -c1-12`) and silently produced an invalid tag every run;
+  # confirmed by actually running this rewrite against production rather
+  # than trusting the read - `docker tag` failed with "invalid reference
+  # format" and the rollback tag was never created, though the deploy itself
+  # still completed since that failure wasn't the last command in its list.
+  short=$(printf '%s' "${new_digest#sha256:}" | cut -c1-12)
   new_id=$(docker image inspect --format '{{.Id}}' "$image")
   old_id=$(docker image inspect --format '{{.Id}}' "bugspotter-$name:latest" 2>/dev/null || true)
   if [ -n "$old_id" ] && [ "$new_id" != "$old_id" ]; then
