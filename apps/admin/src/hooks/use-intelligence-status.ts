@@ -7,12 +7,13 @@ import { intelligenceService } from '../services/intelligence-service';
  * Returns `null` while loading or when there is no current org so
  * callers can fail closed (don't render intel UI until we know).
  */
-export function useIntelligenceStatus(): {
+export function useIntelligenceStatus(orgIdOverride?: string | null): {
   isEnabled: boolean | null;
   isLoading: boolean;
 } {
   const { currentOrganization } = useOrganization();
-  const orgId = currentOrganization?.id;
+  const orgId =
+    orgIdOverride === undefined ? currentOrganization?.id : (orgIdOverride ?? undefined);
 
   const { data, isLoading, isSuccess } = useQuery({
     queryKey: ['intelligence-status', orgId],
