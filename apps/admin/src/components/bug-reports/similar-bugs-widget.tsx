@@ -124,7 +124,7 @@ export function SimilarBugsWidget({ bugReportId, projectId, duplicateOf }: Simil
           <ul className="mt-1 space-y-1">
             {top3.map((bug) => (
               <li key={bug.bug_id} className="text-sm text-gray-700">
-                {bug.title} — {bug.similarity.toFixed(2)}
+                {bug.title} - {bug.similarity.toFixed(2)}
               </li>
             ))}
           </ul>
