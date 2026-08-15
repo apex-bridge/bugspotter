@@ -36,6 +36,7 @@
 //   detectable via stopReason === 'max_tokens' regardless of backend.
 
 import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
 
 const LLM_BACKEND = process.env.LLM_BACKEND || 'api';
@@ -267,6 +268,39 @@ function clipDump(text, tailChars = 1500) {
     : trimmed;
 }
 
+// The tails formatCliTimeout/clipDump put in an Error message are themselves
+// clipped to keep a CI log readable - which is exactly what makes a real
+// post-mortem impossible. A 2026-08-14 timeout (impl-agent, issue #227) had a
+// visible anomaly (thinking-token count jumping ~1690 -> ~21857 in the final
+// 60s) that could not be explained from the 1500-char tail alone: is that a
+// new long thinking segment starting late, or the CLI's own estimate
+// catching up on one continuous segment? Answering that needs the full
+// NDJSON stream, not a fragment.
+//
+// Writes only on a failure path (see call sites in callViaCli) - a
+// successful call needs no forensics, and dumping every run's full stream
+// would make the artifact noise instead of signal. Best-effort: a write
+// failure must never be the reason the real error from callViaCli is lost,
+// so this only warns and returns.
+function dumpCliTranscriptOnFailure(stdout, stderr) {
+  const path = process.env.AI_SDLC_CLI_TRANSCRIPT_PATH;
+  if (!path) {
+    return;
+  }
+  try {
+    const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
+    const stderrBytes = Buffer.byteLength(stderr, 'utf8');
+    writeFileSync(
+      path,
+      `=== stdout (${stdoutBytes} bytes, raw NDJSON stream) ===\n${stdout}\n\n` +
+        `=== stderr (${stderrBytes} bytes) ===\n${stderr}\n`,
+      'utf8'
+    );
+  } catch (err) {
+    console.warn(`llm-client: could not write CLI transcript to ${path}: ${err.message}`);
+  }
+}
+
 // No `maxTokens` param here (deliberately) — the CLI has no per-call
 // output-token cap to forward it to. See the module header comment.
 async function callViaCli({ prompt, timeoutMs, model }) {
@@ -381,6 +415,7 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     const timer = setTimeout(() => {
       clearInterval(heartbeat);
       child.kill('SIGKILL');
+      dumpCliTranscriptOnFailure(stdout, stderr);
       reject(
         new Error(
           formatCliTimeout({
@@ -411,6 +446,7 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     child.on('error', (err) => {
       clearTimeout(timer);
       clearInterval(heartbeat);
+      dumpCliTranscriptOnFailure(stdout, stderr);
       reject(err);
     });
     child.on('close', (code, signal) => {
@@ -425,12 +461,14 @@ async function callViaCli({ prompt, timeoutMs, model }) {
         // in the JSON on stdout, not stderr - include both, clipped (see
         // clipDump above).
         const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
+        dumpCliTranscriptOnFailure(stdout, stderr);
         reject(
           new Error(`claude CLI exited with ${reason}${detail ? `: ${clipDump(detail)}` : ''}`)
         );
         return;
       }
       if (!resultEvent) {
+        dumpCliTranscriptOnFailure(stdout, stderr);
         reject(
           new Error(
             `claude CLI exited cleanly but no "result" event was found in its stream-json ` +
@@ -440,10 +478,12 @@ async function callViaCli({ prompt, timeoutMs, model }) {
         return;
       }
       if (resultEvent.is_error) {
+        dumpCliTranscriptOnFailure(stdout, stderr);
         reject(new Error(`claude CLI reported an error: ${JSON.stringify(resultEvent)}`));
         return;
       }
       if (typeof resultEvent.result !== 'string') {
+        dumpCliTranscriptOnFailure(stdout, stderr);
         reject(new Error(`Unexpected claude CLI response shape: ${JSON.stringify(resultEvent)}`));
         return;
       }

@@ -20,7 +20,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync, rmSync, chmodSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -281,6 +281,74 @@ test('callViaCli timeout error carries what the child actually wrote before the 
     assert.doesNotMatch(err.message, /wrote nothing at all/);
     return true;
   });
+});
+
+test('callViaCli writes the full raw stdout/stderr to AI_SDLC_CLI_TRANSCRIPT_PATH on a timeout', async () => {
+  // formatCliTimeout's tail is clipped to keep a CI log readable, which is
+  // exactly what makes a real post-mortem impossible (2026-08-14, impl-agent
+  // issue #227: the thinking-token count jumped ~1690 -> ~21857 in the final
+  // 60s and the clipped tail alone couldn't say why). This is the escape
+  // hatch: the full stream, not a fragment.
+  const transcriptPath = join(DIR, 'transcript-timeout.txt');
+  process.env.FAKE_CLAUDE_MODE = 'hang';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  process.env.AI_SDLC_CLI_TRANSCRIPT_PATH = transcriptPath;
+
+  try {
+    await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 2500 }));
+
+    const transcript = readFileSync(transcriptPath, 'utf8');
+    // Full content, not the 1500-char-tail-clipped version formatCliTimeout
+    // puts in the Error message.
+    assert.match(transcript, /PARTIAL_ENVELOPE_MARKER/);
+    assert.match(transcript, /FAKE_STDERR_PROGRESS/);
+    assert.match(transcript, /=== stdout \(\d+ bytes, raw NDJSON stream\) ===/);
+    assert.match(transcript, /=== stderr \(\d+ bytes\) ===/);
+  } finally {
+    delete process.env.AI_SDLC_CLI_TRANSCRIPT_PATH;
+  }
+});
+
+test('callViaCli writes a transcript on a non-zero exit too, not just a timeout', async () => {
+  const transcriptPath = join(DIR, 'transcript-error.txt');
+  process.env.FAKE_CLAUDE_MODE = 'error';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  process.env.AI_SDLC_CLI_TRANSCRIPT_PATH = transcriptPath;
+
+  try {
+    await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }));
+
+    const transcript = readFileSync(transcriptPath, 'utf8');
+    assert.match(transcript, /FAKE_STDOUT_MARKER: upstream billing failure detail/);
+  } finally {
+    delete process.env.AI_SDLC_CLI_TRANSCRIPT_PATH;
+  }
+});
+
+test('callViaCli never writes a transcript on success, even when AI_SDLC_CLI_TRANSCRIPT_PATH is set', async () => {
+  // A successful call needs no forensics — dumping every run's full stream
+  // would make the artifact noise instead of signal.
+  const transcriptPath = join(DIR, 'transcript-success.txt');
+  process.env.FAKE_CLAUDE_MODE = 'success';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  process.env.AI_SDLC_CLI_TRANSCRIPT_PATH = transcriptPath;
+
+  try {
+    await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(existsSync(transcriptPath), false);
+  } finally {
+    delete process.env.AI_SDLC_CLI_TRANSCRIPT_PATH;
+  }
+});
+
+test('callViaCli writes no transcript file when AI_SDLC_CLI_TRANSCRIPT_PATH is unset, even on failure', async () => {
+  const transcriptPath = join(DIR, 'transcript-unset.txt');
+  process.env.FAKE_CLAUDE_MODE = 'error';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  delete process.env.AI_SDLC_CLI_TRANSCRIPT_PATH;
+
+  await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }));
+  assert.equal(existsSync(transcriptPath), false);
 });
 
 test('callViaCli strips ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN from the spawned child env, keeps other vars', async () => {
