@@ -29,8 +29,8 @@ ratified.
 
 ### The bug that forced this
 
-`users.email` is globally unique across the whole database (`001_initial
-_schema.sql`). `oidc_idp_config` is per-tenant, and tenant admins configure
+`users.email` is globally unique across the whole database
+(`001_initial_schema.sql`). `oidc_idp_config` is per-tenant, and tenant admins configure
 their own IdP's issuer/client credentials. The spec's account-linking rule
 (match an incoming ID-token's verified email against `users.email`,
 tenant-unscoped) meant any tenant admin - or anyone who compromises one -
@@ -51,7 +51,7 @@ configure it.
 An OIDC login may only auto-link to an **existing** `users` row if that
 user already holds a membership in the **same tenant** whose IdP produced
 the login. Concretely: resolve the tenant from the login path first
-(`/auth/oidc/:tenant/callback`), then check whether the ID-token's verified
+(`/api/v1/auth/oidc/:tenant/callback`), then check whether the ID-token's verified
 email matches an existing user **who is a member of that tenant**. If yes,
 link. If the email matches a user who is _not_ a member of that tenant,
 **reject the login** with a generic, non-enumerating error ("this login
@@ -75,10 +75,14 @@ a tenant admin could in principle set `allowed_domains` to a domain they
 don't own, and nothing here verifies domain _ownership_ - but it closes the
 adjacent, lesser risk (typos, stale config, accidental over-broad IdPs
 minting arbitrary new accounts) and is cheap to enforce given the field
-already exists in the schema. Domain-ownership verification (DNS TXT
-record challenge, the way most enterprise SSO products do it) is
-explicitly **out of scope for v1** - noted as a residual risk below, not
-silently ignored.
+already exists in the schema. **Fail closed when unconfigured**: an empty
+or missing `allowed_domains` on a tenant's IdP config rejects every OIDC
+login for that tenant (both linking and creation), rather than permitting
+any domain by default - a tenant admin who never sets this field gets "SSO
+doesn't work yet," not a silently unrestricted login path. Domain-ownership
+verification (DNS TXT record challenge, the way most enterprise SSO
+products do it) is explicitly **out of scope for v1** - noted as a
+residual risk below, not silently ignored.
 
 ### 3. Tenant -> IdP mapping (`saas` mode)
 
@@ -104,9 +108,10 @@ one the spec applied inconsistently.
 ### 5. API keys and SSO are orthogonal - no restriction in v1
 
 API keys authenticate a specific programmatic-access credential
-(`packages/backend/src/api/routes/auth.ts`'s API-key path is a separate
-strategy from user-session JWTs entirely, per ADR-0008's triple-auth
-model), not a login method for a human. Nothing in this feature's design
+(issued and managed via `packages/backend/src/api/routes/api-keys.ts`;
+authenticated via a separate middleware path from user-session JWTs
+entirely, per ADR-0008's triple-auth model), not a login method for a
+human. Nothing in this feature's design
 requires coupling them. **Decision: SSO users may create and hold API
 keys exactly as password-auth users do; enforcing SSO does not touch API
 key issuance.** Revisit only if a specific enterprise customer requires
@@ -114,16 +119,42 @@ key issuance.** Revisit only if a specific enterprise customer requires
 larger feature (credential-issuance policy), not a default to build
 speculatively now.
 
-### 6. Provider mechanics (unchanged from the original spec - not in question)
+### 6. Provider mechanics and infrastructure controls
 
-`openid-client` v5, PKCE S256 required (no implicit flow, no plain PKCE),
-full ID-token validation (`iss`/`aud`/`nonce`/`exp`/JWKS signature), CSRF
-`state` + `nonce` via the existing Redis cache layer with a <=10 minute
-TTL, `client_secret` encrypted at rest via the existing `EncryptionService`
-(matching the Jira/Linear integration-credential pattern). These held up
-across all three review rounds and are restated here only so this ADR is
-a complete answer to #265's four questions, not because they were
-contested.
+Unchanged from the original spec's review-fixed state - not in question,
+restated for completeness. These were found missing and fixed during PR
+#345's first review round,
+before #345 was closed as superseded - restated here explicitly, as their
+own required constraints, so a fresh implementation PR doesn't have to
+rediscover them:
+
+- `openid-client` v5, PKCE S256 required (no implicit flow, no plain
+  PKCE), full ID-token validation (`iss`/`aud`/`nonce`/`exp`/JWKS
+  signature), CSRF `state` + `nonce` via the existing Redis cache layer
+  with a <=10 minute TTL.
+- `client_secret` encrypted at rest via the existing encryption utility
+  (`getEncryptionService()` / `CredentialEncryption`,
+  `packages/backend/src/utils/encryption.ts`), matching the Jira/Linear
+  integration-credential pattern - never stored in plaintext.
+- `issuerUrl` is admin-supplied and must be validated with
+  `validateSSRFProtection()` (`packages/backend/src/integrations/security
+/ssrf-validator.ts`, the same guard `rpc-bridge.ts` already uses) at
+  config-save time and immediately before every `Issuer.discover()` call -
+  it is otherwise a live SSRF vector reachable against internal hosts and
+  cloud metadata endpoints.
+- The IdP-config admin endpoints (read and write) require tenant-admin
+  role via `requireTenantOrgRole(db, ORG_MEMBER_ROLE.ADMIN)`
+  (`packages/backend/src/api/middleware/org-access.ts`) - a valid session
+  alone (`app.authenticate`) is not sufficient, since any tenant member
+  could otherwise repoint the IdP at an attacker-controlled one.
+- The IdP-config GET response never returns the decrypted secret - a
+  boolean presence flag only; PUT treats an omitted secret as
+  keep-existing.
+
+These held up across all three review rounds (once fixed) and are
+restated here so this ADR is a complete, self-sufficient answer to #265's
+four questions plus the fifth this review process forced out, not because
+any of them were contested on their own merits.
 
 ## Rejected alternatives
 
