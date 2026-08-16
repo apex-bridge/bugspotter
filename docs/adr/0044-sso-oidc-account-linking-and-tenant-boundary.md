@@ -46,6 +46,31 @@ configure it.
 
 ## Decision
 
+The login/callback path decisions 1 and 2 make, in one diagram - the
+highlighted branch is the fix; the original spec linked here instead of
+rejecting:
+
+```mermaid
+flowchart TD
+    A[User clicks Sign in with SSO] --> B["/api/v1/auth/oidc/:tenant/login<br/>redirect to tenant's IdP"]
+    B --> C[IdP authenticates,<br/>redirects back with auth code]
+    C --> D["/api/v1/auth/oidc/:tenant/callback"]
+    D --> E{ID token valid?<br/>iss / aud / nonce / exp / signature}
+    E -->|no| REJECT[Reject: 401]
+    E -->|yes| F{email_verified true AND<br/>domain in allowed_domains?}
+    F -->|"no, or unconfigured"| REJECT
+    F -->|yes| G{Email matches an<br/>existing users row?}
+    G -->|no| CREATE[Create user,<br/>membership in THIS tenant]
+    CREATE --> SESSION[Issue session]
+    G -->|yes| H{Matched user already a<br/>member of THIS tenant?}
+    H -->|yes| LINK[Link: log in as that user]
+    LINK --> SESSION
+    H -->|"no - different tenant"| BOUNDARY["Reject: generic error<br/>Decision 1 - closes the<br/>cross-tenant takeover path"]
+
+    classDef boundary fill:#3a1d1d,stroke:#e05252,color:#fff,stroke-width:2px
+    class BOUNDARY boundary
+```
+
 ### 1. Account-linking is tenant-scoped, not email-scoped
 
 An OIDC login may only auto-link to an **existing** `users` row if that
