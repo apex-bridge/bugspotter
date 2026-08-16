@@ -90,6 +90,15 @@ ADRs are numbered in **logical build order** — foundations first, then the bac
 | [0039](0039-mcp-ajv-json-schema-validation.md)  | Ajv + JSON Schema validation (single source of truth) | mcp            |
 | [0040](0040-mcp-behavioral-jsonl-logging.md)    | Behavioral JSONL logging with scoped PII redaction    | mcp            |
 
+### Era 7 — AI-SDLC / product surfaces
+
+| #                                                            | Decision                                                                             | Source repo(s) |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------ | -------------- |
+| [0041](0041-ai-factory-adaptation.md)                        | AI Factory framework adaptation (mapping, not implementation)                        | public         |
+| [0042](0042-agent-identity-scoped-app.md)                    | Agent identity - scoped GitHub App, not a user account                               | public         |
+| [0043](0043-intelligence-show-match-score-threshold.md)      | Intelligence: surface current match score and threshold in duplicate bug detail view | public         |
+| [0044](0044-sso-oidc-account-linking-and-tenant-boundary.md) | SSO/OIDC auth extension - provider model, tenant-scoped account-linking              | public         |
+
 ## Consciously not promoted to ADRs
 
 The following surfaced during the doc sweep but were judged implementation detail or a consequence of an ADR above, not standalone architectural decisions. Listed here so the record is honest about scope: gzip replay compression (native `CompressionStream` / `pako`); multi-format SDK build (CJS/ESM/UMD); Vite + `@crxjs` extension build; canvas/Shadow-DOM screenshot annotation overlay; domain allowlist for capture; honeypot + rate-limit spam defense on signup; Vercel static deploy + under-construction toggle; SEO/canonical metadata; Playwright serial-mode E2E; non-root Docker user; idempotent `IF NOT EXISTS` migrations (no Alembic) in the intelligence service; Prometheus metrics cardinality protection; Redis sliding-window rate limiting (Lua) and tenant-versioned cache invalidation in the intelligence service; MCP HTTP retry policy (5xx-yes/4xx-no), per-request timeouts, and 30-minute session TTL with sticky routing.
