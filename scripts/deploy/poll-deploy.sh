@@ -129,4 +129,12 @@ if [ "$admin_status" -ne 0 ]; then
   echo "$(date -Iseconds) [admin] deploy_one exited non-zero" >>"$LOG_FILE"
 fi
 
+# Both deploys have already run to completion by this point regardless of
+# each other's outcome (that's the whole independence guarantee above) - this
+# just makes the script's own exit code honest about whether either failed,
+# so cron's own failure signaling (e.g. a MAILTO alert on non-zero exit)
+# actually works instead of always reporting success.
+if [ "$api_status" -ne 0 ] || [ "$admin_status" -ne 0 ]; then
+  exit 1
+fi
 exit 0
