@@ -91,6 +91,20 @@ an attacker's IdP can assert whatever it wants about an email address, but
 it can never cause a login to resolve to an account outside the tenant the
 attacker's own IdP is scoped to.
 
+**In `selfhosted` mode this requirement is moot by construction, not by a
+separate rule.** Decision 4 already establishes selfhosted has exactly one
+global, operator-controlled IdP (env vars, not a per-tenant DB row) - there
+is no tenant-level admin who can independently configure an untrusted IdP
+the way a `saas` tenant admin can, which is the actual precondition for the
+takeover path this decision closes. The selfhosted login/callback route
+therefore carries no `:tenant` path segment, and account-linking matches on
+verified email across the whole instance with no membership check: even if
+a selfhosted deployment has more than one organization (nothing in the
+schema forbids it, though `selfhosted` is scoped single-tenant per
+`CLAUDE.md`), every organization there trusts the same operator-controlled
+IdP equally, so there is no independently-untrusted party for a boundary to
+defend against.
+
 ### 2. `allowed_domains` is enforced on every login, not just checked at config time
 
 Every OIDC login (both the linking branch and the create-on-first-login
@@ -147,16 +161,22 @@ speculatively now.
 ### 6. Provider mechanics and infrastructure controls
 
 Unchanged from the original spec's review-fixed state - not in question,
-restated for completeness. These were found missing and fixed during PR
-#345's first review round,
-before #345 was closed as superseded - restated here explicitly, as their
+restated for completeness. These were found missing and fixed during
+PR `#345`'s first review round, before it was closed as superseded -
+restated here explicitly, as their
 own required constraints, so a fresh implementation PR doesn't have to
 rediscover them:
 
 - `openid-client` v5, PKCE S256 required (no implicit flow, no plain
   PKCE), full ID-token validation (`iss`/`aud`/`nonce`/`exp`/JWKS
-  signature), CSRF `state` + `nonce` via the existing Redis cache layer
-  with a <=10 minute TTL.
+  signature), `email_verified === true` checked before any account lookup
+  runs. CSRF `state` + `nonce` live in the existing Redis cache layer with
+  a <=10 minute TTL, **consumed atomically** (read-and-delete as one
+  operation, not read-then-separately-delete) so a captured `state`/code
+  pair cannot be replayed a second time inside the TTL window, and the
+  stored record is bound to the initiating session, the resolved tenant
+  (`saas` mode), the issuer, the redirect URI, and the PKCE code verifier -
+  not just checked for existence.
 - `client_secret` encrypted at rest via the existing encryption utility
   (`getEncryptionService()` / `CredentialEncryption`,
   `packages/backend/src/utils/encryption.ts`), matching the Jira/Linear
@@ -166,7 +186,19 @@ rediscover them:
 /ssrf-validator.ts`, the same guard `rpc-bridge.ts` already uses) at
   config-save time and immediately before every `Issuer.discover()` call -
   it is otherwise a live SSRF vector reachable against internal hosts and
-  cloud metadata endpoints.
+  cloud metadata endpoints. **The same validation applies to every endpoint
+  `Issuer.discover()` itself returns** (`token_endpoint`, `jwks_uri`) before
+  `openid-client` is allowed to send a backend request to them -
+  `openid-client` v5 does not follow redirects, but it does send requests
+  directly to whatever the issuer's own metadata document claims those
+  endpoints are, and that document is attacker-influenced the same way
+  `issuerUrl` is. Re-validating on every connection (not just once at
+  discovery) rather than caching the discovered endpoints as pre-trusted is
+  required for the same reason. Full DNS-rebinding protection (re-resolving
+  and pinning the IP immediately before each connection, closing the
+  window between validation and the actual TCP connect) is explicitly
+  **out of scope for v1** - a known residual risk, not silently ignored;
+  see below.
 - The IdP-config admin endpoints (read and write) require tenant-admin
   role via `requireTenantOrgRole(db, ORG_MEMBER_ROLE.ADMIN)`
   (`packages/backend/src/api/middleware/org-access.ts`) - a valid session
@@ -228,18 +260,25 @@ inconsistency-by-omission that caused the bug this ADR exists to fix.
 
 ### Negative / residual
 
-- A real person who legitimately has separate accounts in two different
-  tenants under the same email cannot auto-link via SSO across them -
-  they'll hit the generic rejection and need support to sort out manually.
-  Accepted: silent cross-tenant linking is the vulnerability this ADR
-  closes, so this is the direct, correct cost of closing it, not an
-  oversight.
-- `allowed_domains` has no domain-ownership verification in v1. A tenant
-  admin can still claim a domain they don't control; `allowed_domains`
-  narrows the blast radius (must ALSO know a valid email at that domain
-  that resolves inside their own tenant boundary per decision 1) but does
-  not eliminate operator misconfiguration. Filed as a known v2 gap, not
-  silently accepted as solved.
+- A real person with one global account (`users.email` is unique - there
+  is no such thing as two separate accounts under the same email) who has
+  a membership in tenant A but not tenant B cannot auto-link via SSO
+  through tenant B's IdP - they'll hit the generic rejection and need
+  support to add their existing account to tenant B manually. Accepted:
+  silent cross-tenant linking is the vulnerability this ADR closes, so
+  this is the direct, correct cost of closing it, not an oversight.
+- `allowed_domains` has no domain-ownership verification in v1, and its
+  protection is **not symmetric between the two branches of decision 1**.
+  On the linking branch, an attacker still needs the domain in
+  `allowed_domains` _and_ a matching email that already has a membership
+  in that specific tenant - decision 1's boundary applies on top. On the
+  _creation_ branch there is no existing account to match against at all -
+  `allowed_domains` is the only control, so a tenant admin who claims a
+  domain they don't own (or misconfigures it) can have their IdP mint
+  arbitrary new accounts in that tenant for any address at that domain,
+  real or fabricated. Filed as a known v2 gap (domain-ownership
+  verification, e.g. a DNS TXT challenge), not silently accepted as
+  solved.
 - Four follow-up issues instead of one - more coordination surface, more
   PRs to track to closure. Accepted per explicit owner direction: given
   the alternative demonstrated by #345 (three review rounds, still not
