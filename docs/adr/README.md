@@ -10,6 +10,8 @@ Each record follows a light [MADR](https://adr.github.io/madr/) shape: **Context
 
 Where the source docs do not record a rationale or the alternatives that were weighed, the ADR says so ("Not recorded in docs") rather than inventing one.
 
+**Diagrams, selectively.** Add a Mermaid flowchart (GitHub renders `mermaid` fenced blocks natively - no build step, no external asset) when a decision involves a real flow with branches, a topology/boundary, or a before/after comparison - the shapes prose has to work hardest to convey precisely. Don't add one for a single-sentence policy decision; a diagram there is decorative, not clarifying. Before committing a diagram, render it (`npx @mermaid-js/mermaid-cli -i file.mmd -o file.svg`, or view it as a PNG) rather than trusting the syntax by eye - ADR-0044's own first diagram had a real bug (unversioned route paths in the node labels, the exact class of error that ADR's Context section itself warns about) that only surfaced on render, not on read.
+
 > **Interactive view:** open [`index.html`](index.html) in a browser for a searchable, filterable version of this catalog (live search, filter by status/repo/area, era navigation, `j`/`k` keyboard nav). It is self-contained — no build step or server needed.
 
 ## How the sequence is ordered
