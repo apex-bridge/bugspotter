@@ -12,11 +12,11 @@ ADR: pending
 - `packages/backend/src/db/migrations/NNN_add_oidc_idp_config.sql` (new; the repo's migration convention is a 3-digit sequence number — see `packages/backend/CLAUDE.md` — replace NNN with the next unused 3-digit number in the migrations directory, e.g. `027` as of this writing, not a 4-digit `NNNN`)
 - `packages/backend/src/db/repositories/oidc-idp-config.repository.ts` (new; encrypts `client_secret` at rest via `getEncryptionService()` — see Constraint 11)
 - `packages/backend/src/db/repositories.ts` (export new repository)
-- `packages/backend/src/api/routes/oidc.ts` (new)
+- `packages/backend/src/api/routes/oidc.ts` (new; validates `issuerUrl` via the existing `validateSSRFProtection()`, gates `/admin/oidc-config` via the existing `requireTenantOrgRole()`, and never returns `clientSecret` from `GET` — see Constraints 12, 13, 14)
 - `packages/backend/src/api/routes/auth.ts` (add enforce-SSO guard to the password-login handler AND the registration handler — see Constraint 8)
 - `packages/backend/src/api/routes/admin-organizations.ts` (add enforce-SSO guard to the magic-token issuance endpoint — see Constraint 8)
 - `packages/backend/src/api/schemas/oidc.schema.ts` (new)
-- `packages/backend/src/api/index.ts` (register OIDC route plugin)
+- `packages/backend/src/api/server.ts` (register the new route module — see note under Changes; NOT `api/index.ts`, which is the package's export barrel, not where routes are wired up)
 - `packages/backend/src/config.ts` (add selfhosted OIDC env vars)
 - `apps/admin/src/hooks/use-sso-config.ts` (new)
 - `apps/admin/src/pages/sso-config.tsx` (new; verify naming convention against sibling files in `apps/admin/src/pages/` before creating)
@@ -60,7 +60,10 @@ BugSpotter authenticates users exclusively via email+password (bcrypt) and JWT, 
 9. `COOKIE_DOMAIN` must be forwarded to the same `setCookie` call used by the existing login handler so cross-subdomain sessions continue to work in `saas` mode (see `apps/admin/CLAUDE.md`).
 10. The migration must use `CREATE TABLE IF NOT EXISTS` (idempotent), consistent with the repo migration convention.
 11. `oidc_idp_config`'s OIDC client secret must be encrypted at rest, matching the repo's established secrets-at-rest pattern. `packages/backend/src/integrations/jira/config.ts` never stores a Jira API token in a plaintext column — it stores an `encrypted_credentials` blob produced by `getEncryptionService().encrypt(...)` (`packages/backend/src/utils/encryption.ts`, `CredentialEncryption`, AES-256-GCM) and decrypts it with `.decrypt()` on read; the same `getEncryptionService()` singleton is reused across `integrations.ts`, `intelligence-settings.ts`, `jobs.ts`, `linear/config.ts`, and `key-provisioning.ts`. The `oidc_idp_config` migration and repository must follow this pattern for `client_secret`: the column is `encrypted_client_secret TEXT NOT NULL` (never a plaintext `client_secret` column), the repository encrypts before `INSERT`/`UPDATE` and decrypts after `SELECT`, and the decrypted value is held only in memory for the duration of the OIDC discovery/token-exchange call. This is a correction to an earlier draft of this spec, which had `client_secret TEXT NOT NULL` storing the secret in plaintext — that draft did not follow repo convention and must not be implemented as originally written.
-12. The migration's `allowed_domains TEXT[]` column must actually be enforced, not merely stored. When `allowed_domains` is non-empty for a tenant's IdP config, the OIDC callback handler must reject (403) any login whose ID-token `email` claim's domain is not in that list, before the account-linking step (Constraint 6) runs. Without this check the column is decorative: an admin who configures `allowedDomains: ['corp.example.com']` expecting to restrict SSO to that domain gets no such restriction, and the blast radius of a misconfigured or overly-broad IdP tenant (e.g. a shared/multi-tenant Okta or Azure AD org, or a consumer IdP accidentally wired up instead of the corporate one) is every email the IdP will assert `email_verified: true` for — not just the intended domain.
+12. `issuerUrl` is tenant-admin-controlled input handed to `Issuer.discover(issuerUrl)`, which makes an outbound HTTP request to whatever host is stored — including internal-only hosts and cloud metadata endpoints (`http://169.254.169.254/...`) — an SSRF vector (found by automated review of this spec). The repo already has a reusable guard for exactly this: `validateSSRFProtection(url: string): URL` in `packages/backend/src/integrations/security/ssrf-validator.ts` (used by `integrations/security/rpc-bridge.ts` for the same class of problem — outbound requests to attacker/tenant-supplied URLs). `issuerUrl` must be passed through `validateSSRFProtection()` in two places: (a) inside `PUT /admin/oidc-config`, before persisting, so a bad URL fails fast with a clear error; and (b) again immediately before every `Issuer.discover(issuerUrl)` call at login/callback time, as defense-in-depth against DNS-rebinding/TOCTOU between save and use. Do not implement custom hostname/IP filtering — reuse the existing validator.
+13. `GET /admin/oidc-config` and `PUT /admin/oidc-config` must require tenant-admin privileges, not merely a valid session (found by automated review of this spec — the original skeleton used only `onRequest: [app.authenticate]`, which any authenticated user in the tenant, including a regular non-admin member, would pass). Use `requireTenantOrgRole(db, ORG_MEMBER_ROLE.ADMIN)` from `packages/backend/src/api/middleware/org-access.ts` (the existing helper for tenant-scoped admin routes with no `:id` route param — see its use in `packages/backend/src/api/routes/billing.ts`), chained after `requireUser`: `preHandler: [requireUser, requireTenantOrgRole(db, ORG_MEMBER_ROLE.ADMIN)]`. Without this, any tenant member — not just an admin — could point `issuerUrl`/`clientId`/`clientSecret` at an attacker-controlled IdP and set `enforceSso: true`, hijacking every subsequent login for that tenant (this compounds with the SSRF gap in Constraint 12 and the plaintext-secret gap in Constraint 11 — all three were present in the same three-line route skeleton).
+14. `GET /admin/oidc-config` must never return the decrypted `client_secret` to the client (found by automated review of this spec — `OidcIdpConfigRepository.mapRow` decrypts `encrypted_client_secret` on every read per Constraint 11, and the original GET handler skeleton returned that object directly, shipping the plaintext secret to the browser on every page load). The GET response must omit `clientSecret` entirely (or replace it with a boolean `hasClientSecret: true`/masked placeholder). The admin UI must treat an empty/unchanged secret field on save as "keep the existing secret" (only overwrite when the admin actually types a new value) rather than requiring the admin to re-enter it every time. This changes test case H (see Tests section) — the PUT/GET round-trip no longer expects `clientSecret` back from GET.
+15. The migration's `allowed_domains TEXT[]` column must actually be enforced, not merely stored. When `allowed_domains` is non-empty for a tenant's IdP config, the OIDC callback handler must reject (403) any login whose ID-token `email` claim's domain is not in that list, before the account-linking step (Constraint 6) runs. Without this check the column is decorative: an admin who configures `allowedDomains: ['corp.example.com']` expecting to restrict SSO to that domain gets no such restriction, and the blast radius of a misconfigured or overly-broad IdP tenant (e.g. a shared/multi-tenant Okta or Azure AD org, or a consumer IdP accidentally wired up instead of the corporate one) is every email the IdP will assert `email_verified: true` for — not just the intended domain.
 
 ## Acceptance criteria
 
@@ -73,11 +76,13 @@ BugSpotter authenticates users exclusively via email+password (bcrypt) and JWT, 
 - [ ] A callback whose `state` query parameter has no matching Redis key returns HTTP 400 — verified by test case G.
 - [ ] An OIDC login whose ID-token `email` matches an existing `users` row produces no new user row — verified by test case E.
 - [ ] An OIDC login whose ID-token `email` has no matching `users` row produces exactly one new user row — verified by test case F.
-- [ ] `PUT /admin/oidc-config` with a valid body persists the config; a subsequent `GET /admin/oidc-config` returns the same values — verified by test case H.
+- [ ] `PUT /admin/oidc-config` with a valid body persists the config; a subsequent `GET /admin/oidc-config` returns the same `issuerUrl`/`clientId`/`allowedDomains`/`enforceSso` values but never the `clientSecret` field (Constraint 14) — verified by test case H.
 - [ ] The `client_secret` submitted via `PUT /admin/oidc-config` is never persisted in plaintext — the raw value written to the `oidc_idp_config` row does not equal the submitted secret, and `OidcIdpConfigRepository.findByTenantId` returns the correctly round-tripped (decrypted) value — verified by test case I.
 - [ ] `POST /auth/register` returns HTTP 403 `{"error":"sso_enforced"}` when the resolved tenant has `enforce_sso = true`, even with a valid invitation token — verified by test case J.
 - [ ] `POST /auth/magic-login` and `POST /admin/organizations/:id/magic-token` both return HTTP 403 `{"error":"sso_enforced"}` for an org with `enforce_sso = true`, regardless of `magic_login_enabled` — verified by test case K.
 - [ ] A callback carrying a verified-email ID token whose email domain is not in a non-empty `allowedDomains` list is rejected with HTTP 403 before any user is created or linked — verified by test case L.
+- [ ] `PUT /admin/oidc-config` with an `issuerUrl` pointing at a private/internal address (e.g. `http://169.254.169.254/`, `http://localhost:6379`) is rejected with HTTP 400 before any discovery request is attempted — verified by test case M.
+- [ ] `GET /admin/oidc-config` and `PUT /admin/oidc-config` both return HTTP 403 for an authenticated tenant member who is not a tenant admin (`ORG_MEMBER_ROLE.ADMIN` or higher) — verified by test case N.
 
 ## Changes
 
@@ -224,15 +229,29 @@ import type { FastifyInstance } from 'fastify';
 import { Issuer, generators } from 'openid-client'; // v5 — verify API on install
 import { OidcIdpConfigRepository } from '../../db/repositories/oidc-idp-config.repository.js';
 import { oidcConfigBodySchema } from '../schemas/oidc.schema.js';
+import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js'; // Constraint 12
+import { requireTenantOrgRole } from '../middleware/org-access.js'; // Constraint 13
+import { requireUser } from '../middleware/auth.js'; // verified: re-exported here, defined in middleware/auth/authorization.ts
+import { ORG_MEMBER_ROLE } from '../../db/types.js';
+import type { DatabaseClient } from '../../db/client.js';
 
 const STATE_TTL_SECONDS = 600;
 
-export async function oidcRoutes(app: FastifyInstance): Promise<void> {
+// `db` is a constructor-style parameter, not `app.db` — this matches every
+// sibling route module (authRoutes(fastify, db), billingRoutes(fastify, db),
+// adminOrganizationRoutes(fastify, db) in packages/backend/src/api/server.ts).
+// The original skeleton's `async ... : Promise<void>` signature is also
+// changed to a plain sync function to match authRoutes/billingRoutes, which
+// register routes synchronously (unlike `adminRoutes`, which is awaited).
+export function oidcRoutes(app: FastifyInstance, db: DatabaseClient): void {
   // GET /auth/oidc/:tenant/login
   app.get<{ Params: { tenant: string } }>('/auth/oidc/:tenant/login', async (request, reply) => {
     const { tenant } = request.params;
     // 1. Load OidcIdpConfig for tenant from OidcIdpConfigRepository
     //    ASSUMED: repository is available via request.server or DI — verify injection pattern
+    // 1a. validateSSRFProtection(config.issuerUrl) — Constraint 12, defense-in-depth
+    //     re-check even though PUT already validated on save (DNS-rebinding/TOCTOU).
+    //     Throws on unsafe URLs; let it propagate to a 500/400 — do not swallow it.
     // 2. Issuer.discover(config.issuerUrl) to obtain client
     // 3. Generate PKCE: codeVerifier, codeChallenge (S256), state, nonce
     //    via generators.codeVerifier(), generators.codeChallenge(), generators.state(), generators.nonce()
@@ -249,11 +268,12 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       // 1. stateData = await cache.get(`oidc:state:${state}`) — reject 400 if null
       // 2. await cache.delete(`oidc:state:${state}`)  — one-time use
       // 3. Load IdP config for stateData.tenantId
+      // 3a. validateSSRFProtection(config.issuerUrl) — Constraint 12, same as the /login handler.
       // 4. tokenSet = await client.callback(redirectUri, { code }, { code_verifier: stateData.codeVerifier, state, nonce: stateData.nonce })
       //    openid-client throws on exp/iss/aud/nonce/sig failures — catch and return 401
       // 5. claims = tokenSet.claims()
       //    if (!claims.email_verified) return reply.status(401).send({ error: 'email_not_verified' })
-      // 5a. Domain allowlist (Constraint 12) — enforce BEFORE account linking/creation,
+      // 5a. Domain allowlist (Constraint 15) — enforce BEFORE account linking/creation,
       //     not after. Skipping this makes the allowedDomains column purely decorative.
       //     if (config.allowedDomains.length > 0) {
       //       const emailDomain = claims.email.split('@')[1]?.toLowerCase();
@@ -268,24 +288,39 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
-  // GET /admin/oidc-config — tenant admin reads own IdP config
+  // GET /admin/oidc-config — tenant admin reads own IdP config.
+  // requireTenantOrgRole (Constraint 13), not bare authentication — a
+  // non-admin tenant member must not be able to read or write IdP config.
   app.get(
     '/admin/oidc-config',
-    { onRequest: [app.authenticate] }, // ASSUMED: verify auth prehandler name against sibling routes
+    { preHandler: [requireUser, requireTenantOrgRole(db, ORG_MEMBER_ROLE.ADMIN)] },
     async (request, reply) => {
-      // Load and return config for request.user.tenantId
+      // Load config for request.organizationId.
+      // Constraint 14: never include the decrypted clientSecret in the response.
+      // const config = await oidcIdpConfigRepo.findByTenantId(request.organizationId);
+      // if (!config) return reply.status(404).send();
+      // const { clientSecret, ...safeConfig } = config;
+      // return reply.send({ ...safeConfig, hasClientSecret: true });
     }
   );
 
-  // PUT /admin/oidc-config — tenant admin saves IdP config
+  // PUT /admin/oidc-config — tenant admin saves IdP config.
+  // Same requireTenantOrgRole guard as GET (Constraint 13).
   app.put(
     '/admin/oidc-config',
     {
-      onRequest: [app.authenticate],
+      preHandler: [requireUser, requireTenantOrgRole(db, ORG_MEMBER_ROLE.ADMIN)],
       schema: { body: oidcConfigBodySchema },
     },
     async (request, reply) => {
-      // Upsert config for request.user.tenantId, return saved row
+      // 1. validateSSRFProtection(request.body.issuerUrl) — Constraint 12, fail fast
+      //    with a 400 before ever attempting discovery against this URL.
+      // 2. If request.body.clientSecret is empty/omitted and a config row already
+      //    exists, keep the existing encrypted secret rather than overwriting it
+      //    with an empty value (Constraint 14 — the admin UI never has the real
+      //    secret to resubmit, since GET never returns it).
+      // 3. Upsert config for request.organizationId, return the saved row with
+      //    the same clientSecret-omission as GET.
     }
   );
 }
@@ -335,15 +370,16 @@ if (org.settings?.enforce_sso) {
 
 This closes the gap even if `magic_login_enabled` and `enforce_sso` are both left true on the same org (they are independent settings and nothing else prevents that combination).
 
-### `packages/backend/src/api/index.ts`
+### `packages/backend/src/api/server.ts`
 
-Register the OIDC route plugin. Append after the last existing `app.register()` call; adjust the import style to match the file's existing convention (static import at top vs. inline).
+**Correction to an earlier draft of this spec**, which named `packages/backend/src/api/index.ts` and an `await app.register(oidcRoutes)` call — verified against the source tree and both are wrong. `api/index.ts` is the package's export barrel (re-exports `createServer`/`startServer`/etc. for consumers), not where routes are wired up. Route registration happens in `packages/backend/src/api/server.ts`, and every sibling module uses a direct function call with `(fastify, db)` — not Fastify's plugin `app.register()` — e.g. `authRoutes(fastify, db)`, `billingRoutes(fastify, db)`, `adminOrganizationRoutes(fastify, db)`. Follow the same pattern:
 
 ```ts
-// Append after the last existing route registration:
+// In server.ts, alongside the other route registration calls
+// (e.g. right after `authRoutes(fastify, db);`):
 import { oidcRoutes } from './routes/oidc.js';
 // ...
-await app.register(oidcRoutes);
+oidcRoutes(fastify, db);
 ```
 
 ### `packages/backend/src/config.ts`
@@ -361,14 +397,27 @@ oidcClientSecret: process.env.OIDC_CLIENT_SECRET,
 
 New hook for reading and saving tenant IdP config from the admin UI. Verify the base API URL pattern against sibling hooks before using bare `/api/` paths.
 
+Per Constraint 14, `GET /admin/oidc-config` never returns `clientSecret` (only a `hasClientSecret` boolean). `SsoConfig` (the shape read from GET) and `SsoConfigPatch` (the shape sent to PUT) are therefore two different types — the hook must not assume they're the same, unlike the earlier draft of this file.
+
 ```ts
 // New file:
 import { useState, useEffect, useCallback } from 'react';
 
+// Shape returned by GET — never carries the real secret (Constraint 14).
 export interface SsoConfig {
   issuerUrl: string;
   clientId: string;
-  clientSecret: string;
+  hasClientSecret: boolean;
+  allowedDomains: string[];
+  enforceSso: boolean;
+}
+
+// Shape sent to PUT. clientSecret is optional: omit/leave blank to keep the
+// existing stored secret (the admin UI never has the real value to resubmit).
+export interface SsoConfigPatch {
+  issuerUrl: string;
+  clientId: string;
+  clientSecret?: string;
   allowedDomains: string[];
   enforceSso: boolean;
 }
@@ -386,7 +435,7 @@ export function useSsoConfig() {
       .finally(() => setLoading(false));
   }, []);
 
-  const saveConfig = useCallback(async (patch: SsoConfig): Promise<void> => {
+  const saveConfig = useCallback(async (patch: SsoConfigPatch): Promise<void> => {
     const r = await fetch('/api/admin/oidc-config', {
       method: 'PUT',
       credentials: 'include',
@@ -394,7 +443,8 @@ export function useSsoConfig() {
       body: JSON.stringify(patch),
     });
     if (!r.ok) throw new Error('Failed to save SSO config');
-    setConfig(patch);
+    const saved = await r.json();
+    setConfig(saved); // server response, not `patch` — patch may carry a plaintext clientSecret we must not hold in state
   }, []);
 
   return { config, loading, error, saveConfig };
@@ -408,16 +458,26 @@ New page for tenant-admin SSO configuration. Verify page wrapper, layout compone
 ```tsx
 // New file — skeleton; adapt wrapper and i18n to match sibling page conventions:
 import React, { useState } from 'react';
-import type { SsoConfig } from '../hooks/use-sso-config.js';
+import type { SsoConfig, SsoConfigPatch } from '../hooks/use-sso-config.js';
 import { useSsoConfig } from '../hooks/use-sso-config.js';
 
 export function SsoConfigPage() {
   const { config, loading, saveConfig } = useSsoConfig();
-  const [form, setForm] = useState<SsoConfig | null>(null);
+  // `form` mirrors SsoConfigPatch, not SsoConfig — the secret field here is
+  // whatever the admin types (usually blank, meaning "keep existing"), never
+  // the real stored secret, which GET never returns (Constraint 14).
+  const [form, setForm] = useState<SsoConfigPatch | null>(null);
 
-  // On load, seed form from config
-  // On submit, call saveConfig(form) and show success/error toast
-  // Fields: issuerUrl, clientId, clientSecret, allowedDomains (comma-separated), enforceSso toggle
+  // On load, seed form from `config` — leave the clientSecret form field
+  // blank; render config.hasClientSecret as a "secret is set" indicator only
+  // (e.g. a masked placeholder), never a real value to prefill.
+  // On submit, call saveConfig(form). If the clientSecret field was left
+  // blank, omit it from the payload entirely so the backend's "keep existing
+  // secret if omitted" behavior (Constraint 14) applies — do not send an
+  // empty string, which the backend must NOT treat as "keep existing"
+  // (indistinguishable from "clear the secret"; omission is the only signal).
+  // Fields: issuerUrl, clientId, clientSecret (optional, blank = keep existing),
+  // allowedDomains (comma-separated), enforceSso toggle
   // All labels must use i18n keys — add keys to apps/admin/src/i18n/ per CLAUDE.md conventions
 
   if (loading) return null;
@@ -671,10 +731,10 @@ it('returns 400 when state is not in Redis', async () => {
 });
 ```
 
-**Test case H — admin OIDC config round-trip (AC #10):**
+**Test case H — admin OIDC config round-trip, secret never echoed back (AC #10, Constraint 14):**
 
 ```ts
-it('PUT then GET /admin/oidc-config persists and returns the config', async () => {
+it('PUT then GET /admin/oidc-config persists non-secret fields but never echoes clientSecret', async () => {
   const payload = {
     issuerUrl: 'https://idp.example.com',
     clientId: 'client-id',
@@ -686,7 +746,7 @@ it('PUT then GET /admin/oidc-config persists and returns the config', async () =
   const putRes = await app.inject({
     method: 'PUT',
     url: '/admin/oidc-config',
-    headers: { authorization: `Bearer ${adminToken}` },
+    headers: { authorization: `Bearer ${adminToken}` }, // adminToken: tenant ORG_MEMBER_ROLE.ADMIN, not just any authenticated user
     payload,
   });
   expect(putRes.statusCode).toBe(200);
@@ -696,7 +756,9 @@ it('PUT then GET /admin/oidc-config persists and returns the config', async () =
     url: '/admin/oidc-config',
     headers: { authorization: `Bearer ${adminToken}` },
   });
-  expect(JSON.parse(getRes.body)).toMatchObject(payload);
+  const { clientSecret: _omitted, ...expectedSafeFields } = payload;
+  expect(JSON.parse(getRes.body)).toMatchObject(expectedSafeFields);
+  expect(JSON.parse(getRes.body)).not.toHaveProperty('clientSecret');
 });
 ```
 
@@ -772,7 +834,7 @@ describe('magic-login is blocked for SSO-enforced orgs', () => {
 });
 ```
 
-**Test case L — domain allowlist enforced before account linking (AC #14, Constraint 12):**
+**Test case L — domain allowlist enforced before account linking (AC #14, Constraint 15):**
 
 ```ts
 it('rejects a verified-email callback whose domain is not in a non-empty allowedDomains list', async () => {
@@ -789,6 +851,71 @@ it('rejects a verified-email callback whose domain is not in a non-empty allowed
   expect(response.statusCode).toBe(403);
   // No account should be created or linked for a rejected domain.
   expect(usersAfter).toBe(usersBefore);
+});
+```
+
+**Test case M — SSRF-unsafe issuerUrl rejected before any discovery request (AC #15, Constraint 12):**
+
+```ts
+describe('issuerUrl is validated against SSRF targets', () => {
+  const unsafeUrls = [
+    'http://169.254.169.254/latest/meta-data/', // cloud metadata endpoint
+    'http://localhost:6379/', // internal service
+    'http://127.0.0.1/',
+    'http://[::1]/',
+  ];
+
+  for (const issuerUrl of unsafeUrls) {
+    it(`rejects PUT /admin/oidc-config with issuerUrl=${issuerUrl}`, async () => {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/admin/oidc-config',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: {
+          issuerUrl,
+          clientId: 'client-id',
+          clientSecret: 'client-secret',
+          allowedDomains: [],
+          enforceSso: false,
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      // Issuer.discover must never have been called for a rejected URL.
+      expect(discoverSpy).not.toHaveBeenCalled();
+    });
+  }
+});
+```
+
+**Test case N — non-admin tenant member cannot read or write IdP config (AC #16, Constraint 13):**
+
+```ts
+describe('/admin/oidc-config requires ORG_MEMBER_ROLE.ADMIN, not just authentication', () => {
+  it('GET returns 403 for an authenticated non-admin member', async () => {
+    // memberToken belongs to a user with ORG_MEMBER_ROLE.MEMBER in the tenant
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/oidc-config',
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('PUT returns 403 for an authenticated non-admin member', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/admin/oidc-config',
+      headers: { authorization: `Bearer ${memberToken}` },
+      payload: {
+        issuerUrl: 'https://attacker-controlled-idp.example.com',
+        clientId: 'x',
+        clientSecret: 'x',
+        allowedDomains: [],
+        enforceSso: true,
+      },
+    });
+    expect(response.statusCode).toBe(403);
+  });
 });
 ```
 
