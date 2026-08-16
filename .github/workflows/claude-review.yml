@@ -156,6 +156,23 @@ jobs:
       - name: Run Claude review
         uses: anthropics/claude-code-action@v1
         with:
+          # Every PR this workflow needs to review that's opened by
+          # spec-agent.yml/adr-agent.yml/impl-agent.yml is authored by
+          # github-actions[bot] (gh pr create under github.token). The action
+          # refuses to run for ANY bot actor by default - "Workflow initiated
+          # by non-human actor... Add bot to allowed_bots list" - which meant
+          # this review had silently never run on a single bot-authored PR
+          # since this workflow was introduced (#346). CodeRabbit/Copilot
+          # aren't gated by this (separate Apps), so bot PRs still got some
+          # review; this repo's own tuned reviewer just wasn't contributing
+          # to exactly the PRs it matters most for.
+          #
+          # Deliberately the specific login, not '*' - the action's own
+          # security doc warns a public repo with '*' lets any external App
+          # invoke this action with an attacker-controlled prompt. This repo
+          # is private today, but naming the one actor that actually needs
+          # this is also just correct, not merely cautious.
+          allowed_bots: 'github-actions[bot]'
           # Only pass the OAuth token. The action does NOT arbitrate between
           # anthropic_api_key and claude_code_oauth_token when both are set -
           # it maps both straight into env vars unconditionally, and the
