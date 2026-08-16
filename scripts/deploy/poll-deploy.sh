@@ -10,11 +10,21 @@ set -eu
 # `api` and `admin` are deployed independently - a failure or a no-op on one
 # must never block the other, since they ship on different cadences and one
 # CI failure shouldn't stall an unrelated fix. Each `deploy_one` call below
-# runs in its own subshell specifically so a `set -e` abort inside it can't
-# take down the rest of the script (see the bash/dash function+`set -e`
-# gotcha: wrapping a *function call* in `|| true` does not reliably suspend
-# `-e` for commands *inside* the function across shells; wrapping it in a
-# subshell does, portably).
+# runs in its own subshell so a `set -e` abort inside it can't take down the
+# rest of the script.
+#
+# IMPORTANT: `(deploy_one ...) || fallback` does NOT do this safely, even
+# though it looks like it should. Per POSIX (and verified empirically against
+# both bash and dash): a compound command that is the non-final member of an
+# AND-OR list executes with -e *ignored for its entire dynamic extent* -
+# including an explicit `set -e` restated as the first line inside the
+# subshell. Concretely, `(deploy_one) || echo fallback` lets a failing
+# `docker compose up` inside `deploy_one` fall straight through to the health
+# check and (if stale containers still read healthy) get recorded as a
+# successful deploy. The fix used below: disable -e out here first, run the
+# subshell as a bare statement (never the left side of `&&`/`||`) so its own
+# `set -e` actually takes effect, capture $?, then restore -e before
+# branching on the result.
 
 REGISTRY_BASE="ghcr.io/apex-bridge/bugspotter"
 SCRIPT_DIR="/opt/bugspotter/scripts"
@@ -68,10 +78,13 @@ deploy_one() {
   docker compose up -d --no-build $services
 
   ok=0
+  last_statuses=""
   for _ in $(seq 1 15); do
     all_healthy=1
+    last_statuses=""
     for c in $health_containers; do
       status=$(docker inspect --format '{{.State.Health.Status}}' "$c" 2>/dev/null || echo unknown)
+      last_statuses="$last_statuses $c=$status"
       [ "$status" = healthy ] || all_healthy=0
     done
     if [ "$all_healthy" -eq 1 ]; then
@@ -82,11 +95,17 @@ deploy_one() {
   done
 
   if [ "$ok" -ne 1 ]; then
-    echo "$(date -Iseconds) [$name] deployed $new_digest but did not report all containers healthy, not recording as deployed" >>"$LOG_FILE"
+    echo "$(date -Iseconds) [$name] deployed $new_digest but did not report all containers healthy (${last_statuses# }), not recording as deployed" >>"$LOG_FILE"
     return 1
   fi
 
-  printf '%s' "$new_digest" >"$state_file"
+  # Write the state file atomically - a temp file + rename means a process
+  # kill mid-write can never leave a truncated digest for the next run to
+  # read (the lock file already keeps runs from overlapping, but this is
+  # free insurance against a partial write on its own).
+  tmp_state_file="$state_file.tmp"
+  printf '%s' "$new_digest" >"$tmp_state_file"
+  mv "$tmp_state_file" "$state_file"
   echo "$(date -Iseconds) [$name] deployed $new_digest" >>"$LOG_FILE"
 }
 
@@ -94,10 +113,20 @@ deploy_one() {
 # digest already recorded on the host from before `admin` coverage existed -
 # renaming it would just cost one harmless redundant redeploy cycle, but
 # there's no reason to force that.
-(deploy_one api "api:main" "api worker" "bugspotter-api bugspotter-worker" "$SCRIPT_DIR/.last-deployed-digest") ||
+set +e
+(set -e; deploy_one api "api:main" "api worker" "bugspotter-api bugspotter-worker" "$SCRIPT_DIR/.last-deployed-digest")
+api_status=$?
+set -e
+if [ "$api_status" -ne 0 ]; then
   echo "$(date -Iseconds) [api] deploy_one exited non-zero, continuing to admin" >>"$LOG_FILE"
+fi
 
-(deploy_one admin "admin:main" "admin" "bugspotter-admin" "$SCRIPT_DIR/.last-deployed-digest-admin") ||
+set +e
+(set -e; deploy_one admin "admin:main" "admin" "bugspotter-admin" "$SCRIPT_DIR/.last-deployed-digest-admin")
+admin_status=$?
+set -e
+if [ "$admin_status" -ne 0 ]; then
   echo "$(date -Iseconds) [admin] deploy_one exited non-zero" >>"$LOG_FILE"
+fi
 
 exit 0
