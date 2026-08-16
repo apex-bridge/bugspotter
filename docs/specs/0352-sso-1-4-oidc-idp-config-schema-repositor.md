@@ -9,7 +9,8 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 - `packages/backend/src/db/repositories/oidc-idp-config.repository.ts` (new)
 - `packages/backend/src/db/repositories.ts` (export addition)
 - `packages/backend/tests/db/oidc-idp-config.repository.test.ts` (new)
-- `packages/backend/vitest.unit.config.ts` (one-line addition — registers the new test file; see constraint 10)
+- `packages/backend/tests/db/oidc-idp-config-migration.test.ts` (new — real-Postgres migration re-run test, see Test case A2)
+- `packages/backend/vitest.unit.config.ts` (one-line addition — registers `oidc-idp-config.repository.test.ts`; see constraint 10)
 
 **Blocking prerequisites:** none
 
@@ -28,7 +29,7 @@ BugSpotter has no database table or data-access layer for per-tenant OIDC/SSO pr
 
 ## Constraints
 
-1. The migration must use `CREATE TABLE IF NOT EXISTS` so it is safe to run more than once, consistent with the idempotent-migration convention noted in the ADR index.
+1. The migration must use `CREATE TABLE IF NOT EXISTS` so it is safe to run more than once, consistent with the idempotent-migration convention noted in the ADR index. `CREATE TABLE IF NOT EXISTS` alone does not make the whole file idempotent: the file also creates the `update_oidc_idp_config_updated_at` trigger, and `CREATE TRIGGER` has no `IF NOT EXISTS` form, so the trigger creation must be preceded by `DROP TRIGGER IF EXISTS update_oidc_idp_config_updated_at ON oidc_idp_config;` — the same guard already used in `024_notification_throttle_cascade_trigger.sql` and `025_dedup_rules_cascade_and_seed.sql`.
 2. `tenant_id` must carry a `UNIQUE` constraint at the database level and a `NOT NULL REFERENCES organizations(id) ON DELETE CASCADE` foreign key, matching how every other one-row-per-org table in this codebase (`saas.subscriptions`, `saas.organization_invitations`) FKs to `organizations`. `upsert()` must rely on the `UNIQUE` constraint (`ON CONFLICT (tenant_id) DO UPDATE`) rather than a read-before-write guard, so concurrent callers are safe.
 3. `encrypted_client_secret` must never hold plaintext. Encryption must happen inside the repository method before the SQL statement executes; the value captured by the query must differ from the caller's input string.
 4. The type returned by `findByTenantId` and `upsert` must expose `clientSecret` as the decrypted string, not the cipher envelope, so callers above this layer never handle ciphertext directly.
@@ -42,7 +43,8 @@ BugSpotter has no database table or data-access layer for per-tenant OIDC/SSO pr
 
 ## Acceptance criteria
 
-- [ ] Running the migration SQL twice against the same schema produces no error and leaves exactly one `oidc_idp_config` table — verified by test case A.
+- [ ] Running the migration SQL twice against the same schema produces no error and leaves exactly one `oidc_idp_config` table — verified by test case A (static SQL inspection).
+- [ ] Applying the migration file's SQL a second time against a real Postgres instance that already has it (not a mock, not a regex check) succeeds without error and leaves exactly one `oidc_idp_config` table and exactly one `update_oidc_idp_config_updated_at` trigger — verified by test case A2.
 - [ ] Calling `upsert()` twice with the same `tenantId` but different field values returns the updated row and does not insert a second row — verified by test case B.
 - [ ] `findByTenantId()` returns `null` for a `tenantId` that has no row — verified by test case C.
 - [ ] `findByTenantId()` returns a record whose `clientSecret` equals the plaintext value originally passed to `upsert()` (constraint C4) — verified by test case D.
@@ -87,6 +89,14 @@ CREATE TABLE IF NOT EXISTS oidc_idp_config (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- CREATE TRIGGER has no IF NOT EXISTS guard (unlike CREATE TABLE above), so
+-- an unguarded CREATE TRIGGER would fail with duplicate_object if this
+-- file's SQL is ever executed a second time against a schema that already
+-- has it. DROP TRIGGER IF EXISTS immediately before CREATE TRIGGER is the
+-- existing convention for this in the repo — see
+-- 024_notification_throttle_cascade_trigger.sql and
+-- 025_dedup_rules_cascade_and_seed.sql.
+DROP TRIGGER IF EXISTS update_oidc_idp_config_updated_at ON oidc_idp_config;
 CREATE TRIGGER update_oidc_idp_config_updated_at
     BEFORE UPDATE ON oidc_idp_config
     FOR EACH ROW EXECUTE FUNCTION application.update_updated_at_column();
@@ -262,7 +272,15 @@ beforeEach(() => {
 function makeFakePool(rows: unknown[], captured: { sql: string; params: unknown[] }[]): Pool {
   return {
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
-      captured.push({ sql, params });
+      // Copy the array at capture time. `params` is the same array
+      // reference the repository built and passed to query() — if a
+      // buggy implementation mutated it after this call (e.g. swapped a
+      // plaintext secret for ciphertext post-hoc), pushing the reference
+      // would let `captured` observe that later mutation instead of what
+      // was actually sent when query() was invoked, defeating test case E
+      // (AC #5)'s one job: proving the plaintext never reached the SQL
+      // layer at call time.
+      captured.push({ sql, params: [...params] });
       return { rows };
     }),
   } as unknown as Pool;
@@ -285,6 +303,61 @@ it('migration file uses CREATE TABLE IF NOT EXISTS in the saas schema', () => {
   const content = readFileSync(join(migrationsDir, files[0]), 'utf8');
   expect(content).toMatch(/CREATE TABLE IF NOT EXISTS oidc_idp_config/i);
   expect(content).toMatch(/SET search_path TO saas/);
+});
+```
+
+Test case A only inspects the file's text — it would pass even if the trigger creation were unguarded, since it never executes the SQL. It stays as a cheap, DB-free regression check for the guards it does verify (table schema/placement), but it is not sufficient evidence of idempotency by itself. That's what test case A2 below is for.
+
+**Test case A2 — re-applying the migration file against a real, already-migrated Postgres instance is a no-op that leaves exactly one table and one trigger (AC #1, second bullet):**
+
+New file, `packages/backend/tests/db/oidc-idp-config-migration.test.ts` — **not** part of the mocked-pool unit suite above. It runs under the default `vitest.config.ts` (real Postgres via testcontainers, started once in `tests/setup.ts`'s global setup, same as `tests/db/presigned-upload-migration.test.ts` and `tests/db/api-key-repository.test.ts`), not `vitest.unit.config.ts` — so it does **not** need a `vitest.unit.config.ts` include-list entry (constraint 10 is specific to the unit config's explicit allowlist; the default config's `include: ['tests/**/*.test.ts']` is a glob and picks this file up automatically). It is discovered and run by `pnpm --filter @bugspotter/backend test -- tests/db`, the same command CI's "Backend Database Tests" job uses.
+
+By the time this test runs, `tests/setup.ts`'s global setup has already applied every migration file exactly once (via `npx tsx src/cli/migrate.ts`), including this one — that is the migration's _first_ application. Re-running `runMigrations()` a second time would not exercise anything, because the runner tracks applied files in `public.migrations_history` and skips ones already recorded (`packages/backend/src/db/migrations/migrate.ts`). To actually test that the file's own SQL is safe to execute twice — the property CodeRabbit flagged and the property that matters for a manual re-apply / disaster-recovery scenario where `migrations_history` bookkeeping doesn't match the live schema — this test reads the migration file directly and executes its SQL text a second time against the same live database, bypassing the runner's tracking on purpose.
+
+```ts
+// New file — complete content:
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createDatabaseClient } from '../../src/db/client.js';
+import type { DatabaseClient } from '../../src/db/client.js';
+
+describe('Migration 027 (oidc_idp_config) idempotency against a real database', () => {
+  let db: DatabaseClient;
+
+  beforeAll(() => {
+    db = createDatabaseClient();
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('re-executing the migration file against an already-migrated schema succeeds and leaves exactly one table and one trigger', async () => {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const migrationPath = join(__dirname, '../../src/db/migrations/027_oidc_idp_config.sql');
+    const sql = readFileSync(migrationPath, 'utf8');
+
+    // Second application of this file's SQL against a database that
+    // already has the table and trigger from the first (global-setup)
+    // migration run. Must not throw — an unguarded CREATE TRIGGER would
+    // fail here with a duplicate_object error.
+    await db.query(sql);
+
+    const tables = await db.query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'saas' AND table_name = 'oidc_idp_config'`
+    );
+    expect(tables.rows).toHaveLength(1);
+
+    const triggers = await db.query(
+      `SELECT tgname FROM pg_trigger
+       WHERE tgrelid = 'saas.oidc_idp_config'::regclass
+         AND tgname = 'update_oidc_idp_config_updated_at'`
+    );
+    expect(triggers.rows).toHaveLength(1);
+  });
 });
 ```
 
@@ -420,8 +493,9 @@ it('OidcIdpConfigRepository and its types are exported from the repositories bar
 ```bash
 pnpm --filter @bugspotter/backend typecheck
 pnpm --filter @bugspotter/backend test:unit
+pnpm --filter @bugspotter/backend test -- tests/db
 ```
 
-(There is no `--testPathPattern` flag in Vitest — that is a Jest flag. `test:unit` runs the fixed `include` list from `vitest.unit.config.ts`; once `tests/db/oidc-idp-config.repository.test.ts` is added to it (constraint 10 / the `vitest.unit.config.ts` change above), plain `test:unit` picks it up. To run just this file locally: `pnpm --filter @bugspotter/backend exec vitest run --config vitest.unit.config.ts tests/db/oidc-idp-config.repository.test.ts`.)
+(There is no `--testPathPattern` flag in Vitest — that is a Jest flag. `test:unit` runs the fixed `include` list from `vitest.unit.config.ts`; once `tests/db/oidc-idp-config.repository.test.ts` is added to it (constraint 10 / the `vitest.unit.config.ts` change above), plain `test:unit` picks it up. To run just this file locally: `pnpm --filter @bugspotter/backend exec vitest run --config vitest.unit.config.ts tests/db/oidc-idp-config.repository.test.ts`. `tests/db/oidc-idp-config-migration.test.ts` (test case A2) is a separate, real-Postgres test under the default `vitest.config.ts` — it needs Docker (testcontainers) and is exercised by `pnpm --filter @bugspotter/backend test -- tests/db`, the same command CI's "Backend Database Tests" job runs.)
 
-Rollback: Delete the new migration file from `packages/backend/src/db/migrations/`, delete `packages/backend/src/db/repositories/oidc-idp-config.repository.ts` and its test file, revert the two export lines added to `packages/backend/src/db/repositories.ts`, and revert the one-line addition to `vitest.unit.config.ts`. If the migration has already been applied to a live database, execute `DROP TABLE IF EXISTS saas.oidc_idp_config;` manually against that database before removing the migration file, so the migration runner's state and the schema stay in sync.
+Rollback: Delete the new migration file from `packages/backend/src/db/migrations/`, delete `packages/backend/src/db/repositories/oidc-idp-config.repository.ts` and both of its test files (`tests/db/oidc-idp-config.repository.test.ts` and `tests/db/oidc-idp-config-migration.test.ts`), revert the two export lines added to `packages/backend/src/db/repositories.ts`, and revert the one-line addition to `vitest.unit.config.ts`. If the migration has already been applied to a live database, execute `DROP TABLE IF EXISTS saas.oidc_idp_config;` manually against that database before removing the migration file, so the migration runner's state and the schema stay in sync.
