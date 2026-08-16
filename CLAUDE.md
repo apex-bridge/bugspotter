@@ -35,6 +35,7 @@ pnpm --filter @bugspotter/admin dev              # admin UI on :5173
 - **Branch off `main`** for any new work or follow-up fix — squash-merged source branches still exist but are dead, don't build on them.
 - **Run `test:unit` before pushing** behavior changes — a passing `typecheck`/build is not sufficient.
 - **Prefer purely-additive slices**; verify deploy state before assuming. Avoid regressions over cleverness.
+- **Every production write needs its own fresh, explicit approval** — deploying to the netcup host, SSHing in to change state, anything that touches what's actually running. Never generalize a prior "yes, deploy this" into a standing instruction for a later, different change, even in the same file or the same session — and this applies to subagents too: don't pre-authorize a production write in a dispatch prompt, have the subagent stop and report back instead.
 
 ## Skills
 
