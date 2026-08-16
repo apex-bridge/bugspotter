@@ -9,11 +9,12 @@ ADR: pending
 **Files touched:**
 
 - `packages/backend/package.json` (add `openid-client` dependency)
-- `packages/backend/src/db/migrations/NNNN_add_oidc_idp_config.sql` (new; replace NNNN with next sequential number in the migrations directory)
-- `packages/backend/src/db/repositories/oidc-idp-config.repository.ts` (new)
+- `packages/backend/src/db/migrations/NNN_add_oidc_idp_config.sql` (new; the repo's migration convention is a 3-digit sequence number — see `packages/backend/CLAUDE.md` — replace NNN with the next unused 3-digit number in the migrations directory, e.g. `027` as of this writing, not a 4-digit `NNNN`)
+- `packages/backend/src/db/repositories/oidc-idp-config.repository.ts` (new; encrypts `client_secret` at rest via `getEncryptionService()` — see Constraint 11)
 - `packages/backend/src/db/repositories.ts` (export new repository)
 - `packages/backend/src/api/routes/oidc.ts` (new)
-- `packages/backend/src/api/routes/auth.ts` (add enforce-SSO guard to password-login handler)
+- `packages/backend/src/api/routes/auth.ts` (add enforce-SSO guard to the password-login handler AND the registration handler — see Constraint 8)
+- `packages/backend/src/api/routes/admin-organizations.ts` (add enforce-SSO guard to the magic-token issuance endpoint — see Constraint 8)
 - `packages/backend/src/api/schemas/oidc.schema.ts` (new)
 - `packages/backend/src/api/index.ts` (register OIDC route plugin)
 - `packages/backend/src/config.ts` (add selfhosted OIDC env vars)
@@ -44,13 +45,22 @@ BugSpotter authenticates users exclusively via email+password (bcrypt) and JWT, 
 1. An ADR covering provider abstraction, the account-linking rule, tenant→IdP mapping in `saas` mode, and whether SSO users may also hold API keys must be written and accepted before implementation begins. This spec records the decisions below as the proposed defaults; the ADR may revise them.
 2. The OIDC callback must reuse the same refresh-token cookie issuance path used by the existing password-login handler in `packages/backend/src/api/routes/auth.ts`; no second session type is permitted.
 3. PKCE S256 is required; the implicit flow and plain PKCE are not accepted.
-4. CSRF state and nonce must survive the browser redirect round-trip in Redis via the existing cache layer (`packages/backend/src/cache/cache-service.ts`); TTL ≤ 10 minutes. The exact write/read method signatures on `CacheService` are ASSUMED not verified from the source tree — implementer must read `cache-service.ts` before writing the handler.
+4. CSRF state and nonce must survive the browser redirect round-trip in Redis via the existing cache layer (`packages/backend/src/cache/cache-service.ts`); TTL ≤ 10 minutes. The write/read method signatures on `CacheService` were ASSUMED and have now been VERIFIED against the source tree: `CacheService.set<T>(key: string, value: T, ttl: number): Promise<void>`, `.get<T>(key: string): Promise<T | null>`, `.delete(key: string): Promise<void>` — the skeleton in the Changes section below matches the real signatures. `state` must be generated via `openid-client`'s `generators.state()` (cryptographically random, unguessable) and used as the Redis key so only a party who received the redirect can present it; it must be deleted on first read (one-time use). `nonce` must be passed into `client.callback(..., { nonce: stateData.nonce })` so `openid-client` itself checks it against the returned ID token's `nonce` claim — never merely store the nonce without also passing it into the check. Note for the ADR: this design does not bind `state` to the initiating browser (e.g. via a short-lived host-only cookie compared at callback time), so a classic OAuth "login CSRF" (attacker starts their own IdP flow, then relays the resulting `code`/`state` to a victim so the victim's browser gets logged into the attacker's account) is not fully closed by state-existence-in-Redis alone. Low severity here (no existing-account takeover; worst case is a confused-identity session), but the ADR should decide whether to add cookie-bound state as defense-in-depth.
 5. ID-token validation must verify `iss`, `aud`, `nonce`, `exp`, and the JWKS-backed signature using `openid-client` v5 (FAPI-certified, actively maintained). Custom JOSE parsing is not permitted.
 6. Account-linking rule: the ID-token `email` claim is trusted only when `email_verified: true`; it is matched case-insensitively against `users.email`. Match → link the existing row (no new user created). No match → create a new user row (create-on-first-login). This rule must appear verbatim in the ADR.
 7. In `saas` mode, IdP config is stored per-tenant in `oidc_idp_config` (one row per org, enforced by `UNIQUE (tenant_id)`). In `selfhosted` mode, env vars `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` configure a single global IdP; no DB row is required for v1.
 8. When a tenant has `enforce_sso = true`, the existing `POST /auth/login` endpoint must return HTTP 403 `{"error":"sso_enforced"}` for that tenant's users. The admin UI login form must hide the password fields and show only the SSO button when the tenant's IdP config has `enforce_sso` set.
+
+   **This guard must cover every path that can mint a session without going through the IdP, not just `POST /auth/login`.** A review of `packages/backend/src/api/routes/auth.ts` found two paths that independently issue a full access+refresh session and are NOT reached by an `/auth/login`-only guard:
+   - `POST /auth/register` calls `generateAuthTokens()` and sets the session cookie directly inside the registration handler — it never calls `/auth/login`. If a tenant has self-registration enabled (`config.auth.allowRegistration`), a new password-based account can be created and immediately logged in, fully bypassing `enforce_sso`, even when `requireInvitationToRegister` is on (an org admin routinely inviting a new teammate is enough to trigger this — invitation-gating restricts _who_ can register, not _how_ they authenticate afterward).
+   - `POST /auth/magic-login` redeems a JWT "magic token" for a full session, gated only by the target org's independent `magic_login_enabled` setting — not by `enforce_sso`. The token itself is minted by `POST /api/v1/admin/organizations/:id/magic-token` (`admin-organizations.ts`), a platform-admin-only endpoint that already functions as an impersonation path (mints a 30-day-default session for any user in any org on admin request). `enforce_sso` and `magic_login_enabled` are independent booleans on the same org settings object, so nothing stops both being true simultaneously — at which point a platform-admin credential (or a token it already issued) silently defeats the tenant's SSO requirement.
+
+   Both must be closed: `POST /auth/register` must return the same 403 `{"error":"sso_enforced"}` when the resolved tenant has `enforce_sso = true` (reject password-based account creation, do not just skip token issuance — an orphaned unusable account is still an information leak); `POST /auth/magic-login` and `POST /api/v1/admin/organizations/:id/magic-token` must both reject (403 `sso_enforced`) when the target org has `enforce_sso = true`, regardless of `magic_login_enabled`. The ADR must record this as the intended interaction between `enforce_sso` and the existing `allowRegistration`/`requireInvitationToRegister`/`magic_login_enabled` settings — it is not optional hardening, it is the actual scope of "enforce".
+
 9. `COOKIE_DOMAIN` must be forwarded to the same `setCookie` call used by the existing login handler so cross-subdomain sessions continue to work in `saas` mode (see `apps/admin/CLAUDE.md`).
 10. The migration must use `CREATE TABLE IF NOT EXISTS` (idempotent), consistent with the repo migration convention.
+11. `oidc_idp_config`'s OIDC client secret must be encrypted at rest, matching the repo's established secrets-at-rest pattern. `packages/backend/src/integrations/jira/config.ts` never stores a Jira API token in a plaintext column — it stores an `encrypted_credentials` blob produced by `getEncryptionService().encrypt(...)` (`packages/backend/src/utils/encryption.ts`, `CredentialEncryption`, AES-256-GCM) and decrypts it with `.decrypt()` on read; the same `getEncryptionService()` singleton is reused across `integrations.ts`, `intelligence-settings.ts`, `jobs.ts`, `linear/config.ts`, and `key-provisioning.ts`. The `oidc_idp_config` migration and repository must follow this pattern for `client_secret`: the column is `encrypted_client_secret TEXT NOT NULL` (never a plaintext `client_secret` column), the repository encrypts before `INSERT`/`UPDATE` and decrypts after `SELECT`, and the decrypted value is held only in memory for the duration of the OIDC discovery/token-exchange call. This is a correction to an earlier draft of this spec, which had `client_secret TEXT NOT NULL` storing the secret in plaintext — that draft did not follow repo convention and must not be implemented as originally written.
+12. The migration's `allowed_domains TEXT[]` column must actually be enforced, not merely stored. When `allowed_domains` is non-empty for a tenant's IdP config, the OIDC callback handler must reject (403) any login whose ID-token `email` claim's domain is not in that list, before the account-linking step (Constraint 6) runs. Without this check the column is decorative: an admin who configures `allowedDomains: ['corp.example.com']` expecting to restrict SSO to that domain gets no such restriction, and the blast radius of a misconfigured or overly-broad IdP tenant (e.g. a shared/multi-tenant Okta or Azure AD org, or a consumer IdP accidentally wired up instead of the corporate one) is every email the IdP will assert `email_verified: true` for — not just the intended domain.
 
 ## Acceptance criteria
 
@@ -64,98 +74,113 @@ BugSpotter authenticates users exclusively via email+password (bcrypt) and JWT, 
 - [ ] An OIDC login whose ID-token `email` matches an existing `users` row produces no new user row — verified by test case E.
 - [ ] An OIDC login whose ID-token `email` has no matching `users` row produces exactly one new user row — verified by test case F.
 - [ ] `PUT /admin/oidc-config` with a valid body persists the config; a subsequent `GET /admin/oidc-config` returns the same values — verified by test case H.
+- [ ] The `client_secret` submitted via `PUT /admin/oidc-config` is never persisted in plaintext — the raw value written to the `oidc_idp_config` row does not equal the submitted secret, and `OidcIdpConfigRepository.findByTenantId` returns the correctly round-tripped (decrypted) value — verified by test case I.
+- [ ] `POST /auth/register` returns HTTP 403 `{"error":"sso_enforced"}` when the resolved tenant has `enforce_sso = true`, even with a valid invitation token — verified by test case J.
+- [ ] `POST /auth/magic-login` and `POST /admin/organizations/:id/magic-token` both return HTTP 403 `{"error":"sso_enforced"}` for an org with `enforce_sso = true`, regardless of `magic_login_enabled` — verified by test case K.
+- [ ] A callback carrying a verified-email ID token whose email domain is not in a non-empty `allowedDomains` list is rejected with HTTP 403 before any user is created or linked — verified by test case L.
 
 ## Changes
 
-### `packages/backend/src/db/migrations/NNNN_add_oidc_idp_config.sql`
+### `packages/backend/src/db/migrations/NNN_add_oidc_idp_config.sql`
 
-New migration. Replace `NNNN` with the next unused sequence number in the migrations directory.
+New migration. Replace `NNN` with the next unused 3-digit sequence number in the migrations directory (e.g. `027` as of this writing — see `packages/backend/CLAUDE.md`'s `NNN_description.sql` convention; do not use a 4-digit number).
 
 ```sql
 -- New file:
 CREATE TABLE IF NOT EXISTS oidc_idp_config (
-  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id       UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  issuer_url      TEXT        NOT NULL,
-  client_id       TEXT        NOT NULL,
-  client_secret   TEXT        NOT NULL,
-  allowed_domains TEXT[]      NOT NULL DEFAULT '{}',
-  enforce_sso     BOOLEAN     NOT NULL DEFAULT FALSE,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  id                       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id                UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  issuer_url               TEXT        NOT NULL,
+  client_id                TEXT        NOT NULL,
+  -- Encrypted via CredentialEncryption (packages/backend/src/utils/encryption.ts),
+  -- the same AES-256-GCM service used for project_integrations.encrypted_credentials.
+  -- NEVER store the client secret in plaintext — see Constraint 11.
+  encrypted_client_secret  TEXT        NOT NULL,
+  allowed_domains          TEXT[]      NOT NULL DEFAULT '{}',
+  enforce_sso              BOOLEAN     NOT NULL DEFAULT FALSE,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (tenant_id)
 );
+
+COMMENT ON COLUMN oidc_idp_config.encrypted_client_secret IS 'OIDC client secret, encrypted at rest via CredentialEncryption — never plaintext';
 ```
 
 ### `packages/backend/src/db/repositories/oidc-idp-config.repository.ts`
 
-New repository. Follows the pattern of sibling files in `packages/backend/src/db/repositories/`. The `DatabaseClient` type and `.query()` signature are ASSUMED from the common pg pattern — verify against `packages/backend/src/db/client.ts` before using.
+New repository. Follows the pattern of sibling files in `packages/backend/src/db/repositories/`. The `DatabaseClient` type and `.query()` signature were ASSUMED and have now been VERIFIED against `packages/backend/src/db/client.ts`: `async query<T extends pg.QueryResultRow = pg.QueryResultRow>(text: string, params?: unknown[]): Promise<pg.QueryResult<T>>` — the skeleton below matches.
+
+`clientSecret` on the domain type is the decrypted, in-memory value (needed by `oidc.ts` to call `Issuer.discover`/`client.callback`). It is encrypted with `getEncryptionService().encrypt()` immediately before every `INSERT`/`UPDATE` and decrypted with `.decrypt()` immediately after every `SELECT` — mirroring `JiraConfigManager.saveToDatabase`/`fromDatabase` in `packages/backend/src/integrations/jira/config.ts`. See Constraint 11.
 
 ```ts
 // New file:
 import type { DatabaseClient } from '../client.js';
+import { getEncryptionService } from '../../utils/encryption.js';
 
 export interface OidcIdpConfig {
   id: string;
   tenantId: string;
   issuerUrl: string;
   clientId: string;
-  clientSecret: string;
+  clientSecret: string; // decrypted; never write this field straight to a column
   allowedDomains: string[];
   enforceSso: boolean;
 }
 
 export class OidcIdpConfigRepository {
-  constructor(private readonly db: DatabaseClient) {} // ASSUMED: DatabaseClient has .query()
+  private readonly encryption = getEncryptionService();
+
+  constructor(private readonly db: DatabaseClient) {}
 
   async findByTenantId(tenantId: string): Promise<OidcIdpConfig | null> {
     const result = await this.db.query<Record<string, unknown>>(
-      `SELECT id, tenant_id, issuer_url, client_id, client_secret, allowed_domains, enforce_sso
+      `SELECT id, tenant_id, issuer_url, client_id, encrypted_client_secret, allowed_domains, enforce_sso
          FROM oidc_idp_config WHERE tenant_id = $1`,
       [tenantId]
     );
-    return result.rows[0] ? mapRow(result.rows[0]) : null;
+    return result.rows[0] ? this.mapRow(result.rows[0]) : null;
   }
 
   async upsert(
     tenantId: string,
     patch: Omit<OidcIdpConfig, 'id' | 'tenantId'>
   ): Promise<OidcIdpConfig> {
+    const encryptedClientSecret = this.encryption.encrypt(patch.clientSecret);
     const result = await this.db.query<Record<string, unknown>>(
       `INSERT INTO oidc_idp_config
-         (tenant_id, issuer_url, client_id, client_secret, allowed_domains, enforce_sso)
+         (tenant_id, issuer_url, client_id, encrypted_client_secret, allowed_domains, enforce_sso)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (tenant_id) DO UPDATE SET
-         issuer_url      = EXCLUDED.issuer_url,
-         client_id       = EXCLUDED.client_id,
-         client_secret   = EXCLUDED.client_secret,
-         allowed_domains = EXCLUDED.allowed_domains,
-         enforce_sso     = EXCLUDED.enforce_sso,
-         updated_at      = NOW()
+         issuer_url               = EXCLUDED.issuer_url,
+         client_id                = EXCLUDED.client_id,
+         encrypted_client_secret  = EXCLUDED.encrypted_client_secret,
+         allowed_domains          = EXCLUDED.allowed_domains,
+         enforce_sso              = EXCLUDED.enforce_sso,
+         updated_at               = NOW()
        RETURNING *`,
       [
         tenantId,
         patch.issuerUrl,
         patch.clientId,
-        patch.clientSecret,
+        encryptedClientSecret,
         patch.allowedDomains,
         patch.enforceSso,
       ]
     );
-    return mapRow(result.rows[0]);
+    return this.mapRow(result.rows[0]);
   }
-}
 
-function mapRow(row: Record<string, unknown>): OidcIdpConfig {
-  return {
-    id: row.id as string,
-    tenantId: row.tenant_id as string,
-    issuerUrl: row.issuer_url as string,
-    clientId: row.client_id as string,
-    clientSecret: row.client_secret as string,
-    allowedDomains: row.allowed_domains as string[],
-    enforceSso: row.enforce_sso as boolean,
-  };
+  private mapRow(row: Record<string, unknown>): OidcIdpConfig {
+    return {
+      id: row.id as string,
+      tenantId: row.tenant_id as string,
+      issuerUrl: row.issuer_url as string,
+      clientId: row.client_id as string,
+      clientSecret: this.encryption.decrypt(row.encrypted_client_secret as string),
+      allowedDomains: row.allowed_domains as string[],
+      enforceSso: row.enforce_sso as boolean,
+    };
+  }
 }
 ```
 
@@ -228,6 +253,14 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
       //    openid-client throws on exp/iss/aud/nonce/sig failures — catch and return 401
       // 5. claims = tokenSet.claims()
       //    if (!claims.email_verified) return reply.status(401).send({ error: 'email_not_verified' })
+      // 5a. Domain allowlist (Constraint 12) — enforce BEFORE account linking/creation,
+      //     not after. Skipping this makes the allowedDomains column purely decorative.
+      //     if (config.allowedDomains.length > 0) {
+      //       const emailDomain = claims.email.split('@')[1]?.toLowerCase();
+      //       if (!emailDomain || !config.allowedDomains.map(d => d.toLowerCase()).includes(emailDomain)) {
+      //         return reply.status(403).send({ error: 'domain_not_allowed' });
+      //       }
+      //     }
       // 6. user = await userRepo.findByEmail(claims.email.toLowerCase()) ?? await userRepo.create({ email: claims.email, ... })
       // 7. Issue refresh-token cookie using the same helper as password login (ASSUMED — verify in auth.ts)
       //    Honor COOKIE_DOMAIN (Constraint 9)
@@ -260,17 +293,47 @@ export async function oidcRoutes(app: FastifyInstance): Promise<void> {
 
 ### `packages/backend/src/api/routes/auth.ts`
 
-Add the enforce-SSO guard inside the existing `POST /auth/login` handler, after the tenant is resolved and before credential verification. Exact insertion point depends on how the handler is structured — read the file and insert immediately after the tenant resolution block.
+Add the enforce-SSO guard to **both** `POST /auth/login` and `POST /auth/register` (Constraint 8 — registration mints a session directly and is not reached by a login-only guard). `request.organizationId` is already populated by upstream subdomain-resolution middleware and is available at the top of both handlers (see the existing tenant-match gate later in `/login`, and `isPasswordResetEnabledForRequest` in the same file, both of which read `request.organizationId` the same way) — read the file to confirm the exact variable name in scope at the insertion point.
 
 ```ts
-// Append after tenant resolution, before password verification:
-const idpConfig = await oidcIdpConfigRepo.findByTenantId(resolvedTenantId);
+// Near the top of both POST /auth/login and POST /auth/register,
+// before any password check / user creation:
+const idpConfig = request.organizationId
+  ? await oidcIdpConfigRepo.findByTenantId(request.organizationId)
+  : null;
 if (idpConfig?.enforceSso) {
   return reply.status(403).send({ error: 'sso_enforced' });
 }
 ```
 
-`oidcIdpConfigRepo` must be injected consistently with how other repositories are accessed in the same handler. Verify the injection pattern before editing.
+`oidcIdpConfigRepo` must be injected consistently with how other repositories are accessed in this file (`db.*`, e.g. `db.organizations`, `db.users`). Verify the injection pattern before editing — the new repository is likely reachable as `db.oidcIdpConfig` once wired through `repositories.ts` and `db/client.ts`'s `RepositoryRegistry`, but that wiring is not enumerated here; confirm against the pattern used for `db.dedupRules` or another recently-added repository.
+
+### `packages/backend/src/api/routes/admin-organizations.ts`
+
+Add the same guard to the two magic-login surfaces (Constraint 8): `POST /api/v1/admin/organizations/:id/magic-token` (token issuance) and, in `auth.ts`, `POST /auth/magic-login` (token redemption). Guard both, not just one — issuance-only blocking still leaves already-issued tokens (up to 30 days by default, per `expires_in`) redeemable.
+
+```ts
+// In POST /api/v1/admin/organizations/:id/magic-token, after loading `org`
+// and before the magic_login_enabled check:
+if (org.settings?.enforce_sso) {
+  throw new AppError(
+    'Magic-login tokens cannot be issued for an SSO-enforced organization',
+    403,
+    'SsoEnforced'
+  );
+}
+```
+
+```ts
+// In auth.ts, POST /auth/magic-login, after loading `org` (org lookup already
+// exists in this handler for the magic_login_enabled check) and before
+// checking magic_login_enabled:
+if (org.settings?.enforce_sso) {
+  throw new AppError('Magic login is disabled for this organization', 403, 'SsoEnforced');
+}
+```
+
+This closes the gap even if `magic_login_enabled` and `enforce_sso` are both left true on the same org (they are independent settings and nothing else prevents that combination).
 
 ### `packages/backend/src/api/index.ts`
 
@@ -637,6 +700,98 @@ it('PUT then GET /admin/oidc-config persists and returns the config', async () =
 });
 ```
 
+**Test case I — client secret is never stored in plaintext (AC #11, Constraint 11):**
+
+```ts
+it('does not persist the plaintext client_secret in oidc_idp_config', async () => {
+  const plaintextSecret = 'super-secret-value';
+  await oidcIdpConfigRepo.upsert(tenantId, {
+    issuerUrl: 'https://idp.example.com',
+    clientId: 'client-id',
+    clientSecret: plaintextSecret,
+    allowedDomains: [],
+    enforceSso: false,
+  });
+
+  // Read the raw column directly (bypassing the repository's own decrypt)
+  // to prove the stored value is not the plaintext secret.
+  const raw = await mockDb.query(
+    'SELECT encrypted_client_secret FROM oidc_idp_config WHERE tenant_id = $1',
+    [tenantId]
+  );
+  expect(raw.rows[0].encrypted_client_secret).not.toBe(plaintextSecret);
+  expect(raw.rows[0].encrypted_client_secret).not.toContain(plaintextSecret);
+
+  // But the repository's own read path still returns the decrypted value.
+  const config = await oidcIdpConfigRepo.findByTenantId(tenantId);
+  expect(config?.clientSecret).toBe(plaintextSecret);
+});
+```
+
+**Test case J — password registration blocked when SSO enforced (AC #12, Constraint 8):**
+
+```ts
+it('POST /auth/register returns 403 sso_enforced when tenant enforce_sso is true, even with a valid invite', async () => {
+  // oidcIdpConfigRepo.findByTenantId resolves { enforceSso: true, ... } for request.organizationId
+  // invitationService.validatePendingToken resolves a valid, matching invitation
+  const response = await app.inject({
+    method: 'POST',
+    url: '/auth/register',
+    payload: { email: 'new@corp.example.com', password: 'any', invite_token: 'valid-token' },
+  });
+
+  expect(response.statusCode).toBe(403);
+  expect(JSON.parse(response.body)).toMatchObject({ error: 'sso_enforced' });
+});
+```
+
+**Test case K — magic-login issuance and redemption blocked when SSO enforced (AC #13, Constraint 8):**
+
+```ts
+describe('magic-login is blocked for SSO-enforced orgs', () => {
+  it('POST /admin/organizations/:id/magic-token returns 403 even when magic_login_enabled is true', async () => {
+    // org.settings = { enforce_sso: true, magic_login_enabled: true }
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/organizations/${orgId}/magic-token`,
+      headers: { authorization: `Bearer ${platformAdminToken}` },
+      payload: { user_id: userId },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('POST /auth/magic-login rejects a pre-existing valid token if the org has since enabled enforce_sso', async () => {
+    // token was minted before enforce_sso was turned on; org.settings.enforce_sso is now true
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/magic-login',
+      payload: { token: preIssuedMagicToken },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+});
+```
+
+**Test case L — domain allowlist enforced before account linking (AC #14, Constraint 12):**
+
+```ts
+it('rejects a verified-email callback whose domain is not in a non-empty allowedDomains list', async () => {
+  // IdP config has allowedDomains: ['corp.example.com']
+  // mock client.callback returns valid, verified claims with email: 'user@other-domain.example.com'
+
+  const usersBefore = await mockDb.users.count();
+  const response = await app.inject({
+    method: 'GET',
+    url: '/auth/oidc/tenant-slug/callback?code=c&state=mock-state',
+  });
+  const usersAfter = await mockDb.users.count();
+
+  expect(response.statusCode).toBe(403);
+  // No account should be created or linked for a rejected domain.
+  expect(usersAfter).toBe(usersBefore);
+});
+```
+
 ## Verification
 
 ```bash
@@ -656,4 +811,4 @@ pnpm --filter @bugspotter/backend test:unit
 pnpm --filter @bugspotter/admin typecheck
 ```
 
-Rollback: All backend changes are additive (new table, new routes, new config keys). The enforce-SSO guard in `auth.ts` is only active when a row exists in `oidc_idp_config`; dropping the table or removing the row restores password-login behavior. No existing data is mutated. To roll back: revert the `auth.ts` guard, drop the migration, remove the `oidcRoutes` registration from `api/index.ts`, and remove the `openid-client` dependency.
+Rollback: All backend changes are additive (new table, new routes, new config keys). The enforce-SSO guards in `auth.ts` (`/auth/login`, `/auth/register`) and `admin-organizations.ts` (`/admin/organizations/:id/magic-token`, and the `enforce_sso` check inside `/auth/magic-login`) are only active when a row exists in `oidc_idp_config` with `enforce_sso = true`; removing that row (or dropping the table) restores prior password/magic-login behavior for that tenant. No existing data is mutated. To roll back fully: revert all four guards (`/auth/login`, `/auth/register`, magic-token issuance, magic-login redemption), drop the migration, remove the `oidcRoutes` registration from `api/index.ts`, and remove the `openid-client` dependency.
