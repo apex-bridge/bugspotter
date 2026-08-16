@@ -1,6 +1,6 @@
 # ADR-0044: SSO/OIDC auth extension - provider model, account-linking, and the tenant boundary
 
-- Status: Proposed
+- Status: Accepted
 - Area: Auth / multi-tenancy / security
 - Date: 2026-08-16
 - Refs: #265 (SSO/OIDC login); #345 (superseded spec - see Context)
