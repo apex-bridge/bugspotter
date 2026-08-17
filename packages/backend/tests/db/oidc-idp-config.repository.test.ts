@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
@@ -41,11 +41,12 @@ function makeFakePool(rows: unknown[], captured: { sql: string; params: unknown[
 describe('OidcIdpConfigRepository', () => {
   it('migration file uses CREATE TABLE IF NOT EXISTS in the saas schema', () => {
     const __dirname = dirname(fileURLToPath(import.meta.url));
-    const migrationsDir = join(__dirname, '../../src/db/migrations');
-    const files = readdirSync(migrationsDir).filter((f) => f.includes('oidc_idp_config'));
-    expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/\.sql$/);
-    const content = readFileSync(join(migrationsDir, files[0]), 'utf8');
+    // Exact filename, not a substring filter over the migrations directory —
+    // a future migration altering this table (e.g.
+    // 030_oidc_idp_config_add_column.sql) would also match `includes`
+    // and break `toHaveLength(1)` even though migration 027 itself is fine.
+    const migrationPath = join(__dirname, '../../src/db/migrations/027_oidc_idp_config.sql');
+    const content = readFileSync(migrationPath, 'utf8');
     expect(content).toMatch(/CREATE TABLE IF NOT EXISTS oidc_idp_config/i);
     expect(content).toMatch(/SET search_path TO saas/);
   });
