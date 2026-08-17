@@ -17,3 +17,8 @@ export { FieldMappingRepository } from './repositories/field-mapping.repository.
 export { WebhookRepository } from './repositories/webhook.repository.js';
 export { OAuthTokenRepository } from './repositories/oauth-token.repository.js';
 export { ApiKeyRepository } from './repositories/api-key.repository.js';
+export { OidcIdpConfigRepository } from './repositories/oidc-idp-config.repository.js';
+export type {
+  OidcIdpConfig,
+  OidcIdpConfigUpsertInput,
+} from './repositories/oidc-idp-config.repository.js';
