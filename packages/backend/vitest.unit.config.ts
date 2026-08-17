@@ -66,6 +66,7 @@ export default defineConfig({
       'tests/db/notification-rule.repository.atomicity.test.ts',
       'tests/db/retry.test.ts',
       'tests/db/user-repository-org-filter.test.ts',
+      'tests/db/oidc-idp-config.repository.test.ts',
       // Jira config tests (pure unit, mocked repository)
       'tests/integrations/jira/config.test.ts',
       // Jira mapper tests (pure unit, no database)
