@@ -289,7 +289,16 @@ export function formatCliProgress({
       visibleText.length > visibleTextTailChars
         ? `…${visibleText.slice(-visibleTextTailChars)}`
         : visibleText;
-    line += `, last text: "${snippet.replace(/\s+/g, ' ').trim()}"`;
+    // JSON.stringify, not manual `"${...}"` interpolation: real transcripts
+    // (#353, 2026-08-18) show the model's "text" blocks routinely contain
+    // literal `"` (e.g. embedded `<invoke name="Bash">`-style content, since
+    // --tools= makes it narrate tool calls as plain text instead of issuing
+    // real tool_use blocks) - a raw quote inside a manually `"..."`-wrapped
+    // snippet visually closes the string early and makes the log line look
+    // truncated/corrupted even though nothing was lost. JSON.stringify
+    // escapes embedded quotes/backslashes/control chars correctly and still
+    // reads as a quoted string.
+    line += `, last text: ${JSON.stringify(snippet.replace(/\s+/g, ' ').trim())}`;
   }
   return line;
 }

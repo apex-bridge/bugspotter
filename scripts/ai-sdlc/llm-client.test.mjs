@@ -337,6 +337,27 @@ test('formatCliProgress omits the visible-text field entirely when none was seen
   assert.doesNotMatch(line, /last text/);
 });
 
+test('formatCliProgress safely escapes a visible-text snippet that itself contains double quotes', () => {
+  // Real transcripts (#353, 2026-08-18 timeouts) show the model's "text"
+  // content routinely contains literal `"` - e.g. `<invoke name="Bash">` -
+  // since --tools= makes it narrate would-be tool calls as plain text
+  // instead of issuing real tool_use blocks. A naive `"${snippet}"` wrap
+  // would let that embedded quote visually close the string early.
+  const line = formatCliProgress({
+    elapsedMs: 60_000,
+    stdoutBytes: 500,
+    stderrBytes: 0,
+    visibleText: '<invoke name="Bash"><parameter name="command">echo hi</parameter></invoke>',
+  });
+
+  // The embedded quotes must come through escaped, not as a bare `"` that
+  // prematurely ends the `last text: "..."` quoting.
+  assert.match(line, /last text: "<invoke name=\\"Bash\\">/);
+  // The line must still end with a single closing quote for the whole
+  // snippet, not one left dangling mid-string by an unescaped `"`.
+  assert.ok(line.endsWith('</invoke>"'), `expected a cleanly closed quoted string, got: ${line}`);
+});
+
 test('callViaCli timeout error carries what the child actually wrote before the kill', async () => {
   process.env.FAKE_CLAUDE_MODE = 'hang';
   process.env.FAKE_CLAUDE_ENV_DUMP = '';
