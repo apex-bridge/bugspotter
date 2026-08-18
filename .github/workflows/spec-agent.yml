@@ -56,8 +56,8 @@ jobs:
 
       - name: Generate spec
         id: gen
-        # 8m > generate-spec.mjs's own 420s (7m) LLM timeout, so the script's
-        # error message wins over a silent step kill.
+        # 8m > generate-spec.mjs's own 450s (7.5m) LLM timeout, so the
+        # script's error message wins over a silent step kill.
         timeout-minutes: 8
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
