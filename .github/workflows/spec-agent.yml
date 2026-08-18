@@ -33,9 +33,9 @@ jobs:
     name: Draft spec
     if: github.event.label.name == 'needs-spec'
     runs-on: ubuntu-latest
-    # 22m. This job makes TWO sequential LLM calls - generate-spec.mjs (420s)
-    # and verify-spec.mjs (420s) - so the job cap has to contain 840s of model
-    # budget plus setup. At 15m (900s) it did not: worst case was ~840s of LLM
+    # 22m. This job makes TWO sequential LLM calls - generate-spec.mjs (450s)
+    # and verify-spec.mjs (420s) - so the job cap has to contain 870s of model
+    # budget plus setup. At 15m (900s) it did not: worst case was ~870s of LLM
     # plus checkout, setup-node, `npm install -g @anthropic-ai/claude-code`,
     # prettier, git push and two `gh` calls. The failure mode was the worst
     # available - GitHub cancels the job mid-call, so a spec that generate-spec
