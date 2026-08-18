@@ -58,6 +58,21 @@ writeFileSync(
     '  setTimeout(function () { process.exit(0); }, 5000);',
     '  return;',
     '}',
+    // Same as 'hang', except the final assistant event is a genuinely
+    // *complete* NDJSON record that simply has not been followed by its
+    // trailing newline yet when the kill fires - a real, plausible shape
+    // for a large content block (the #353 transcripts this PR was built
+    // around had single text blocks up to ~77KB, arriving across several
+    // stdout chunks) whose closing '\\n' just hasn't landed by the time the
+    // timeout timer fires. consumeLine only runs on '\\n'-delimited slices
+    // as data arrives, so this line is deliberately left sitting in
+    // callViaCli's internal lineBuf, unconsumed, unless the timeout path
+    // flushes it the same way the close handler already does.
+    "if (mode === 'hang_no_trailing_newline') {",
+    "  process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'FAKE_UNFLUSHED_TEXT: no trailing newline yet' }] } }));",
+    '  setTimeout(function () { process.exit(0); }, 5000);',
+    '  return;',
+    '}',
     "if (mode === 'error') {",
     "  process.stdout.write('FAKE_STDOUT_MARKER: upstream billing failure detail');",
     '  process.exit(2);',
@@ -382,6 +397,28 @@ test('callViaCli timeout error carries what the child actually wrote before the 
     assert.match(err.message, /last visible assistant text/);
     assert.match(err.message, /FAKE_VISIBLE_TEXT: drafting the spec/);
     assert.doesNotMatch(err.message, /wrote nothing at all/);
+    return true;
+  });
+});
+
+test('callViaCli flushes a complete-but-not-yet-newline-terminated NDJSON record before timing out', async () => {
+  // CodeRabbit finding on PR #361: the close handler flushes a trailing
+  // unterminated line from lineBuf (`if (lineBuf.trim()) consumeLine(lineBuf)`)
+  // but, before this fix, the timeout path did not - it killed the child
+  // and built the error straight from lastThinkingTokens/latestVisibleText
+  // as last updated by the 'data' handler, silently dropping any complete
+  // record still sitting in lineBuf without its trailing '\n'. That is a
+  // real, plausible race for a large content block (real #353 transcripts
+  // had single text blocks up to ~77KB spanning several stdout chunks)
+  // whose closing newline just hasn't arrived by the moment the timer
+  // fires - exactly the case this diagnostic exists to cover.
+  process.env.FAKE_CLAUDE_MODE = 'hang_no_trailing_newline';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+
+  await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 2500 }), (err) => {
+    assert.match(err.message, /claude CLI timed out after 2500ms/);
+    assert.match(err.message, /last visible assistant text/);
+    assert.match(err.message, /FAKE_UNFLUSHED_TEXT: no trailing newline yet/);
     return true;
   });
 });

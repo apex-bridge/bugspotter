@@ -481,6 +481,25 @@ async function callViaCli({ prompt, timeoutMs, model }) {
 
     const timer = setTimeout(() => {
       clearInterval(heartbeat);
+      // Mirrors the close handler below: a complete NDJSON record can be
+      // sitting in lineBuf without its trailing newline yet (the child's
+      // last stdout chunk before the kill need not end on a line boundary -
+      // more likely than it sounds for a large text block arriving across
+      // several 'data' events, exactly the shape #353's real transcripts
+      // showed, tens of KB per block). Without this, thinkingTokens/
+      // latestVisibleText below would be systematically one event stale at
+      // the worst possible moment: the instant of the kill itself.
+      // Mirrors the close handler below: a complete NDJSON record can be
+      // sitting in lineBuf without its trailing newline yet (the child's
+      // last stdout chunk before the kill need not end on a line boundary -
+      // more likely than it sounds for a large text block arriving across
+      // several 'data' events, exactly the shape #353's real transcripts
+      // showed, tens of KB per block). Without this, thinkingTokens/
+      // latestVisibleText below would be systematically one event stale at
+      // the worst possible moment: the instant of the kill itself.
+      if (lineBuf.trim()) {
+        consumeLine(lineBuf);
+      }
       child.kill('SIGKILL');
       dumpCliTranscriptOnFailure(stdout, stderr);
       reject(
