@@ -163,21 +163,25 @@ Rules:
 
 let specContent;
 try {
-  // 420s, matching verify-spec.mjs. 180_000 was set when this prompt was
-  // just TEMPLATE.md + the issue body; it has grown a lot since and the
-  // budget was never revisited: PR #240 added the BFS source-tree scanner
-  // and PR #260 added the ~10KB ADR index. Two independent reasons the old
-  // number was wrong:
-  //   1. verify-spec.mjs measured 283.9s for a comparable call on the CLI
-  //      backend and set 420s off that. 180s was below an already-measured
-  //      duration for similar work.
-  //   2. It failed in practice - run 30752527569 (issue #269) died at
-  //      exactly 180000ms having produced nothing.
-  // spec-agent.yml caps this step at 8m, above this 420s, so the error above
-  // wins over a silent step kill. Note the job also runs verify-spec.mjs
-  // (another 420s), so raising either number means re-checking that job's
-  // 22m cap still contains both plus setup - see that file's comments.
-  ({ text: specContent } = await callClaude({ prompt, maxTokens: 4096, timeoutMs: 420_000 }));
+  // 450s. Was 420s (originally raised from 180_000, matching
+  // verify-spec.mjs's own measured 283.9s for comparable work) - but that
+  // number was itself never revisited after the prompt grew twice more
+  // since (PR #240's BFS source-tree scanner, PR #260's ~10KB ADR index,
+  // which grew again 2026-08-16 when a new ADR era table was added to
+  // docs/adr/README.md). Issue #360 (2026-08-18): three consecutive
+  // identical 420s timeouts on issue #353's spec, each killed while still
+  // actively producing output - not #269's kind of failure (180s below an
+  // already-measured duration), a genuinely larger/harder task than this
+  // number has ever been checked against. spec-agent.yml's own step cap is
+  // 480s; 450s keeps a 30s buffer under it so this timeout's own error
+  // message still wins over GitHub's silent step kill, same reasoning as
+  // the original 420s-under-the-old-480s-cap gap, just narrower - there is
+  // no more headroom to give without also raising the workflow's own step
+  // and job caps, which is a bigger change #360 leaves open if this still
+  // isn't enough. Note the job also runs verify-spec.mjs (its own 420s,
+  // unchanged), so raising either further means re-checking the job's 22m
+  // cap still contains both plus setup - see that file's comments.
+  ({ text: specContent } = await callClaude({ prompt, maxTokens: 4096, timeoutMs: 450_000 }));
 } catch (err) {
   console.error(err.message);
   process.exit(1);
