@@ -184,6 +184,7 @@ export function formatCliTimeout({
   stderr = '',
   tailChars = 1500,
   thinkingTokens = null,
+  visibleText = null,
 }) {
   // Keep this exact prefix: it is the string the run logs have been
   // identified by across every timeout so far.
@@ -214,6 +215,25 @@ export function formatCliTimeout({
     message +=
       `\n  last known thinking-token count: ~${thinkingTokens} ` +
       `(thinking progress was observed before termination)`;
+  }
+
+  // The raw stdout tail below is the NDJSON wire format - mostly field names,
+  // event envelopes, and (for thinking blocks) a base64 signature, not
+  // anything a human reads quickly. `visibleText` is the model's own most
+  // recently seen text content block, extracted as it streams (see
+  // consumeLine's assistant-event branch) - the one thing that actually let
+  // a human spot a real failure shape once: three consecutive #353
+  // spec-agent timeouts (2026-08-18) all showed the model narrating the same
+  // intention on repeat ("I'll read the relevant source files... Let me read
+  // the key files... Let me read the relevant source files...") before being
+  // killed, a qualitatively different shape than every prior timeout this
+  // pipeline had hit, and invisible in the raw tail alone - finding it took
+  // manually downloading the transcript artifact and parsing it by hand.
+  if (visibleText) {
+    const clipped = visibleText.length > tailChars;
+    message +=
+      `\n  last visible assistant text${clipped ? ` (last ${tailChars} chars of ${visibleText.length})` : ''}:\n` +
+      (clipped ? visibleText.slice(-tailChars) : visibleText);
   }
 
   if (stdoutBytes === 0 && stderrBytes === 0) {
@@ -247,11 +267,31 @@ export function formatCliTimeout({
 // thinking_tokens event, if any have arrived yet) adds the one signal that
 // distinguishes "extended thinking, genuinely still working" from every
 // other kind of silence.
-export function formatCliProgress({ elapsedMs, stdoutBytes, stderrBytes, thinkingTokens = null }) {
+export function formatCliProgress({
+  elapsedMs,
+  stdoutBytes,
+  stderrBytes,
+  thinkingTokens = null,
+  visibleText = null,
+  visibleTextTailChars = 120,
+}) {
   const base =
     `claude CLI: still running after ${Math.round(elapsedMs / 1000)}s ` +
     `(stdout ${stdoutBytes}B, stderr ${stderrBytes}B)`;
-  return thinkingTokens === null ? base : `${base}, ~${thinkingTokens} thinking tokens so far`;
+  let line = thinkingTokens === null ? base : `${base}, ~${thinkingTokens} thinking tokens so far`;
+  // A short live snippet of the model's own most recent visible text, so a
+  // human watching the run (or reading the log after the fact, before ever
+  // touching the transcript artifact) can see AT A GLANCE whether it's
+  // producing new spec content or repeating itself - the second is a real,
+  // observed failure shape (#353, 2026-08-18), not a hypothetical.
+  if (visibleText) {
+    const snippet =
+      visibleText.length > visibleTextTailChars
+        ? `…${visibleText.slice(-visibleTextTailChars)}`
+        : visibleText;
+    line += `, last text: "${snippet.replace(/\s+/g, ' ').trim()}"`;
+  }
+  return line;
 }
 
 // Bounds a raw stdout/stderr dump before it lands in a thrown Error message.
@@ -372,6 +412,17 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     // the one number that distinguishes "still working" from "wedged" while
     // a call is in flight or right up to the moment it's killed.
     let lastThinkingTokens = null;
+    // The model's own most recently seen visible text content block, kept
+    // as a single overwritten snapshot (not appended/accumulated) — under
+    // stream-json, an assistant event's content block already carries the
+    // block's own text as known so far, so keeping only the latest one
+    // avoids both unbounded growth and double-counting, whether the CLI is
+    // emitting growing partial blocks or one event per completed block.
+    // Exists specifically so a timeout or heartbeat can show what the model
+    // was actually writing, not just how many bytes arrived - see
+    // formatCliTimeout's own comment for the failure this was built to
+    // stop requiring manual transcript archaeology to diagnose.
+    let latestVisibleText = null;
     const startedAt = Date.now();
 
     function consumeLine(line) {
@@ -395,6 +446,12 @@ async function callViaCli({ prompt, timeoutMs, model }) {
         lastThinkingTokens = evt.estimated_tokens;
       } else if (evt?.type === 'result') {
         resultEvent = evt;
+      } else if (evt?.type === 'assistant' && Array.isArray(evt.message?.content)) {
+        for (const block of evt.message.content) {
+          if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+            latestVisibleText = block.text;
+          }
+        }
       }
     }
 
@@ -407,6 +464,7 @@ async function callViaCli({ prompt, timeoutMs, model }) {
           stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
           stderrBytes: Buffer.byteLength(stderr, 'utf8'),
           thinkingTokens: lastThinkingTokens,
+          visibleText: latestVisibleText,
         })
       );
     }, CLI_HEARTBEAT_MS);
@@ -424,6 +482,7 @@ async function callViaCli({ prompt, timeoutMs, model }) {
             stdout,
             stderr,
             thinkingTokens: lastThinkingTokens,
+            visibleText: latestVisibleText,
           })
         )
       );

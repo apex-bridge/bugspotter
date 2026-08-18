@@ -52,6 +52,7 @@ writeFileSync(
     // function.
     "if (mode === 'hang') {",
     "  process.stdout.write(JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 42 }) + '\\n');",
+    "  process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'FAKE_VISIBLE_TEXT: drafting the spec' }] } }) + '\\n');",
     "  process.stdout.write('PARTIAL_ENVELOPE_MARKER');",
     "  process.stderr.write('FAKE_STDERR_PROGRESS');",
     '  setTimeout(function () { process.exit(0); }, 5000);',
@@ -263,6 +264,79 @@ test('formatCliTimeout omits the thinking-token line when none arrived', () => {
   assert.doesNotMatch(message, /thinking-token count/);
 });
 
+test('formatCliTimeout includes the visible-text tail, separate from the raw stdout tail', () => {
+  const message = formatCliTimeout({
+    timeoutMs: 420_000,
+    elapsedMs: 420_030,
+    stdout:
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"I will read the files."}]}}\n',
+    visibleText: 'I will read the files.',
+  });
+
+  assert.match(message, /last visible assistant text/);
+  assert.match(message, /I will read the files\./);
+  // Must appear as its own labeled section, not just incidentally present
+  // because it also happens to be inside the raw stdout tail.
+  assert.match(message, /last visible assistant text[\s\S]*I will read the files\./);
+});
+
+test('formatCliTimeout omits the visible-text section when nothing was extracted', () => {
+  const message = formatCliTimeout({ timeoutMs: 780_000, elapsedMs: 780_050, stdout: 'raw bytes' });
+  assert.doesNotMatch(message, /last visible assistant text/);
+});
+
+test('formatCliTimeout clips the visible-text tail independently of the raw stdout tail length', () => {
+  const longText = 'y'.repeat(5000);
+  const message = formatCliTimeout({
+    timeoutMs: 5000,
+    stdout: 'short',
+    visibleText: longText,
+    tailChars: 100,
+  });
+
+  assert.match(message, /last visible assistant text \(last 100 chars of 5000\)/);
+  assert.ok(
+    !message.includes(longText),
+    'the full 5000-char text must not appear verbatim, only its clipped tail'
+  );
+});
+
+test('formatCliProgress includes a short visible-text snippet when known', () => {
+  const line = formatCliProgress({
+    elapsedMs: 60_000,
+    stdoutBytes: 500,
+    stderrBytes: 0,
+    visibleText: 'I will read the relevant source files before drafting the spec.',
+  });
+
+  assert.match(
+    line,
+    /last text: "I will read the relevant source files before drafting the spec\."/
+  );
+});
+
+test('formatCliProgress clips a long visible-text snippet to a short tail', () => {
+  const longText = `${'a'.repeat(200)}TAIL_MARKER`;
+  const line = formatCliProgress({
+    elapsedMs: 60_000,
+    stdoutBytes: 500,
+    stderrBytes: 0,
+    visibleText: longText,
+    visibleTextTailChars: 20,
+  });
+
+  assert.match(line, /last text: "…\w*TAIL_MARKER"/);
+  assert.ok(
+    !line.includes('a'.repeat(50)),
+    'expected the snippet clipped, not the full 200-char run'
+  );
+});
+
+test('formatCliProgress omits the visible-text field entirely when none was seen yet', () => {
+  const line = formatCliProgress({ elapsedMs: 60_000, stdoutBytes: 0, stderrBytes: 0 });
+  assert.doesNotMatch(line, /last text/);
+});
+
 test('callViaCli timeout error carries what the child actually wrote before the kill', async () => {
   process.env.FAKE_CLAUDE_MODE = 'hang';
   process.env.FAKE_CLAUDE_ENV_DUMP = '';
@@ -278,6 +352,14 @@ test('callViaCli timeout error carries what the child actually wrote before the 
     assert.match(err.message, /received: stdout \d+B, stderr \d+B/);
     assert.match(err.message, /PARTIAL_ENVELOPE_MARKER/);
     assert.match(err.message, /last known thinking-token count: ~42/);
+    // Proves callViaCli's own consumeLine (not just formatCliTimeout in
+    // isolation) actually parses the assistant event's text content block
+    // out of the real NDJSON stream and carries it through to the
+    // rejection - the whole point of this addition, since the raw stdout
+    // tail alone (PARTIAL_ENVELOPE_MARKER, asserted above) is not
+    // human-readable prose.
+    assert.match(err.message, /last visible assistant text/);
+    assert.match(err.message, /FAKE_VISIBLE_TEXT: drafting the spec/);
     assert.doesNotMatch(err.message, /wrote nothing at all/);
     return true;
   });
