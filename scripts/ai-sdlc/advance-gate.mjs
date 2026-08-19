@@ -12,7 +12,10 @@
 //   spec/  merge -> needs-adr, OR agent-working directly if the spec itself
 //          declares no ADR is warranted (its own "ADR: n/a" line - a field
 //          a human/agent already set deliberately while drafting the spec,
-//          not a guess this script invents).
+//          not a guess this script invents), OR the field already names an
+//          existing, Accepted ADR (#359 - a spec split off an already-
+//          ratified decision, e.g. a child issue under ADR-0044, still needs
+//          agent-working, not a redundant new ADR draft).
 //   adr/   merge -> agent-working, always (the branch only exists when an
 //          ADR was drafted, so there is no other place for it to go).
 //   impl/  merge -> needs-deploy, always (Gate 3 IS the merge - see
@@ -119,10 +122,22 @@ export function readAdrField(specContent) {
  * @param {string[]} input.issueLabels - the issue's labels *right now*, so a
  *   label a person already changed by hand is respected rather than clobbered
  * @param {string|null} input.adrField - only meaningful for stage 'spec'
+ * @param {boolean} [input.adrAlreadyRatified] - true when adrField names a
+ *   docs/adr/NNNN-slug.md file that exists on disk with `Status: Accepted` -
+ *   the workflow checks this (it has main checked out already), not this
+ *   module, so the decision here stays a pure function of its inputs and
+ *   testable without touching the filesystem. Only meaningful for stage
+ *   'spec'.
  * @returns {{action: 'advance'|'skip', stage: string|null, issueNumber: number|null,
  *            fromLabels: string[], toLabel: string|null, reason: string}}
  */
-export function decideAdvance({ headRef, prBody, issueLabels = [], adrField = null }) {
+export function decideAdvance({
+  headRef,
+  prBody,
+  issueLabels = [],
+  adrField = null,
+  adrAlreadyRatified = false,
+}) {
   const { stage, issueNumber: branchIssueNumber } = parseStageAndBranchIssue(headRef);
 
   if (!stage) {
@@ -169,14 +184,17 @@ export function decideAdvance({ headRef, prBody, issueLabels = [], adrField = nu
         reason: 'could not read the ADR field from the merged spec file',
       };
     }
-    const toLabel = adrField.toLowerCase() === 'n/a' ? GATE_LABELS.agentWorking : GATE_LABELS.adr;
+    const noAdrNeeded = adrField.toLowerCase() === 'n/a' || adrAlreadyRatified;
+    const toLabel = noAdrNeeded ? GATE_LABELS.agentWorking : GATE_LABELS.adr;
     return {
       action: 'advance',
       stage,
       issueNumber,
       fromLabels: [GATE_LABELS.spec],
       toLabel,
-      reason: `spec merged; its ADR field reads "${adrField}"`,
+      reason: adrAlreadyRatified
+        ? `spec merged; its ADR field "${adrField}" already exists and is Accepted - no new ADR needed`
+        : `spec merged; its ADR field reads "${adrField}"`,
     };
   }
 
@@ -295,6 +313,7 @@ function main() {
     prBody,
     issueLabels,
     adrField: process.env.ADR_FIELD || null,
+    adrAlreadyRatified: process.env.ADR_ALREADY_RATIFIED === 'true',
   });
 
   console.log(`advance-gate decide: ${decision.action} (${decision.reason})`);
