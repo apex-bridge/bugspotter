@@ -71,6 +71,26 @@ jobs:
           fi
           echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
+          # #359: a spec's ADR field pointing at an already-ratified ADR (e.g.
+          # a child issue split off a decision ADR-0044 already settled) used
+          # to route to needs-adr just the same as "pending" or free text
+          # would - firing adr-agent.yml to draft a redundant ADR nobody
+          # asked for (hit for real on #352, PR #357/ADR-0045). Only an exact
+          # docs/adr/NNNN-slug.md path that both exists AND is marked
+          # Accepted counts - "pending" and made-up text still fall through
+          # to needs-adr, and a Proposed/Draft ADR still needs its own gate.
+          # Matches "- Status: Accepted" whether or not it carries a trailing
+          # parenthetical (e.g. ADR-0010's "Accepted (legacy deprecation in
+          # progress)") - \b keeps it from also matching a different status
+          # that merely starts with "Accepted" as a word-fragment.
+          RATIFIED="false"
+          if [[ "$VALUE" =~ ^docs/adr/[0-9]{4}-[A-Za-z0-9._-]+\.md$ ]] \
+            && [ -f "$VALUE" ] \
+            && grep -qm1 -E '^- Status: Accepted\b' "$VALUE"; then
+            RATIFIED="true"
+          fi
+          echo "ratified=$RATIFIED" >> "$GITHUB_OUTPUT"
+
       - name: Fetch the issue's current labels
         id: current_labels
         if: steps.resolve.outputs.issue_number != ''
@@ -94,6 +114,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           ISSUE_LABELS_JSON: ${{ steps.current_labels.outputs.json }}
           ADR_FIELD: ${{ steps.adr_field.outputs.value }}
+          ADR_ALREADY_RATIFIED: ${{ steps.adr_field.outputs.ratified }}
         run: node scripts/ai-sdlc/advance-gate.mjs decide
 
       # GH_TOKEN here is deliberately NOT github.token. GitHub does not fire

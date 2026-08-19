@@ -89,6 +89,35 @@ test('treats an uppercase ADR: N/A the same as n/a', () => {
   assert.equal(d.toLabel, GATE_LABELS.agentWorking);
 });
 
+test('spec merge whose ADR field names an already-ratified ADR advances straight to agent-working (#359)', () => {
+  const d = decideAdvance({
+    headRef: 'spec/issue-353-sso-2-4-oidc-login-callback-path-',
+    prBody: 'Refs #353',
+    issueLabels: [GATE_LABELS.spec],
+    adrField: 'docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md',
+    adrAlreadyRatified: true,
+  });
+  assert.equal(d.action, 'advance');
+  assert.equal(d.issueNumber, 353);
+  assert.deepEqual(d.fromLabels, [GATE_LABELS.spec]);
+  assert.equal(d.toLabel, GATE_LABELS.agentWorking);
+  assert.match(d.reason, /already exists and is Accepted/);
+});
+
+test('a spec ADR field naming a real path still routes to needs-adr when the workflow did not confirm it is ratified', () => {
+  // adrAlreadyRatified defaults to false - the workflow only sets it true
+  // after actually checking the file exists AND is Accepted, so a stale or
+  // mistaken path (or a Proposed/Draft ADR) still gets its own gate.
+  const d = decideAdvance({
+    headRef: 'spec/issue-354-sso-3-4-enforce-sso-guards-',
+    prBody: 'Refs #354',
+    issueLabels: [GATE_LABELS.spec],
+    adrField: 'docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md',
+  });
+  assert.equal(d.action, 'advance');
+  assert.equal(d.toLabel, GATE_LABELS.adr);
+});
+
 test('spec merge with an ADR still pending advances to needs-adr', () => {
   const d = decideAdvance({
     headRef: 'spec/issue-226-intelligence-wire-per-org-similarity-thr',
