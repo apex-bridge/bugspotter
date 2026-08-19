@@ -40,14 +40,15 @@ jobs:
     name: Generate implementation scaffold
     if: github.event.label.name == 'agent-working'
     runs-on: ubuntu-latest
-    # Must exceed the "Generate scaffold" step budget (18m) plus everything
+    # Must exceed the "Generate scaffold" step budget (21m) plus everything
     # around it, or a slow-but-successful generation gets killed after paying
     # for the model call. Measured on run 30149093922 (the last fully green
     # run): ~17s of setup before the step, ~64s for scope check + install +
     # build + prettier + eslint + commit/push (which runs the pre-push unit
-    # suite) + PR + comment after it. 18m + ~1.5m left no margin under a 20m
-    # cap; 25m leaves ~6m for a slower runner or a larger scaffold.
-    timeout-minutes: 25
+    # suite) + PR + comment after it, ~1.5m total. Raised 25m -> 28m alongside
+    # the step's 18m -> 21m (issue #365) to keep roughly the same ~5-6m
+    # margin this job has always carried, not let it thin out to nothing.
+    timeout-minutes: 28
 
     steps:
       - uses: actions/checkout@v4
@@ -86,11 +87,14 @@ jobs:
 
       - name: Generate scaffold
         id: gen
-        # 18m, under the job's 25m cap. Raised from 15m alongside
+        # 21m, under the job's 28m cap. Raised from 15m to 18m alongside
         # generate-impl.mjs's CLI timeout (600s -> 780s): a real run on
         # issue #237 took 9m08s and another timed out at exactly 10m, so the
-        # old budget had no useful margin.
-        timeout-minutes: 18
+        # old budget had no useful margin. Raised again 18m -> 21m alongside
+        # 780s -> 1140s (issue #365): three identical timeouts on issue #353,
+        # each killed mid-way through a second extended-thinking pass that
+        # never got room to finish.
+        timeout-minutes: 21
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -108,10 +112,14 @@ jobs:
           # failure (timeout, non-zero exit, malformed envelope) - never on
           # success. formatCliTimeout's own error message clips to 1500 chars
           # to keep this log readable, which is exactly what makes a real
-          # post-mortem impossible (2026-08-14, issue #227: a thinking-token
-          # count jump in the final 60s that the clipped tail alone couldn't
-          # explain). The "Upload CLI transcript on failure" step below
-          # attaches the full file as a build artifact.
+          # post-mortem impossible from the step log alone (2026-08-14, issue
+          # #227: a thinking-token count jump in the final 60s the clipped
+          # tail alone couldn't explain). The "Upload CLI transcript on
+          # failure" step below attaches the full file as a build artifact -
+          # issue #365 (2026-08-19) used exactly that artifact to explain
+          # #227's jump: it's Claude's extended-thinking signature field
+          # (100K+ chars, emitted atomically once a thinking block completes,
+          # not streamed), not a stall or a loop.
           AI_SDLC_CLI_TRANSCRIPT_PATH: ${{ github.workspace }}/cli-transcript-impl.log
         run: node scripts/ai-sdlc/generate-impl.mjs
 

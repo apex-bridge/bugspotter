@@ -387,6 +387,18 @@ try {
   // startup and file I/O (that step's budget was raised to 18m in the same
   // change, and the job cap to 25m so the post-generation steps still fit).
   //
+  // 780_000ms proved too thin too: issue #365 (2026-08-19), three identical
+  // timeouts on issue #353's OIDC login/callback task, each killed still
+  // producing output. Hand-parsing the raw CLI transcript (see #365 for the
+  // full diagnosis) found the model doing one ~420-450s extended-thinking
+  // pass, then starting a SECOND one immediately after - all three runs were
+  // killed partway through that second pass, having spent nearly the whole
+  // budget on thinking twice without ever reaching real output. Raised to
+  // 1_140_000ms (19m) to give a second thinking pass of similar length room
+  // to actually finish, not just start. Not claimed to be enough - #365
+  // isn't closed, this is one measured step against it, same as #360/#362's
+  // relationship for generate-spec.mjs's timeout.
+  //
   // The deeper cost driver is the response schema: {path, content} means the
   // model re-emits every declared file IN FULL, so editing three ~500-line
   // files costs ~15K output tokens of mostly-unchanged text. A diff/patch-shaped
@@ -402,7 +414,7 @@ try {
   ({ text, stopReason } = await callClaude({
     prompt,
     maxTokens: MAX_TOKENS,
-    timeoutMs: 780_000,
+    timeoutMs: 1_140_000,
     model: MODEL,
   }));
 } catch (err) {
