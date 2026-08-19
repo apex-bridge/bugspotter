@@ -79,10 +79,14 @@ jobs:
           # docs/adr/NNNN-slug.md path that both exists AND is marked
           # Accepted counts - "pending" and made-up text still fall through
           # to needs-adr, and a Proposed/Draft ADR still needs its own gate.
+          # Matches "- Status: Accepted" whether or not it carries a trailing
+          # parenthetical (e.g. ADR-0010's "Accepted (legacy deprecation in
+          # progress)") - \b keeps it from also matching a different status
+          # that merely starts with "Accepted" as a word-fragment.
           RATIFIED="false"
           if [[ "$VALUE" =~ ^docs/adr/[0-9]{4}-[A-Za-z0-9._-]+\.md$ ]] \
             && [ -f "$VALUE" ] \
-            && grep -qm1 -E '^- Status: Accepted$' "$VALUE"; then
+            && grep -qm1 -E '^- Status: Accepted\b' "$VALUE"; then
             RATIFIED="true"
           fi
           echo "ratified=$RATIFIED" >> "$GITHUB_OUTPUT"
