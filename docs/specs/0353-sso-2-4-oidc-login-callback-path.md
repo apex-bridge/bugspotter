@@ -9,8 +9,8 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 - `packages/backend/src/cache/redis-cache.ts` — implement `getAndDelete` via Redis 7 native `GETDEL`
 - `packages/backend/src/cache/memory-cache.ts` — implement `getAndDelete` (get + delete, sufficient for in-process test cache)
 - `packages/backend/src/api/services/oidc-service.ts` — new file; IdP discovery + SSRF gating, PKCE/state generation, atomic state consumption
-- `packages/backend/src/api/routes/auth-oidc.ts` — new file; Fastify plugin with `GET /api/v1/auth/oidc/:tenant/login` and `GET /api/v1/auth/oidc/:tenant/callback`
-- `packages/backend/src/api/server.ts` — register `oidcRoutes` plugin
+- `packages/backend/src/api/routes/auth-oidc.ts` — new file; route module with `GET /api/v1/auth/oidc/:tenant/login` and `GET /api/v1/auth/oidc/:tenant/callback`, registered by direct function call (matching `authRoutes`), not as a Fastify plugin
+- `packages/backend/src/api/server.ts` — call `oidcRoutes(fastify)` alongside the other route-module calls
 
 **Blocking prerequisites:**
 
@@ -33,13 +33,13 @@ BugSpotter has no OIDC login path; organizations relying on enterprise IdPs (Okt
 1. `openid-client` v5 API throughout — the issue names `Issuer.discover()` but v5 ships a functional API as its primary surface; implementer must verify which surface the installed package version exposes (`Issuer.discover` class-based or `discovery()` functional) and use it consistently throughout `oidc-service.ts` and `auth-oidc.ts`.
 2. PKCE `code_challenge_method: 'S256'` on every authorization request; no implicit flow, no bare authorization code grant without a verifier.
 3. `email_verified === true` (strict boolean) verified on ID-token claims before any user lookup; if absent or `false`, return 401 immediately without touching the database.
-4. CSRF state payload `{ nonce, codeVerifier, redirectUri, tenantId, issuer }` stored in Redis with ≤10-minute TTL and consumed with Redis 7's native `GETDEL` command (single atomic round-trip); a pipeline `GET` + `DEL` is not sufficient — two commands under concurrent requests can both read before either deletes.
+4. CSRF state payload `{ nonce, codeVerifier, redirectUri, tenantId, issuer }` stored in Redis with ≤10-minute TTL and consumed with Redis 7's native `GETDEL` command (single atomic round-trip); a pipeline `GET` + `DEL` is not sufficient — two commands under concurrent requests can both read before either deletes. The callback handler must re-validate the stored `issuer` against the freshly re-discovered `issuer.metadata.issuer` before proceeding (ADR-0044: the state is bound to the issuer, not just checked for existence) — a mismatch fails with the same generic 401.
 5. `issuerUrl` from saved config AND both `token_endpoint` and `jwks_uri` from the discovery response each validated with `validateSSRFProtection()` immediately before every connection — not cached as pre-approved after first discovery. Verify the exact export name in `packages/backend/src/integrations/security/ssrf-validator.ts` before use; it is ASSUMED to match the name the issue quotes.
 6. `allowed_domains`: fail-closed if the field is absent, null, or empty — reject with 401 before any user lookup. Domain comparison uses `email.split('@')[1]`; enforced on every branch (same-tenant link, cross-tenant reject, new-user create).
 7. Account-linking (ADR-0044 Decision 1): email match in same tenant → link (reuse existing user row, no insert); email match in a different tenant → 401 with generic message (must not reveal which tenant owns the address); no match → create user + add membership.
-8. Cookie issued in the callback must match the refresh-token cookie in `packages/backend/src/api/routes/auth.ts` exactly — same cookie name, `HttpOnly`/`Secure`/`SameSite` flags, and `COOKIE_DOMAIN`. Read `auth.ts` to verify the helper name and cookie shape before implementing `issueOidcCookie`; do not introduce a second cookie format.
+8. Cookie issued in the callback must match the refresh-token cookie in `packages/backend/src/api/routes/auth.ts` exactly — cookie name `refresh_token` (not `refreshToken`), options built via `buildRefreshCookieOptions()` from `packages/backend/src/api/utils/auth-cookies.ts` (`HttpOnly`/`Secure`/`SameSite`/`COOKIE_DOMAIN` all come from that helper). Do not introduce a second cookie format.
 9. `getAndDelete` must be added to the exported cache interface in `packages/backend/src/cache/types.ts` (the interface name is `ICacheProvider`) and implemented in both `redis-cache.ts` and `memory-cache.ts` before `oidc-service.ts` compiles.
-10. Route plugin must not modify any handler registered under `/api/v1/auth/login` or any existing session/token-refresh path; all additions are new route registrations.
+10. `auth-oidc.ts` must not modify any handler registered under `/api/v1/auth/login` or any existing session/token-refresh path; all additions are new route registrations.
 
 ## Acceptance criteria
 
@@ -64,20 +64,33 @@ BugSpotter has no OIDC login path; organizations relying on enterprise IdPs (Okt
 
 Add `getAndDelete` to the `ICacheProvider` interface.
 
+`ICacheProvider.get()` is generic (`get<T>(key): Promise<T | null>`) and `RedisCache` handles JSON serialization internally while `MemoryCache` stores the value as-is — `getAndDelete` must follow that same generic shape, not return a raw `string` that callers then `JSON.parse` themselves.
+
 ```ts
 // Append to ICacheProvider, after the existing `delete` declaration:
-getAndDelete(key: string): Promise<string | null>;
+getAndDelete<T>(key: string): Promise<T | null>;
 ```
 
 ### `packages/backend/src/cache/redis-cache.ts`
 
-Add `getAndDelete` using the Redis 7 `GETDEL` command. Verify the ioredis method name (`getdel` lowercase) against the installed ioredis version.
+Add `getAndDelete` using the Redis 7 `GETDEL` command, mirroring the existing `get()` method's JSON parsing and error handling. Verify the ioredis method name (`getdel` lowercase) against the installed ioredis version.
 
 ```ts
 // Append inside the RedisCache class body, after the existing delete method:
-async getAndDelete(key: string): Promise<string | null> {
+async getAndDelete<T>(key: string): Promise<T | null> {
   const redis = await this.getConnection();
-  return redis.getdel(this.buildKey(key));
+  const fullKey = this.buildKey(key);
+  const data = await redis.getdel(fullKey);
+  if (data === null) return null;
+  try {
+    return JSON.parse(data) as T;
+  } catch (parseError) {
+    logger.error('Redis cache JSON parse error', {
+      key,
+      error: parseError instanceof Error ? parseError.message : 'Unknown error',
+    });
+    return null;
+  }
 }
 ```
 
@@ -85,8 +98,8 @@ async getAndDelete(key: string): Promise<string | null> {
 
 ```ts
 // Append inside the MemoryCache class body, after the existing delete method:
-async getAndDelete(key: string): Promise<string | null> {
-  const value = await this.get<string>(key);
+async getAndDelete<T>(key: string): Promise<T | null> {
+  const value = await this.get<T>(key);
   await this.delete(key);
   return value;
 }
@@ -139,9 +152,7 @@ export async function consumeOidcState(
   cache: ICacheProvider,
   stateKey: string
 ): Promise<OidcStatePayload | null> {
-  const raw = await cache.getAndDelete(`oidc:state:${stateKey}`);
-  if (!raw) return null;
-  return JSON.parse(raw) as OidcStatePayload;
+  return cache.getAndDelete<OidcStatePayload>(`oidc:state:${stateKey}`);
 }
 
 export { generators };
@@ -149,11 +160,11 @@ export { generators };
 
 ### `packages/backend/src/api/routes/auth-oidc.ts`
 
-New file. Fastify plugin; all sensitive decisions delegated to `oidc-service.ts`.
+New file. Route module, not a Fastify plugin — registered by a direct function call from `server.ts` (`oidcRoutes(fastify)`), matching the `authRoutes(fastify, db)` convention this backend uses for every other route module. All sensitive decisions delegated to `oidc-service.ts`.
 
 ```ts
 // New file — packages/backend/src/api/routes/auth-oidc.ts
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import {
   discoverIssuerValidated,
   storeOidcState,
@@ -161,7 +172,7 @@ import {
   generators,
 } from '../services/oidc-service.js';
 
-export const oidcRoutes: FastifyPluginAsync = async (fastify) => {
+export function oidcRoutes(fastify: FastifyInstance): void {
   fastify.get<{ Params: { tenant: string } }>(
     '/api/v1/auth/oidc/:tenant/login',
     async (request, reply) => {
@@ -170,7 +181,13 @@ export const oidcRoutes: FastifyPluginAsync = async (fastify) => {
       const config = await fastify.container.ssoProviderRepository.findByTenantSlug(tenant);
       if (!config) return reply.code(404).send({ error: 'SSO not configured' });
 
-      const redirectUri = `${fastify.config.baseUrl}/api/v1/auth/oidc/${tenant}/callback`;
+      // No `fastify.config`/`baseUrl` decoration exists in this codebase — server.ts imports
+      // `config` as a plain module, it isn't decorated onto the fastify instance, and there's
+      // no config.server.baseUrl field. Build the redirect URI from the incoming request's
+      // origin instead, which is also correct per-tenant-subdomain in saas mode. `trustProxy`
+      // is already enabled on the Fastify instance (`config.server.trustProxy` in server.ts),
+      // so request.protocol/hostname respect X-Forwarded-* headers behind a reverse proxy.
+      const redirectUri = `${request.protocol}://${request.hostname}/api/v1/auth/oidc/${tenant}/callback`;
       const issuer = await discoverIssuerValidated(config.issuerUrl);
 
       // ASSUMED: openid-client v5 Client construction — verify v5 class vs functional API
@@ -221,6 +238,13 @@ export const oidcRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const issuer = await discoverIssuerValidated(config.issuerUrl);
+    // Bind the callback to the same IdP the login step discovered (ADR-0044: the CSRF state
+    // is bound to the issuer, not just checked for existence). Without this, a tenant's IdP
+    // config could change between login and callback and the stored state would still be
+    // honored against a different issuer than the one the user actually authenticated with.
+    if (issuer.metadata.issuer !== statePayload.issuer) {
+      return reply.code(401).send({ error: 'Authentication failed' });
+    }
     // ASSUMED: openid-client v5 Client construction — verify v5 API
     const client = new issuer.Client({
       client_id: config.clientId,
@@ -267,30 +291,32 @@ export const oidcRoutes: FastifyPluginAsync = async (fastify) => {
     });
     return issueOidcCookie(fastify, reply, newUser.id, statePayload.tenantId);
   });
-};
+}
 
-// TODO before merging: read packages/backend/src/api/routes/auth.ts, identify the
-// refresh-token cookie helper (name ASSUMED), and inline or call it here.
-// Do not introduce a new cookie name, flag set, or COOKIE_DOMAIN behavior.
+// Cookie must match auth.ts exactly: name `refresh_token`, options built via
+// buildRefreshCookieOptions() from packages/backend/src/api/utils/auth-cookies.ts.
+// Do not introduce a new cookie name, flag set, or COOKIE_DOMAIN behavior — reuse the helper.
 async function issueOidcCookie(
   _fastify: unknown,
   _reply: unknown,
   _userId: string,
   _tenantId: string
 ) {
-  throw new Error('Placeholder — implement by matching auth.ts cookie issuance');
+  throw new Error(
+    'Placeholder — implement by calling buildRefreshCookieOptions() and setting refresh_token'
+  );
 }
 ```
 
 ### `packages/backend/src/api/server.ts`
 
-Register the OIDC plugin alongside existing route registrations.
+Call `oidcRoutes(fastify)` alongside the other route-module calls (e.g. next to `authRoutes(fastify, db)`), not via `fastify.register(...)` — this backend wires its own route modules by direct function call, reserving `fastify.register` for actual Fastify plugins (`@fastify/cors`, `@fastify/jwt`, etc.).
 
 ```ts
-// Append after the last existing fastify.register(...) route call (verify insertion point):
+// Append after the existing authRoutes(fastify, db) call (verify insertion point):
 import { oidcRoutes } from './routes/auth-oidc.js';
 // ...
-await fastify.register(oidcRoutes);
+oidcRoutes(fastify);
 ```
 
 ## Tests
@@ -396,7 +422,7 @@ it('valid callback with email_verified:true for same-tenant member issues cookie
     tenantId: 'tenant-abc',
     issuer: 'https://idp.example.com',
   };
-  mockCache.getAndDelete.mockResolvedValue(JSON.stringify(payload));
+  mockCache.getAndDelete.mockResolvedValue(payload);
   mockSsoProviderRepository.findByTenantSlug.mockResolvedValue({
     issuerUrl: 'https://idp.example.com',
     clientId: 'c',
@@ -421,7 +447,7 @@ it('valid callback with email_verified:true for same-tenant member issues cookie
   });
 
   expect(res.statusCode).toBeLessThan(400);
-  expect(res.headers['set-cookie']).toMatch(/refreshToken=/);
+  expect(res.headers['set-cookie']).toMatch(/refresh_token=/);
 });
 ```
 
@@ -429,7 +455,7 @@ it('valid callback with email_verified:true for same-tenant member issues cookie
 
 ```ts
 it('returns 401 when openid-client throws on bad signature', async () => {
-  mockCache.getAndDelete.mockResolvedValue(JSON.stringify(validPayload));
+  mockCache.getAndDelete.mockResolvedValue(validPayload);
   mockSsoProviderRepository.findByTenantSlug.mockResolvedValue(validConfig);
   vi.mocked(MockClientInstance.callback).mockRejectedValue(
     new Error('JWSSignatureVerificationFailed')
@@ -449,9 +475,7 @@ it('returns 401 when openid-client throws on bad signature', async () => {
 ```ts
 it('returns 401 on second use of the same state (state consumed after first callback)', async () => {
   // First call: state is present
-  mockCache.getAndDelete
-    .mockResolvedValueOnce(JSON.stringify(validPayload))
-    .mockResolvedValueOnce(null); // second call: already deleted
+  mockCache.getAndDelete.mockResolvedValueOnce(validPayload).mockResolvedValueOnce(null); // second call: already deleted
 
   mockSsoProviderRepository.findByTenantSlug.mockResolvedValue(validConfig);
   vi.mocked(MockClientInstance.callback).mockResolvedValue(validTokenSet);
@@ -477,9 +501,7 @@ it('returns 401 on second use of the same state (state consumed after first call
 
 ```ts
 it('returns 401 when email matches a user who has no membership in the requested tenant', async () => {
-  mockCache.getAndDelete.mockResolvedValue(
-    JSON.stringify({ ...validPayload, tenantId: 'tenant-abc' })
-  );
+  mockCache.getAndDelete.mockResolvedValue({ ...validPayload, tenantId: 'tenant-abc' });
   mockSsoProviderRepository.findByTenantSlug.mockResolvedValue({
     ...validConfig,
     tenantId: 'tenant-abc',
@@ -503,7 +525,7 @@ it('returns 401 when email matches a user who has no membership in the requested
 
 ```ts
 it('returns 401 before any user lookup when allowedDomains is empty', async () => {
-  mockCache.getAndDelete.mockResolvedValue(JSON.stringify(validPayload));
+  mockCache.getAndDelete.mockResolvedValue(validPayload);
   mockSsoProviderRepository.findByTenantSlug.mockResolvedValue({
     ...validConfig,
     allowedDomains: [],
@@ -533,7 +555,7 @@ it('rejects when discovered token_endpoint resolves to an internal address', asy
       throw new Error('SSRF: private address');
     }); // token_endpoint fails
 
-  mockCache.getAndDelete.mockResolvedValue(JSON.stringify(validPayload));
+  mockCache.getAndDelete.mockResolvedValue(validPayload);
   mockSsoProviderRepository.findByTenantSlug.mockResolvedValue(validConfig);
 
   const res = await fastify.inject({
@@ -554,4 +576,4 @@ pnpm --filter @bugspotter/backend test:unit -- --reporter=verbose tests/api/auth
 pnpm --filter @bugspotter/backend test:unit -- --reporter=verbose tests/cache/
 ```
 
-Rollback: the new routes (`/api/v1/auth/oidc/:tenant/login` and `/api/v1/auth/oidc/:tenant/callback`) are purely additive; removing the `await fastify.register(oidcRoutes)` line in `packages/backend/src/api/server.ts` fully restores current behavior. The `getAndDelete` addition to the cache interface and implementations is also additive. No data migration beyond #352's schema, which has its own rollback path.
+Rollback: the new routes (`/api/v1/auth/oidc/:tenant/login` and `/api/v1/auth/oidc/:tenant/callback`) are purely additive; removing the `oidcRoutes(fastify)` call in `packages/backend/src/api/server.ts` fully restores current behavior. The `getAndDelete` addition to the cache interface and implementations is also additive. No data migration beyond #352's schema, which has its own rollback path.
