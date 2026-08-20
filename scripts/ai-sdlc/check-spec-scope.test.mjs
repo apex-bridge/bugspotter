@@ -1,8 +1,15 @@
-// Tests for check-spec-scope.mjs's pure logic. Zero-dependency, run with
-// `node --test`.
+// Tests for check-spec-scope.mjs's pure logic, plus a CLI block for the
+// hard/soft dispatch in main() (SPEC_SCOPE_HARD), which isn't pure logic
+// and can only be exercised by actually running the script. Zero-dependency,
+// run with `node --test`.
 
-import { test, describe } from 'node:test';
+import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { checkFanOut, resolveCap, DEFAULT_CAP } from './check-spec-scope.mjs';
 
 describe('resolveCap', () => {
@@ -58,5 +65,69 @@ describe('checkFanOut', () => {
 
   test('empty list never warns', () => {
     assert.equal(checkFanOut([]), null);
+  });
+});
+
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'check-spec-scope.mjs');
+const DIR = mkdtempSync(join(tmpdir(), 'check-spec-scope-test-'));
+after(() => rmSync(DIR, { recursive: true, force: true }));
+
+function writeSpec(name, fileCount) {
+  const path = join(DIR, name);
+  const files = Array.from({ length: fileCount }, (_, i) => `\`packages/a/${i}.ts\``).join(', ');
+  writeFileSync(
+    path,
+    [
+      '# Spec: fixture',
+      '',
+      `**Files touched:** ${files}`,
+      '',
+      '## Problem',
+      '',
+      'Fixture.',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+  return path;
+}
+
+/** Runs the real CLI with a clean slate for the env vars under test. */
+function runCli(env) {
+  const base = { ...process.env };
+  delete base.SPEC_FILE;
+  delete base.SPEC_SCOPE_CAP;
+  delete base.SPEC_SCOPE_HARD;
+  return spawnSync(process.execPath, [SCRIPT], { env: { ...base, ...env }, encoding: 'utf8' });
+}
+
+describe('CLI: SPEC_SCOPE_HARD dispatch', () => {
+  test('over cap, SPEC_SCOPE_HARD unset: exits 0, still warns', () => {
+    const spec = writeSpec('over-soft.md', DEFAULT_CAP + 1);
+    const r = runCli({ SPEC_FILE: spec });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /::warning::/);
+    assert.match(r.stderr, /files touched \(cap: 6\)/);
+  });
+
+  test('over cap, SPEC_SCOPE_HARD=true: exits 1', () => {
+    const spec = writeSpec('over-hard.md', DEFAULT_CAP + 1);
+    const r = runCli({ SPEC_FILE: spec, SPEC_SCOPE_HARD: 'true' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /files touched \(cap: 6\)/);
+  });
+
+  test('over cap, SPEC_SCOPE_HARD set to something other than "true": stays soft', () => {
+    const spec = writeSpec('over-hard-typo.md', DEFAULT_CAP + 1);
+    const r = runCli({ SPEC_FILE: spec, SPEC_SCOPE_HARD: 'yes' });
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  test('within cap, SPEC_SCOPE_HARD=true: exits 0, no finding', () => {
+    const spec = writeSpec('within-hard.md', DEFAULT_CAP);
+    const r = runCli({ SPEC_FILE: spec, SPEC_SCOPE_HARD: 'true' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /within cap/);
   });
 });

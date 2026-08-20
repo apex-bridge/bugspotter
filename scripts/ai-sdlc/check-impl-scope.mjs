@@ -28,6 +28,9 @@
 // check. It short-circuited to exit 0 until 2026-08-02, which left the most
 // extreme version of the #237 bug (zero of N declared files) passing green
 // through the gate built to catch it.
+// Optional env var: IMPL_SUMMARY (generate-impl.mjs's own impl_summary
+// output) - printed on a mismatch as an unverified lead, not trusted as a
+// completeness signal (see issue #367, where it disagreed with reality).
 // Exit 1 if the two lists disagree in either direction, OR if the ratified
 // spec can't be read or has no parseable "Files touched" line — a hard gate
 // that no-ops on a malformed baseline isn't a gate, it's a trap door.
@@ -75,7 +78,7 @@ export function findUnwrittenPaths(writtenPaths, declaredPaths) {
 }
 
 function main() {
-  const { SPEC_FILE, FILES_WRITTEN } = process.env;
+  const { SPEC_FILE, FILES_WRITTEN, IMPL_SUMMARY } = process.env;
   if (!SPEC_FILE) {
     console.error('Missing SPEC_FILE');
     process.exit(1);
@@ -153,6 +156,21 @@ function main() {
           '       without amending will fail identically, since the agent will keep\n' +
           '       (correctly) deciding that file needs no change.\n'
       );
+
+      // The model's own account of what it did, straight from its response -
+      // NOT verified against FILES_WRITTEN, and issue #367 (2026-08-20) found
+      // it can actively disagree: one run's summary claimed all 7 declared
+      // files were handled while the files array itself contained only 2.
+      // Surfaced anyway because it's still a fast lead on WHY something is
+      // missing (ran out of budget mid-file, decided a file needed no
+      // change, flagged its own gap) - a human just has to read it knowing
+      // it may be describing work that was never actually emitted.
+      if (IMPL_SUMMARY?.trim()) {
+        console.error(
+          `\n  Model's own summary (unverified - may describe work not actually written,\n` +
+            `  see issue #367): ${IMPL_SUMMARY.trim()}\n`
+        );
+      }
     }
 
     console.error(`Declared in ${SPEC_FILE}:\n${declaredPaths.map((p) => `  ${p}`).join('\n')}`);
