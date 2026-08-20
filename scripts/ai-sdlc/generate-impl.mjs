@@ -5,7 +5,7 @@
 // Model router (label-based via ISSUE_LABELS env):
 //   complexity:high  -> claude-opus-4-8   (deep architecture, cross-cutting changes)
 //   pii-sensitive    -> claude-haiku-4-5-20251001  (local-floor stand-in; cheapest hosted)
-//   default          -> claude-sonnet-4-6
+//   default          -> claude-sonnet-5
 // The selected model is passed to callClaude's `model` override on either backend.
 //
 // Static context (CLAUDE.md files + pattern examples) is prepended to the prompt.
@@ -52,7 +52,7 @@ if (!SPEC_CONTENT) {
 // Change without a code edit: set IMPL_MODEL_HIGH / IMPL_MODEL_DEFAULT / IMPL_MODEL_LOW
 // in Settings > Secrets and variables > Actions > Variables.
 const MODEL_HIGH = process.env.IMPL_MODEL_HIGH || 'claude-opus-4-8';
-const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || 'claude-sonnet-4-6';
+const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || 'claude-sonnet-5';
 const MODEL_LOW = process.env.IMPL_MODEL_LOW || 'claude-haiku-4-5-20251001';
 
 function selectModel(labels) {

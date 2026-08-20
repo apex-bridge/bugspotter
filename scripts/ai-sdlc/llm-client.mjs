@@ -23,7 +23,7 @@
 //   in Claude Code's auth precedence and would otherwise silently shadow it.
 //
 // callClaude({ prompt, maxTokens, timeoutMs, model }) — `model` is optional
-//   (defaults to claude-sonnet-4-6 on both backends) and lets a caller like
+//   (defaults to claude-sonnet-5 on both backends) and lets a caller like
 //   generate-impl.mjs's label-based model router (complexity:high ->
 //   claude-opus-4-8, pii-sensitive -> claude-haiku, default -> sonnet)
 //   pick a different model per call on either backend.
@@ -41,7 +41,7 @@ import { Buffer } from 'node:buffer';
 
 const LLM_BACKEND = process.env.LLM_BACKEND || 'api';
 
-const CLI_MODEL = 'claude-sonnet-4-6';
+const CLI_MODEL = 'claude-sonnet-5';
 
 export function requireLlmCredentials() {
   if (LLM_BACKEND === 'cli') {
@@ -65,7 +65,7 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
     },
     signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
-      model: model || 'claude-sonnet-4-6',
+      model: model || 'claude-sonnet-5',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
     }),

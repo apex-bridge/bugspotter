@@ -575,7 +575,7 @@ test('callViaCli invokes claude with --tools= and --strict-mcp-config, not --all
       'stream-json',
       '--verbose',
       '--model',
-      'claude-sonnet-4-6',
+      'claude-sonnet-5',
       '--tools=',
       '--strict-mcp-config',
     ]);
@@ -679,7 +679,7 @@ test('callViaApi falls back to the hardcoded default model when none is supplied
 
   try {
     await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
-    assert.equal(requests[0].body.model, 'claude-sonnet-4-6');
+    assert.equal(requests[0].body.model, 'claude-sonnet-5');
   } finally {
     globalThis.fetch = originalFetch;
   }

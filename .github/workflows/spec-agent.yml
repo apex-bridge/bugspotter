@@ -138,7 +138,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
           git add "$SPEC_FILE"
-          MSG="$(printf 'spec(#%s): draft spec\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ISSUE_NUMBER")"
+          MSG="$(printf 'spec(#%s): draft spec\n\nAssisted-by: claude-sonnet-5 (agent)' "$ISSUE_NUMBER")"
           git commit -m "$MSG"
           git fetch origin "$BRANCH" 2>/dev/null || true
           git push --force-with-lease origin "$BRANCH"
@@ -153,7 +153,7 @@ jobs:
           BRANCH: ${{ steps.push.outputs.branch }}
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
         run: |
-          PR_BODY="$(printf 'Agent-drafted spec for issue #%s.\n\nReview, fill gaps, and merge to advance this issue to `needs-adr` (if an ADR is warranted) or `agent-working` (if no ADR is needed).\n\nRefs #%s\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
+          PR_BODY="$(printf 'Agent-drafted spec for issue #%s.\n\nReview, fill gaps, and merge to advance this issue to `needs-adr` (if an ADR is warranted) or `agent-working` (if no ADR is needed).\n\nRefs #%s\n\nAssisted-by: claude-sonnet-5 (agent)' "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
 
           PR_URL=$(gh pr create \
             --title "spec(#${ISSUE_NUMBER}): ${ISSUE_TITLE}" \
