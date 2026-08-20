@@ -5,23 +5,28 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 
 **Files touched:**
 
+- `packages/backend/src/db/repositories/factory.ts` — add `oidcIdpConfigs: OidcIdpConfigRepository` to `RepositoryRegistry` and `createRepositories()`; the repository class already exists (#352) but was never wired into the DI container — confirmed by grep: no reference to it anywhere under `src/api/` or `src/container/`
+- `packages/backend/src/db/client.ts` — add the corresponding `readonly oidcIdpConfigs!: OidcIdpConfigRepository;` property (`DatabaseClient implements RepositoryRegistry`)
 - `packages/backend/src/api/services/oidc-service.ts` — new file; IdP discovery + SSRF gating, PKCE/state generation, state storage
-- `packages/backend/src/api/routes/auth-oidc.ts` — new file; route module with `GET /api/v1/auth/oidc/:tenant/login`, registered by direct function call (matching `authRoutes`), not as a Fastify plugin
+- `packages/backend/src/api/routes/auth-oidc.ts` — new file; route module with `GET /api/v1/auth/oidc/:tenantId/login`, registered by direct function call (matching `authRoutes`), not as a Fastify plugin
 - `packages/backend/src/api/server.ts` — call `oidcRoutes(fastify)` alongside the other route-module calls
+- `packages/backend/tests/api/auth-oidc.test.ts` — new file; test case A/B below
 
 **Blocking prerequisites:**
 
-- #352 — SSO provider config repository and schema must exist before `auth-oidc.ts` can look up `issuerUrl`, `clientId`, and `allowedDomains`
+- #352 — `OidcIdpConfigRepository` and its schema must exist (they do — see "Files touched" above for the DI-wiring gap this slice also closes)
 
 ## Problem
 
 Split off #353 as its smaller, lower-risk half (see #367 for why). BugSpotter has no OIDC login path; organizations relying on enterprise IdPs (Okta, Azure AD, Google Workspace) cannot authenticate employees without a local password. This slice implements the login-initiation endpoint: IdP discovery, PKCE code-challenge generation, and CSRF-state storage, per ADR-0044. The callback (token exchange, ID-token validation, account-linking, cookie issuance) is #368, a separate slice.
 
+**Corrected during review (PR #369):** the original monolithic #353 spec this was split from assumed a `fastify.container.ssoProviderRepository` with a `findByTenantSlug()` method and a `fastify.container.cache` — neither exists. `OidcIdpConfigRepository` (real, from #352) exposes `findByTenantId(tenantId)`, not a slug lookup — this codebase has no tenant-slug concept anywhere (grepped, zero hits). And there is no `cache` on `IServiceContainer` at all; the actual pattern this codebase uses is the `getCacheService()` singleton from `src/cache/index.ts`, imported directly where needed, not injected via the container. Both corrected below and reflected in the route path (`:tenantId`, not `:tenant`).
+
 ## Out of scope
 
-- The callback endpoint (`GET /api/v1/auth/oidc/:tenant/callback`) and everything downstream of it — #368.
-- `getAndDelete` on the cache interface — not needed by login initiation (only `set`), added in #368 where it's actually consumed.
-- Self-hosted mode path (no `:tenant` segment, env-configured IdP) — route structure accommodates it but env-based config lookup is a separate slice.
+- The callback endpoint (`GET /api/v1/auth/oidc/:tenantId/callback`) and everything downstream of it — #368.
+- `getAndDelete` on `CacheService`/`ICacheProvider` — not needed by login initiation (only `set`), added in #368 where it's actually consumed.
+- Self-hosted mode path (no `:tenantId` segment, env-configured IdP) — route structure accommodates it but env-based config lookup is a separate slice.
 - Admin UI screens for IdP configuration — separate slice.
 - SSO-required enforcement guards — slice 3/4 (#354).
 
@@ -30,21 +35,48 @@ Split off #353 as its smaller, lower-risk half (see #367 for why). BugSpotter ha
 1. `openid-client` v5 API throughout — the issue names `Issuer.discover()` but v5 ships a functional API as its primary surface; implementer must verify which surface the installed package version exposes (`Issuer.discover` class-based or `discovery()` functional) and use it consistently.
 2. PKCE `code_challenge_method: 'S256'` on every authorization request; no implicit flow, no bare authorization code grant without a verifier.
 3. `issuerUrl` from saved config AND both `token_endpoint` and `jwks_uri` from the discovery response each validated with `validateSSRFProtection()` immediately before every connection — not cached as pre-approved after first discovery. Verify the exact export name in `packages/backend/src/integrations/security/ssrf-validator.ts` before use; it is ASSUMED to match the name this constraint quotes.
-4. CSRF state payload `{ nonce, codeVerifier, redirectUri, tenantId, issuer }` stored in Redis with ≤10-minute TTL via the existing `ICacheProvider.set()` — no new cache method needed for this slice (consumption via `getAndDelete` is #368's concern).
+4. CSRF state payload `{ nonce, codeVerifier, redirectUri, tenantId, issuer }` stored via `getCacheService().set()` with ≤10-minute TTL — no new cache method needed for this slice (atomic consumption via `getAndDelete` is #368's concern, added to `CacheService` there).
 5. No `fastify.config`/`baseUrl` decoration exists in this codebase — build the redirect URI from the incoming request's origin (`request.protocol`/`request.hostname`), not a config field. `trustProxy` is already enabled on the Fastify instance, so this respects `X-Forwarded-*` headers behind a reverse proxy.
 6. `auth-oidc.ts` must not modify any handler registered under `/api/v1/auth/login` or any existing session/token-refresh path; all additions are new route registrations.
 7. `oidc-service.ts` must export `discoverIssuerValidated`, `storeOidcState`, and `generators` in a shape #368 can import and extend without modifying this slice's exports (`consumeOidcState` is added by #368, not this slice).
+8. `OidcIdpConfigRepository.findByTenantId(tenantId)` takes the tenant/organization id directly — the route param is `:tenantId`, not a slug. Verify against `packages/backend/src/db/repositories/oidc-idp-config.repository.ts` before use (confirmed present at time of writing: `async findByTenantId(tenantId: string): Promise<OidcIdpConfig | null>`).
 
 ## Acceptance criteria
 
-- [ ] `GET /api/v1/auth/oidc/:tenant/login` responds 302 to the IdP authorization URL, the URL includes `code_challenge_method=S256`, and the state payload is in Redis with TTL ≤600s — verified by test case A.
-- [ ] `GET /api/v1/auth/oidc/:tenant/login` for an unconfigured tenant responds 404 without calling `validateSSRFProtection` — verified by test case B.
+- [ ] `GET /api/v1/auth/oidc/:tenantId/login` responds 302 to the IdP authorization URL, the URL includes `code_challenge_method=S256`, and the state payload is retrievable via `getCacheService().get()` with TTL ≤600s — verified by test case A.
+- [ ] `GET /api/v1/auth/oidc/:tenantId/login` for an unconfigured tenant responds 404 without calling `validateSSRFProtection` — verified by test case B.
 
 ## Changes
 
+### `packages/backend/src/db/repositories/factory.ts`
+
+Wire the already-existing `OidcIdpConfigRepository` (from #352) into the DI container — it was defined and exported but never added to `RepositoryRegistry`, so nothing could actually reach it via `fastify.container.db`.
+
+```ts
+// Add near the other imports:
+import { OidcIdpConfigRepository } from './oidc-idp-config.repository.js';
+
+// Add to the RepositoryRegistry interface (near the other SaaS/tenant-scoped entries):
+oidcIdpConfigs: OidcIdpConfigRepository;
+
+// Add inside createRepositories(), alongside the other `new XRepository(pool)` instantiations,
+// and include `oidcIdpConfigs` in the returned object:
+const oidcIdpConfigs = new OidcIdpConfigRepository(pool);
+```
+
+### `packages/backend/src/db/client.ts`
+
+`DatabaseClient implements RepositoryRegistry`, so it needs the matching property.
+
+```ts
+// Add alongside the other `public readonly <name>!: <Type>;` declarations:
+public readonly oidcIdpConfigs!: OidcIdpConfigRepository;
+// Add the import: import type { OidcIdpConfigRepository } from './repositories/oidc-idp-config.repository.js';
+```
+
 ### `packages/backend/src/api/services/oidc-service.ts`
 
-New file. Owns IdP interaction logic so the route handler stays thin. `consumeOidcState` is intentionally NOT included here — #368 adds it once `ICacheProvider.getAndDelete` exists.
+New file. Owns IdP interaction logic so the route handler stays thin. `consumeOidcState` is intentionally NOT included here — #368 adds it once `CacheService.getAndDelete` exists. Cache access goes through the `getCacheService()` singleton, matching this codebase's actual pattern (`src/cache/index.ts`) — not threaded through `fastify.container`, which has no `cache` property.
 
 ```ts
 // New file — packages/backend/src/api/services/oidc-service.ts
@@ -54,7 +86,7 @@ New file. Owns IdP interaction logic so the route handler stays thin. `consumeOi
 import { Issuer, generators } from 'openid-client';
 // validateSSRFProtection is a synchronous function returning URL (throws on blocked addresses)
 import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js';
-import type { ICacheProvider } from '../../cache/types.js';
+import { getCacheService } from '../../cache/index.js';
 
 const STATE_TTL_SECONDS = 600;
 
@@ -77,12 +109,8 @@ export async function discoverIssuerValidated(issuerUrl: string) {
   return issuer;
 }
 
-export async function storeOidcState(
-  cache: ICacheProvider,
-  stateKey: string,
-  payload: OidcStatePayload
-): Promise<void> {
-  await cache.set(`oidc:state:${stateKey}`, payload, STATE_TTL_SECONDS);
+export async function storeOidcState(stateKey: string, payload: OidcStatePayload): Promise<void> {
+  await getCacheService().set(`oidc:state:${stateKey}`, payload, STATE_TTL_SECONDS);
 }
 
 export { generators };
@@ -90,7 +118,7 @@ export { generators };
 
 ### `packages/backend/src/api/routes/auth-oidc.ts`
 
-New file. Route module, not a Fastify plugin — registered by a direct function call from `server.ts` (`oidcRoutes(fastify)`), matching the `authRoutes(fastify, db)` convention this backend uses for every other route module. Only the `login` handler in this slice — #368 appends the `callback` handler to this same file.
+New file. Route module, not a Fastify plugin — registered by a direct function call from `server.ts` (`oidcRoutes(fastify)`), matching the `authRoutes(fastify, db)` convention this backend uses for every other route module. Only the `login` handler in this slice — #368 appends the `callback` handler to this same file. Repository access is `fastify.container.db.oidcIdpConfigs`, matching `DatabaseClient implements RepositoryRegistry`.
 
 ```ts
 // New file — packages/backend/src/api/routes/auth-oidc.ts
@@ -98,15 +126,14 @@ import type { FastifyInstance } from 'fastify';
 import { discoverIssuerValidated, storeOidcState, generators } from '../services/oidc-service.js';
 
 export function oidcRoutes(fastify: FastifyInstance): void {
-  fastify.get<{ Params: { tenant: string } }>(
-    '/api/v1/auth/oidc/:tenant/login',
+  fastify.get<{ Params: { tenantId: string } }>(
+    '/api/v1/auth/oidc/:tenantId/login',
     async (request, reply) => {
-      const { tenant } = request.params;
-      // ASSUMED: ssoProviderRepository added by #352 — verify container key and method name
-      const config = await fastify.container.ssoProviderRepository.findByTenantSlug(tenant);
+      const { tenantId } = request.params;
+      const config = await fastify.container.db.oidcIdpConfigs.findByTenantId(tenantId);
       if (!config) return reply.code(404).send({ error: 'SSO not configured' });
 
-      const redirectUri = `${request.protocol}://${request.hostname}/api/v1/auth/oidc/${tenant}/callback`;
+      const redirectUri = `${request.protocol}://${request.hostname}/api/v1/auth/oidc/${tenantId}/callback`;
       const issuer = await discoverIssuerValidated(config.issuerUrl);
 
       // ASSUMED: openid-client v5 Client construction — verify v5 class vs functional API
@@ -125,11 +152,11 @@ export function oidcRoutes(fastify: FastifyInstance): void {
         redirect_uri: redirectUri,
       });
 
-      await storeOidcState(fastify.container.cache, state, {
+      await storeOidcState(state, {
         nonce,
         codeVerifier,
         redirectUri,
-        tenantId: config.tenantId,
+        tenantId,
         issuer: issuer.metadata.issuer,
       });
 
@@ -162,7 +189,9 @@ New file — #368 extends it with callback test cases.
 
 `openid-client` is an ES module with a named export for `Issuer`; `vi.mock` must appear at top level (not inside a `describe`). The mock `Issuer.discover` must return an object shaped like an `Issuer` with a `Client` constructor and `metadata`.
 
-The container mock must include `ssoProviderRepository` and `cache` (with `set`). If a `createMockContainer()` helper exists in the test suite, add those keys there explicitly — missing keys cause TypeErrors at runtime, not TypeScript errors.
+`getCacheService` (from `../../src/cache/index.js`) must be mocked at top level too, returning an object with `get`/`set` mocks — it is a singleton factory, not something injected via the container, so the test cannot substitute it through `fastify.container`.
+
+The container mock needs `db.oidcIdpConfigs` with a `findByTenantId` mock (not `ssoProviderRepository`/`findByTenantSlug`).
 
 ```ts
 // Top-level vi.mock calls (must be outside describe blocks):
@@ -193,42 +222,45 @@ vi.mock('openid-client', () => {
 vi.mock('../../src/integrations/security/ssrf-validator.js', () => ({
   validateSSRFProtection: vi.fn().mockReturnValue(new URL('https://idp.example.com')),
 }));
+
+const mockCacheService = {
+  get: vi.fn(),
+  set: vi.fn().mockResolvedValue(undefined),
+};
+vi.mock('../../src/cache/index.js', () => ({
+  getCacheService: vi.fn(() => mockCacheService),
+}));
 ```
 
 ```ts
-// Shared fixture setup inside beforeEach:
-const mockCache = {
-  get: vi.fn(),
-  set: vi.fn().mockResolvedValue(undefined),
-  delete: vi.fn().mockResolvedValue(undefined),
+// Shared fixture setup inside beforeEach — extend the existing container mock:
+const mockOidcIdpConfigs = {
+  findByTenantId: vi.fn(),
 };
-
-const mockSsoProviderRepository = {
-  findByTenantSlug: vi.fn(),
-};
+// container.db.oidcIdpConfigs = mockOidcIdpConfigs (wire into whatever container-mock
+// helper this test suite already uses for `db`)
 ```
 
 **Test case A — login redirects with S256 PKCE and stores state (AC #1):**
 
 ```ts
 it('redirects to IdP with S256 PKCE challenge and stores state in cache', async () => {
-  mockSsoProviderRepository.findByTenantSlug.mockResolvedValue({
+  mockOidcIdpConfigs.findByTenantId.mockResolvedValue({
     issuerUrl: 'https://idp.example.com',
     clientId: 'client-1',
-    tenantId: 'tenant-abc',
     allowedDomains: ['corp.example.com'],
   });
 
   const res = await fastify.inject({
     method: 'GET',
-    url: '/api/v1/auth/oidc/acme/login',
+    url: '/api/v1/auth/oidc/tenant-abc/login',
   });
 
   expect(res.statusCode).toBe(302);
   expect(res.headers.location).toContain('code_challenge_method=S256');
-  expect(mockCache.set).toHaveBeenCalledWith(
+  expect(mockCacheService.set).toHaveBeenCalledWith(
     'oidc:state:mock-state',
-    expect.objectContaining({ nonce: 'mock-nonce' }),
+    expect.objectContaining({ nonce: 'mock-nonce', tenantId: 'tenant-abc' }),
     600
   );
 });
@@ -238,7 +270,7 @@ it('redirects to IdP with S256 PKCE challenge and stores state in cache', async 
 
 ```ts
 it('returns 404 for a tenant with no SSO configuration, without touching SSRF validation', async () => {
-  mockSsoProviderRepository.findByTenantSlug.mockResolvedValue(null);
+  mockOidcIdpConfigs.findByTenantId.mockResolvedValue(null);
 
   const res = await fastify.inject({
     method: 'GET',
@@ -260,4 +292,4 @@ pnpm --filter @bugspotter/backend typecheck
 pnpm --filter @bugspotter/backend test:unit -- --reporter=verbose tests/api/auth-oidc.test.ts
 ```
 
-Rollback: purely additive (a new route file + one new route-module wiring call in `server.ts`). Removing the `oidcRoutes(fastify)` call in `packages/backend/src/api/server.ts` fully restores current behavior.
+Rollback: the route file, service file, and server.ts wiring are purely additive — removing the `oidcRoutes(fastify)` call in `packages/backend/src/api/server.ts` fully restores current behavior. The `factory.ts`/`client.ts` DI-wiring addition is also additive (a new registry entry pointing at an already-existing, already-migrated repository class) and safe to leave in place even if the route wiring is reverted.
