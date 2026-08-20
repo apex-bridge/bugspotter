@@ -32,6 +32,7 @@ import type { OAuthTokenRepository } from './repositories/oauth-token.repository
 import type { ApiKeyRepository } from './repositories/api-key.repository.js';
 import type { TicketCreationOutboxRepository } from './repositories/ticket-creation-outbox.repository.js';
 import type { DataResidencyRepository } from './repositories/data-residency.repository.js';
+import type { OidcIdpConfigRepository } from './repositories/oidc-idp-config.repository.js';
 import type { NotificationChannelRepository } from './repositories/notification-channel.repository.js';
 import type { NotificationRuleRepository } from './repositories/notification-rule.repository.js';
 import type { NotificationTemplateRepository } from './repositories/notification-template.repository.js';
@@ -177,6 +178,7 @@ export class DatabaseClient implements RepositoryRegistry {
   public readonly dedupRules!: DedupRuleRepository;
   public readonly ticketOutbox!: TicketCreationOutboxRepository;
   public readonly dataResidency!: DataResidencyRepository;
+  public readonly oidcIdpConfigs!: OidcIdpConfigRepository;
   // SaaS multi-tenant repositories
   public readonly organizations!: OrganizationRepository;
   public readonly organizationMembers!: OrganizationMemberRepository;
@@ -216,6 +218,7 @@ export class DatabaseClient implements RepositoryRegistry {
     this.dataResidency = this.wrapWithRetry(repositories.dataResidency);
     // Data residency service (business logic layer)
     this.dataResidencyService = new DataResidencyService(this.dataResidency);
+    this.oidcIdpConfigs = this.wrapWithRetry(repositories.oidcIdpConfigs);
     // Notification system repositories
     this.notificationChannels = this.wrapWithRetry(repositories.notificationChannels);
     this.notificationRules = this.wrapWithRetry(repositories.notificationRules);

@@ -6,8 +6,6 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 **Files touched:**
 
 - `packages/backend/package.json`, `pnpm-lock.yaml` — add `openid-client` v5 as a real dependency; the workspace has no reference to it at all today (confirmed: zero hits in either manifest or the lockfile)
-- `packages/backend/src/db/repositories/factory.ts` — add `oidcIdpConfigs: OidcIdpConfigRepository` to `RepositoryRegistry` and `createRepositories()`; the repository class already exists (#352) but was never wired into the DI container — confirmed by grep: no reference to it anywhere under `src/api/` or `src/container/`
-- `packages/backend/src/db/client.ts` — add the corresponding `readonly oidcIdpConfigs!: OidcIdpConfigRepository;` property and constructor assignment (`DatabaseClient implements RepositoryRegistry`)
 - `packages/backend/src/api/services/oidc-service.ts` — new file; IdP discovery + SSRF gating, PKCE/state generation, state storage
 - `packages/backend/src/api/routes/auth-oidc.ts` — new file; route module with `GET /api/v1/auth/oidc/:tenantId/login`, registered by direct function call (matching `authRoutes`), not as a Fastify plugin
 - `packages/backend/src/api/server.ts` — call `oidcRoutes(fastify)` alongside the other route-module calls
@@ -15,7 +13,8 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 
 **Blocking prerequisites:**
 
-- #352 — `OidcIdpConfigRepository` and its schema must exist (they do — see "Files touched" above for the DI-wiring gap this slice also closes)
+- #352 — `OidcIdpConfigRepository` and its schema must exist (they do)
+- **DI wiring already landed** (2026-08-20, hand-implemented outside the pipeline): `oidcIdpConfigs: OidcIdpConfigRepository` is now in `RepositoryRegistry`/`createRepositories()` (`factory.ts`) and `DatabaseClient` (`client.ts`) — `fastify.container.db.oidcIdpConfigs` is real and usable. Originally part of this slice's own Files-touched list, but that pushed the declared file count to 7, over `generate-impl.mjs`'s own hard "do not generate more than 6 files" instruction — the first impl-agent run silently dropped 5 of the 7 declared files rather than erroring, which `check-impl-scope.mjs` correctly caught. Since the wiring is small, mechanical, and follows an exact existing pattern with zero ambiguity, it was hand-implemented directly and removed from this slice's scope rather than filed as yet another pipeline cycle.
 
 ## Problem
 
@@ -57,45 +56,7 @@ Add `openid-client` (pinned to v5) as an actual dependency — Constraint 1 abov
 pnpm --filter @bugspotter/backend add openid-client@^5
 ```
 
-### `packages/backend/src/db/repositories/factory.ts`
-
-Wire the already-existing `OidcIdpConfigRepository` (from #352) into the DI container — it was defined and exported but never added to `RepositoryRegistry`, so nothing could actually reach it via `fastify.container.db`.
-
-```ts
-// Add near the other imports:
-import { OidcIdpConfigRepository } from './oidc-idp-config.repository.js';
-
-// Add to the RepositoryRegistry interface (near the other SaaS/tenant-scoped entries):
-oidcIdpConfigs: OidcIdpConfigRepository;
-
-// Add inside createRepositories(), alongside the other `new XRepository(pool)` instantiations:
-const oidcIdpConfigs = new OidcIdpConfigRepository(pool);
-
-// Add `oidcIdpConfigs` to the object createRepositories() returns, alongside the other
-// repository instances (the interface addition above alone is not enough — the factory's
-// own return statement must actually include the new field, or RepositoryRegistry's
-// contract is violated and TypeScript will reject the return value):
-return {
-  // ...existing entries...
-  oidcIdpConfigs,
-};
-```
-
-### `packages/backend/src/db/client.ts`
-
-`DatabaseClient implements RepositoryRegistry`, so it needs the matching field declaration AND the constructor assignment — every other repository is wrapped via `this.wrapWithRetry(...)` in the constructor, not just declared.
-
-```ts
-// Add the import: import type { OidcIdpConfigRepository } from './repositories/oidc-idp-config.repository.js';
-
-// Add alongside the other `public readonly <name>!: <Type>;` declarations:
-public readonly oidcIdpConfigs!: OidcIdpConfigRepository;
-
-// Add inside the constructor, alongside the other `this.<name> = this.wrapWithRetry(repositories.<name>);`
-// assignments (the field declaration above alone is not enough — the constructor is what actually
-// populates it, or every access at runtime is undefined despite compiling):
-this.oidcIdpConfigs = this.wrapWithRetry(repositories.oidcIdpConfigs);
-```
+`oidcIdpConfigs` is already real on `fastify.container.db` — see "Blocking prerequisites" above. No changes needed to `factory.ts`/`client.ts` in this slice.
 
 ### `packages/backend/src/api/services/oidc-service.ts`
 

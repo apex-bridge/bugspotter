@@ -29,6 +29,7 @@ import { OAuthTokenRepository } from './oauth-token.repository.js';
 import { ApiKeyRepository } from './api-key.repository.js';
 import { TicketCreationOutboxRepository } from './ticket-creation-outbox.repository.js';
 import { DataResidencyRepository } from './data-residency.repository.js';
+import { OidcIdpConfigRepository } from './oidc-idp-config.repository.js';
 import { OrganizationRepository } from '../../saas/repositories/organization.repository.js';
 import { OrganizationMemberRepository } from '../../saas/repositories/organization-member.repository.js';
 import { SubscriptionRepository } from '../../saas/repositories/subscription.repository.js';
@@ -67,6 +68,7 @@ export interface RepositoryRegistry {
   dedupRules: DedupRuleRepository;
   ticketOutbox: TicketCreationOutboxRepository;
   dataResidency: DataResidencyRepository;
+  oidcIdpConfigs: OidcIdpConfigRepository;
   // SaaS multi-tenant repositories
   organizations: OrganizationRepository;
   organizationMembers: OrganizationMemberRepository;
@@ -118,6 +120,7 @@ export function createRepositories(pool: Pool | PoolClient): RepositoryRegistry 
     dedupRules: new DedupRuleRepository(pool),
     ticketOutbox: new TicketCreationOutboxRepository(pool),
     dataResidency: new DataResidencyRepository(pool),
+    oidcIdpConfigs: new OidcIdpConfigRepository(pool),
     // SaaS multi-tenant repositories
     organizations: new OrganizationRepository(pool),
     organizationMembers: new OrganizationMemberRepository(pool),
