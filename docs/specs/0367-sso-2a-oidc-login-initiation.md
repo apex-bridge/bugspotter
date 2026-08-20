@@ -5,8 +5,9 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 
 **Files touched:**
 
+- `packages/backend/package.json`, `pnpm-lock.yaml` — add `openid-client` v5 as a real dependency; the workspace has no reference to it at all today (confirmed: zero hits in either manifest or the lockfile)
 - `packages/backend/src/db/repositories/factory.ts` — add `oidcIdpConfigs: OidcIdpConfigRepository` to `RepositoryRegistry` and `createRepositories()`; the repository class already exists (#352) but was never wired into the DI container — confirmed by grep: no reference to it anywhere under `src/api/` or `src/container/`
-- `packages/backend/src/db/client.ts` — add the corresponding `readonly oidcIdpConfigs!: OidcIdpConfigRepository;` property (`DatabaseClient implements RepositoryRegistry`)
+- `packages/backend/src/db/client.ts` — add the corresponding `readonly oidcIdpConfigs!: OidcIdpConfigRepository;` property and constructor assignment (`DatabaseClient implements RepositoryRegistry`)
 - `packages/backend/src/api/services/oidc-service.ts` — new file; IdP discovery + SSRF gating, PKCE/state generation, state storage
 - `packages/backend/src/api/routes/auth-oidc.ts` — new file; route module with `GET /api/v1/auth/oidc/:tenantId/login`, registered by direct function call (matching `authRoutes`), not as a Fastify plugin
 - `packages/backend/src/api/server.ts` — call `oidcRoutes(fastify)` alongside the other route-module calls
@@ -32,7 +33,7 @@ Split off #353 as its smaller, lower-risk half (see #367 for why). BugSpotter ha
 
 ## Constraints
 
-1. `openid-client` v5 API throughout — the issue names `Issuer.discover()` but v5 ships a functional API as its primary surface; implementer must verify which surface the installed package version exposes (`Issuer.discover` class-based or `discovery()` functional) and use it consistently.
+1. `openid-client` is not a dependency of this workspace at all today (confirmed: zero hits in `package.json`, `packages/backend/package.json`, and `pnpm-lock.yaml`) — add it pinned to v5 before writing any code against it. v5 ships a functional API as its primary surface, not the class-based `Issuer.discover()`; use `Issuer.discover`, `issuer.Client`, and `generators.*` consistently as shown below once the package is actually installed and its real exported surface is confirmed against the installed version.
 2. PKCE `code_challenge_method: 'S256'` on every authorization request; no implicit flow, no bare authorization code grant without a verifier.
 3. `issuerUrl` from saved config AND both `token_endpoint` and `jwks_uri` from the discovery response each validated with `validateSSRFProtection()` immediately before every connection — not cached as pre-approved after first discovery. Verify the exact export name in `packages/backend/src/integrations/security/ssrf-validator.ts` before use; it is ASSUMED to match the name this constraint quotes.
 4. CSRF state payload `{ nonce, codeVerifier, redirectUri, tenantId, issuer }` stored via `getCacheService().set()` with ≤10-minute TTL — no new cache method needed for this slice (atomic consumption via `getAndDelete` is #368's concern, added to `CacheService` there).
@@ -48,6 +49,14 @@ Split off #353 as its smaller, lower-risk half (see #367 for why). BugSpotter ha
 
 ## Changes
 
+### `packages/backend/package.json`, `pnpm-lock.yaml`
+
+Add `openid-client` (pinned to v5) as an actual dependency — Constraint 1 above.
+
+```bash
+pnpm --filter @bugspotter/backend add openid-client@^5
+```
+
 ### `packages/backend/src/db/repositories/factory.ts`
 
 Wire the already-existing `OidcIdpConfigRepository` (from #352) into the DI container — it was defined and exported but never added to `RepositoryRegistry`, so nothing could actually reach it via `fastify.container.db`.
@@ -59,19 +68,33 @@ import { OidcIdpConfigRepository } from './oidc-idp-config.repository.js';
 // Add to the RepositoryRegistry interface (near the other SaaS/tenant-scoped entries):
 oidcIdpConfigs: OidcIdpConfigRepository;
 
-// Add inside createRepositories(), alongside the other `new XRepository(pool)` instantiations,
-// and include `oidcIdpConfigs` in the returned object:
+// Add inside createRepositories(), alongside the other `new XRepository(pool)` instantiations:
 const oidcIdpConfigs = new OidcIdpConfigRepository(pool);
+
+// Add `oidcIdpConfigs` to the object createRepositories() returns, alongside the other
+// repository instances (the interface addition above alone is not enough — the factory's
+// own return statement must actually include the new field, or RepositoryRegistry's
+// contract is violated and TypeScript will reject the return value):
+return {
+  // ...existing entries...
+  oidcIdpConfigs,
+};
 ```
 
 ### `packages/backend/src/db/client.ts`
 
-`DatabaseClient implements RepositoryRegistry`, so it needs the matching property.
+`DatabaseClient implements RepositoryRegistry`, so it needs the matching field declaration AND the constructor assignment — every other repository is wrapped via `this.wrapWithRetry(...)` in the constructor, not just declared.
 
 ```ts
+// Add the import: import type { OidcIdpConfigRepository } from './repositories/oidc-idp-config.repository.js';
+
 // Add alongside the other `public readonly <name>!: <Type>;` declarations:
 public readonly oidcIdpConfigs!: OidcIdpConfigRepository;
-// Add the import: import type { OidcIdpConfigRepository } from './repositories/oidc-idp-config.repository.js';
+
+// Add inside the constructor, alongside the other `this.<name> = this.wrapWithRetry(repositories.<name>);`
+// assignments (the field declaration above alone is not enough — the constructor is what actually
+// populates it, or every access at runtime is undefined despite compiling):
+this.oidcIdpConfigs = this.wrapWithRetry(repositories.oidcIdpConfigs);
 ```
 
 ### `packages/backend/src/api/services/oidc-service.ts`
@@ -193,10 +216,18 @@ New file — #368 extends it with callback test cases.
 
 The container mock needs `db.oidcIdpConfigs` with a `findByTenantId` mock (not `ssoProviderRepository`/`findByTenantSlug`).
 
+`vi.mock` factories are hoisted above module-scope `const` declarations, so any mock referenced inside a factory (`mockAuthorizationUrlFn`, `MockClient`, `mockCacheService`) must be defined via `vi.hoisted()` first, not a plain top-level `const` — referencing a plain `const` from inside a hoisted factory hits the temporal dead zone and throws `ReferenceError` at import time. This codebase already uses `vi.hoisted` for exactly this reason elsewhere (`tests/api/routes/signup.route.test.ts`).
+
 ```ts
+// Top-level, using vi.hoisted so these are available inside the hoisted vi.mock factories below
+// (a plain `const` here would hit the TDZ — vi.mock is hoisted above it):
+const { mockAuthorizationUrlFn, mockCacheService } = vi.hoisted(() => ({
+  mockAuthorizationUrlFn: vi.fn(),
+  mockCacheService: { get: vi.fn(), set: vi.fn().mockResolvedValue(undefined) },
+}));
+
 // Top-level vi.mock calls (must be outside describe blocks):
 vi.mock('openid-client', () => {
-  const mockAuthorizationUrlFn = vi.fn().mockReturnValue('https://idp.example.com/auth?state=s1');
   const MockClient = vi.fn().mockImplementation(() => ({
     authorizationUrl: mockAuthorizationUrlFn,
   }));
@@ -223,13 +254,19 @@ vi.mock('../../src/integrations/security/ssrf-validator.js', () => ({
   validateSSRFProtection: vi.fn().mockReturnValue(new URL('https://idp.example.com')),
 }));
 
-const mockCacheService = {
-  get: vi.fn(),
-  set: vi.fn().mockResolvedValue(undefined),
-};
 vi.mock('../../src/cache/index.js', () => ({
   getCacheService: vi.fn(() => mockCacheService),
 }));
+```
+
+```ts
+// Inside beforeEach, since mockAuthorizationUrlFn is now a real vi.fn() shared across tests
+// via vi.hoisted (not recreated per-test the way the old closure-scoped version was) — give
+// it a fixed, harmless return value; the route only ever reads the resulting redirect target,
+// individual tests assert on the CALL arguments (what the route passed in), not on this
+// return value's content, since a canned string can't reflect per-call params like the real
+// openid-client library's own encoding would:
+mockAuthorizationUrlFn.mockReturnValue('https://idp.example.com/auth?mock=1');
 ```
 
 ```ts
@@ -257,7 +294,13 @@ it('redirects to IdP with S256 PKCE challenge and stores state in cache', async 
   });
 
   expect(res.statusCode).toBe(302);
-  expect(res.headers.location).toContain('code_challenge_method=S256');
+  // Assert on what the route PASSED to authorizationUrl(), not on the mock's return value's
+  // content — mockAuthorizationUrlFn returns a fixed canned string regardless of its call
+  // arguments, so checking the redirect Location for query params only proves the mock
+  // string contains them, not that the route actually requested S256/this state.
+  expect(mockAuthorizationUrlFn).toHaveBeenCalledWith(
+    expect.objectContaining({ code_challenge_method: 'S256', state: 'mock-state' })
+  );
   expect(mockCacheService.set).toHaveBeenCalledWith(
     'oidc:state:mock-state',
     expect.objectContaining({ nonce: 'mock-nonce', tenantId: 'tenant-abc' }),
