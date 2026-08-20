@@ -39,7 +39,7 @@ Split off #353 as its larger, security-critical half (see #367 for why the split
 2. `email_verified === true` (strict boolean) verified on ID-token claims before any user lookup; if absent or `false`, return 401 immediately without touching the database.
 3. CSRF state payload consumed with Redis 7's native `GETDEL` command (single atomic round-trip) via the new `CacheService.getAndDelete()`, which must bypass its L1 memory-cache read path and go straight to the Redis tier for the atomicity guarantee — checking L1 first would reintroduce the exact race this exists to prevent (two concurrent requests both reading a still-present L1 copy before either deletes it). Best-effort clear the L1 copy afterward for hygiene; correctness relies only on the Redis `GETDEL`. A pipeline `GET` + `DEL` is not sufficient. The callback handler must re-validate the stored `issuer` against the freshly re-discovered `issuer.metadata.issuer` before proceeding (ADR-0044: the state is bound to the issuer, not just checked for existence) — a mismatch fails with the same generic 401.
 4. `issuerUrl` from saved config AND both `token_endpoint` and `jwks_uri` from the discovery response each validated with `validateSSRFProtection()` immediately before every connection — reuses `discoverIssuerValidated` from #367, which already does this; do not re-implement or skip it.
-5. `allowed_domains`: fail-closed if the field is absent, null, or empty — reject with 401 before any user lookup. Domain comparison uses `email.split('@')[1]`; enforced on every branch (same-tenant link, cross-tenant reject, new-user create).
+5. `allowedDomains`: fail-closed if the field is absent, null, or empty — reject with 401 before any user lookup. Domain comparison uses `email.split('@')[1]`; enforced on every branch (same-tenant link, cross-tenant reject, new-user create).
 6. Account-linking (ADR-0044 Decision 1): email match with an existing membership in this tenant (`organizationMembers.findMembership(tenantId, existingUser.id)`) → link (reuse existing user row, no insert); email match but no membership in this tenant → 401 with generic message (must not reveal which tenant owns the address); no user match at all → create user (`users.create(...)`, fields ASSUMED — see Out of scope) + `organizationMembers.createWithUser(tenantId, newUser.id, 'member')`.
 7. Cookie issued in the callback must match the refresh-token cookie in `packages/backend/src/api/routes/auth.ts` exactly — cookie name `refresh_token` (not `refreshToken`), options built via `buildRefreshCookieOptions()` from `packages/backend/src/api/utils/auth-cookies.ts` (`HttpOnly`/`Secure`/`SameSite`/`COOKIE_DOMAIN` all come from that helper). Do not introduce a second cookie format.
 8. `getAndDelete` must be added to `ICacheProvider` (`packages/backend/src/cache/types.ts`) and implemented in both `redis-cache.ts` and `memory-cache.ts`, AND to `CacheService` (`cache-service.ts`) which delegates to them — routes only ever call `getCacheService()`, never the lower-level providers directly. `ICacheProvider.get()` is generic (`get<T>(key): Promise<T | null>`) and `RedisCache` handles JSON serialization internally while `MemoryCache` stores the value as-is — `getAndDelete` must follow that same generic shape.
@@ -264,10 +264,22 @@ Edit the file #367 created — extend its top-level `vi.mock('openid-client', ..
 
 Extend the `openid-client` mock's `MockClient` to include a `callback` mock function (`mockCallbackFn`), extend `mockCacheService` (from #367's mock) with `getAndDelete`, and extend the container mock to add `db.users` (`findByEmail`, `create`) and `db.organizationMembers` (`findMembership`, `createWithUser`).
 
+`mockCallbackFn` is referenced from inside the same hoisted `vi.mock('openid-client', ...)` factory #367 created, so it must be added to #367's `vi.hoisted()` call, not declared as a separate plain `const` — the same temporal-dead-zone reasoning #367's own spec now documents applies here too.
+
 ```ts
+// Extend #367's vi.hoisted() call to also produce mockCallbackFn:
+const { mockAuthorizationUrlFn, mockCacheService, mockCallbackFn } = vi.hoisted(() => ({
+  mockAuthorizationUrlFn: vi.fn(),
+  mockCacheService: {
+    get: vi.fn(),
+    set: vi.fn().mockResolvedValue(undefined),
+    getAndDelete: vi.fn(),
+  },
+  mockCallbackFn: vi.fn(),
+}));
+
 // Extend the existing top-level vi.mock('openid-client', ...) block from #367:
-// add a callback mock to MockClient's implementation:
-const mockCallbackFn = vi.fn();
+// add the callback mock to MockClient's implementation:
 const MockClient = vi.fn().mockImplementation(() => ({
   authorizationUrl: mockAuthorizationUrlFn, // from #367
   callback: mockCallbackFn,
@@ -275,8 +287,8 @@ const MockClient = vi.fn().mockImplementation(() => ({
 ```
 
 ```ts
-// Extend #367's mockCacheService:
-mockCacheService.getAndDelete = vi.fn();
+// mockCacheService.getAndDelete is already provided by the vi.hoisted() extension above —
+// no separate mutation needed here.
 
 const mockUsers = {
   findByEmail: vi.fn(),
@@ -396,7 +408,7 @@ it('returns 401 when email matches a user who has no membership in the requested
 });
 ```
 
-**Test case H — `allowed_domains` fail-closed (AC #8):**
+**Test case H — `allowedDomains` fail-closed (AC #8):**
 
 ```ts
 it('returns 401 before any user lookup when allowedDomains is empty', async () => {
