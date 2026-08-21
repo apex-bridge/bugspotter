@@ -107,6 +107,95 @@ export class RedisCache implements ICacheProvider {
   }
 
   /**
+   * Atomically get a value and delete it in one operation, via Redis's
+   * native GETDEL (Redis 6.2+) rather than a get-then-delete pair, which
+   * would leave a window for the same value to be read twice.
+   *
+   * On older/self-hosted Redis (< 6.2) where GETDEL doesn't exist, falls
+   * back to an atomic Lua eval - a plain GET+DEL pipeline isn't safe under
+   * concurrency (two consumers can both read before either DELs, breaking
+   * the one-shot invariant this method exists to provide). Same capability
+   * check + Lua script as `consumePasswordResetToken()` in
+   * `services/auth/password-reset-token.ts`.
+   *
+   * The `typeof redis.getdel === 'function'` check only tells us the
+   * *client library* has GETDEL support - ioredis compiles every Redis
+   * command method in statically at build time, independent of which
+   * Redis *server* version it's actually connected to. So we still have
+   * to attempt the call and fall back on the server's own rejection
+   * (`unknown command 'GETDEL'`) rather than trusting the client-side
+   * capability check alone. Any other error from `getdel` is a real
+   * failure and is left to propagate to the outer catch below, same as
+   * every other error path in this method.
+   */
+  async getAndDelete<T>(key: string): Promise<T | null> {
+    try {
+      const redis = await this.getConnection();
+      const fullKey = this.buildKey(key);
+      let data: string | null;
+
+      if (typeof (redis as { getdel?: unknown }).getdel === 'function') {
+        try {
+          data = await redis.getdel(fullKey);
+        } catch (getdelError) {
+          if (
+            getdelError instanceof Error &&
+            /unknown command.*getdel/i.test(getdelError.message)
+          ) {
+            data = (await redis.eval(
+              "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+              1,
+              fullKey
+            )) as string | null;
+          } else {
+            throw getdelError;
+          }
+        }
+      } else {
+        data = (await redis.eval(
+          "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+          1,
+          fullKey
+        )) as string | null;
+      }
+
+      if (data === null) {
+        if (this.enableMetrics) {
+          this.misses++;
+        }
+        return null;
+      }
+
+      if (this.enableMetrics) {
+        this.hits++;
+      }
+
+      try {
+        return JSON.parse(data) as T;
+      } catch (parseError) {
+        // Unlike the general-purpose get(), this cache is for one-time-use
+        // secrets (OIDC state, PKCE values) - never log any part of the
+        // actual value, just enough to debug the parse failure.
+        logger.error('Redis cache JSON parse error in getAndDelete', {
+          key,
+          dataLength: data.length,
+          error: parseError instanceof Error ? parseError.message : 'Unknown error',
+        });
+        return null; // Safer than type assertion
+      }
+    } catch (error) {
+      logger.error('Redis cache getAndDelete error', {
+        key,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      if (this.enableMetrics) {
+        this.misses++;
+      }
+      return null;
+    }
+  }
+
+  /**
    * Set a value in cache
    */
   async set<T>(key: string, value: T, ttl?: number): Promise<void> {
