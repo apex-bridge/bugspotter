@@ -113,9 +113,13 @@ jobs:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
         run: node scripts/ai-sdlc/verify-spec-ownership.mjs
 
-      # Advisory only (see the script's own header for why this isn't a
-      # hard cap yet) - warns if the spec's declared scope is large enough
-      # to be worth a second look before ratifying.
+      # Deliberately kept soft here (SPEC_SCOPE_HARD unset) even though the
+      # cap is a real hard gate elsewhere: an over-scoped agent-generated
+      # spec should still produce a visible PR with a warning, rather than
+      # failing this whole job with nothing to show for it - a silently
+      # vanished generation run is worse than a PR a human has to react to.
+      # ai-sdlc-guards.yml runs the hard copy of this same check against the
+      # PR itself, where a reviewer will actually see it before merging.
       - name: Check spec scope (advisory)
         env:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}

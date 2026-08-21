@@ -28,12 +28,16 @@
 // check. It short-circuited to exit 0 until 2026-08-02, which left the most
 // extreme version of the #237 bug (zero of N declared files) passing green
 // through the gate built to catch it.
+// Optional env var: IMPL_SUMMARY (generate-impl.mjs's own impl_summary
+// output) - printed on a mismatch as an unverified lead, not trusted as a
+// completeness signal (see issue #367, where it disagreed with reality).
 // Exit 1 if the two lists disagree in either direction, OR if the ratified
 // spec can't be read or has no parseable "Files touched" line — a hard gate
 // that no-ops on a malformed baseline isn't a gate, it's a trap door.
 // Exit 0 only when the comparison actually ran and came back clean.
 
 import { readFileSync } from 'node:fs';
+import { posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
 
@@ -41,16 +45,29 @@ import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
  * Canonicalize a repo-relative path for set comparison.
  *
  * The two sides of this comparison are produced very differently: written
- * paths come from generate-impl.mjs, already normalized by node's
- * `relative()` (no `./`, forward slashes); declared paths are lifted
- * verbatim out of backticks in human-ratified, LLM-drafted markdown. A
- * stray `./` or a stray space on the spec side would otherwise make the
- * SAME file show up in BOTH failure lists at once - reported as written-but-
- * undeclared and declared-but-unwritten simultaneously - which is a
- * confusing false failure that costs a full generation run.
+ * paths come from generate-impl.mjs, already canonicalized by node's
+ * `relative(base, resolve(base, p))` (no `./`, no `..` segments, forward
+ * slashes); declared paths are lifted verbatim out of backticks in
+ * human-ratified, LLM-drafted markdown. A stray `./`, a stray space, or a
+ * `packages/x/../y.ts`-shaped path on the spec side would otherwise make
+ * the SAME file show up in BOTH failure lists at once - reported as
+ * written-but-undeclared and declared-but-unwritten simultaneously - which
+ * is a confusing false failure that costs a full generation run.
+ * `posix.normalize()` (not the manual leading-"./"" strip this used to be)
+ * is what actually matches the written side's `..`-resolving behavior; a
+ * spec declaring a path with a literal `..` segment - unusual, but not
+ * impossible from a drafting model - would otherwise never match its own
+ * written file (found via generate-impl.mjs's self-correction feature
+ * reusing this same function; see issue #367's completeness-hardening PR).
+ *
+ * Empty input returns empty, not `posix.normalize('')`'s own `'.'` - every
+ * call site immediately `.filter(Boolean)`s its output, on the assumption
+ * that empty-in means empty-out (an empty `FILES_WRITTEN` env var must stay
+ * an empty writtenPaths array, not become the single bogus path `['.']`).
  */
 export function normalizePath(p) {
-  return p.trim().replaceAll('\\', '/').replace(/^\.\//, '');
+  const trimmed = p.trim().replaceAll('\\', '/');
+  return trimmed ? posix.normalize(trimmed) : '';
 }
 
 /** Returns the subset of writtenPaths not present in declaredPaths. */
@@ -75,7 +92,7 @@ export function findUnwrittenPaths(writtenPaths, declaredPaths) {
 }
 
 function main() {
-  const { SPEC_FILE, FILES_WRITTEN } = process.env;
+  const { SPEC_FILE, FILES_WRITTEN, IMPL_SUMMARY } = process.env;
   if (!SPEC_FILE) {
     console.error('Missing SPEC_FILE');
     process.exit(1);
@@ -153,6 +170,21 @@ function main() {
           '       without amending will fail identically, since the agent will keep\n' +
           '       (correctly) deciding that file needs no change.\n'
       );
+
+      // The model's own account of what it did, straight from its response -
+      // NOT verified against FILES_WRITTEN, and issue #367 (2026-08-20) found
+      // it can actively disagree: one run's summary claimed all 7 declared
+      // files were handled while the files array itself contained only 2.
+      // Surfaced anyway because it's still a fast lead on WHY something is
+      // missing (ran out of budget mid-file, decided a file needed no
+      // change, flagged its own gap) - a human just has to read it knowing
+      // it may be describing work that was never actually emitted.
+      if (IMPL_SUMMARY?.trim()) {
+        console.error(
+          `\n  Model's own summary (unverified - may describe work not actually written,\n` +
+            `  see issue #367): ${IMPL_SUMMARY.trim()}\n`
+        );
+      }
     }
 
     console.error(`Declared in ${SPEC_FILE}:\n${declaredPaths.map((p) => `  ${p}`).join('\n')}`);

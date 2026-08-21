@@ -97,20 +97,30 @@ jobs:
             exit 1
           }
 
-      - name: Check spec scope (advisory)
+      - name: Check spec scope (hard)
         if: ${{ !cancelled() && steps.specs.outputs.count != '0' }}
         env:
           SPECS: ${{ steps.specs.outputs.files }}
+          # Hard here (unlike spec-agent.yml's own inline copy of this same
+          # check, which stays soft) - this step runs against the PR content
+          # a human actually reviews and merges, agent-authored or
+          # hand-written either way, so it's the one that should actually
+          # block ratifying a spec over generate-impl.mjs's own file-count
+          # limit. See check-spec-scope.mjs's header for the full reasoning
+          # and issue #367, the real incident that justified flipping this.
+          SPEC_SCOPE_HARD: 'true'
         run: |
           set -euo pipefail
-          # Advisory by design - the cap is uncalibrated. It runs here rather
-          # than in the agent job specifically so its output lands on the PR the
-          # reviewer is reading, instead of in a step summary nobody opens.
+          failed=0
           while IFS= read -r spec; do
             [ -n "$spec" ] || continue
             echo "::group::check-spec-scope $spec"
-            if ! SPEC_FILE="$spec" node scripts/ai-sdlc/check-spec-scope.mjs; then
-              echo "::warning::check-spec-scope crashed for $spec instead of reporting advisory output - this is a launch/script failure, not a scope finding"
-            fi
+            # Run every spec before failing, so one PR touching two specs
+            # reports both rather than only the first.
+            SPEC_FILE="$spec" node scripts/ai-sdlc/check-spec-scope.mjs || failed=1
             echo "::endgroup::"
           done <<< "$SPECS"
+          [ "$failed" -eq 0 ] || {
+            echo "::error::Spec scope check failed. A spec is unreadable, has no parseable \"Files touched:\" line, or declares more files than generate-impl.mjs's own 6-file generation limit - see the group log above for which spec(s), which reason, and why this blocks merge rather than just warning."
+            exit 1
+          }

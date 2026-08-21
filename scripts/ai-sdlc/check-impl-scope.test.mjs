@@ -110,6 +110,23 @@ describe('normalizePath', () => {
   test('normalizes backslash separators to forward slashes', () => {
     assert.equal(normalizePath('packages\\backend\\src\\a.ts'), 'packages/backend/src/a.ts');
   });
+
+  test('resolves ".." segments the same way generate-impl.mjs\'s relative()-based toRepoRelative does', () => {
+    // A spec declaring a path this way is unusual, but the written side
+    // (relative(base, resolve(base, p))) always collapses it - without the
+    // same resolution here, a correctly-written file would show up as
+    // both written-but-undeclared AND declared-but-unwritten.
+    assert.equal(normalizePath('packages/x/../y.ts'), 'packages/y.ts');
+  });
+
+  test('empty input stays empty, not posix.normalize\'s own "."', () => {
+    // Every call site .filter(Boolean)s the result on the assumption that
+    // empty-in means empty-out. FILES_WRITTEN='' -> ''.split(',') -> ['']
+    // -> normalizePath('') must filter away, or an empty FILES_WRITTEN
+    // becomes the single bogus written path ['.'] instead of [].
+    assert.equal(normalizePath(''), '');
+    assert.equal(normalizePath('   '), '');
+  });
 });
 
 // --- CLI-level tests for main() -------------------------------------------
@@ -146,6 +163,7 @@ function runCli(env) {
   const base = { ...process.env };
   delete base.SPEC_FILE;
   delete base.FILES_WRITTEN;
+  delete base.IMPL_SUMMARY;
   return spawnSync(process.execPath, [SCRIPT], { env: { ...base, ...env }, encoding: 'utf8' });
 }
 
@@ -185,6 +203,36 @@ describe('CLI', () => {
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Did NOT write files the spec declared:\n {2}- packages\/b\.ts/);
     assert.doesNotMatch(r.stderr, /Wrote files the spec never declared/);
+  });
+
+  test('under-delivery surfaces IMPL_SUMMARY as an unverified lead when provided', () => {
+    const spec = writeSpec('under-with-summary.md', TWO_FILES);
+    const r = runCli({
+      SPEC_FILE: spec,
+      FILES_WRITTEN: 'packages/a.ts',
+      IMPL_SUMMARY: 'Wrote both files and the wiring.',
+    });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Model's own summary \(unverified/);
+    assert.match(r.stderr, /Wrote both files and the wiring\./);
+  });
+
+  test('under-delivery omits the summary section when IMPL_SUMMARY is unset', () => {
+    const spec = writeSpec('under-no-summary.md', TWO_FILES);
+    const r = runCli({ SPEC_FILE: spec, FILES_WRITTEN: 'packages/a.ts' });
+    assert.equal(r.status, 1);
+    assert.doesNotMatch(r.stderr, /Model's own summary/);
+  });
+
+  test('a passing run never prints the summary section, even if IMPL_SUMMARY is set', () => {
+    const spec = writeSpec('match-with-summary.md', TWO_FILES);
+    const r = runCli({
+      SPEC_FILE: spec,
+      FILES_WRITTEN: 'packages/a.ts,packages/b.ts',
+      IMPL_SUMMARY: 'Wrote both files.',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout + r.stderr, /Model's own summary/);
   });
 
   test('exits 1 on over-delivery, naming only the undeclared path', () => {
