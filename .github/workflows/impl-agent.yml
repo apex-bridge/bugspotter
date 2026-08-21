@@ -141,18 +141,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # Hard gate: the scaffold's file list and the ratified spec's "Files
-      # touched" list must match EXACTLY - no file written that the spec
-      # never declared, and no file declared that the scaffold never wrote.
-      # An unambiguous comparison, not a judgment call, so unlike
-      # check-spec-scope.mjs's advisory warning this fails the workflow
-      # outright. FILES_WRITTEN is passed even when empty: an empty value
-      # means the scaffold wrote nothing, which the gate must fail rather
-      # than skip.
+      # Hard gate, always: the scaffold's file list and the ratified spec's
+      # "Files touched" list must match EXACTLY - no file written that the
+      # spec never declared, and no file declared that the scaffold never
+      # wrote. An unambiguous comparison, not a judgment call - unlike
+      # check-spec-scope.mjs's cap check, which stays soft specifically in
+      # this workflow (spec-agent.yml runs its own hard copy against the PR
+      # instead; see that script's header). FILES_WRITTEN is passed even
+      # when empty: an empty value means the scaffold wrote nothing, which
+      # the gate must fail rather than skip.
       - name: Check impl scope against spec
         env:
           SPEC_FILE: ${{ steps.spec.outputs.spec_file }}
           FILES_WRITTEN: ${{ steps.gen.outputs.files_written }}
+          IMPL_SUMMARY: ${{ steps.gen.outputs.impl_summary }}
         run: node scripts/ai-sdlc/check-impl-scope.mjs
 
       - name: Install dependencies (required for ESLint)
