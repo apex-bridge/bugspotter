@@ -244,6 +244,16 @@ describe('CacheService', () => {
 
       expect(result).toBeNull();
     });
+
+    it('should not let a failing best-effort L1 cleanup surface as a getAndDelete failure', async () => {
+      // Redis has already authoritatively consumed the value by the time
+      // the L1 cleanup runs; a thrown error there must be swallowed, not
+      // propagated, per the method's own "best-effort" doc comment.
+      vi.mocked(mockRedisCache.getAndDelete).mockResolvedValue('consumed-value');
+      vi.mocked(mockMemoryCache.delete).mockRejectedValue(new Error('L1 cleanup failed'));
+
+      await expect(cacheService.getAndDelete('key')).resolves.toBe('consumed-value');
+    });
   });
 
   describe('Set Operation', () => {

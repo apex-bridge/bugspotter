@@ -16,6 +16,7 @@ const mockRedis = {
   setex: vi.fn(),
   del: vi.fn(),
   getdel: vi.fn(),
+  eval: vi.fn(),
   exists: vi.fn(),
   scan: vi.fn(),
   ping: vi.fn(),
@@ -44,6 +45,7 @@ describe('RedisCache', () => {
     mockRedis.setex.mockReset();
     mockRedis.del.mockReset();
     mockRedis.getdel.mockReset();
+    mockRedis.eval.mockReset();
     mockRedis.exists.mockReset();
     mockRedis.scan.mockReset();
     mockRedis.ping.mockReset();
@@ -334,6 +336,46 @@ describe('RedisCache', () => {
       const stats = await cache.getStats();
       expect(stats.hits).toBe(1);
       expect(stats.misses).toBe(1);
+    });
+
+    it('should fall back to an atomic Lua eval when GETDEL is unavailable (Redis < 6.2)', async () => {
+      // Simulate an older/self-hosted Redis where ioredis has no `getdel`
+      // method at all - the capability check in the implementation must
+      // detect this and use the Lua eval fallback instead, matching
+      // consumePasswordResetToken()'s pattern.
+      const originalGetdel = mockRedis.getdel;
+      // @ts-expect-error - simulating a Redis client without GETDEL support
+      delete mockRedis.getdel;
+      mockRedis.eval.mockResolvedValue('{"name":"test"}');
+
+      try {
+        const result = await cache.getAndDelete<{ name: string }>('key');
+
+        expect(mockRedis.eval).toHaveBeenCalledWith(
+          "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+          1,
+          'test:key'
+        );
+        expect(result).toEqual({ name: 'test' });
+      } finally {
+        mockRedis.getdel = originalGetdel;
+      }
+    });
+
+    it('should return null via the Lua eval fallback when the key does not exist', async () => {
+      const originalGetdel = mockRedis.getdel;
+      // @ts-expect-error - simulating a Redis client without GETDEL support
+      delete mockRedis.getdel;
+      mockRedis.eval.mockResolvedValue(null);
+
+      try {
+        const result = await cache.getAndDelete('nonexistent');
+
+        expect(mockRedis.eval).toHaveBeenCalled();
+        expect(result).toBeNull();
+      } finally {
+        mockRedis.getdel = originalGetdel;
+      }
     });
   });
 

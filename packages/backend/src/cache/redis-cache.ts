@@ -110,12 +110,26 @@ export class RedisCache implements ICacheProvider {
    * Atomically get a value and delete it in one operation, via Redis's
    * native GETDEL (Redis 6.2+) rather than a get-then-delete pair, which
    * would leave a window for the same value to be read twice.
+   *
+   * On older/self-hosted Redis (< 6.2) where GETDEL doesn't exist, falls
+   * back to an atomic Lua eval - a plain GET+DEL pipeline isn't safe under
+   * concurrency (two consumers can both read before either DELs, breaking
+   * the one-shot invariant this method exists to provide). Same capability
+   * check + Lua script as `consumePasswordResetToken()` in
+   * `services/auth/password-reset-token.ts`.
    */
   async getAndDelete<T>(key: string): Promise<T | null> {
     try {
       const redis = await this.getConnection();
       const fullKey = this.buildKey(key);
-      const data = await redis.getdel(fullKey);
+      const data =
+        typeof (redis as { getdel?: unknown }).getdel === 'function'
+          ? await redis.getdel(fullKey)
+          : ((await redis.eval(
+              "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+              1,
+              fullKey
+            )) as string | null);
 
       if (data === null) {
         if (this.enableMetrics) {

@@ -155,7 +155,18 @@ export class CacheService {
     if (this.redisCache) {
       const value = await this.redisCache.getAndDelete<T>(key);
       if (this.memoryCache) {
-        await this.memoryCache.delete(key);
+        // Best-effort per the doc comment above: Redis has already
+        // authoritatively consumed the value by this point, so a failure
+        // cleaning up the local L1 copy must not surface as a failure of
+        // the overall consumption.
+        try {
+          await this.memoryCache.delete(key);
+        } catch (error) {
+          logger.warn('Cache getAndDelete L1 cleanup failed (best-effort)', {
+            key,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
       }
       if (this.debug) {
         logger.debug(value !== null ? 'Cache getAndDelete L2 hit' : 'Cache getAndDelete miss', {
