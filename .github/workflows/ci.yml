@@ -95,6 +95,59 @@ jobs:
           docker run --rm -v "$PWD:/w" -w /w alpine:3 \
             sh scripts/test-validate-api-domain.sh
 
+  # Advisory only - never added to ci-success's `needs` below, never exits
+  # non-zero. Two real CI flakes hit the same day (a bcrypt cost-factor
+  # check, an admin health-check response-time check) shared one shape: a
+  # NEW test assertion comparing a timing/duration value to a bare numeric
+  # wall-clock threshold, inherently CI-runner-load-dependent. A hard rule
+  # would be wrong here - some tests (rate-limiter windows, retry backoff)
+  # genuinely need to assert on elapsed time - so this only warns on newly
+  # ADDED lines in changed test files, for a human to judge, and only fires
+  # on a bare numeric literal threshold (a comparison against a named
+  # constant, e.g. `toBeLessThan(RATE_LIMIT_WINDOW_MS)`, is far more likely
+  # to be a deliberate, non-flaky assertion and is not flagged).
+  flaky-timing-check:
+    name: Flaky timing assertion check (advisory)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new bare-threshold timing assertions (advisory)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # [1-9][0-9]* (not [0-9]): a bare `0` threshold (e.g.
+          # `toBeGreaterThan(0)` on an uptime/count sanity check) is an
+          # existence check, not a wall-clock speed claim, and is virtually
+          # never flaky - confirmed against this repo's own admin.test.ts,
+          # which has both shapes side by side.
+          hits=$(git diff -U0 --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.test.ts' '*.test.mjs' \
+            | grep -E '^\+[^+]' \
+            | grep -E '\.to(BeLessThan|BeGreaterThan|BeCloseTo)\(\s*[1-9][0-9]*\s*\)' \
+            | grep -iE 'time|duration|elapsed|latency|timeout|delay|_ms\b|benchmark' \
+            || true)
+          if [ -n "$hits" ]; then
+            echo "::warning::New test assertion(s) compare a timing/duration value to a bare numeric threshold - the exact shape of two real CI flakes this session (a bcrypt cost-factor check, an admin health-check response-time check), both inherently CI-runner-load-dependent. If this genuinely tests behavior (a rate-limiter window, a retry backoff), ignore this; if it's asserting wall-clock speed as a proxy for something else, prefer a deterministic assertion instead:"
+            printf '%s\n' "$hits" | sed 's/^/  /'
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo ""
+                echo "**Flaky-timing-assertion warning:** new test line(s) compare a timing/duration value to a bare numeric threshold:"
+                echo '```'
+                printf '%s\n' "$hits"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "Flaky timing-assertion check: no new bare-threshold timing assertions found."
+          fi
+
   test-backend-db:
     name: Backend Database Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
