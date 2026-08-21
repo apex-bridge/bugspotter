@@ -107,50 +107,6 @@ export class RedisCache implements ICacheProvider {
   }
 
   /**
-   * Atomically get a value and delete it in one operation, via Redis's
-   * native GETDEL (Redis 6.2+) rather than a get-then-delete pair, which
-   * would leave a window for the same value to be read twice.
-   */
-  async getAndDelete<T>(key: string): Promise<T | null> {
-    try {
-      const redis = await this.getConnection();
-      const fullKey = this.buildKey(key);
-      const data = await redis.getdel(fullKey);
-
-      if (data === null) {
-        if (this.enableMetrics) {
-          this.misses++;
-        }
-        return null;
-      }
-
-      if (this.enableMetrics) {
-        this.hits++;
-      }
-
-      try {
-        return JSON.parse(data) as T;
-      } catch (parseError) {
-        logger.error('Redis cache JSON parse error', {
-          key,
-          rawValue: data.substring(0, 100), // Log first 100 chars for debugging
-          error: parseError instanceof Error ? parseError.message : 'Unknown error',
-        });
-        return null; // Safer than type assertion
-      }
-    } catch (error) {
-      logger.error('Redis cache getAndDelete error', {
-        key,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-      if (this.enableMetrics) {
-        this.misses++;
-      }
-      return null;
-    }
-  }
-
-  /**
    * Set a value in cache
    */
   async set<T>(key: string, value: T, ttl?: number): Promise<void> {

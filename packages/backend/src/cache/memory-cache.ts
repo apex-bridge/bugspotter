@@ -159,20 +159,6 @@ export class MemoryCache implements ICacheProvider {
   }
 
   /**
-   * Atomically get a value and delete it in one operation. Single-threaded
-   * Node has no interleaving concern here (unlike Redis, which needs its
-   * own native GETDEL) - a plain get-then-delete is already atomic from
-   * every caller's point of view.
-   */
-  async getAndDelete<T>(key: string): Promise<T | null> {
-    const value = await this.get<T>(key);
-    if (value !== null) {
-      this.cache.delete(key);
-    }
-    return value;
-  }
-
-  /**
    * Set a value in cache
    */
   async set<T>(key: string, value: T, ttl?: number): Promise<void> {

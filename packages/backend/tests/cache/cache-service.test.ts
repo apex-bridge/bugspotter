@@ -22,7 +22,6 @@ describe('CacheService', () => {
     // Create mock instances
     mockMemoryCache = {
       get: vi.fn(),
-      getAndDelete: vi.fn(),
       set: vi.fn(),
       delete: vi.fn(),
       deletePattern: vi.fn(),
@@ -37,7 +36,6 @@ describe('CacheService', () => {
 
     mockRedisCache = {
       get: vi.fn(),
-      getAndDelete: vi.fn(),
       set: vi.fn(),
       delete: vi.fn(),
       deletePattern: vi.fn(),
@@ -171,78 +169,6 @@ describe('CacheService', () => {
 
       expect(result).toEqual(testValue);
       expect(mockMemoryCache.get).toHaveBeenCalledWith('test-key');
-    });
-  });
-
-  describe('getAndDelete (one-time-use payloads)', () => {
-    beforeEach(() => {
-      cacheService = new CacheService();
-      // @ts-expect-error - Accessing private property for testing
-      cacheService.memoryCache = mockMemoryCache;
-      // @ts-expect-error - Accessing private property for testing
-      cacheService.redisCache = mockRedisCache;
-    });
-
-    it('should read from Redis (L2), not L1, when both tiers are enabled', async () => {
-      const testValue = { state: 'abc123' };
-      vi.mocked(mockRedisCache.getAndDelete).mockResolvedValue(testValue);
-
-      const result = await cacheService.getAndDelete('oidc-state-key');
-
-      expect(result).toEqual(testValue);
-      expect(mockRedisCache.getAndDelete).toHaveBeenCalledWith('oidc-state-key');
-      // L1 is never treated as an independent read for this operation - a
-      // stale L1 copy on this instance must not be returned as if it were
-      // a fresh consumption when another instance already consumed it via
-      // Redis.
-      expect(mockMemoryCache.get).not.toHaveBeenCalled();
-    });
-
-    it('should also clear the L1 copy alongside a Redis hit', async () => {
-      vi.mocked(mockRedisCache.getAndDelete).mockResolvedValue('value');
-
-      await cacheService.getAndDelete('key');
-
-      expect(mockMemoryCache.delete).toHaveBeenCalledWith('key');
-    });
-
-    it('should also clear the L1 copy alongside a Redis miss', async () => {
-      vi.mocked(mockRedisCache.getAndDelete).mockResolvedValue(null);
-
-      const result = await cacheService.getAndDelete('key');
-
-      expect(result).toBeNull();
-      expect(mockMemoryCache.delete).toHaveBeenCalledWith('key');
-    });
-
-    it('should not let a second call see the value Redis already consumed', async () => {
-      vi.mocked(mockRedisCache.getAndDelete)
-        .mockResolvedValueOnce('value')
-        .mockResolvedValueOnce(null);
-
-      expect(await cacheService.getAndDelete('key')).toBe('value');
-      expect(await cacheService.getAndDelete('key')).toBeNull();
-    });
-
-    it('should fall back to memory cache when Redis is disabled', async () => {
-      const service = new CacheService({ enableRedisCache: false });
-      // @ts-expect-error - Accessing private property for testing
-      service.memoryCache = mockMemoryCache;
-
-      vi.mocked(mockMemoryCache.getAndDelete).mockResolvedValue('memory-only-value');
-
-      const result = await service.getAndDelete('key');
-
-      expect(result).toBe('memory-only-value');
-      expect(mockMemoryCache.getAndDelete).toHaveBeenCalledWith('key');
-    });
-
-    it('should return null when neither cache tier is enabled', async () => {
-      const service = new CacheService({ enableMemoryCache: false, enableRedisCache: false });
-
-      const result = await service.getAndDelete('key');
-
-      expect(result).toBeNull();
     });
   });
 
