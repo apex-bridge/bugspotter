@@ -131,9 +131,12 @@ export class RedisCache implements ICacheProvider {
       try {
         return JSON.parse(data) as T;
       } catch (parseError) {
-        logger.error('Redis cache JSON parse error', {
+        // Unlike the general-purpose get(), this cache is for one-time-use
+        // secrets (OIDC state, PKCE values) - never log any part of the
+        // actual value, just enough to debug the parse failure.
+        logger.error('Redis cache JSON parse error in getAndDelete', {
           key,
-          rawValue: data.substring(0, 100), // Log first 100 chars for debugging
+          dataLength: data.length,
           error: parseError instanceof Error ? parseError.message : 'Unknown error',
         });
         return null; // Safer than type assertion

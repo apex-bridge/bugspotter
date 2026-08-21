@@ -159,17 +159,43 @@ export class MemoryCache implements ICacheProvider {
   }
 
   /**
-   * Atomically get a value and delete it in one operation. Single-threaded
-   * Node has no interleaving concern here (unlike Redis, which needs its
-   * own native GETDEL) - a plain get-then-delete is already atomic from
-   * every caller's point of view.
+   * Atomically get a value and delete it in one operation.
+   *
+   * This does NOT delegate to `get()` - even though `get()` has no internal
+   * `await`, calling it as `await this.get(key)` still suspends to a
+   * microtask at the call site (that's just how `await` works, regardless of
+   * whether the callee itself awaited anything). Two concurrent
+   * `getAndDelete(sameKey)` calls could then both resolve their `get()` before
+   * either runs `this.cache.delete(key)`, breaking the one-time-use
+   * guarantee. Reading and deleting directly against `this.cache` with no
+   * `await` anywhere in this method body means it runs to completion
+   * synchronously once invoked, with no interleaving point - that's what
+   * makes it atomic on single-threaded Node.
    */
   async getAndDelete<T>(key: string): Promise<T | null> {
-    const value = await this.get<T>(key);
-    if (value !== null) {
-      this.cache.delete(key);
+    const entry = this.cache.get(key);
+
+    if (!entry) {
+      if (this.enableMetrics) {
+        this.misses++;
+      }
+      return null;
     }
-    return value;
+
+    if (this.isExpired(entry)) {
+      this.cache.delete(key);
+      if (this.enableMetrics) {
+        this.misses++;
+      }
+      return null;
+    }
+
+    this.cache.delete(key);
+    if (this.enableMetrics) {
+      this.hits++;
+    }
+
+    return entry.value as T;
   }
 
   /**
