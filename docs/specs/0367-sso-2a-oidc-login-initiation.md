@@ -34,7 +34,7 @@ Split off #353 as its smaller, lower-risk half (see #367 for why). BugSpotter ha
 
 ## Constraints
 
-1. `openid-client@5.7.1` is now installed (see "Blocking prerequisites" above) — v5 ships a functional API as its primary surface, not the class-based `Issuer.discover()`; verify the installed version's real exported surface before finalizing imports, and use `Issuer.discover`, `issuer.Client`, and `generators.*` consistently as shown below if that's what 5.7.1 actually exposes.
+1. `openid-client@5.7.1` is now installed (see "Blocking prerequisites" above) — verified against the installed version: it exposes the class-based v5 API (`Issuer.discover`, `issuer.Client`, `generators.codeVerifier`, `generators.codeChallenge` are all functions), not the v6 functional API (`discovery()`, `randomPKCECodeVerifier()`, which 5.7.1 does not export). Use `Issuer.discover`, `issuer.Client`, and `generators.*` consistently as shown below.
 2. PKCE `code_challenge_method: 'S256'` on every authorization request; no implicit flow, no bare authorization code grant without a verifier.
 3. `issuerUrl` from saved config AND both `token_endpoint` and `jwks_uri` from the discovery response each validated with `validateSSRFProtection()` immediately before every connection — not cached as pre-approved after first discovery. Verify the exact export name in `packages/backend/src/integrations/security/ssrf-validator.ts` before use; it is ASSUMED to match the name this constraint quotes.
 4. CSRF state payload `{ nonce, codeVerifier, redirectUri, tenantId, issuer }` stored via `getCacheService().set()` with ≤10-minute TTL — no new cache method needed for this slice (atomic consumption via `getAndDelete` is #368's concern, added to `CacheService` there).
@@ -58,9 +58,9 @@ New file. Owns IdP interaction logic so the route handler stays thin. `consumeOi
 
 ```ts
 // New file — packages/backend/src/api/services/oidc-service.ts
-// IMPORTANT: verify the openid-client v5 import surface before finalizing these imports.
-// If the package exposes a functional API (discovery(), randomPKCECodeVerifier(), etc.)
-// rather than the class-based Issuer.discover(), rewrite discoverIssuerValidated accordingly.
+// openid-client@5.7.1 exposes the class-based v5 API (Issuer.discover, issuer.Client,
+// generators.*), not the v6 functional API (discovery(), randomPKCECodeVerifier()) —
+// verified against the installed version.
 import { Issuer, generators } from 'openid-client';
 // validateSSRFProtection is a synchronous function returning URL (throws on blocked addresses)
 import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js';
@@ -114,7 +114,7 @@ export function oidcRoutes(fastify: FastifyInstance): void {
       const redirectUri = `${request.protocol}://${request.hostname}/api/v1/auth/oidc/${tenantId}/callback`;
       const issuer = await discoverIssuerValidated(config.issuerUrl);
 
-      // ASSUMED: openid-client v5 Client construction — verify v5 class vs functional API
+      // Verified against openid-client@5.7.1: class-based construction, not the v6 functional API.
       const client = new issuer.Client({ client_id: config.clientId, response_types: ['code'] });
       const state = generators.state();
       const nonce = generators.nonce();
