@@ -5,7 +5,7 @@
 // Model router (label-based via ISSUE_LABELS env):
 //   complexity:high  -> claude-opus-4-8   (deep architecture, cross-cutting changes)
 //   pii-sensitive    -> claude-haiku-4-5-20251001  (local-floor stand-in; cheapest hosted)
-//   default          -> claude-sonnet-4-6
+//   default          -> claude-sonnet-5
 // The selected model is passed to callClaude's `model` override on either backend.
 //
 // Static context (CLAUDE.md files + pattern examples) is prepended to the prompt.
@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto';
 import { callClaude, requireLlmCredentials } from './llm-client.mjs';
 import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
 import { normalizePath, findUnwrittenPaths } from './check-impl-scope.mjs';
+import { DEFAULT_MODEL, HIGH_MODEL, LOW_MODEL } from './model-defaults.mjs';
 
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_LABELS = '', SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
@@ -51,10 +52,12 @@ if (!SPEC_CONTENT) {
 
 // Model router — label-based with per-tier overrides via GitHub repo variables.
 // Change without a code edit: set IMPL_MODEL_HIGH / IMPL_MODEL_DEFAULT / IMPL_MODEL_LOW
-// in Settings > Secrets and variables > Actions > Variables.
-const MODEL_HIGH = process.env.IMPL_MODEL_HIGH || 'claude-opus-4-8';
-const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || 'claude-sonnet-4-6';
-const MODEL_LOW = process.env.IMPL_MODEL_LOW || 'claude-haiku-4-5-20251001';
+// in Settings > Secrets and variables > Actions > Variables. Fallback literals
+// come from the shared model-defaults.mjs (also used by llm-client.mjs), so a
+// version bump only touches one place.
+const MODEL_HIGH = process.env.IMPL_MODEL_HIGH || HIGH_MODEL;
+const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || DEFAULT_MODEL;
+const MODEL_LOW = process.env.IMPL_MODEL_LOW || LOW_MODEL;
 
 function selectModel(labels) {
   const set = new Set(labels.split(',').map((l) => l.trim().toLowerCase()));
