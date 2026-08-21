@@ -5,10 +5,6 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 
 **Files touched:**
 
-- `packages/backend/src/cache/types.ts` — add `getAndDelete` to `ICacheProvider` interface
-- `packages/backend/src/cache/redis-cache.ts` — implement `getAndDelete` via Redis 7 native `GETDEL`
-- `packages/backend/src/cache/memory-cache.ts` — implement `getAndDelete` (get + delete, sufficient for in-process test cache)
-- `packages/backend/src/cache/cache-service.ts` — add `getAndDelete` to `CacheService` (the actual class routes consume via `getCacheService()` — it does not implement `ICacheProvider` directly, it's a two-tier orchestrator over `RedisCache`/`MemoryCache` with its own method set)
 - `packages/backend/src/api/services/oidc-service.ts` — edit; add `consumeOidcState`
 - `packages/backend/src/api/routes/auth-oidc.ts` — edit; add `GET /api/v1/auth/oidc/:tenantId/callback` handler to the `oidcRoutes()` function #367 created
 - `packages/backend/tests/api/auth-oidc.test.ts` — edit; test cases A–N below
@@ -16,12 +12,13 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 **Blocking prerequisites:**
 
 - #367 — creates `oidc-service.ts` and `auth-oidc.ts` (with the `login` handler and `oidcRoutes()` shell) that this slice extends, and wires `fastify.container.db.oidcIdpConfigs` into the DI container. Must merge and be implemented first.
+- #379 — adds `getAndDelete` to `ICacheProvider`, `RedisCache`, `MemoryCache`, and `CacheService` (`getCacheService().getAndDelete()`), which `consumeOidcState` below depends on. Originally scoped as part of this spec; split into its own PR to stay under `check-spec-scope.mjs`'s 6-file cap (this spec was 7 files combined). Must merge first.
 
 ## Problem
 
 Split off #353 as its larger, security-critical half (see #367 for why the split happened, and #367's own spec for the login-initiation half this depends on). This slice implements the callback endpoint: atomic CSRF-state consumption, ID-token validation, tenant-scoped account-linking (ADR-0044 Decision 1 — the fix for a real cross-tenant account-takeover path: `users.email` is globally unique but `oidc_idp_config` is per-tenant, so a naive email match could let one tenant's IdP assert an email belonging to a different tenant's user), and refresh-token cookie issuance.
 
-**Corrected during review (PR #370), same root cause as #367's correction:** `fastify.container.cache` doesn't exist, and `CacheService` (the real thing `getCacheService()` returns) doesn't implement `ICacheProvider` — it wraps `RedisCache`/`MemoryCache` with its own `get`/`set`/`delete` methods and needs its own `getAndDelete` added, not just the lower-level providers'. `userRepository`/`membershipRepository` container keys were also wrong — the real registry keys (verified in `factory.ts`) are `users` and `organizationMembers`, and `organizationMembers` has no direct "find by user and tenant" method matching the original signature — the closest real methods are `findMembership(organizationId, userId)` and `createWithUser(organizationId, userId, role)`. All corrected below.
+**Corrected during review (PR #370), same root cause as #367's correction:** `fastify.container.cache` doesn't exist, and `CacheService` (the real thing `getCacheService()` returns) doesn't implement `ICacheProvider` — it wraps `RedisCache`/`MemoryCache` with its own `get`/`set`/`delete` methods and needed its own `getAndDelete` added, not just the lower-level providers'. That addition is now #379 (split out as its own PR — see Blocking prerequisites). `userRepository`/`membershipRepository` container keys were also wrong — the real registry keys (verified in `factory.ts`) are `users` and `organizationMembers`, and `organizationMembers` has no direct "find by user and tenant" method matching the original signature — the closest real methods are `findMembership(organizationId, userId)` and `createWithUser(organizationId, userId, role)`. All corrected below.
 
 ## Out of scope
 
@@ -37,14 +34,13 @@ Split off #353 as its larger, security-critical half (see #367 for why the split
 
 1. `openid-client` v5 API throughout, matching #367's usage — the `Client` construction and `callback()` method name must be verified against the installed package version, consistent with how #367 already resolved this for `authorizationUrl()`.
 2. `email_verified === true` (strict boolean) verified on ID-token claims before any user lookup; if absent or `false`, return 401 immediately without touching the database.
-3. CSRF state payload consumed with Redis 7's native `GETDEL` command (single atomic round-trip) via the new `CacheService.getAndDelete()`, which must bypass its L1 memory-cache read path and go straight to the Redis tier for the atomicity guarantee — checking L1 first would reintroduce the exact race this exists to prevent (two concurrent requests both reading a still-present L1 copy before either deletes it). Best-effort clear the L1 copy afterward for hygiene; correctness relies only on the Redis `GETDEL`. A pipeline `GET` + `DEL` is not sufficient. The callback handler must re-validate the stored `issuer` against the freshly re-discovered `issuer.metadata.issuer` before proceeding (ADR-0044: the state is bound to the issuer, not just checked for existence) — a mismatch fails with the same generic 401.
+3. CSRF state payload consumed via `CacheService.getAndDelete()` (#379), which bypasses its L1 memory-cache read path and goes straight to Redis's native `GETDEL` (single atomic round-trip) for the atomicity guarantee — checking L1 first would reintroduce the exact race this exists to prevent (two concurrent requests both reading a still-present L1 copy before either deletes it). This slice only calls it via `consumeOidcState`; the atomicity mechanism itself is #379's responsibility, not re-implemented here. The callback handler must re-validate the stored `issuer` against the freshly re-discovered `issuer.metadata.issuer` before proceeding (ADR-0044: the state is bound to the issuer, not just checked for existence) — a mismatch fails with the same generic 401.
 4. `issuerUrl` from saved config AND both `token_endpoint` and `jwks_uri` from the discovery response each validated with `validateSSRFProtection()` immediately before every connection — reuses `discoverIssuerValidated` from #367, which already does this; do not re-implement or skip it.
 5. `allowedDomains`: fail-closed if the field is absent, null, or empty — reject with 401 before any user lookup. Domain comparison uses `email.split('@')[1]`; enforced on every branch (same-tenant link, cross-tenant reject, new-user create).
 6. Account-linking (ADR-0044 Decision 1): email match with an existing membership in this tenant (`organizationMembers.findMembership(tenantId, existingUser.id)`) → link (reuse existing user row, no insert); email match but no membership in this tenant → 401 with generic message (must not reveal which tenant owns the address); no user match at all → create user (`users.create(...)`, fields ASSUMED — see Out of scope) + `organizationMembers.createWithUser(tenantId, newUser.id, 'member')`.
 7. Cookie issued in the callback must match the refresh-token cookie in `packages/backend/src/api/routes/auth.ts` exactly — cookie name `refresh_token` (not `refreshToken`), options built via `buildRefreshCookieOptions()` from `packages/backend/src/api/utils/auth-cookies.ts` (`HttpOnly`/`Secure`/`SameSite`/`COOKIE_DOMAIN` all come from that helper). Do not introduce a second cookie format.
-8. `getAndDelete` must be added to `ICacheProvider` (`packages/backend/src/cache/types.ts`) and implemented in both `redis-cache.ts` and `memory-cache.ts`, AND to `CacheService` (`cache-service.ts`) which delegates to them — routes only ever call `getCacheService()`, never the lower-level providers directly. `ICacheProvider.get()` is generic (`get<T>(key): Promise<T | null>`) and `RedisCache` handles JSON serialization internally while `MemoryCache` stores the value as-is — `getAndDelete` must follow that same generic shape.
-9. `auth-oidc.ts`'s callback handler must be added inside the existing `oidcRoutes()` function #367 created, not as a separate exported function — the route module keeps one registration entry point.
-10. `OrganizationMemberRepository.createWithUser` uses `ON CONFLICT (organization_id, user_id) DO NOTHING` and returns `null` on conflict — handle a `null` return from the new-user branch (should not occur given the "no existing user" precondition, but do not assume the query result is always non-null).
+8. `auth-oidc.ts`'s callback handler must be added inside the existing `oidcRoutes()` function #367 created, not as a separate exported function — the route module keeps one registration entry point.
+9. `OrganizationMemberRepository.createWithUser` uses `ON CONFLICT (organization_id, user_id) DO NOTHING` and returns `null` on conflict — handle a `null` return from the new-user branch (should not occur given the "no existing user" precondition, but do not assume the query result is always non-null).
 
 ## Acceptance criteria
 
@@ -64,78 +60,6 @@ Split off #353 as its larger, security-critical half (see #367 for why the split
 - [ ] Callback where the re-discovered issuer does not match the issuer stored in the state payload returns 401 — verified by test case N.
 
 ## Changes
-
-### `packages/backend/src/cache/types.ts`
-
-Add `getAndDelete` to the `ICacheProvider` interface.
-
-```ts
-// Append to ICacheProvider, after the existing `delete` declaration:
-getAndDelete<T>(key: string): Promise<T | null>;
-```
-
-### `packages/backend/src/cache/redis-cache.ts`
-
-Add `getAndDelete` using the Redis 7 `GETDEL` command, mirroring the existing `get()` method's JSON parsing and error handling. Verify the ioredis method name (`getdel` lowercase) against the installed ioredis version.
-
-```ts
-// Append inside the RedisCache class body, after the existing delete method:
-async getAndDelete<T>(key: string): Promise<T | null> {
-  const redis = await this.getConnection();
-  const fullKey = this.buildKey(key);
-  const data = await redis.getdel(fullKey);
-  if (data === null) return null;
-  try {
-    return JSON.parse(data) as T;
-  } catch (parseError) {
-    logger.error('Redis cache JSON parse error', {
-      key,
-      error: parseError instanceof Error ? parseError.message : 'Unknown error',
-    });
-    return null;
-  }
-}
-```
-
-### `packages/backend/src/cache/memory-cache.ts`
-
-```ts
-// Append inside the MemoryCache class body, after the existing delete method:
-async getAndDelete<T>(key: string): Promise<T | null> {
-  const value = await this.get<T>(key);
-  await this.delete(key);
-  return value;
-}
-```
-
-### `packages/backend/src/cache/cache-service.ts`
-
-`CacheService` is the class routes actually consume via `getCacheService()` — it wraps `RedisCache`/`MemoryCache` and does not implement `ICacheProvider` directly, so it needs its own `getAndDelete`, modeled on the existing `get`/`delete` methods' two-tier fan-out but going straight to Redis for the atomicity guarantee (see Constraint 3).
-
-```ts
-// Append inside the CacheService class body, after the existing delete method:
-/**
- * Atomically get and delete a key - for one-time-use values like CSRF state.
- * Deliberately does NOT check the L1 memory cache first: the atomicity guarantee
- * comes from Redis's single-round-trip GETDEL, and reading L1 first would
- * reintroduce the race this method exists to prevent (two concurrent requests
- * both reading a still-present L1 copy before either deletes it).
- */
-async getAndDelete<T>(key: string): Promise<T | null> {
-  if (this.redisCache) {
-    const value = await this.redisCache.getAndDelete<T>(key);
-    if (this.memoryCache) {
-      // Best-effort L1 cleanup; correctness relies only on the Redis GETDEL above.
-      await this.memoryCache.delete(key).catch(() => {});
-    }
-    return value;
-  }
-  if (this.memoryCache) {
-    return this.memoryCache.getAndDelete<T>(key);
-  }
-  return null;
-}
-```
 
 ### `packages/backend/src/api/services/oidc-service.ts`
 
@@ -484,7 +408,6 @@ Test cases C, D, E, G, J, K, and M follow the same shape as B, B, B, H, A (exist
 ```bash
 pnpm --filter @bugspotter/backend typecheck
 pnpm --filter @bugspotter/backend test:unit -- --reporter=verbose tests/api/auth-oidc.test.ts
-pnpm --filter @bugspotter/backend test:unit -- --reporter=verbose tests/cache/
 ```
 
-Rollback: purely additive (extends `auth-oidc.ts` with a second route handler, adds `getAndDelete` to the cache interface/implementations/service). Removing the callback route registration and the `getAndDelete` cache methods fully restores current behavior. No data migration beyond #352's schema, which has its own rollback path.
+Rollback: purely additive (extends `auth-oidc.ts` with a second route handler). Removing the callback route registration fully restores current behavior. No data migration beyond #352's schema, which has its own rollback path.
