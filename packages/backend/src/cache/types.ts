@@ -76,6 +76,16 @@ export interface ICacheProvider {
   get<T>(key: string): Promise<T | null>;
 
   /**
+   * Atomically get a value and delete it in one operation.
+   * Use for one-time-use payloads (e.g. OIDC/OAuth state) where a caller
+   * reading the value twice — once to validate, once to consume — would
+   * open a window for the same value to be replayed between the two calls.
+   * @param key - Cache key
+   * @returns Cached value or null if not found/expired
+   */
+  getAndDelete<T>(key: string): Promise<T | null>;
+
+  /**
    * Set a value in cache
    * @param key - Cache key
    * @param value - Value to cache (must be JSON-serializable)
