@@ -321,10 +321,37 @@ describe('RedisCache', () => {
       expect(result).toBeNull();
     });
 
-    it('should not throw on Redis errors', async () => {
+    it('should not throw on Redis errors, and should not fall back to eval for unrelated errors', async () => {
+      // A generic/unrelated error (e.g. a network blip) is NOT the
+      // "server doesn't support GETDEL" case - it must propagate to the
+      // outer catch like every other error in this method, not trigger
+      // the Lua eval fallback.
       mockRedis.getdel.mockRejectedValue(new Error('Redis down'));
 
       await expect(cache.getAndDelete('key')).resolves.toBeNull();
+      expect(mockRedis.eval).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to the Lua eval when the Redis SERVER rejects GETDEL as unknown (Redis < 6.2)', async () => {
+      // ioredis exposes a `getdel` method on the client regardless of
+      // which Redis server version it's talking to (it's compiled into
+      // the library at build time), so `typeof redis.getdel === 'function'`
+      // is always true and can't be used to detect server support. The
+      // real signal is the server rejecting the command at runtime.
+      mockRedis.getdel.mockRejectedValue(
+        new Error("ERR unknown command 'GETDEL', with args beginning with: ")
+      );
+      mockRedis.eval.mockResolvedValue('{"name":"test"}');
+
+      const result = await cache.getAndDelete<{ name: string }>('key');
+
+      expect(mockRedis.getdel).toHaveBeenCalledWith('test:key');
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+        1,
+        'test:key'
+      );
+      expect(result).toEqual({ name: 'test' });
     });
 
     it('should track metrics on hit and miss', async () => {

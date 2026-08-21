@@ -117,19 +117,47 @@ export class RedisCache implements ICacheProvider {
    * the one-shot invariant this method exists to provide). Same capability
    * check + Lua script as `consumePasswordResetToken()` in
    * `services/auth/password-reset-token.ts`.
+   *
+   * The `typeof redis.getdel === 'function'` check only tells us the
+   * *client library* has GETDEL support - ioredis compiles every Redis
+   * command method in statically at build time, independent of which
+   * Redis *server* version it's actually connected to. So we still have
+   * to attempt the call and fall back on the server's own rejection
+   * (`unknown command 'GETDEL'`) rather than trusting the client-side
+   * capability check alone. Any other error from `getdel` is a real
+   * failure and is left to propagate to the outer catch below, same as
+   * every other error path in this method.
    */
   async getAndDelete<T>(key: string): Promise<T | null> {
     try {
       const redis = await this.getConnection();
       const fullKey = this.buildKey(key);
-      const data =
-        typeof (redis as { getdel?: unknown }).getdel === 'function'
-          ? await redis.getdel(fullKey)
-          : ((await redis.eval(
+      let data: string | null;
+
+      if (typeof (redis as { getdel?: unknown }).getdel === 'function') {
+        try {
+          data = await redis.getdel(fullKey);
+        } catch (getdelError) {
+          if (
+            getdelError instanceof Error &&
+            /unknown command.*getdel/i.test(getdelError.message)
+          ) {
+            data = (await redis.eval(
               "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
               1,
               fullKey
-            )) as string | null);
+            )) as string | null;
+          } else {
+            throw getdelError;
+          }
+        }
+      } else {
+        data = (await redis.eval(
+          "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+          1,
+          fullKey
+        )) as string | null;
+      }
 
       if (data === null) {
         if (this.enableMetrics) {
