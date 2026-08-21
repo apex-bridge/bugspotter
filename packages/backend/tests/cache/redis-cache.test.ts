@@ -15,6 +15,8 @@ const mockRedis = {
   set: vi.fn(),
   setex: vi.fn(),
   del: vi.fn(),
+  getdel: vi.fn(),
+  eval: vi.fn(),
   exists: vi.fn(),
   scan: vi.fn(),
   ping: vi.fn(),
@@ -42,6 +44,8 @@ describe('RedisCache', () => {
     mockRedis.set.mockReset();
     mockRedis.setex.mockReset();
     mockRedis.del.mockReset();
+    mockRedis.getdel.mockReset();
+    mockRedis.eval.mockReset();
     mockRedis.exists.mockReset();
     mockRedis.scan.mockReset();
     mockRedis.ping.mockReset();
@@ -286,6 +290,119 @@ describe('RedisCache', () => {
       const stats = await cache.getStats();
       expect(stats.hits).toBe(0);
       expect(stats.misses).toBe(1);
+    });
+  });
+
+  describe('getAndDelete', () => {
+    it('should use native GETDEL, not a separate get+del pair', async () => {
+      mockRedis.getdel.mockResolvedValue('{"name":"test"}');
+
+      const result = await cache.getAndDelete<{ name: string }>('key');
+
+      expect(mockRedis.getdel).toHaveBeenCalledWith('test:key');
+      expect(mockRedis.get).not.toHaveBeenCalled();
+      expect(mockRedis.del).not.toHaveBeenCalled();
+      expect(result).toEqual({ name: 'test' });
+    });
+
+    it('should return null for non-existent keys', async () => {
+      mockRedis.getdel.mockResolvedValue(null);
+
+      const result = await cache.getAndDelete('nonexistent');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null for malformed JSON', async () => {
+      mockRedis.getdel.mockResolvedValue('plain-string');
+
+      const result = await cache.getAndDelete<string>('key');
+
+      expect(result).toBeNull();
+    });
+
+    it('should not throw on Redis errors, and should not fall back to eval for unrelated errors', async () => {
+      // A generic/unrelated error (e.g. a network blip) is NOT the
+      // "server doesn't support GETDEL" case - it must propagate to the
+      // outer catch like every other error in this method, not trigger
+      // the Lua eval fallback.
+      mockRedis.getdel.mockRejectedValue(new Error('Redis down'));
+
+      await expect(cache.getAndDelete('key')).resolves.toBeNull();
+      expect(mockRedis.eval).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to the Lua eval when the Redis SERVER rejects GETDEL as unknown (Redis < 6.2)', async () => {
+      // ioredis exposes a `getdel` method on the client regardless of
+      // which Redis server version it's talking to (it's compiled into
+      // the library at build time), so `typeof redis.getdel === 'function'`
+      // is always true and can't be used to detect server support. The
+      // real signal is the server rejecting the command at runtime.
+      mockRedis.getdel.mockRejectedValue(
+        new Error("ERR unknown command 'GETDEL', with args beginning with: ")
+      );
+      mockRedis.eval.mockResolvedValue('{"name":"test"}');
+
+      const result = await cache.getAndDelete<{ name: string }>('key');
+
+      expect(mockRedis.getdel).toHaveBeenCalledWith('test:key');
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+        1,
+        'test:key'
+      );
+      expect(result).toEqual({ name: 'test' });
+    });
+
+    it('should track metrics on hit and miss', async () => {
+      mockRedis.getdel.mockResolvedValueOnce('"value"').mockResolvedValueOnce(null);
+
+      await cache.getAndDelete('key1');
+      await cache.getAndDelete('key2');
+
+      const stats = await cache.getStats();
+      expect(stats.hits).toBe(1);
+      expect(stats.misses).toBe(1);
+    });
+
+    it('should fall back to an atomic Lua eval when GETDEL is unavailable (Redis < 6.2)', async () => {
+      // Simulate an older/self-hosted Redis where ioredis has no `getdel`
+      // method at all - the capability check in the implementation must
+      // detect this and use the Lua eval fallback instead, matching
+      // consumePasswordResetToken()'s pattern.
+      const originalGetdel = mockRedis.getdel;
+      // @ts-expect-error - simulating a Redis client without GETDEL support
+      delete mockRedis.getdel;
+      mockRedis.eval.mockResolvedValue('{"name":"test"}');
+
+      try {
+        const result = await cache.getAndDelete<{ name: string }>('key');
+
+        expect(mockRedis.eval).toHaveBeenCalledWith(
+          "local v = redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]) end; return v",
+          1,
+          'test:key'
+        );
+        expect(result).toEqual({ name: 'test' });
+      } finally {
+        mockRedis.getdel = originalGetdel;
+      }
+    });
+
+    it('should return null via the Lua eval fallback when the key does not exist', async () => {
+      const originalGetdel = mockRedis.getdel;
+      // @ts-expect-error - simulating a Redis client without GETDEL support
+      delete mockRedis.getdel;
+      mockRedis.eval.mockResolvedValue(null);
+
+      try {
+        const result = await cache.getAndDelete('nonexistent');
+
+        expect(mockRedis.eval).toHaveBeenCalled();
+        expect(result).toBeNull();
+      } finally {
+        mockRedis.getdel = originalGetdel;
+      }
     });
   });
 
