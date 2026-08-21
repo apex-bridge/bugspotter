@@ -6,10 +6,15 @@
  * same pattern `tests/api/routes/signup.route.test.ts` uses — since
  * `server.ts` wiring is out of scope for this slice (see spec #367).
  *
- * `openid-client`, the SSRF validator, and the cache singleton are all
- * mocked at top level via `vi.mock`/`vi.hoisted` (ES module mocks must be
- * hoisted above module-scope `const` declarations they're referenced from,
- * or referencing them from inside the hoisted factory hits the TDZ).
+ * `openid-client`, the SSRF validator, the DNS-pinning helper, and the
+ * cache singleton are all mocked at top level via `vi.mock`/`vi.hoisted`
+ * (ES module mocks must be hoisted above module-scope `const`
+ * declarations they're referenced from, or referencing them from inside
+ * the hoisted factory hits the TDZ).
+ *
+ * `OIDC_REDIRECT_BASE_URL` is populated by `tests/setup-unit-env.ts` — the
+ * route throws a `ConfigurationError` when it's unset, matching production
+ * behavior for a deployment that hasn't configured it.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -22,9 +27,10 @@ import { oidcRoutes } from '../../src/api/routes/auth-oidc.js';
 // above regular imports/consts).
 // ---------------------------------------------------------------------------
 
-const { mockAuthorizationUrlFn, mockCacheService } = vi.hoisted(() => ({
+const { mockAuthorizationUrlFn, mockCacheService, mockPinHostnameToIp } = vi.hoisted(() => ({
   mockAuthorizationUrlFn: vi.fn(),
   mockCacheService: { get: vi.fn(), set: vi.fn().mockResolvedValue(undefined) },
+  mockPinHostnameToIp: vi.fn(),
 }));
 
 vi.mock('openid-client', () => {
@@ -39,6 +45,10 @@ vi.mock('openid-client', () => {
     },
     Client: MockClient,
   };
+  // `Issuer` here is a plain mock object (not a real class) — `discover` is
+  // reassigned per-call inside oidc-service.ts's `custom.http_options` dance,
+  // which just sets/reads a property on whatever `Issuer` is, so a plain
+  // object works fine as long as `custom.http_options` is a defined key.
   return {
     Issuer: { discover: vi.fn().mockResolvedValue(mockIssuer) },
     generators: {
@@ -47,11 +57,19 @@ vi.mock('openid-client', () => {
       codeVerifier: vi.fn().mockReturnValue('mock-verifier'),
       codeChallenge: vi.fn().mockReturnValue('mock-challenge'),
     },
+    custom: { http_options: Symbol('http_options') },
   };
 });
 
 vi.mock('../../src/integrations/security/ssrf-validator.js', () => ({
   validateSSRFProtection: vi.fn().mockReturnValue(new URL('https://idp.example.com')),
+}));
+
+// Real DNS-rebinding pinning is exercised by hardened-http.ts's own unit
+// tests — here we just need discoverIssuerValidated() to not attempt a
+// real DNS lookup for the fake `idp.example.com` host.
+vi.mock('../../src/integrations/security/hardened-http.js', () => ({
+  pinHostnameToIp: mockPinHostnameToIp,
 }));
 
 vi.mock('../../src/cache/index.js', () => ({
@@ -89,6 +107,11 @@ describe('GET /api/v1/auth/oidc/:tenantId/login', () => {
     // encoding would.
     mockAuthorizationUrlFn.mockReturnValue('https://idp.example.com/auth?mock=1');
     mockCacheService.set.mockResolvedValue(undefined);
+    mockPinHostnameToIp.mockResolvedValue({
+      ip: '93.184.216.34',
+      family: 4,
+      lookup: vi.fn(),
+    });
     server = await buildServer();
   });
 
@@ -122,6 +145,16 @@ describe('GET /api/v1/auth/oidc/:tenantId/login', () => {
       expect.objectContaining({ nonce: 'mock-nonce', tenantId: 'tenant-abc' }),
       600
     );
+
+    // Regression guard: a change that silently drops the SSRF gate (URL
+    // validation or the DNS-rebinding pin) shouldn't be able to pass this
+    // test while still returning a 302 — assert both were actually invoked,
+    // not just that the redirect happened.
+    const { validateSSRFProtection } = await import(
+      '../../src/integrations/security/ssrf-validator.js'
+    );
+    expect(validateSSRFProtection).toHaveBeenCalledWith('https://idp.example.com');
+    expect(mockPinHostnameToIp).toHaveBeenCalledWith('idp.example.com');
   });
 
   it('returns 404 for a tenant with no SSO configuration, without touching SSRF validation', async () => {

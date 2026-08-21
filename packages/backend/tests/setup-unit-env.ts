@@ -26,3 +26,9 @@ process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'unit-test-encryption
 // Required by the JWT plugin when any auth-handling module loads.
 process.env.JWT_SECRET =
   process.env.JWT_SECRET ?? 'unit-test-jwt-secret-for-testing-only-not-production';
+
+// Required by the OIDC login-initiation route (#367) — it throws a
+// ConfigurationError rather than deriving redirect_uri from request
+// headers when this is unset.
+process.env.OIDC_REDIRECT_BASE_URL =
+  process.env.OIDC_REDIRECT_BASE_URL ?? 'https://api.unit-test.example.com';

@@ -68,6 +68,20 @@ export interface FrontendConfig {
   url: string;
 }
 
+export interface OidcConfig {
+  /**
+   * Canonical externally-reachable base URL for this backend instance (e.g.
+   * `https://api.bugspotter.io`), used to build the `redirect_uri` sent to
+   * an OIDC IdP during login initiation. MUST be a fixed, operator-set
+   * value — never derived from `request.protocol`/`request.hostname`,
+   * which are attacker-influenceable via the Host / X-Forwarded-* headers
+   * depending on proxy config, and a mismatched/spoofed redirect_uri is
+   * security-relevant for an OIDC flow (open-redirect / code interception).
+   * `null` when unset — fine for deployments with no tenant SSO configured.
+   */
+  redirectBaseUrl: string | null;
+}
+
 export interface ShareTokenConfig {
   defaultExpirationHours: number;
   presignedUrlExpirationSeconds: number;
@@ -106,6 +120,7 @@ export interface AppConfig {
   jwt: JwtConfig;
   auth: AuthConfig;
   frontend: FrontendConfig;
+  oidc: OidcConfig;
   shareToken: ShareTokenConfig;
   rateLimit: RateLimitConfig;
   storage: StorageConfig;
