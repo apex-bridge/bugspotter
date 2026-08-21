@@ -73,6 +73,12 @@ jobs:
         timeout-minutes: 6
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
+          # generate-adr.mjs never passes an explicit model to callClaude(),
+          # so CLI_MODEL (this) is its real effective default - without this
+          # mapping, setting the repo variable would silently do nothing,
+          # since a GitHub Actions variable only reaches process.env via an
+          # explicit env: entry like this one, never automatically.
+          LLM_DEFAULT_MODEL: ${{ vars.LLM_DEFAULT_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}

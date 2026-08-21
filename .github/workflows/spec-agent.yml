@@ -61,6 +61,12 @@ jobs:
         timeout-minutes: 8
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
+          # generate-spec.mjs never passes an explicit model to callClaude(),
+          # so CLI_MODEL (this) is its real effective default - without this
+          # mapping, setting the repo variable would silently do nothing,
+          # since a GitHub Actions variable only reaches process.env via an
+          # explicit env: entry like this one, never automatically.
+          LLM_DEFAULT_MODEL: ${{ vars.LLM_DEFAULT_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -80,6 +86,9 @@ jobs:
         timeout-minutes: 8
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
+          # verify-spec.mjs also never passes an explicit model - same
+          # CLI_MODEL default as the Generate spec step above.
+          LLM_DEFAULT_MODEL: ${{ vars.LLM_DEFAULT_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
