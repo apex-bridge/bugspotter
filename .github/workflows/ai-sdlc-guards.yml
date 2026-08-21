@@ -113,21 +113,21 @@ jobs:
         # A human glancing at this warning would have caught it immediately.
         run: |
           set -euo pipefail
-          outside=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- . ':!docs/specs/**' ':!docs/adr/**')
+          outside=$(git diff --name-only --diff-filter=ACMRD "$BASE_SHA" "$HEAD_SHA" -- . ':!docs/specs/**' ':!docs/adr/**')
           if [ -n "$outside" ]; then
-            echo "::warning::This PR touches docs/specs/** but also modifies files outside docs/specs/**/docs/adr/**. Often fine (a small incidental fix bundled in), but also the exact shape of an accidental cross-branch merge - double check these are intentional:"
+            echo "::warning::This PR touches docs/specs/** but also modifies files outside docs/specs/** and docs/adr/**. Often fine (a small incidental fix bundled in), but also the exact shape of an accidental cross-branch merge - double check these are intentional:"
             printf '%s\n' "$outside" | sed 's/^/  /'
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               {
                 echo ""
-                echo "**Spec-branch scope warning:** this PR modifies files outside \`docs/specs/**\`/\`docs/adr/**\`:"
+                echo "**Spec-branch scope warning:** this PR modifies files outside \`docs/specs/**\` and \`docs/adr/**\`:"
                 echo '```'
                 printf '%s\n' "$outside"
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY"
             fi
           else
-            echo "Spec-branch scope check: no files outside docs/specs/**/docs/adr/** in this diff."
+            echo "Spec-branch scope check: no files outside docs/specs/** and docs/adr/** in this diff."
           fi
 
       - name: Check spec scope (hard)

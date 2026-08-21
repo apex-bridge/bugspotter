@@ -40,6 +40,11 @@ function stepBlockForRun(yamlText, scriptName) {
   while (startIdx > 0 && !/^\s*- name:/.test(lines[startIdx])) {
     startIdx--;
   }
+  assert.match(
+    lines[startIdx],
+    /^\s*- name:/,
+    `no "- name:" boundary found scanning back from the "run: node scripts/ai-sdlc/${scriptName}" line - would silently return an over-broad block spanning earlier steps`
+  );
   return lines.slice(startIdx, runIdx + 1).join('\n');
 }
 
