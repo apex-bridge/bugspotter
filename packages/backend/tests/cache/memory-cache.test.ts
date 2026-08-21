@@ -51,6 +51,24 @@ describe('MemoryCache', () => {
       expect(await cache.has('key1')).toBe(true);
       expect(await cache.has('non-existent')).toBe(false);
     });
+
+    it('should get and delete a value in one operation', async () => {
+      await cache.set('key1', { foo: 'bar' }, 60);
+      const result = await cache.getAndDelete<{ foo: string }>('key1');
+      expect(result).toEqual({ foo: 'bar' });
+      expect(await cache.get('key1')).toBeNull();
+    });
+
+    it('should return null from getAndDelete for a non-existent key', async () => {
+      const result = await cache.getAndDelete('non-existent');
+      expect(result).toBeNull();
+    });
+
+    it('should not allow a second getAndDelete to see the same value', async () => {
+      await cache.set('key1', 'value1', 60);
+      expect(await cache.getAndDelete('key1')).toBe('value1');
+      expect(await cache.getAndDelete('key1')).toBeNull();
+    });
   });
 
   describe('TTL expiration', () => {
