@@ -137,9 +137,10 @@ let runSeq = 0;
 /**
  * Runs the real generate-impl.mjs against the temp repo.
  * @param {string} specContent
- * @param {{files?: object[], retryFiles?: object[]}} [fakeResponses] - what
- *   the fake `claude` returns on the first call and, if a self-correction
- *   round-trip fires, the corrective follow-up call.
+ * @param {{files?: object[], retryFiles?: object[], env?: object}} [fakeResponses] -
+ *   what the fake `claude` returns on the first call and, if a
+ *   self-correction round-trip fires, the corrective follow-up call, plus
+ *   any extra env vars to set on the child (e.g. the IMPL_*_MS overrides).
  */
 function runImpl(specContent, fakeResponses = {}) {
   const promptDump = join(BIN_DIR, `prompt-${runSeq++}.txt`);
@@ -162,6 +163,7 @@ function runImpl(specContent, fakeResponses = {}) {
       ...(fakeResponses.retryFiles
         ? { FAKE_CLAUDE_RETRY_FILES: JSON.stringify(fakeResponses.retryFiles) }
         : {}),
+      ...(fakeResponses.env ?? {}),
     },
   });
   const dump = existsSync(promptDump) ? readFileSync(promptDump, 'utf8') : null;
@@ -237,8 +239,11 @@ describe('self-correction on a missing declared file', () => {
     assert.match(r.stdout, /corrective follow-up turn/);
     assert.match(r.stdout, /Wrote packages\/a\.ts/);
     assert.match(r.stdout, /Wrote packages\/b\.ts/);
-    assert.match(r.stdout, /Corrective follow-up added 1 file\(s\)/);
-    assert.match(r.stdout, /corrective follow-up added 1 file\(s\): packages\/b\.ts/);
+    assert.match(r.stdout, /Corrective follow-up recovered 1\/1 file\(s\)/);
+    assert.match(
+      r.stdout,
+      /corrective follow-up recovered 1 of 1 missing file\(s\): packages\/b\.ts/
+    );
     // The retry prompt must actually tell the model what's missing and
     // what was already covered - not just repeat the original prompt blind.
     assert.match(r.retryPrompt, /packages\/b\.ts/);
@@ -269,6 +274,24 @@ describe('self-correction on a missing declared file', () => {
     // check-impl-scope.mjs's job to report, not this script's to loop on.
   });
 
+  test('does not claim a file was recovered when the retry returns the wrong path', () => {
+    // The confabulation this whole self-correction feature must not repeat:
+    // the retry DOES return a file (so it looks superficially successful),
+    // but it's not the path that was actually missing. The summary must
+    // report reality (nothing recovered), not the retry's own claim.
+    const r = runImpl(spec('packages/a.ts', 'packages/b.ts'), {
+      files: [{ path: 'packages/a.ts', content: 'export const a = 1;\n' }],
+      retryFiles: [{ path: 'packages/wrong-file.ts', content: 'export const w = 1;\n' }],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.modelCallCount, 2);
+    assert.match(r.stdout, /Wrote packages\/a\.ts/);
+    assert.match(r.stdout, /Wrote packages\/wrong-file\.ts/);
+    assert.doesNotMatch(r.stdout, /Wrote packages\/b\.ts/);
+    assert.match(r.stdout, /Corrective follow-up recovered none of the missing file\(s\)/);
+    assert.match(r.stdout, /recovered none of the.*missing file\(s\): packages\/b\.ts/);
+  });
+
   test('over-delivery (an undeclared extra file) does not trigger a retry', () => {
     // Self-correction targets under-delivery specifically; an extra file
     // is a different problem (drift, not a gap) that check-impl-scope.mjs
@@ -281,5 +304,25 @@ describe('self-correction on a missing declared file', () => {
     });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.modelCallCount, 1);
+  });
+
+  test('skips the retry when IMPL_STEP_BUDGET_MS leaves no safe headroom', () => {
+    // A file's worth of headroom is missing but the env override collapses
+    // the step budget to less than the safety buffer alone, so remainingMs
+    // goes negative - the retry must not fire even though it otherwise
+    // would for this exact spec/response pair (see the first test above).
+    const r = runImpl(spec('packages/a.ts', 'packages/b.ts'), {
+      files: [{ path: 'packages/a.ts', content: 'export const a = 1;\n' }],
+      retryFiles: [{ path: 'packages/b.ts', content: 'export const b = 2;\n' }],
+      env: { IMPL_STEP_BUDGET_MS: '1000' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(
+      r.modelCallCount,
+      1,
+      'a collapsed budget must prevent the corrective call entirely'
+    );
+    assert.match(r.stdout, /not enough for a safe corrective call/);
+    assert.doesNotMatch(r.stdout, /Wrote packages\/b\.ts/);
   });
 });

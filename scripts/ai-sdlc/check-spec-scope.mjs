@@ -88,13 +88,29 @@ function main() {
   try {
     spec = readFileSync(SPEC_FILE, 'utf8');
   } catch (err) {
-    console.warn(`Spec scope check: could not read spec file: ${err.message}`);
+    // In hard mode this is a real gate, and a gate that no-ops on a file it
+    // can't even read isn't a gate, it's a trap door (same reasoning
+    // check-impl-scope.mjs's own header states for the identical choice).
+    // Soft mode (spec-agent.yml's own inline copy) keeps waving this
+    // through: a caller-side plumbing bug there shouldn't fail the whole
+    // generation job over a check this soft to begin with.
+    const msg = `Spec scope check: could not read spec file: ${err.message}`;
+    if (hard) {
+      console.error(`::error::${msg}`);
+      process.exit(1);
+    }
+    console.warn(msg);
     process.exit(0);
   }
 
   const declaredPaths = extractDeclaredPaths(spec);
   if (!declaredPaths) {
-    console.warn('Spec scope check: no "Files touched:" line found — skipping.');
+    const msg = 'Spec scope check: no "Files touched:" line found.';
+    if (hard) {
+      console.error(`::error::${msg} A malformed spec is a real finding in hard mode, not a skip.`);
+      process.exit(1);
+    }
+    console.warn(`${msg} Skipping.`);
     process.exit(0);
   }
 

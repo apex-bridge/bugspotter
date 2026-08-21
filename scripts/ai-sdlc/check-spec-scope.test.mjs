@@ -130,4 +130,34 @@ describe('CLI: SPEC_SCOPE_HARD dispatch', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /within cap/);
   });
+
+  test('unreadable spec file, SPEC_SCOPE_HARD unset: exits 0 (soft waves it through)', () => {
+    const r = runCli({ SPEC_FILE: join(DIR, 'does-not-exist.md') });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /could not read spec file/);
+  });
+
+  test('unreadable spec file, SPEC_SCOPE_HARD=true: exits 1 (hard gate cannot be bypassed by an I/O error)', () => {
+    const r = runCli({ SPEC_FILE: join(DIR, 'does-not-exist.md'), SPEC_SCOPE_HARD: 'true' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /could not read spec file/);
+  });
+
+  test('no parseable "Files touched:" line, SPEC_SCOPE_HARD unset: exits 0 (soft skips)', () => {
+    const path = join(DIR, 'no-files-touched-soft.md');
+    writeFileSync(path, '# Spec: fixture\n\n## Problem\n\nNo files field.\n', 'utf8');
+    const r = runCli({ SPEC_FILE: path });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /no "Files touched:" line found/);
+  });
+
+  test('no parseable "Files touched:" line, SPEC_SCOPE_HARD=true: exits 1 (a malformed spec is a real finding, not a skip)', () => {
+    const path = join(DIR, 'no-files-touched-hard.md');
+    writeFileSync(path, '# Spec: fixture\n\n## Problem\n\nNo files field.\n', 'utf8');
+    const r = runCli({ SPEC_FILE: path, SPEC_SCOPE_HARD: 'true' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /no "Files touched:" line found/);
+  });
 });

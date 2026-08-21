@@ -473,15 +473,24 @@ if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) {
 // completeness signal here any more than check-impl-scope.mjs trusts it.
 //
 // Time-budgeted, not unconditional: STEP_BUDGET_MS mirrors impl-agent.yml's
-// "Generate scaffold" step cap (currently 21m) - keep the two in sync if
-// that step's timeout-minutes ever changes. Turn 1 alone can legitimately
-// use most of that budget, so a second call only fires with a real,
-// bounded amount of time actually left; otherwise this skips straight to
-// check-impl-scope.mjs reporting the gap to a human, same as before this
-// existed.
-const STEP_BUDGET_MS = 21 * 60_000;
-const SAFETY_BUFFER_MS = 4 * 60_000; // headroom for validation/write/downstream steps
-const RETRY_MIN_BUDGET_MS = 90_000; // not worth attempting a corrective call below this
+// "Generate scaffold" step cap (currently 21m). Turn 1 alone can
+// legitimately use most of that budget, so a second call only fires with
+// a real, bounded amount of time actually left; otherwise this skips
+// straight to check-impl-scope.mjs reporting the gap to a human, same as
+// before this existed. All three are overridable via env vars specifically
+// so a future change to that workflow step's timeout-minutes can't
+// silently desync from the number this script assumes - update the env
+// var alongside the workflow change rather than relying on remembering to
+// edit this file's own hard-coded default too.
+function parsePositiveMs(envValue, fallback) {
+  const n = Number(envValue);
+  return envValue !== undefined && Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const STEP_BUDGET_MS = parsePositiveMs(process.env.IMPL_STEP_BUDGET_MS, 21 * 60_000);
+// Headroom for validation/write/downstream steps after the model call(s) return.
+const SAFETY_BUFFER_MS = parsePositiveMs(process.env.IMPL_SAFETY_BUFFER_MS, 4 * 60_000);
+// Not worth attempting a corrective call below this much remaining budget.
+const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.IMPL_RETRY_MIN_BUDGET_MS, 90_000);
 const declaredPathsForRetry = (extractDeclaredPaths(SPEC_CONTENT) ?? [])
   .map(normalizePath)
   .filter(Boolean);
@@ -489,6 +498,7 @@ const respondedPaths = parsed.files
   .map((f) => (typeof f?.path === 'string' ? normalizePath(f.path) : null))
   .filter(Boolean);
 const missingPaths = findUnwrittenPaths(respondedPaths, declaredPathsForRetry);
+let correctionAttempted = false;
 
 if (missingPaths.length > 0 && declaredPathsForRetry.length > 0) {
   const remainingMs = STEP_BUDGET_MS - SAFETY_BUFFER_MS - (Date.now() - scriptStartedAt);
@@ -535,11 +545,21 @@ if (missingPaths.length > 0 && declaredPathsForRetry.length > 0) {
         const retryRaw = retryFenceMatch ? retryFenceMatch[1].trim() : retryText.trim();
         const retryParsed = JSON.parse(retryRaw);
         if (Array.isArray(retryParsed?.files) && retryParsed.files.length > 0) {
+          // Merge the candidate files in, but do NOT claim success here.
+          // retryParsed.files is what the retry SAYS it returned, not what
+          // survives the write loop below (path-traversal/forbidden-path/
+          // control-char rejection, or a duplicate of a turn-1 path) -
+          // claiming these specific paths were "added" before that loop
+          // has run would repeat the exact confabulation issue #367 is
+          // about, just in this script's own log instead of the model's.
+          // correctionAttempted + missingPaths (captured above) are what
+          // let the post-write-loop block report what ACTUALLY landed.
           parsed.files = [...parsed.files, ...retryParsed.files];
-          parsed.summary =
-            `${parsed.summary ?? ''} [corrective follow-up added ${retryParsed.files.length} ` +
-            `file(s): ${missingPaths.join(', ')}]`;
-          console.log(`Corrective follow-up added ${retryParsed.files.length} file(s).`);
+          correctionAttempted = true;
+          console.log(
+            `Corrective follow-up returned ${retryParsed.files.length} file(s) - verifying ` +
+              `after the write loop which of them actually land before updating the summary.`
+          );
         }
       } catch (e) {
         console.warn(
@@ -583,6 +603,34 @@ for (const { path, content } of parsed.files) {
 if (writtenPaths.length === 0) {
   console.error('No valid files were written after validation - aborting.');
   process.exit(1);
+}
+
+// Now that writtenPaths reflects what actually survived the write loop
+// (path-traversal/forbidden-path/control-char rejection and dedup all
+// included), report what the corrective follow-up ACTUALLY recovered -
+// the intersection of what it was missing and what's now really on disk -
+// not what it was asked for or what retryParsed.files claimed. Getting
+// this wrong here would be the same confabulation issue #367 flagged in
+// the model's own summary, just relocated into this script's log instead
+// of fixed.
+if (correctionAttempted) {
+  const recovered = missingPaths.filter((p) => writtenPaths.includes(p));
+  const stillMissing = missingPaths.filter((p) => !writtenPaths.includes(p));
+  if (recovered.length > 0) {
+    parsed.summary =
+      `${parsed.summary ?? ''} [corrective follow-up recovered ${recovered.length} of ` +
+      `${missingPaths.length} missing file(s): ${recovered.join(', ')}` +
+      (stillMissing.length > 0 ? `; still missing: ${stillMissing.join(', ')}` : '') +
+      `]`;
+    console.log(
+      `Corrective follow-up recovered ${recovered.length}/${missingPaths.length} file(s).`
+    );
+  } else {
+    parsed.summary =
+      `${parsed.summary ?? ''} [corrective follow-up attempted but recovered none of the ` +
+      `${missingPaths.length} missing file(s): ${missingPaths.join(', ')}]`;
+    console.log('Corrective follow-up recovered none of the missing file(s).');
+  }
 }
 
 console.log(`\nSummary: ${parsed.summary}`);
