@@ -3,7 +3,7 @@
  * Comprehensive tests for share token generation and validation
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   generateShareToken,
   isValidShareToken,
@@ -385,16 +385,17 @@ describe('Token Generator', () => {
       expect(await verifyPassword(password, invalidHash)).toBe(false);
     });
 
-    it('should be computationally expensive (timing check)', async () => {
-      vi.useRealTimers(); // Use real timers for timing measurements
+    it('should use the requested cost factor, not a silently-downgraded one', async () => {
+      // Was a wall-clock timing assertion (duration > 50ms) - inherently
+      // runner-load-dependent, so it failed intermittently on CI regardless
+      // of the code under test (issue #377: three separate unrelated PRs hit
+      // it the same day, 41-50ms against the 50ms threshold). bcrypt encodes
+      // its own cost factor in the hash prefix ($2b$<rounds>$...), so this
+      // verifies the same "not silently cheap" property deterministically.
       const password = 'timing-test-password';
+      const hash = await hashPassword(password, 10);
 
-      const startTime = Date.now();
-      await hashPassword(password, 10);
-      const duration = Date.now() - startTime;
-
-      // Bcrypt with 10 rounds should take at least 50ms (usually 100-300ms)
-      expect(duration).toBeGreaterThan(50);
+      expect(hash).toMatch(/^\$2[aby]\$10\$/);
     });
   });
 });
