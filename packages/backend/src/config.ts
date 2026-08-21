@@ -112,6 +112,11 @@ export const config: AppConfig = {
   frontend: {
     url: process.env.FRONTEND_URL ?? '',
   },
+  oidc: {
+    // Trim + drop a trailing slash so route handlers can concatenate a
+    // leading-slash path directly without ending up with `//api/v1/...`.
+    redirectBaseUrl: process.env.OIDC_REDIRECT_BASE_URL?.trim().replace(/\/+$/, '') || null,
+  },
   shareToken: {
     defaultExpirationHours: parseInt(process.env.SHARE_TOKEN_DEFAULT_EXPIRATION_HOURS ?? '24', 10),
     presignedUrlExpirationSeconds: parseInt(
@@ -253,6 +258,33 @@ function collectCookieDomainErrors(): string[] {
   return errors;
 }
 
+function collectOidcErrors(): string[] {
+  // Opt-in: only relevant to deployments with at least one tenant OIDC/SSO
+  // config. Skip validation entirely when unset rather than requiring it
+  // unconditionally in production, so this stays a purely-additive slice
+  // for deployments that never touch SSO.
+  const raw = config.oidc.redirectBaseUrl;
+  if (!raw) {
+    return [];
+  }
+
+  const errors: string[] = [];
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      errors.push('OIDC_REDIRECT_BASE_URL must use http or https protocol');
+    }
+    if (parsed.protocol === 'http:' && config.server.env === 'production') {
+      logger.warn(
+        'OIDC_REDIRECT_BASE_URL uses http in production — the redirect_uri sent to IdPs will not be https'
+      );
+    }
+  } catch {
+    errors.push(`OIDC_REDIRECT_BASE_URL must be a valid URL (got "${raw}")`);
+  }
+  return errors;
+}
+
 function collectOrgRetentionErrors(): string[] {
   // Guard against typos like `ORG_RETENTION_DAYS=30d` that parse to NaN
   // (which `<` comparisons treat as "never past the window" — nothing would
@@ -355,6 +387,7 @@ export function validateConfig(context: ValidationContext = 'api'): void {
     errors.push(...collectDataResidencyErrors());
     errors.push(...collectCookieDomainErrors());
     errors.push(...collectOrgRetentionErrors());
+    errors.push(...collectOidcErrors());
   }
 
   throwIfErrors(errors);

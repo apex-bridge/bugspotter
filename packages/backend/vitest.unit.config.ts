@@ -34,6 +34,8 @@ export default defineConfig({
       'tests/integrations/dedup-rule.schema.test.ts',
       'tests/api/auth-responses.test.ts',
       'tests/api/auth-handlers.test.ts',
+      // OIDC login-initiation route (#367) — mocked container/cache/openid-client, no DB.
+      'tests/api/auth-oidc.test.ts',
       'tests/api/trust-proxy.test.ts',
       'tests/api/analytics-routes.test.ts',
       'tests/api/media-urls.test.ts',

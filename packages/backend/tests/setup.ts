@@ -56,6 +56,14 @@ export async function setup() {
   process.env.ALLOW_REGISTRATION = 'true'; // Enable registration for tests
   process.env.REQUIRE_INVITATION_TO_REGISTER = 'false'; // Disable for existing tests (tested explicitly in auth.test.ts)
   process.env.ENCRYPTION_KEY = 'test-encryption-key-32-bytes-min'; // Required for Jira integration tests
+  // Required by the OIDC login-initiation route (#367) - it throws a
+  // ConfigurationError rather than deriving redirect_uri from request
+  // headers when this is unset. tests/api/auth-oidc.test.ts matches both
+  // this config's broad `tests/**/*.test.ts` include AND
+  // vitest.unit.config.ts's explicit include list, so both configs' env
+  // bootstraps need it - see setup-unit-env.ts for the other one.
+  process.env.OIDC_REDIRECT_BASE_URL =
+    process.env.OIDC_REDIRECT_BASE_URL ?? 'https://api.unit-test.example.com';
 
   console.log('✅ PostgreSQL container started');
   console.log('📍 Database:', connectionUri.replace(/:[^:@]+@/, ':***@'));
