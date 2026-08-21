@@ -96,19 +96,29 @@ export { generators };
 
 ### `packages/backend/src/api/routes/auth-oidc.ts`
 
-New file. Route module, not a Fastify plugin — registered by a direct function call from `server.ts` (`oidcRoutes(fastify)`), matching the `authRoutes(fastify, db)` convention this backend uses for every other route module. Only the `login` handler in this slice — #368 appends the `callback` handler to this same file. Repository access is `fastify.container.db.oidcIdpConfigs`, matching `DatabaseClient implements RepositoryRegistry`.
+New file. Route module, not a Fastify plugin — registered by a direct function call from `server.ts` (`oidcRoutes(fastify)`), matching the `authRoutes(fastify, db)` convention this backend uses for every other route module. Only the `login` handler in this slice — #368 appends the `callback` handler to this same file.
+
+**`fastify.container` is not globally typed — it must be cast at each use site.** There is no `declare module 'fastify' { interface FastifyInstance { container: ... } }` anywhere in this codebase; `server.ts` itself only reads `fastify.container` back once, via `(fastify as FastifyInstance & { container: IServiceContainer }).container` (its own line, verified present). A route handler writing `fastify.container.db.X` directly will NOT compile: `Property 'container' does not exist on type 'FastifyInstance<...>'`. Use the same cast pattern via a small local helper, matching this codebase's own established (if minimal) precedent rather than introducing a new global type-augmentation convention.
 
 ```ts
 // New file — packages/backend/src/api/routes/auth-oidc.ts
 import type { FastifyInstance } from 'fastify';
+import type { IServiceContainer } from '../../container/index.js';
 import { discoverIssuerValidated, storeOidcState, generators } from '../services/oidc-service.js';
+
+// fastify.container is not globally typed anywhere in this codebase (server.ts
+// itself only reads it back via this same cast, at its own single use site) -
+// this local helper is #368's shared access point too, not a one-off.
+function getContainer(fastify: FastifyInstance): IServiceContainer {
+  return (fastify as FastifyInstance & { container: IServiceContainer }).container;
+}
 
 export function oidcRoutes(fastify: FastifyInstance): void {
   fastify.get<{ Params: { tenantId: string } }>(
     '/api/v1/auth/oidc/:tenantId/login',
     async (request, reply) => {
       const { tenantId } = request.params;
-      const config = await fastify.container.db.oidcIdpConfigs.findByTenantId(tenantId);
+      const config = await getContainer(fastify).db.oidcIdpConfigs.findByTenantId(tenantId);
       if (!config) return reply.code(404).send({ error: 'SSO not configured' });
 
       const redirectUri = `${request.protocol}://${request.hostname}/api/v1/auth/oidc/${tenantId}/callback`;
