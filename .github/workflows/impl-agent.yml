@@ -8,7 +8,7 @@ name: Impl Agent
 # Model router (label-based):
 #   complexity:high  -> claude-opus-4-8
 #   pii-sensitive    -> claude-haiku-4-5-20251001
-#   default          -> claude-sonnet-4-6
+#   default          -> claude-sonnet-5
 # The selected model is used on whichever LLM backend is active below.
 #
 # LLM backend is switchable via the LLM_BACKEND repo variable:

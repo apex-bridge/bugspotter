@@ -21,8 +21,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdtempSync, rmSync, chmodSync, readFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DIR = mkdtempSync(join(tmpdir(), 'llm-client-test-'));
 const IMPL = join(DIR, 'fake-claude-impl.cjs');
@@ -575,7 +577,7 @@ test('callViaCli invokes claude with --tools= and --strict-mcp-config, not --all
       'stream-json',
       '--verbose',
       '--model',
-      'claude-sonnet-4-6',
+      'claude-sonnet-5',
       '--tools=',
       '--strict-mcp-config',
     ]);
@@ -679,7 +681,7 @@ test('callViaApi falls back to the hardcoded default model when none is supplied
 
   try {
     await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
-    assert.equal(requests[0].body.model, 'claude-sonnet-4-6');
+    assert.equal(requests[0].body.model, 'claude-sonnet-5');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -737,4 +739,70 @@ test('callClaude stays quiet when no maxTokens was passed', async () => {
     0,
     'nothing was dropped, so there is nothing to report'
   );
+});
+
+// --- LLM_DEFAULT_MODEL override (CLI_MODEL) --------------------------------
+//
+// CLI_MODEL is computed once at module-load time from process.env, same as
+// LLM_BACKEND above - so unlike every other test in this file, which shares
+// the ONE dynamic import() at the top (LLM_DEFAULT_MODEL deliberately left
+// unset there, so the 35 tests above keep asserting the plain default), this
+// needs a genuinely fresh process with the env var already set before
+// llm-client.mjs is ever imported. A subprocess, not a second in-process
+// import - Node's ESM loader caches by resolved specifier, so re-importing
+// the same file in-process would just return the already-evaluated module.
+// pathToFileURL, not a raw path: dynamic import() requires a valid URL
+// scheme, and a bare Windows path ('C:\...') isn't one.
+const LLM_CLIENT_URL = pathToFileURL(
+  join(dirname(fileURLToPath(import.meta.url)), 'llm-client.mjs')
+).href;
+
+/** Runs a fresh `node` process that calls callClaude() once and returns the argv the fake claude received. */
+function runInSubprocess(envOverrides) {
+  const scriptPath = join(DIR, `model-override-check-${Date.now()}-${Math.random()}.mjs`);
+  const dumpPath = join(DIR, `model-override-argv-${Date.now()}-${Math.random()}.json`);
+  writeFileSync(
+    scriptPath,
+    [
+      `const { callClaude } = await import(${JSON.stringify(LLM_CLIENT_URL)});`,
+      `await callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });`,
+      '',
+    ].join('\n')
+  );
+
+  // Clean slate for LLM_DEFAULT_MODEL specifically: the parent test-runner
+  // process must not leak its own value (there shouldn't be one, but the
+  // "unset" test below needs that guaranteed, not assumed) into a child
+  // whose whole point is proving what happens when it truly is unset.
+  const env = { ...process.env };
+  delete env.LLM_DEFAULT_MODEL;
+
+  const result = spawnSync(process.execPath, [scriptPath], {
+    encoding: 'utf8',
+    env: {
+      ...env,
+      ...envOverrides,
+      LLM_BACKEND: 'cli',
+      CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-token',
+      PATH: `${DIR}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`,
+      FAKE_CLAUDE_MODE: 'success',
+      FAKE_CLAUDE_ARGV_DUMP: dumpPath,
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(readFileSync(dumpPath, 'utf8'));
+}
+
+test('LLM_DEFAULT_MODEL overrides CLI_MODEL, verified via a fresh process', () => {
+  const argv = runInSubprocess({ LLM_DEFAULT_MODEL: 'claude-custom-test-model' });
+  const modelIdx = argv.indexOf('--model');
+  assert.notEqual(modelIdx, -1);
+  assert.equal(argv[modelIdx + 1], 'claude-custom-test-model');
+});
+
+test('LLM_DEFAULT_MODEL unset falls back to the hardcoded default, verified via a fresh process', () => {
+  const argv = runInSubprocess({});
+  const modelIdx = argv.indexOf('--model');
+  assert.notEqual(modelIdx, -1);
+  assert.equal(argv[modelIdx + 1], 'claude-sonnet-5');
 });

@@ -61,6 +61,12 @@ jobs:
         timeout-minutes: 8
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
+          # generate-spec.mjs never passes an explicit model to callClaude(),
+          # so CLI_MODEL (this) is its real effective default - without this
+          # mapping, setting the repo variable would silently do nothing,
+          # since a GitHub Actions variable only reaches process.env via an
+          # explicit env: entry like this one, never automatically.
+          LLM_DEFAULT_MODEL: ${{ vars.LLM_DEFAULT_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -80,6 +86,9 @@ jobs:
         timeout-minutes: 8
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
+          # verify-spec.mjs also never passes an explicit model - same
+          # CLI_MODEL default as the Generate spec step above.
+          LLM_DEFAULT_MODEL: ${{ vars.LLM_DEFAULT_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
@@ -136,13 +145,17 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
           SPEC_SLUG: ${{ steps.gen.outputs.spec_slug }}
+          # The model generate-spec.mjs actually used (LLM_DEFAULT_MODEL's
+          # resolved value, not a second hardcoded literal here that would
+          # silently go stale the moment that override is set).
+          MODEL: ${{ steps.gen.outputs.model }}
         run: |
           BRANCH="spec/issue-${ISSUE_NUMBER}-${SPEC_SLUG}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
           git add "$SPEC_FILE"
-          MSG="$(printf 'spec(#%s): draft spec\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ISSUE_NUMBER")"
+          MSG="$(printf 'spec(#%s): draft spec\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$MODEL")"
           git commit -m "$MSG"
           git fetch origin "$BRANCH" 2>/dev/null || true
           git push --force-with-lease origin "$BRANCH"
@@ -156,8 +169,9 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           BRANCH: ${{ steps.push.outputs.branch }}
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
+          MODEL: ${{ steps.gen.outputs.model }}
         run: |
-          PR_BODY="$(printf 'Agent-drafted spec for issue #%s.\n\nReview, fill gaps, and merge to advance this issue to `needs-adr` (if an ADR is warranted) or `agent-working` (if no ADR is needed).\n\nRefs #%s\n\nAssisted-by: claude-sonnet-4-6 (agent)' "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
+          PR_BODY="$(printf 'Agent-drafted spec for issue #%s.\n\nReview, fill gaps, and merge to advance this issue to `needs-adr` (if an ADR is warranted) or `agent-working` (if no ADR is needed).\n\nRefs #%s\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$ISSUE_NUMBER" "$MODEL")"
 
           PR_URL=$(gh pr create \
             --title "spec(#${ISSUE_NUMBER}): ${ISSUE_TITLE}" \

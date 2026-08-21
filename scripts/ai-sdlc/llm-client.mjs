@@ -23,10 +23,20 @@
 //   in Claude Code's auth precedence and would otherwise silently shadow it.
 //
 // callClaude({ prompt, maxTokens, timeoutMs, model }) — `model` is optional
-//   (defaults to claude-sonnet-4-6 on both backends) and lets a caller like
-//   generate-impl.mjs's label-based model router (complexity:high ->
-//   claude-opus-4-8, pii-sensitive -> claude-haiku, default -> sonnet)
-//   pick a different model per call on either backend.
+//   (defaults to CLI_MODEL, DEFAULT_MODEL from model-defaults.mjs unless
+//   overridden, on both backends) and lets a caller like generate-impl.mjs's
+//   label-based model router (complexity:high -> claude-opus-4-8,
+//   pii-sensitive -> claude-haiku, default -> sonnet) pick a different model
+//   per call on either backend. generate-spec.mjs, verify-spec.mjs, and
+//   generate-adr.mjs never pass `model` at all, so CLI_MODEL is their real
+//   effective default - change it without a code edit via the
+//   LLM_DEFAULT_MODEL repo variable, the same pattern generate-impl.mjs's own
+//   IMPL_MODEL_DEFAULT/_HIGH/_LOW already use (see that file; both files'
+//   fallback literals come from the shared model-defaults.mjs, so a version
+//   bump only touches one place). Before this override existed, switching the
+//   pipeline's default model (2026-08-21, claude-sonnet-4-6 -> claude-sonnet-5)
+//   required editing this file directly - a code PR for what should be a
+//   config change.
 //   `maxTokens` only takes effect on the API backend (becomes max_tokens in
 //   the request body). callViaCli ignores it — `claude --help` has no flag
 //   to cap output tokens per call (only --max-budget-usd, a dollar budget,
@@ -38,10 +48,15 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
+import { DEFAULT_MODEL } from './model-defaults.mjs';
 
 const LLM_BACKEND = process.env.LLM_BACKEND || 'api';
 
-const CLI_MODEL = 'claude-sonnet-4-6';
+// Exported for testability: computed once at module-load time from
+// process.env, so verifying the override actually works requires a fresh
+// process (a spawned subprocess with LLM_DEFAULT_MODEL already set before
+// import), not an in-process re-import - see llm-client.test.mjs.
+export const CLI_MODEL = process.env.LLM_DEFAULT_MODEL || DEFAULT_MODEL;
 
 export function requireLlmCredentials() {
   if (LLM_BACKEND === 'cli') {
@@ -65,7 +80,10 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
     },
     signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
-      model: model || 'claude-sonnet-4-6',
+      // CLI_MODEL, not a second hardcoded literal - one source of truth for
+      // "the default when no caller-supplied model", overridable the same
+      // way on both backends via LLM_DEFAULT_MODEL.
+      model: model || CLI_MODEL,
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
     }),
