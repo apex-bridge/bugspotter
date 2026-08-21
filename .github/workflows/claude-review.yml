@@ -251,9 +251,21 @@ jobs:
           # (deeper read on demand). Haiku is roughly 1/12 the cost of
           # Opus per token and finishes well inside the 25-turn budget
           # for typical diffs. Both branches of this conditional are
-          # non-empty model ids, so the `&& A || B` ternary is safe
-          # here (unlike the allowedTools line above).
+          # non-empty (each `vars.* || 'literal'` always resolves to a
+          # non-empty string), so the `&& A || B` ternary is safe here
+          # (unlike the allowedTools line above) — but each branch needs
+          # its own parens: without them, `||`'s lower precedence than
+          # `&&` would let the human-run fallback leak into the auto-run
+          # result too.
+          #
+          # Overridable via CLAUDE_REVIEW_MODEL_AUTO / _HUMAN repo
+          # variables — same pattern as generate-impl.mjs's
+          # IMPL_MODEL_HIGH/_LOW and llm-client.mjs's LLM_DEFAULT_MODEL
+          # (see model-defaults.mjs). This workflow can't import that
+          # shared module — plain GitHub Actions YAML, no JS runtime here
+          # — so its fallback literals are kept in sync with
+          # model-defaults.mjs's LOW_MODEL/HIGH_MODEL by hand.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob${{ github.event_name != 'pull_request' && ',Bash(gh pr comment:*)' || '' }}"
             --max-turns 25
-            --model ${{ github.event_name == 'pull_request' && 'claude-haiku-4-5-20251001' || 'claude-opus-4-7' }}
+            --model ${{ github.event_name == 'pull_request' && (vars.CLAUDE_REVIEW_MODEL_AUTO || 'claude-haiku-4-5-20251001') || (vars.CLAUDE_REVIEW_MODEL_HUMAN || 'claude-opus-4-8') }}

@@ -5,7 +5,7 @@
 // Model router (label-based via ISSUE_LABELS env):
 //   complexity:high  -> claude-opus-4-8   (deep architecture, cross-cutting changes)
 //   pii-sensitive    -> claude-haiku-4-5-20251001  (local-floor stand-in; cheapest hosted)
-//   default          -> claude-sonnet-4-6
+//   default          -> claude-sonnet-5
 // The selected model is passed to callClaude's `model` override on either backend.
 //
 // Static context (CLAUDE.md files + pattern examples) is prepended to the prompt.
@@ -31,6 +31,8 @@ import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { callClaude, requireLlmCredentials } from './llm-client.mjs';
 import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
+import { normalizePath, findUnwrittenPaths } from './check-impl-scope.mjs';
+import { DEFAULT_MODEL, HIGH_MODEL, LOW_MODEL } from './model-defaults.mjs';
 
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_LABELS = '', SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
@@ -50,10 +52,12 @@ if (!SPEC_CONTENT) {
 
 // Model router — label-based with per-tier overrides via GitHub repo variables.
 // Change without a code edit: set IMPL_MODEL_HIGH / IMPL_MODEL_DEFAULT / IMPL_MODEL_LOW
-// in Settings > Secrets and variables > Actions > Variables.
-const MODEL_HIGH = process.env.IMPL_MODEL_HIGH || 'claude-opus-4-8';
-const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || 'claude-sonnet-4-6';
-const MODEL_LOW = process.env.IMPL_MODEL_LOW || 'claude-haiku-4-5-20251001';
+// in Settings > Secrets and variables > Actions > Variables. Fallback literals
+// come from the shared model-defaults.mjs (also used by llm-client.mjs), so a
+// version bump only touches one place.
+const MODEL_HIGH = process.env.IMPL_MODEL_HIGH || HIGH_MODEL;
+const MODEL_DEFAULT = process.env.IMPL_MODEL_DEFAULT || DEFAULT_MODEL;
+const MODEL_LOW = process.env.IMPL_MODEL_LOW || LOW_MODEL;
 
 function selectModel(labels) {
   const set = new Set(labels.split(',').map((l) => l.trim().toLowerCase()));
@@ -370,6 +374,7 @@ RULES:
 // correctness — see the header comment above.
 const prompt = staticContext ? `${staticContext}\n\n${userPrompt}` : userPrompt;
 
+const scriptStartedAt = Date.now();
 let text, stopReason;
 try {
   // 600s: this is the largest of the four ai-sdlc Claude calls — max_tokens
@@ -456,6 +461,128 @@ if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) {
   process.exit(1);
 }
 
+// Self-correction: compare the response's own declared paths against the
+// spec's "Files touched" list BEFORE writing anything, and make ONE
+// corrective follow-up call for exactly the missing files if there's a
+// gap. check-impl-scope.mjs's hard gate downstream still has the final
+// say - this is a pre-emptive attempt to not need it, not a replacement.
+// Deliberately asks for ONLY the missing files, not a full re-generation:
+// the response schema's cost driver is re-emitting whole files, so a
+// broad "try again" risks dropping a *different* file under the same
+// pressure that caused this one. Verified against `parsed.files`, never
+// against `parsed.summary` - issue #367 (2026-08-20) found a real run
+// whose summary claimed all declared files were written while the files
+// array itself held only 2 of 7, so the summary cannot be trusted as a
+// completeness signal here any more than check-impl-scope.mjs trusts it.
+//
+// Time-budgeted, not unconditional: STEP_BUDGET_MS mirrors impl-agent.yml's
+// "Generate scaffold" step cap (currently 21m). Turn 1 alone can
+// legitimately use most of that budget, so a second call only fires with
+// a real, bounded amount of time actually left; otherwise this skips
+// straight to check-impl-scope.mjs reporting the gap to a human, same as
+// before this existed. All three are overridable via env vars specifically
+// so a future change to that workflow step's timeout-minutes can't
+// silently desync from the number this script assumes - update the env
+// var alongside the workflow change rather than relying on remembering to
+// edit this file's own hard-coded default too.
+function parsePositiveMs(envValue, fallback) {
+  // Trim-then-check-empty BEFORE Number(), same reasoning as
+  // check-spec-scope.mjs's resolveCap: Number('') is 0, not NaN, and
+  // GitHub Actions resolves an unconfigured `vars.*` reference to an empty
+  // string rather than leaving the env var unset - so `envValue !==
+  // undefined` alone would let an empty override silently collapse the
+  // budget to 0 instead of falling back.
+  const trimmed = typeof envValue === 'string' ? envValue.trim() : envValue;
+  if (trimmed === undefined || trimmed === '') {
+    return fallback;
+  }
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const STEP_BUDGET_MS = parsePositiveMs(process.env.IMPL_STEP_BUDGET_MS, 21 * 60_000);
+// Headroom for validation/write/downstream steps after the model call(s) return.
+const SAFETY_BUFFER_MS = parsePositiveMs(process.env.IMPL_SAFETY_BUFFER_MS, 4 * 60_000);
+// Not worth attempting a corrective call below this much remaining budget.
+const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.IMPL_RETRY_MIN_BUDGET_MS, 90_000);
+const declaredPathsForRetry = (extractDeclaredPaths(SPEC_CONTENT) ?? [])
+  .map(normalizePath)
+  .filter(Boolean);
+const respondedPaths = parsed.files
+  .map((f) => (typeof f?.path === 'string' ? normalizePath(f.path) : null))
+  .filter(Boolean);
+const missingPaths = findUnwrittenPaths(respondedPaths, declaredPathsForRetry);
+let correctionAttempted = false;
+
+if (missingPaths.length > 0 && declaredPathsForRetry.length > 0) {
+  const remainingMs = STEP_BUDGET_MS - SAFETY_BUFFER_MS - (Date.now() - scriptStartedAt);
+  if (remainingMs < RETRY_MIN_BUDGET_MS) {
+    console.log(
+      `Response is missing ${missingPaths.length} declared file(s) (${missingPaths.join(', ')}), ` +
+        `but only ~${Math.round(remainingMs / 1000)}s remain in the step budget - not enough for ` +
+        `a safe corrective call. Proceeding without it; check-impl-scope.mjs will report the gap.`
+    );
+  } else {
+    const retryTimeoutMs = Math.min(300_000, remainingMs);
+    console.log(
+      `Response covered ${respondedPaths.length}/${declaredPathsForRetry.length} declared files; ` +
+        `missing: ${missingPaths.join(', ')}. Requesting exactly the missing file(s) in one ` +
+        `corrective follow-up turn (timeout ${Math.round(retryTimeoutMs / 1000)}s).`
+    );
+    const correctionPrompt =
+      `${prompt}\n\n` +
+      `--- CORRECTIVE FOLLOW-UP ---\n` +
+      `Your previous response's "files" array covered: ${respondedPaths.join(', ') || '(none)'}.\n` +
+      `The spec's "Files touched" list also declares these paths, which your response did ` +
+      `NOT include: ${missingPaths.join(', ')}.\n` +
+      `Return ONLY these missing file(s) now, in the exact same JSON schema ` +
+      `({ "files": [...], "summary": "..." }) - do not re-emit files you already provided.`;
+
+    let retryText, retryStopReason;
+    try {
+      ({ text: retryText, stopReason: retryStopReason } = await callClaude({
+        prompt: correctionPrompt,
+        maxTokens: MAX_TOKENS,
+        timeoutMs: retryTimeoutMs,
+        model: MODEL,
+      }));
+    } catch (err) {
+      // Not fatal - fall through with what turn 1 gave us and let
+      // check-impl-scope.mjs report the (still-real) gap to a human.
+      console.warn(`Corrective follow-up call failed, proceeding without it: ${err.message}`);
+      retryText = null;
+    }
+
+    if (retryText && retryStopReason !== 'max_tokens') {
+      try {
+        const retryFenceMatch = retryText.match(/```json\s*([\s\S]*?)\s*```/i);
+        const retryRaw = retryFenceMatch ? retryFenceMatch[1].trim() : retryText.trim();
+        const retryParsed = JSON.parse(retryRaw);
+        if (Array.isArray(retryParsed?.files) && retryParsed.files.length > 0) {
+          // Merge the candidate files in, but do NOT claim success here.
+          // retryParsed.files is what the retry SAYS it returned, not what
+          // survives the write loop below (path-traversal/forbidden-path/
+          // control-char rejection, or a duplicate of a turn-1 path) -
+          // claiming these specific paths were "added" before that loop
+          // has run would repeat the exact confabulation issue #367 is
+          // about, just in this script's own log instead of the model's.
+          // correctionAttempted + missingPaths (captured above) are what
+          // let the post-write-loop block report what ACTUALLY landed.
+          parsed.files = [...parsed.files, ...retryParsed.files];
+          correctionAttempted = true;
+          console.log(
+            `Corrective follow-up returned ${retryParsed.files.length} file(s) - verifying ` +
+              `after the write loop which of them actually land before updating the summary.`
+          );
+        }
+      } catch (e) {
+        console.warn(
+          `Corrective follow-up response was not parseable JSON, proceeding without it: ${e.message}`
+        );
+      }
+    }
+  }
+}
+
 // Write files (repoRoot + FORBIDDEN_PATH_PATTERNS are declared above, shared
 // with the read side of the prompt-injection boundary)
 const writtenPaths = [];
@@ -489,6 +616,34 @@ for (const { path, content } of parsed.files) {
 if (writtenPaths.length === 0) {
   console.error('No valid files were written after validation - aborting.');
   process.exit(1);
+}
+
+// Now that writtenPaths reflects what actually survived the write loop
+// (path-traversal/forbidden-path/control-char rejection and dedup all
+// included), report what the corrective follow-up ACTUALLY recovered -
+// the intersection of what it was missing and what's now really on disk -
+// not what it was asked for or what retryParsed.files claimed. Getting
+// this wrong here would be the same confabulation issue #367 flagged in
+// the model's own summary, just relocated into this script's log instead
+// of fixed.
+if (correctionAttempted) {
+  const recovered = missingPaths.filter((p) => writtenPaths.includes(p));
+  const stillMissing = missingPaths.filter((p) => !writtenPaths.includes(p));
+  if (recovered.length > 0) {
+    parsed.summary =
+      `${parsed.summary ?? ''} [corrective follow-up recovered ${recovered.length} of ` +
+      `${missingPaths.length} missing file(s): ${recovered.join(', ')}` +
+      (stillMissing.length > 0 ? `; still missing: ${stillMissing.join(', ')}` : '') +
+      `]`;
+    console.log(
+      `Corrective follow-up recovered ${recovered.length}/${missingPaths.length} file(s).`
+    );
+  } else {
+    parsed.summary =
+      `${parsed.summary ?? ''} [corrective follow-up attempted but recovered none of the ` +
+      `${missingPaths.length} missing file(s): ${missingPaths.join(', ')}]`;
+    console.log('Corrective follow-up recovered none of the missing file(s).');
+  }
 }
 
 console.log(`\nSummary: ${parsed.summary}`);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Calls Claude to draft an ADR for a GitHub issue.
 // Run from the repo root. Reads existing ADRs for numbering + style.
-// Outputs adr_file, adr_number, adr_slug to GITHUB_OUTPUT.
+// Outputs adr_file, adr_number, adr_slug, and model to GITHUB_OUTPUT.
 //
 // Required env vars: ISSUE_NUMBER, ISSUE_TITLE, plus either
 //   ANTHROPIC_API_KEY (default) or CLAUDE_CODE_OAUTH_TOKEN (LLM_BACKEND=cli)
@@ -17,7 +17,7 @@ import {
   mkdirSync,
   existsSync,
 } from 'node:fs';
-import { callClaude, requireLlmCredentials } from './llm-client.mjs';
+import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
 
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
@@ -165,6 +165,10 @@ if (GITHUB_OUTPUT) {
   appendFileSync(GITHUB_OUTPUT, `adr_file=${adrFile}\n`);
   appendFileSync(GITHUB_OUTPUT, `adr_slug=${slug}\n`);
   appendFileSync(GITHUB_OUTPUT, `adr_number=${padded}\n`);
+  // So the workflow's "Assisted-by" commit/PR trailers can name the model
+  // that actually generated this ADR instead of a second hardcoded literal
+  // that would silently go stale the moment LLM_DEFAULT_MODEL is overridden.
+  appendFileSync(GITHUB_OUTPUT, `model=${CLI_MODEL}\n`);
 } else {
   console.log(`adr_file=${adrFile}`);
   console.log(`adr_slug=${slug}`);
