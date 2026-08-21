@@ -5,16 +5,18 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 
 **Files touched:**
 
-- `packages/backend/package.json`, `pnpm-lock.yaml` — add `openid-client` v5 as a real dependency; the workspace has no reference to it at all today (confirmed: zero hits in either manifest or the lockfile)
 - `packages/backend/src/api/services/oidc-service.ts` — new file; IdP discovery + SSRF gating, PKCE/state generation, state storage
 - `packages/backend/src/api/routes/auth-oidc.ts` — new file; route module with `GET /api/v1/auth/oidc/:tenantId/login`, registered by direct function call (matching `authRoutes`), not as a Fastify plugin
-- `packages/backend/src/api/server.ts` — call `oidcRoutes(fastify)` alongside the other route-module calls
 - `packages/backend/tests/api/auth-oidc.test.ts` — new file; test case A/B below
+
+**Out of scope, follow-up after this merges:** wiring `oidcRoutes(fastify)` into `packages/backend/src/api/server.ts` — a single import + one function call, but it can only be written once this slice's `auth-oidc.ts` actually exists to import from, so it's a small hand-implemented follow-up immediately after this lands, not part of this slice's own scope.
 
 **Blocking prerequisites:**
 
 - #352 — `OidcIdpConfigRepository` and its schema must exist (they do)
-- **DI wiring already landed** (2026-08-20, hand-implemented outside the pipeline): `oidcIdpConfigs: OidcIdpConfigRepository` is now in `RepositoryRegistry`/`createRepositories()` (`factory.ts`) and `DatabaseClient` (`client.ts`) — `fastify.container.db.oidcIdpConfigs` is real and usable. Originally part of this slice's own Files-touched list, but that pushed the declared file count to 7, over `generate-impl.mjs`'s own hard "do not generate more than 6 files" instruction — the first impl-agent run silently dropped 5 of the 7 declared files rather than erroring, which `check-impl-scope.mjs` correctly caught. Since the wiring is small, mechanical, and follows an exact existing pattern with zero ambiguity, it was hand-implemented directly and removed from this slice's scope rather than filed as yet another pipeline cycle.
+- **DI wiring already landed** (2026-08-20, hand-implemented outside the pipeline): `oidcIdpConfigs: OidcIdpConfigRepository` is now in `RepositoryRegistry`/`createRepositories()` (`factory.ts`) and `DatabaseClient` (`client.ts`) — `fastify.container.db.oidcIdpConfigs` is real and usable.
+- **`openid-client` v5 already installed** (2026-08-20, hand-implemented outside the pipeline): `packages/backend/package.json`/`pnpm-lock.yaml` now carry `openid-client@5.7.1` (`pnpm --filter @bugspotter/backend add openid-client@^5`), typecheck confirmed clean.
+- **Why hand-implemented, twice:** this slice's declared file count reached 7 during review fixes (DI wiring + the missing dependency), over `generate-impl.mjs`'s own hard "do not generate more than 6 files" instruction. The first impl-agent run silently dropped 5 of 7 files rather than erroring; reducing to 5 (removing the already-landed DI wiring) still dropped 2 of 5 on the second run (`package.json`, `server.ts` — always the smallest/most mechanical entries, core logic written correctly both times). Reduced further to exactly 3 files - the core logic the model has now proven it writes reliably - by hand-landing both remaining mechanical pieces (this dependency add, and moving `server.ts`'s wiring to a post-merge follow-up) rather than gambling on a third full retry.
 
 ## Problem
 
@@ -32,7 +34,7 @@ Split off #353 as its smaller, lower-risk half (see #367 for why). BugSpotter ha
 
 ## Constraints
 
-1. `openid-client` is not a dependency of this workspace at all today (confirmed: zero hits in `package.json`, `packages/backend/package.json`, and `pnpm-lock.yaml`) — add it pinned to v5 before writing any code against it. v5 ships a functional API as its primary surface, not the class-based `Issuer.discover()`; use `Issuer.discover`, `issuer.Client`, and `generators.*` consistently as shown below once the package is actually installed and its real exported surface is confirmed against the installed version.
+1. `openid-client@5.7.1` is now installed (see "Blocking prerequisites" above) — verified against the installed version: it exposes the class-based v5 API (`Issuer.discover`, `issuer.Client`, `generators.codeVerifier`, `generators.codeChallenge` are all functions), not the v6 functional API (`discovery()`, `randomPKCECodeVerifier()`, which 5.7.1 does not export). Use `Issuer.discover`, `issuer.Client`, and `generators.*` consistently as shown below.
 2. PKCE `code_challenge_method: 'S256'` on every authorization request; no implicit flow, no bare authorization code grant without a verifier.
 3. `issuerUrl` from saved config AND both `token_endpoint` and `jwks_uri` from the discovery response each validated with `validateSSRFProtection()` immediately before every connection — not cached as pre-approved after first discovery. Verify the exact export name in `packages/backend/src/integrations/security/ssrf-validator.ts` before use; it is ASSUMED to match the name this constraint quotes.
 4. CSRF state payload `{ nonce, codeVerifier, redirectUri, tenantId, issuer }` stored via `getCacheService().set()` with ≤10-minute TTL — no new cache method needed for this slice (atomic consumption via `getAndDelete` is #368's concern, added to `CacheService` there).
@@ -48,15 +50,7 @@ Split off #353 as its smaller, lower-risk half (see #367 for why). BugSpotter ha
 
 ## Changes
 
-### `packages/backend/package.json`, `pnpm-lock.yaml`
-
-Add `openid-client` (pinned to v5) as an actual dependency — Constraint 1 above.
-
-```bash
-pnpm --filter @bugspotter/backend add openid-client@^5
-```
-
-`oidcIdpConfigs` is already real on `fastify.container.db` — see "Blocking prerequisites" above. No changes needed to `factory.ts`/`client.ts` in this slice.
+`openid-client` is already installed and `oidcIdpConfigs` is already real on `fastify.container.db` — see "Blocking prerequisites" above. No changes needed to `package.json`/`pnpm-lock.yaml`/`factory.ts`/`client.ts` in this slice.
 
 ### `packages/backend/src/api/services/oidc-service.ts`
 
@@ -64,9 +58,9 @@ New file. Owns IdP interaction logic so the route handler stays thin. `consumeOi
 
 ```ts
 // New file — packages/backend/src/api/services/oidc-service.ts
-// IMPORTANT: verify the openid-client v5 import surface before finalizing these imports.
-// If the package exposes a functional API (discovery(), randomPKCECodeVerifier(), etc.)
-// rather than the class-based Issuer.discover(), rewrite discoverIssuerValidated accordingly.
+// openid-client@5.7.1 exposes the class-based v5 API (Issuer.discover, issuer.Client,
+// generators.*), not the v6 functional API (discovery(), randomPKCECodeVerifier()) —
+// verified against the installed version.
 import { Issuer, generators } from 'openid-client';
 // validateSSRFProtection is a synchronous function returning URL (throws on blocked addresses)
 import { validateSSRFProtection } from '../../integrations/security/ssrf-validator.js';
@@ -120,7 +114,7 @@ export function oidcRoutes(fastify: FastifyInstance): void {
       const redirectUri = `${request.protocol}://${request.hostname}/api/v1/auth/oidc/${tenantId}/callback`;
       const issuer = await discoverIssuerValidated(config.issuerUrl);
 
-      // ASSUMED: openid-client v5 Client construction — verify v5 class vs functional API
+      // Verified against openid-client@5.7.1: class-based construction, not the v6 functional API.
       const client = new issuer.Client({ client_id: config.clientId, response_types: ['code'] });
       const state = generators.state();
       const nonce = generators.nonce();
@@ -152,22 +146,30 @@ export function oidcRoutes(fastify: FastifyInstance): void {
 }
 ```
 
-### `packages/backend/src/api/server.ts`
-
-Call `oidcRoutes(fastify)` alongside the other route-module calls (e.g. next to `authRoutes(fastify, db)`), not via `fastify.register(...)` — this backend wires its own route modules by direct function call, reserving `fastify.register` for actual Fastify plugins (`@fastify/cors`, `@fastify/jwt`, etc.).
-
-```ts
-// Append after the existing authRoutes(fastify, db) call (verify insertion point):
-import { oidcRoutes } from './routes/auth-oidc.js';
-// ...
-oidcRoutes(fastify);
-```
+`server.ts` wiring is out of scope for this slice — see "Out of scope, follow-up after this merges" above. Once this merges, `oidcRoutes(fastify)` gets called alongside the other route-module calls (e.g. next to `authRoutes(fastify, db)`), not via `fastify.register(...)` — this backend wires its own route modules by direct function call, reserving `fastify.register` for actual Fastify plugins (`@fastify/cors`, `@fastify/jwt`, etc.).
 
 ## Tests
 
 ### `packages/backend/tests/api/auth-oidc.test.ts`
 
 New file — #368 extends it with callback test cases.
+
+**Test harness — do NOT use `createServer()`.** `server.ts` wiring is out of scope for this slice (see above), so this file must build its own minimal Fastify instance and register `oidcRoutes` directly — the same pattern `tests/api/routes/signup.route.test.ts` already uses (`Fastify()`, register only the plugins actually needed, call the route module function directly, `fastify.decorate('container', mockContainer)` to satisfy `fastify.container.db.oidcIdpConfigs`, matching how `server.ts` itself does `fastify.decorate('container', container)`).
+
+```ts
+import Fastify, { type FastifyInstance } from 'fastify';
+import { oidcRoutes } from '../../../src/api/routes/auth-oidc.js';
+
+async function buildServer(): Promise<FastifyInstance> {
+  const server = Fastify();
+  server.decorate('container', {
+    db: { oidcIdpConfigs: mockOidcIdpConfigs },
+  });
+  oidcRoutes(server);
+  await server.ready();
+  return server;
+}
+```
 
 **Mock/fixture updates required:**
 
@@ -231,12 +233,25 @@ mockAuthorizationUrlFn.mockReturnValue('https://idp.example.com/auth?mock=1');
 ```
 
 ```ts
-// Shared fixture setup inside beforeEach — extend the existing container mock:
+// Module scope: buildServer() (defined above) reads mockOidcIdpConfigs by closure.
 const mockOidcIdpConfigs = {
   findByTenantId: vi.fn(),
 };
-// container.db.oidcIdpConfigs = mockOidcIdpConfigs (wire into whatever container-mock
-// helper this test suite already uses for `db`)
+
+describe('OIDC login initiation', () => {
+  let server: FastifyInstance;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    server = await buildServer();
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  // test cases below go inside this describe block
+});
 ```
 
 **Test case A — login redirects with S256 PKCE and stores state (AC #1):**
@@ -249,7 +264,7 @@ it('redirects to IdP with S256 PKCE challenge and stores state in cache', async 
     allowedDomains: ['corp.example.com'],
   });
 
-  const res = await fastify.inject({
+  const res = await server.inject({
     method: 'GET',
     url: '/api/v1/auth/oidc/tenant-abc/login',
   });
@@ -276,7 +291,7 @@ it('redirects to IdP with S256 PKCE challenge and stores state in cache', async 
 it('returns 404 for a tenant with no SSO configuration, without touching SSRF validation', async () => {
   mockOidcIdpConfigs.findByTenantId.mockResolvedValue(null);
 
-  const res = await fastify.inject({
+  const res = await server.inject({
     method: 'GET',
     url: '/api/v1/auth/oidc/unknown-tenant/login',
   });
