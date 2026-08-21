@@ -97,6 +97,39 @@ jobs:
             exit 1
           }
 
+      - name: Check spec-branch diff scope (advisory)
+        if: steps.specs.outputs.count != '0'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Advisory, not hard: a spec PR touching one incidental unrelated file
+        # (e.g. #376 bundled a spec fix with an unrelated flaky-test rewrite
+        # in the same PR) is legitimate and common enough that blocking on it
+        # would be a false-positive machine. What this catches instead is the
+        # SHAPE of a real 2026-08-21 incident - switching branches without
+        # returning to main first let `git pull` silently merge a whole
+        # OTHER feature branch (7 unrelated cache-layer files) into a spec
+        # PR, discovered only by manually running `gh pr diff --name-only`.
+        # A human glancing at this warning would have caught it immediately.
+        run: |
+          set -euo pipefail
+          outside=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- . ':!docs/specs/**' ':!docs/adr/**')
+          if [ -n "$outside" ]; then
+            echo "::warning::This PR touches docs/specs/** but also modifies files outside docs/specs/**/docs/adr/**. Often fine (a small incidental fix bundled in), but also the exact shape of an accidental cross-branch merge - double check these are intentional:"
+            printf '%s\n' "$outside" | sed 's/^/  /'
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo ""
+                echo "**Spec-branch scope warning:** this PR modifies files outside \`docs/specs/**\`/\`docs/adr/**\`:"
+                echo '```'
+                printf '%s\n' "$outside"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "Spec-branch scope check: no files outside docs/specs/**/docs/adr/** in this diff."
+          fi
+
       - name: Check spec scope (hard)
         if: ${{ !cancelled() && steps.specs.outputs.count != '0' }}
         env:
