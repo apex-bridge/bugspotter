@@ -121,6 +121,6 @@ jobs:
             echo "::endgroup::"
           done <<< "$SPECS"
           [ "$failed" -eq 0 ] || {
-            echo "::error::Spec scope check failed. A spec declares more files than generate-impl.mjs's own 6-file generation limit - see the group log above for which one(s) and why this blocks merge, not just warns."
+            echo "::error::Spec scope check failed. A spec is unreadable, has no parseable \"Files touched:\" line, or declares more files than generate-impl.mjs's own 6-file generation limit - see the group log above for which spec(s), which reason, and why this blocks merge rather than just warning."
             exit 1
           }

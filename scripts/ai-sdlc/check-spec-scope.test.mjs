@@ -160,4 +160,33 @@ describe('CLI: SPEC_SCOPE_HARD dispatch', () => {
     assert.match(r.stderr, /::error::/);
     assert.match(r.stderr, /no "Files touched:" line found/);
   });
+
+  test('"Files touched:" marker present but empty, SPEC_SCOPE_HARD=true: exits 1, not "0 files within cap"', () => {
+    // extractDeclaredPaths returns [] (not null) for a marker with no
+    // parseable backtick path - truthy, so `!declaredPaths` alone would
+    // silently pass this as "0 files declared, within cap" in hard mode.
+    const path = join(DIR, 'empty-marker-hard.md');
+    writeFileSync(
+      path,
+      '# Spec: fixture\n\n**Files touched:**\n\n## Problem\n\nFixture.\n',
+      'utf8'
+    );
+    const r = runCli({ SPEC_FILE: path, SPEC_SCOPE_HARD: 'true' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /no "Files touched:" line found/);
+    assert.doesNotMatch(r.stdout, /within cap/);
+  });
+
+  test('"Files touched:" marker present but empty, SPEC_SCOPE_HARD unset: exits 0 (soft skips, same as no marker at all)', () => {
+    const path = join(DIR, 'empty-marker-soft.md');
+    writeFileSync(
+      path,
+      '# Spec: fixture\n\n**Files touched:**\n\n## Problem\n\nFixture.\n',
+      'utf8'
+    );
+    const r = runCli({ SPEC_FILE: path });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /no "Files touched:" line found/);
+  });
 });

@@ -483,8 +483,18 @@ if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) {
 // var alongside the workflow change rather than relying on remembering to
 // edit this file's own hard-coded default too.
 function parsePositiveMs(envValue, fallback) {
-  const n = Number(envValue);
-  return envValue !== undefined && Number.isFinite(n) && n >= 0 ? n : fallback;
+  // Trim-then-check-empty BEFORE Number(), same reasoning as
+  // check-spec-scope.mjs's resolveCap: Number('') is 0, not NaN, and
+  // GitHub Actions resolves an unconfigured `vars.*` reference to an empty
+  // string rather than leaving the env var unset - so `envValue !==
+  // undefined` alone would let an empty override silently collapse the
+  // budget to 0 instead of falling back.
+  const trimmed = typeof envValue === 'string' ? envValue.trim() : envValue;
+  if (trimmed === undefined || trimmed === '') {
+    return fallback;
+  }
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 const STEP_BUDGET_MS = parsePositiveMs(process.env.IMPL_STEP_BUDGET_MS, 21 * 60_000);
 // Headroom for validation/write/downstream steps after the model call(s) return.

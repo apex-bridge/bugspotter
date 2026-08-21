@@ -110,6 +110,23 @@ describe('normalizePath', () => {
   test('normalizes backslash separators to forward slashes', () => {
     assert.equal(normalizePath('packages\\backend\\src\\a.ts'), 'packages/backend/src/a.ts');
   });
+
+  test('resolves ".." segments the same way generate-impl.mjs\'s relative()-based toRepoRelative does', () => {
+    // A spec declaring a path this way is unusual, but the written side
+    // (relative(base, resolve(base, p))) always collapses it - without the
+    // same resolution here, a correctly-written file would show up as
+    // both written-but-undeclared AND declared-but-unwritten.
+    assert.equal(normalizePath('packages/x/../y.ts'), 'packages/y.ts');
+  });
+
+  test('empty input stays empty, not posix.normalize\'s own "."', () => {
+    // Every call site .filter(Boolean)s the result on the assumption that
+    // empty-in means empty-out. FILES_WRITTEN='' -> ''.split(',') -> ['']
+    // -> normalizePath('') must filter away, or an empty FILES_WRITTEN
+    // becomes the single bogus written path ['.'] instead of [].
+    assert.equal(normalizePath(''), '');
+    assert.equal(normalizePath('   '), '');
+  });
 });
 
 // --- CLI-level tests for main() -------------------------------------------

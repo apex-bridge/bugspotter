@@ -325,4 +325,20 @@ describe('self-correction on a missing declared file', () => {
     assert.match(r.stdout, /not enough for a safe corrective call/);
     assert.doesNotMatch(r.stdout, /Wrote packages\/b\.ts/);
   });
+
+  test('an empty-string IMPL_STEP_BUDGET_MS falls back to the default, not a collapsed 0 budget', () => {
+    // GitHub Actions resolves an unconfigured `vars.*` reference to an
+    // empty string, not an unset env var - Number('') is 0, not NaN, so a
+    // naive `envValue !== undefined` check would silently disable every
+    // future corrective call the moment this ever gets wired to a repo
+    // variable that isn't configured yet.
+    const r = runImpl(spec('packages/a.ts', 'packages/b.ts'), {
+      files: [{ path: 'packages/a.ts', content: 'export const a = 1;\n' }],
+      retryFiles: [{ path: 'packages/b.ts', content: 'export const b = 2;\n' }],
+      env: { IMPL_STEP_BUDGET_MS: '' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.modelCallCount, 2, 'an empty override must not collapse the budget to 0');
+    assert.match(r.stdout, /Wrote packages\/b\.ts/);
+  });
 });

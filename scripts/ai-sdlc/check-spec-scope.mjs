@@ -104,7 +104,12 @@ function main() {
   }
 
   const declaredPaths = extractDeclaredPaths(spec);
-  if (!declaredPaths) {
+  // extractDeclaredPaths returns null only when the "**Files touched:**"
+  // marker itself is absent - a marker present with no parseable backtick
+  // path returns [], which is truthy. Both are the same malformed-spec
+  // finding: `!declaredPaths` alone would let a hard-mode run see 0 files
+  // "within cap" and exit 0, silently bypassing the gate.
+  if (!declaredPaths || declaredPaths.length === 0) {
     const msg = 'Spec scope check: no "Files touched:" line found.';
     if (hard) {
       console.error(`::error::${msg} A malformed spec is a real finding in hard mode, not a skip.`);

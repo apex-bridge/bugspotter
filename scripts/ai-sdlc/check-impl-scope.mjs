@@ -37,6 +37,7 @@
 // Exit 0 only when the comparison actually ran and came back clean.
 
 import { readFileSync } from 'node:fs';
+import { posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
 
@@ -44,16 +45,29 @@ import { extractDeclaredPaths } from './verify-spec-ownership.mjs';
  * Canonicalize a repo-relative path for set comparison.
  *
  * The two sides of this comparison are produced very differently: written
- * paths come from generate-impl.mjs, already normalized by node's
- * `relative()` (no `./`, forward slashes); declared paths are lifted
- * verbatim out of backticks in human-ratified, LLM-drafted markdown. A
- * stray `./` or a stray space on the spec side would otherwise make the
- * SAME file show up in BOTH failure lists at once - reported as written-but-
- * undeclared and declared-but-unwritten simultaneously - which is a
- * confusing false failure that costs a full generation run.
+ * paths come from generate-impl.mjs, already canonicalized by node's
+ * `relative(base, resolve(base, p))` (no `./`, no `..` segments, forward
+ * slashes); declared paths are lifted verbatim out of backticks in
+ * human-ratified, LLM-drafted markdown. A stray `./`, a stray space, or a
+ * `packages/x/../y.ts`-shaped path on the spec side would otherwise make
+ * the SAME file show up in BOTH failure lists at once - reported as
+ * written-but-undeclared and declared-but-unwritten simultaneously - which
+ * is a confusing false failure that costs a full generation run.
+ * `posix.normalize()` (not the manual leading-"./"" strip this used to be)
+ * is what actually matches the written side's `..`-resolving behavior; a
+ * spec declaring a path with a literal `..` segment - unusual, but not
+ * impossible from a drafting model - would otherwise never match its own
+ * written file (found via generate-impl.mjs's self-correction feature
+ * reusing this same function; see issue #367's completeness-hardening PR).
+ *
+ * Empty input returns empty, not `posix.normalize('')`'s own `'.'` - every
+ * call site immediately `.filter(Boolean)`s its output, on the assumption
+ * that empty-in means empty-out (an empty `FILES_WRITTEN` env var must stay
+ * an empty writtenPaths array, not become the single bogus path `['.']`).
  */
 export function normalizePath(p) {
-  return p.trim().replaceAll('\\', '/').replace(/^\.\//, '');
+  const trimmed = p.trim().replaceAll('\\', '/');
+  return trimmed ? posix.normalize(trimmed) : '';
 }
 
 /** Returns the subset of writtenPaths not present in declaredPaths. */
