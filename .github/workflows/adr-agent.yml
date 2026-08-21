@@ -112,13 +112,17 @@ jobs:
           ADR_FILE: ${{ steps.gen.outputs.adr_file }}
           ADR_SLUG: ${{ steps.gen.outputs.adr_slug }}
           ADR_NUMBER: ${{ steps.gen.outputs.adr_number }}
+          # The model generate-adr.mjs actually used (LLM_DEFAULT_MODEL's
+          # resolved value, not a second hardcoded literal here that would
+          # silently go stale the moment that override is set).
+          MODEL: ${{ steps.gen.outputs.model }}
         run: |
           BRANCH="adr/${ADR_NUMBER}-${ADR_SLUG}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
           git add -- "$ADR_FILE"
-          MSG="$(printf 'docs(adr): ADR-%s draft (%s)\n\nAssisted-by: claude-sonnet-5 (agent)' "$ADR_NUMBER" "$ADR_SLUG")"
+          MSG="$(printf 'docs(adr): ADR-%s draft (%s)\n\nAssisted-by: %s (agent)' "$ADR_NUMBER" "$ADR_SLUG" "$MODEL")"
           git commit -m "$MSG"
           git fetch origin "$BRANCH" 2>/dev/null || true
           git push --force-with-lease origin "$BRANCH"
@@ -132,8 +136,9 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           BRANCH: ${{ steps.push.outputs.branch }}
           ADR_NUMBER: ${{ steps.gen.outputs.adr_number }}
+          MODEL: ${{ steps.gen.outputs.model }}
         run: |
-          PR_BODY="$(printf 'Agent-drafted ADR-%s for issue #%s.\n\nReview, promote Status to Accepted if correct, and merge to advance this issue to `agent-working`.\n\nRefs #%s\n\nAssisted-by: claude-sonnet-5 (agent)' "$ADR_NUMBER" "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
+          PR_BODY="$(printf 'Agent-drafted ADR-%s for issue #%s.\n\nReview, promote Status to Accepted if correct, and merge to advance this issue to `agent-working`.\n\nRefs #%s\n\nAssisted-by: %s (agent)' "$ADR_NUMBER" "$ISSUE_NUMBER" "$ISSUE_NUMBER" "$MODEL")"
 
           PR_URL=$(gh pr create \
             --title "docs(adr): ADR-${ADR_NUMBER} ${ISSUE_TITLE}" \
