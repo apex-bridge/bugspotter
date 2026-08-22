@@ -337,9 +337,24 @@ jobs:
           #    attempts help - but the terminal error message says plainly
           #    that a fresh workflow re-run, not this loop, is the fix that
           #    has actually worked every time so far.
+          # A third gap, also from review: the forced remote command (the
+          # host-side deploy script - not tracked in this repo, see
+          # RUNBOOK.md - so it can't be fixed by remapping its own exit
+          # codes from here) can itself exit 255 and print output that
+          # happens to contain one of these phrases (e.g. Docker/curl
+          # commonly say "Connection refused" about a completely unrelated
+          # local service). A bare substring match anywhere in the combined
+          # output would misclassify that as a retryable SSH-level failure.
+          # Anchored instead to ssh's own client-side diagnostic message
+          # format ("ssh: connect to host HOST port PORT: reason" for
+          # TCP-level failures, "ssh: Could not resolve hostname HOST:" for
+          # DNS) - a line only ssh itself ever emits, and only when the
+          # connection attempt failed before the remote command could run
+          # at all, so there is no way for the remote script's own output
+          # to produce it.
           MAX_ATTEMPTS=2
           ATTEMPT=1
-          NETWORK_ERROR_PATTERN='Connection timed out|Connection refused|No route to host|Network is unreachable|Could not resolve hostname'
+          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)$|^ssh: Could not resolve hostname '
           while true; do
             if [ "$ATTEMPT" -gt 1 ]; then
               echo "Retry $ATTEMPT/$MAX_ATTEMPTS..."
