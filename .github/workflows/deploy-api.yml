@@ -352,9 +352,25 @@ jobs:
           # connection attempt failed before the remote command could run
           # at all, so there is no way for the remote script's own output
           # to produce it.
+          # 2026-08-22, second attempt: the prefix-anchored pattern below
+          # STILL failed to classify a real "ssh: connect to host X port 22:
+          # Connection timed out" line as a network error - printed verbatim
+          # by this same step, immediately before the misclassification.
+          # Root cause not confirmed locally (every reproduction of the
+          # exact byte sequence, with and without a trailing \r, with and
+          # without a trailing newline on the captured variable, matched
+          # correctly here) - possibly some difference in the actual
+          # ubuntu-latest runner's captured bytes this local shell can't
+          # reproduce. Rather than guess again: dropped the trailing `$`
+          # anchor (unnecessary for correctness - the prefix combined with
+          # SSH_EXIT==255 is already specific enough that removing it can't
+          # introduce a false positive, and removes one possible point of
+          # failure) and added an explicit diagnostic echo of the
+          # classification result and pattern used, so a third occurrence
+          # produces a real answer instead of another guess.
           MAX_ATTEMPTS=2
           ATTEMPT=1
-          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)$|^ssh: Could not resolve hostname '
+          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)|^ssh: Could not resolve hostname '
           while true; do
             if [ "$ATTEMPT" -gt 1 ]; then
               echo "Retry $ATTEMPT/$MAX_ATTEMPTS..."
@@ -383,6 +399,15 @@ jobs:
             if [ "$SSH_EXIT" -eq 255 ] && printf '%s' "$SSH_OUTPUT" | grep -qE "$NETWORK_ERROR_PATTERN"; then
               IS_NETWORK_ERROR=true
             fi
+            # Diagnostic for the next occurrence, not just this one: if this
+            # ever misclassifies again, the raw bytes and the exact pattern
+            # used are right here instead of requiring another guess. Plain
+            # echo, not ::debug:: - debug annotations are hidden unless a
+            # repo has step-debug logging explicitly enabled, and this needs
+            # to be visible on a normal run.
+            echo "Retry classification: SSH_EXIT=$SSH_EXIT IS_NETWORK_ERROR=$IS_NETWORK_ERROR"
+            echo "Pattern used: $NETWORK_ERROR_PATTERN"
+            printf '%s' "$SSH_OUTPUT" | od -c | tail -5
 
             if [ "$IS_NETWORK_ERROR" = false ] || [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
               if [ "$IS_NETWORK_ERROR" = true ]; then
