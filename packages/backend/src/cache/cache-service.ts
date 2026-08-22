@@ -139,6 +139,60 @@ export class CacheService {
   }
 
   /**
+   * Atomically get a value and delete it in one operation, for one-time-use
+   * payloads (e.g. OIDC/OAuth state) where reading the same value twice
+   * must not both succeed.
+   *
+   * Unlike `get()`, this does NOT try L1 first: L1 (memory) is per-instance,
+   * so behind a load balancer, one instance's L1 copy has no idea whether a
+   * different instance already consumed the value via L2 (Redis). Redis is
+   * the cross-instance source of truth here - it alone decides hit/miss.
+   * Any L1 copy is cleaned up best-effort alongside it, never queried as an
+   * independent read, so a stale L1 entry can't be replayed as a second
+   * "hit" after Redis has already forgotten the key.
+   */
+  async getAndDelete<T>(key: string): Promise<T | null> {
+    if (this.redisCache) {
+      const value = await this.redisCache.getAndDelete<T>(key);
+      if (this.memoryCache) {
+        // Best-effort per the doc comment above: Redis has already
+        // authoritatively consumed the value by this point, so a failure
+        // cleaning up the local L1 copy must not surface as a failure of
+        // the overall consumption.
+        try {
+          await this.memoryCache.delete(key);
+        } catch (error) {
+          logger.warn('Cache getAndDelete L1 cleanup failed (best-effort)', {
+            key,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+      }
+      if (this.debug) {
+        logger.debug(value !== null ? 'Cache getAndDelete L2 hit' : 'Cache getAndDelete miss', {
+          key,
+        });
+      }
+      return value;
+    }
+
+    // No Redis tier configured - memory is the only cache, so it's the
+    // sole (and therefore authoritative) source for a single-instance
+    // deployment.
+    if (this.memoryCache) {
+      const value = await this.memoryCache.getAndDelete<T>(key);
+      if (this.debug) {
+        logger.debug(value !== null ? 'Cache getAndDelete L1 hit' : 'Cache getAndDelete miss', {
+          key,
+        });
+      }
+      return value;
+    }
+
+    return null;
+  }
+
+  /**
    * Delete a key from all cache tiers
    */
   async delete(key: string): Promise<void> {

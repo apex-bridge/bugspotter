@@ -51,6 +51,45 @@ describe('MemoryCache', () => {
       expect(await cache.has('key1')).toBe(true);
       expect(await cache.has('non-existent')).toBe(false);
     });
+
+    it('should get and delete a value in one operation', async () => {
+      await cache.set('key1', { foo: 'bar' }, 60);
+      const result = await cache.getAndDelete<{ foo: string }>('key1');
+      expect(result).toEqual({ foo: 'bar' });
+      expect(await cache.get('key1')).toBeNull();
+    });
+
+    it('should return null from getAndDelete for a non-existent key', async () => {
+      const result = await cache.getAndDelete('non-existent');
+      expect(result).toBeNull();
+    });
+
+    it('should not allow a second getAndDelete to see the same value', async () => {
+      await cache.set('key1', 'value1', 60);
+      expect(await cache.getAndDelete('key1')).toBe('value1');
+      expect(await cache.getAndDelete('key1')).toBeNull();
+    });
+
+    it('should only let one of two concurrent getAndDelete calls see the value', async () => {
+      await cache.set('key1', 'value1', 60);
+
+      // Fire both calls without awaiting either individually first, so their
+      // promises are genuinely in flight at the same time - this is what
+      // reproduces the race if getAndDelete ever regresses to awaiting an
+      // internal get() before deleting.
+      const [first, second] = await Promise.all([
+        cache.getAndDelete('key1'),
+        cache.getAndDelete('key1'),
+      ]);
+
+      const results = [first, second];
+      const values = results.filter((r) => r !== null);
+      const nulls = results.filter((r) => r === null);
+
+      expect(values).toEqual(['value1']);
+      expect(nulls).toHaveLength(1);
+      expect(await cache.get('key1')).toBeNull();
+    });
   });
 
   describe('TTL expiration', () => {
