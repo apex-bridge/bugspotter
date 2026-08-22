@@ -384,6 +384,27 @@ jobs:
           # the full `od -c` output instead of the last 5 lines - the
           # previous truncation could cut off exactly the bytes a fourth
           # occurrence would need.
+          # Latest review round (PR #385): two more real gaps in this same
+          # capture, both from CodeRabbit.
+          # (A) SSH_OUTPUT below merges ssh's own stderr with the remote
+          # command's stdout - normally ssh's diagnostic-format text can't
+          # appear in the remote deploy script's own output, EXCEPT if that
+          # script (lives on the host, not in this repo - see RUNBOOK.md)
+          # itself shells out to ssh for some other purpose and that nested
+          # call fails with the identical wording. A merged stream can't
+          # tell the two apart, so a genuine remote failure could get
+          # misclassified as a retryable network error and retried against
+          # a partially completed deployment.
+          # (B) Command substitution always strips ALL trailing newlines
+          # from its output before anything else runs, so the od -c dump
+          # below could never show ssh's true trailing bytes even if a
+          # future incident turns out to be newline/line-ending related -
+          # the information was already gone before the dump ever ran.
+          # Fixed by capturing ssh's stdout and stderr into separate temp
+          # files instead of one merged command-substitution variable:
+          # classification now reads only the stderr file (closes A), and
+          # temp files preserve exact bytes including trailing newlines
+          # (closes B).
           MAX_ATTEMPTS=2
           ATTEMPT=1
           NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)\r?$|^ssh: Could not resolve hostname .*\r?$'
@@ -398,21 +419,28 @@ jobs:
             # this retry logic would never fire. `cmd || VAR=$?` is also
             # exempt from `set -e` (a command on the left of `||` never
             # triggers -e), so this still can't abort the step early either.
-            # stdout+stderr captured together (2>&1 inside the substitution)
-            # so the network-error check below can inspect ssh's own message
-            # text, then printed as-is to preserve normal log visibility.
+            # Captured into separate temp files, not a merged `2>&1`
+            # command substitution - see the capture-mechanism note above.
+            # Only SSH_STDERR_FILE feeds the network-error check below;
+            # files preserve exact bytes (including trailing newlines) that
+            # a command-substitution variable would silently strip.
             SSH_EXIT=0
-            SSH_OUTPUT=$(ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            SSH_STDOUT_FILE="$RUNNER_TEMP/ssh_stdout_$ATTEMPT"
+            SSH_STDERR_FILE="$RUNNER_TEMP/ssh_stderr_$ATTEMPT"
+            ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
               -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
-              "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF" 2>&1) || SSH_EXIT=$?
-            printf '%s\n' "$SSH_OUTPUT"
+              "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF" \
+              >"$SSH_STDOUT_FILE" 2>"$SSH_STDERR_FILE" || SSH_EXIT=$?
+            cat "$SSH_STDOUT_FILE"
+            cat "$SSH_STDERR_FILE" >&2
 
             if [ "$SSH_EXIT" -eq 0 ]; then
+              rm -f "$SSH_STDOUT_FILE" "$SSH_STDERR_FILE"
               break
             fi
 
             IS_NETWORK_ERROR=false
-            if [ "$SSH_EXIT" -eq 255 ] && printf '%s' "$SSH_OUTPUT" | grep -E "$NETWORK_ERROR_PATTERN" >/dev/null 2>&1; then
+            if [ "$SSH_EXIT" -eq 255 ] && grep -E "$NETWORK_ERROR_PATTERN" "$SSH_STDERR_FILE" >/dev/null 2>&1; then
               IS_NETWORK_ERROR=true
             fi
             # Diagnostic for the next occurrence, not just this one: if this
@@ -420,10 +448,15 @@ jobs:
             # used are right here instead of requiring another guess. Plain
             # echo, not ::debug:: - debug annotations are hidden unless a
             # repo has step-debug logging explicitly enabled, and this needs
-            # to be visible on a normal run.
+            # to be visible on a normal run. Both files are dumped, but only
+            # the stderr one feeds the classification above - the stdout
+            # dump is context only (e.g. a remote script's partial output).
             echo "Retry classification: SSH_EXIT=$SSH_EXIT IS_NETWORK_ERROR=$IS_NETWORK_ERROR"
             echo "Pattern used: $NETWORK_ERROR_PATTERN"
-            printf '%s' "$SSH_OUTPUT" | od -c
+            echo "--- ssh client stderr (what classification is based on) ---"
+            od -c "$SSH_STDERR_FILE"
+            echo "--- remote command stdout, if any (NOT used for classification) ---"
+            od -c "$SSH_STDOUT_FILE"
 
             if [ "$IS_NETWORK_ERROR" = false ] || [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
               if [ "$IS_NETWORK_ERROR" = true ]; then
@@ -431,10 +464,12 @@ jobs:
               else
                 echo "::error::SSH deploy failed (exit $SSH_EXIT) - not a recognized network-level error, so not retrying (could mask a real problem, e.g. a stale SSH_KNOWN_HOSTS or revoked SSH_DEPLOY_KEY). Check the output above." >&2
               fi
+              rm -f "$SSH_STDOUT_FILE" "$SSH_STDERR_FILE"
               exit "$SSH_EXIT"
             fi
 
             echo "::warning::SSH network-level failure on attempt $ATTEMPT/$MAX_ATTEMPTS - retrying once on this same runner (same source IP) in case it's a one-off blip. If this is netcup's known IP-block pattern, this retry will likely fail the same way - a fresh workflow_dispatch (new runner, new IP) is the fix that has actually worked before. Retrying in 15s..."
+            rm -f "$SSH_STDOUT_FILE" "$SSH_STDERR_FILE"
             ATTEMPT=$((ATTEMPT + 1))
             sleep 15
           done
