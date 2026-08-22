@@ -311,9 +311,92 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
 
           echo "Deploying $IMAGE_REF to $DEPLOY_HOST"
-          ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
-            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
-            "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF"
+
+          # Two things learned from review on the first version of this retry
+          # loop - both real, both fixed here:
+          #
+          # 1. ssh's exit code 255 is NOT specific to connection-level
+          #    failures - per its own documented contract, it is the generic
+          #    "an error occurred client-side" code, also covering host-key
+          #    verification failures and BatchMode auth failures. Blindly
+          #    retrying on any 255 would also retry a genuinely broken
+          #    SSH_KNOWN_HOSTS or a revoked deploy key, uselessly, before
+          #    failing with a misleading "transient" message. Only retry when
+          #    ssh's own output actually names a network-level failure.
+          #
+          # 2. Every attempt in this loop runs on the SAME runner - a GitHub
+          #    Actions job never changes runners mid-execution - so they all
+          #    share one source IP. The 2026-08-11 and 2026-08-22 incidents
+          #    that motivated this loop were both resolved by a fresh
+          #    `workflow_dispatch` (a NEW job, a NEW runner, a NEW IP), not
+          #    by retrying within one job - if the cause is netcup's network
+          #    edge dropping THIS runner's specific IP, retrying here just
+          #    repeats the same failure. This loop still earns its keep for a
+          #    genuine one-off blip unrelated to IP-based filtering, so it
+          #    stays, bounded to one retry rather than pretending several
+          #    attempts help - but the terminal error message says plainly
+          #    that a fresh workflow re-run, not this loop, is the fix that
+          #    has actually worked every time so far.
+          # A third gap, also from review: the forced remote command (the
+          # host-side deploy script - not tracked in this repo, see
+          # RUNBOOK.md - so it can't be fixed by remapping its own exit
+          # codes from here) can itself exit 255 and print output that
+          # happens to contain one of these phrases (e.g. Docker/curl
+          # commonly say "Connection refused" about a completely unrelated
+          # local service). A bare substring match anywhere in the combined
+          # output would misclassify that as a retryable SSH-level failure.
+          # Anchored instead to ssh's own client-side diagnostic message
+          # format ("ssh: connect to host HOST port PORT: reason" for
+          # TCP-level failures, "ssh: Could not resolve hostname HOST:" for
+          # DNS) - a line only ssh itself ever emits, and only when the
+          # connection attempt failed before the remote command could run
+          # at all, so there is no way for the remote script's own output
+          # to produce it.
+          MAX_ATTEMPTS=2
+          ATTEMPT=1
+          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)$|^ssh: Could not resolve hostname '
+          while true; do
+            if [ "$ATTEMPT" -gt 1 ]; then
+              echo "Retry $ATTEMPT/$MAX_ATTEMPTS..."
+            fi
+            # `cmd || VAR=$?`, not `if cmd; then ... fi` followed by reading
+            # `$?` - POSIX defines an if/fi with no branch taken (condition
+            # false, no else) as exiting 0 itself, not the condition's own
+            # exit status, so `$?` read after the fi would always be 0 and
+            # this retry logic would never fire. `cmd || VAR=$?` is also
+            # exempt from `set -e` (a command on the left of `||` never
+            # triggers -e), so this still can't abort the step early either.
+            # stdout+stderr captured together (2>&1 inside the substitution)
+            # so the network-error check below can inspect ssh's own message
+            # text, then printed as-is to preserve normal log visibility.
+            SSH_EXIT=0
+            SSH_OUTPUT=$(ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+              -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+              "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF" 2>&1) || SSH_EXIT=$?
+            printf '%s\n' "$SSH_OUTPUT"
+
+            if [ "$SSH_EXIT" -eq 0 ]; then
+              break
+            fi
+
+            IS_NETWORK_ERROR=false
+            if [ "$SSH_EXIT" -eq 255 ] && printf '%s' "$SSH_OUTPUT" | grep -qE "$NETWORK_ERROR_PATTERN"; then
+              IS_NETWORK_ERROR=true
+            fi
+
+            if [ "$IS_NETWORK_ERROR" = false ] || [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+              if [ "$IS_NETWORK_ERROR" = true ]; then
+                echo "::error::SSH deploy failed with a network-level error (exit 255) after $ATTEMPT attempt(s), same runner/IP each time. This matches netcup's known intermittent network-edge drop of a specific runner's source IP (seen 2026-08-11, 2026-08-22) - re-running this workflow (Actions -> Re-run jobs, or workflow_dispatch again) allocates a fresh runner with a different IP, which has resolved it every time so far." >&2
+              else
+                echo "::error::SSH deploy failed (exit $SSH_EXIT) - not a recognized network-level error, so not retrying (could mask a real problem, e.g. a stale SSH_KNOWN_HOSTS or revoked SSH_DEPLOY_KEY). Check the output above." >&2
+              fi
+              exit "$SSH_EXIT"
+            fi
+
+            echo "::warning::SSH network-level failure on attempt $ATTEMPT/$MAX_ATTEMPTS - retrying once on this same runner (same source IP) in case it's a one-off blip. If this is netcup's known IP-block pattern, this retry will likely fail the same way - a fresh workflow_dispatch (new runner, new IP) is the fix that has actually worked before. Retrying in 15s..."
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 15
+          done
 
       - name: Verify deployment health
         if: vars.PRODUCTION_API_URL != ''
