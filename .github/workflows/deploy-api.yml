@@ -312,99 +312,47 @@ jobs:
 
           echo "Deploying $IMAGE_REF to $DEPLOY_HOST"
 
-          # Two things learned from review on the first version of this retry
-          # loop - both real, both fixed here:
+          # This retry loop exists because of two real netcup production
+          # incidents (2026-08-11, 2026-08-22) where a normal deploy failed
+          # with an SSH connection-level error. Design constraints below
+          # all came from review rounds on that fix - each one closes a
+          # real gap, so don't simplify this back down without re-reading
+          # git history on this file first.
           #
-          # 1. ssh's exit code 255 is NOT specific to connection-level
-          #    failures - per its own documented contract, it is the generic
-          #    "an error occurred client-side" code, also covering host-key
-          #    verification failures and BatchMode auth failures. Blindly
-          #    retrying on any 255 would also retry a genuinely broken
-          #    SSH_KNOWN_HOSTS or a revoked deploy key, uselessly, before
-          #    failing with a misleading "transient" message. Only retry when
-          #    ssh's own output actually names a network-level failure.
+          # - Only retry a genuine SSH-client network failure (exit 255 AND
+          #   ssh's own stderr matches its documented client diagnostic
+          #   format), not any exit 255 - that code also covers host-key
+          #   verification and BatchMode auth failures, which retrying
+          #   would just mask behind a misleading "transient" message.
           #
-          # 2. Every attempt in this loop runs on the SAME runner - a GitHub
-          #    Actions job never changes runners mid-execution - so they all
-          #    share one source IP. The 2026-08-11 and 2026-08-22 incidents
-          #    that motivated this loop were both resolved by a fresh
-          #    `workflow_dispatch` (a NEW job, a NEW runner, a NEW IP), not
-          #    by retrying within one job - if the cause is netcup's network
-          #    edge dropping THIS runner's specific IP, retrying here just
-          #    repeats the same failure. This loop still earns its keep for a
-          #    genuine one-off blip unrelated to IP-based filtering, so it
-          #    stays, bounded to one retry rather than pretending several
-          #    attempts help - but the terminal error message says plainly
-          #    that a fresh workflow re-run, not this loop, is the fix that
-          #    has actually worked every time so far.
-          # A third gap, also from review: the forced remote command (the
-          # host-side deploy script - not tracked in this repo, see
-          # RUNBOOK.md - so it can't be fixed by remapping its own exit
-          # codes from here) can itself exit 255 and print output that
-          # happens to contain one of these phrases (e.g. Docker/curl
-          # commonly say "Connection refused" about a completely unrelated
-          # local service). A bare substring match anywhere in the combined
-          # output would misclassify that as a retryable SSH-level failure.
-          # Anchored instead to ssh's own client-side diagnostic message
-          # format ("ssh: connect to host HOST port PORT: reason" for
-          # TCP-level failures, "ssh: Could not resolve hostname HOST:" for
-          # DNS) - a line only ssh itself ever emits, and only when the
-          # connection attempt failed before the remote command could run
-          # at all, so there is no way for the remote script's own output
-          # to produce it.
-          # 2026-08-22, second attempt: the prefix-anchored pattern below
-          # STILL failed to classify a real "ssh: connect to host X port 22:
-          # Connection timed out" line as a network error - printed verbatim
-          # by this same step, immediately before the misclassification.
-          # Root cause not confirmed locally (every reproduction of the
-          # exact byte sequence, with and without a trailing \r, with and
-          # without a trailing newline on the captured variable, matched
-          # correctly here) - possibly some difference in the actual
-          # ubuntu-latest runner's captured bytes this local shell can't
-          # reproduce. That attempt dropped the trailing `$` anchor entirely
-          # and added a diagnostic byte dump, on the theory that removing
-          # the anchor couldn't introduce a false positive on its own - true
-          # in isolation, but review caught that this variable also carries
-          # the forced remote command's own output (see above), so an
-          # unanchored prefix match is reachable by more than just ssh's own
-          # diagnostics. Third attempt: restored end-anchoring on both
-          # alternatives, tolerant of an optional trailing `\r` (`\r?$`)
-          # rather than the old bare `$`, since the runner's actual captured
-          # bytes were never confirmed to be free of one. Also switched the
-          # classification check from `grep -qE` to `grep -E ... >/dev/null`
-          # - `-q` closes its stdin as soon as it finds a match, which can
-          # make the writing end of the pipe (this `printf`) see SIGPIPE and
-          # exit non-zero; under GitHub Actions' default `pipefail`, that
-          # non-zero exit - not grep's own success - can become the
-          # pipeline's reported status, so `grep -qE` can evaluate as "no
-          # match" even when it matched. Not confirmed as the actual cause
-          # of either incident (a local repro with pipefail on did not
-          # reproduce it for this short a line) but it's a real gap with
-          # zero downside to closing. Also expanded the diagnostic dump to
-          # the full `od -c` output instead of the last 5 lines - the
-          # previous truncation could cut off exactly the bytes a fourth
-          # occurrence would need.
-          # Latest review round (PR #385): two more real gaps in this same
-          # capture, both from CodeRabbit.
-          # (A) SSH_OUTPUT below merges ssh's own stderr with the remote
-          # command's stdout - normally ssh's diagnostic-format text can't
-          # appear in the remote deploy script's own output, EXCEPT if that
-          # script (lives on the host, not in this repo - see RUNBOOK.md)
-          # itself shells out to ssh for some other purpose and that nested
-          # call fails with the identical wording. A merged stream can't
-          # tell the two apart, so a genuine remote failure could get
-          # misclassified as a retryable network error and retried against
-          # a partially completed deployment.
-          # (B) Command substitution always strips ALL trailing newlines
-          # from its output before anything else runs, so the od -c dump
-          # below could never show ssh's true trailing bytes even if a
-          # future incident turns out to be newline/line-ending related -
-          # the information was already gone before the dump ever ran.
-          # Fixed by capturing ssh's stdout and stderr into separate temp
-          # files instead of one merged command-substitution variable:
-          # classification now reads only the stderr file (closes A), and
-          # temp files preserve exact bytes including trailing newlines
-          # (closes B).
+          # - Bounded to one retry, on the same runner/IP. Both incidents
+          #   above were actually resolved by a fresh `workflow_dispatch`
+          #   (new runner, new IP), not by retrying within a job - if the
+          #   cause is netcup's network edge dropping this runner's IP,
+          #   retrying here just repeats the same failure. This loop still
+          #   earns its keep for a genuine one-off blip, but the terminal
+          #   error message says plainly that a fresh re-run, not this
+          #   loop, is the fix that has actually worked.
+          #
+          # - Classification reads ssh's own stderr only, captured to a
+          #   separate temp file from the remote command's stdout (see
+          #   below) - the remote deploy script (host-only, not in this
+          #   repo, see RUNBOOK.md) could otherwise spoof a retry, either
+          #   via an unrelated tool saying something like "Connection
+          #   refused", or a nested ssh call inside it failing with the
+          #   identical wording. `NETWORK_ERROR_PATTERN` is anchored to
+          #   ssh's specific message format, tolerant of an optional
+          #   trailing `\r`, for the same reason.
+          #
+          # - The classification grep consumes its full input
+          #   (`grep -E ... >/dev/null`, not `-q`) to avoid a SIGPIPE/
+          #   pipefail race that can misreport a real match as "no match".
+          #
+          # - The diagnostic dump below (raw `od -c` on the captured
+          #   files) is kept in full and reads the temp files directly,
+          #   not a command-substitution variable, so it can't silently
+          #   lose trailing bytes if a future occurrence turns out to be
+          #   newline-related.
           MAX_ATTEMPTS=2
           ATTEMPT=1
           NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)\r?$|^ssh: Could not resolve hostname .*\r?$'
@@ -412,18 +360,12 @@ jobs:
             if [ "$ATTEMPT" -gt 1 ]; then
               echo "Retry $ATTEMPT/$MAX_ATTEMPTS..."
             fi
-            # `cmd || VAR=$?`, not `if cmd; then ... fi` followed by reading
-            # `$?` - POSIX defines an if/fi with no branch taken (condition
-            # false, no else) as exiting 0 itself, not the condition's own
-            # exit status, so `$?` read after the fi would always be 0 and
-            # this retry logic would never fire. `cmd || VAR=$?` is also
-            # exempt from `set -e` (a command on the left of `||` never
-            # triggers -e), so this still can't abort the step early either.
-            # Captured into separate temp files, not a merged `2>&1`
-            # command substitution - see the capture-mechanism note above.
-            # Only SSH_STDERR_FILE feeds the network-error check below;
-            # files preserve exact bytes (including trailing newlines) that
-            # a command-substitution variable would silently strip.
+            # `cmd || VAR=$?`, not `if cmd; then ... fi` then reading `$?`
+            # - a taken-no-branch if/fi exits 0 itself regardless of the
+            # condition's real exit status (POSIX), and `||` is exempt
+            # from `set -e` either way. Stdout/stderr go to separate temp
+            # files - see the note above - only SSH_STDERR_FILE feeds the
+            # classification below.
             SSH_EXIT=0
             SSH_STDOUT_FILE="$RUNNER_TEMP/ssh_stdout_$ATTEMPT"
             SSH_STDERR_FILE="$RUNNER_TEMP/ssh_stderr_$ATTEMPT"
@@ -443,14 +385,12 @@ jobs:
             if [ "$SSH_EXIT" -eq 255 ] && grep -E "$NETWORK_ERROR_PATTERN" "$SSH_STDERR_FILE" >/dev/null 2>&1; then
               IS_NETWORK_ERROR=true
             fi
-            # Diagnostic for the next occurrence, not just this one: if this
-            # ever misclassifies again, the raw bytes and the exact pattern
-            # used are right here instead of requiring another guess. Plain
-            # echo, not ::debug:: - debug annotations are hidden unless a
-            # repo has step-debug logging explicitly enabled, and this needs
-            # to be visible on a normal run. Both files are dumped, but only
-            # the stderr one feeds the classification above - the stdout
-            # dump is context only (e.g. a remote script's partial output).
+            # Diagnostic for the next occurrence: raw bytes and the exact
+            # pattern used, right here instead of requiring another guess.
+            # Plain echo, not ::debug:: - debug annotations are hidden
+            # unless step-debug logging is explicitly enabled, and this
+            # needs to be visible on a normal run. Only the stderr dump
+            # feeds the classification above; the stdout dump is context.
             echo "Retry classification: SSH_EXIT=$SSH_EXIT IS_NETWORK_ERROR=$IS_NETWORK_ERROR"
             echo "Pattern used: $NETWORK_ERROR_PATTERN"
             echo "--- ssh client stderr (what classification is based on) ---"
