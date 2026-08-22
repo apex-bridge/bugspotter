@@ -312,77 +312,91 @@ jobs:
 
           echo "Deploying $IMAGE_REF to $DEPLOY_HOST"
 
-          # Two things learned from review on the first version of this retry
-          # loop - both real, both fixed here:
+          # This retry loop exists because of two real netcup production
+          # incidents (2026-08-11, 2026-08-22) where a normal deploy failed
+          # with an SSH connection-level error. Design constraints below
+          # all came from review rounds on that fix - each one closes a
+          # real gap, so don't simplify this back down without re-reading
+          # git history on this file first.
           #
-          # 1. ssh's exit code 255 is NOT specific to connection-level
-          #    failures - per its own documented contract, it is the generic
-          #    "an error occurred client-side" code, also covering host-key
-          #    verification failures and BatchMode auth failures. Blindly
-          #    retrying on any 255 would also retry a genuinely broken
-          #    SSH_KNOWN_HOSTS or a revoked deploy key, uselessly, before
-          #    failing with a misleading "transient" message. Only retry when
-          #    ssh's own output actually names a network-level failure.
+          # - Only retry a genuine SSH-client network failure (exit 255 AND
+          #   ssh's own stderr matches its documented client diagnostic
+          #   format), not any exit 255 - that code also covers host-key
+          #   verification and BatchMode auth failures, which retrying
+          #   would just mask behind a misleading "transient" message.
           #
-          # 2. Every attempt in this loop runs on the SAME runner - a GitHub
-          #    Actions job never changes runners mid-execution - so they all
-          #    share one source IP. The 2026-08-11 and 2026-08-22 incidents
-          #    that motivated this loop were both resolved by a fresh
-          #    `workflow_dispatch` (a NEW job, a NEW runner, a NEW IP), not
-          #    by retrying within one job - if the cause is netcup's network
-          #    edge dropping THIS runner's specific IP, retrying here just
-          #    repeats the same failure. This loop still earns its keep for a
-          #    genuine one-off blip unrelated to IP-based filtering, so it
-          #    stays, bounded to one retry rather than pretending several
-          #    attempts help - but the terminal error message says plainly
-          #    that a fresh workflow re-run, not this loop, is the fix that
-          #    has actually worked every time so far.
-          # A third gap, also from review: the forced remote command (the
-          # host-side deploy script - not tracked in this repo, see
-          # RUNBOOK.md - so it can't be fixed by remapping its own exit
-          # codes from here) can itself exit 255 and print output that
-          # happens to contain one of these phrases (e.g. Docker/curl
-          # commonly say "Connection refused" about a completely unrelated
-          # local service). A bare substring match anywhere in the combined
-          # output would misclassify that as a retryable SSH-level failure.
-          # Anchored instead to ssh's own client-side diagnostic message
-          # format ("ssh: connect to host HOST port PORT: reason" for
-          # TCP-level failures, "ssh: Could not resolve hostname HOST:" for
-          # DNS) - a line only ssh itself ever emits, and only when the
-          # connection attempt failed before the remote command could run
-          # at all, so there is no way for the remote script's own output
-          # to produce it.
+          # - Bounded to one retry, on the same runner/IP. Both incidents
+          #   above were actually resolved by a fresh `workflow_dispatch`
+          #   (new runner, new IP), not by retrying within a job - if the
+          #   cause is netcup's network edge dropping this runner's IP,
+          #   retrying here just repeats the same failure. This loop still
+          #   earns its keep for a genuine one-off blip, but the terminal
+          #   error message says plainly that a fresh re-run, not this
+          #   loop, is the fix that has actually worked.
+          #
+          # - Classification reads ssh's own stderr only, captured to a
+          #   separate temp file from the remote command's stdout (see
+          #   below) - the remote deploy script (host-only, not in this
+          #   repo, see RUNBOOK.md) could otherwise spoof a retry, either
+          #   via an unrelated tool saying something like "Connection
+          #   refused", or a nested ssh call inside it failing with the
+          #   identical wording. `NETWORK_ERROR_PATTERN` is anchored to
+          #   ssh's specific message format, tolerant of an optional
+          #   trailing `\r`, for the same reason.
+          #
+          # - The classification grep consumes its full input
+          #   (`grep -E ... >/dev/null`, not `-q`) to avoid a SIGPIPE/
+          #   pipefail race that can misreport a real match as "no match".
+          #
+          # - The diagnostic dump below (raw `od -c` on the captured
+          #   files) is kept in full and reads the temp files directly,
+          #   not a command-substitution variable, so it can't silently
+          #   lose trailing bytes if a future occurrence turns out to be
+          #   newline-related.
           MAX_ATTEMPTS=2
           ATTEMPT=1
-          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)$|^ssh: Could not resolve hostname '
+          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)\r?$|^ssh: Could not resolve hostname .*\r?$'
           while true; do
             if [ "$ATTEMPT" -gt 1 ]; then
               echo "Retry $ATTEMPT/$MAX_ATTEMPTS..."
             fi
-            # `cmd || VAR=$?`, not `if cmd; then ... fi` followed by reading
-            # `$?` - POSIX defines an if/fi with no branch taken (condition
-            # false, no else) as exiting 0 itself, not the condition's own
-            # exit status, so `$?` read after the fi would always be 0 and
-            # this retry logic would never fire. `cmd || VAR=$?` is also
-            # exempt from `set -e` (a command on the left of `||` never
-            # triggers -e), so this still can't abort the step early either.
-            # stdout+stderr captured together (2>&1 inside the substitution)
-            # so the network-error check below can inspect ssh's own message
-            # text, then printed as-is to preserve normal log visibility.
+            # `cmd || VAR=$?`, not `if cmd; then ... fi` then reading `$?`
+            # - a taken-no-branch if/fi exits 0 itself regardless of the
+            # condition's real exit status (POSIX), and `||` is exempt
+            # from `set -e` either way. Stdout/stderr go to separate temp
+            # files - see the note above - only SSH_STDERR_FILE feeds the
+            # classification below.
             SSH_EXIT=0
-            SSH_OUTPUT=$(ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            SSH_STDOUT_FILE="$RUNNER_TEMP/ssh_stdout_$ATTEMPT"
+            SSH_STDERR_FILE="$RUNNER_TEMP/ssh_stderr_$ATTEMPT"
+            ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
               -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
-              "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF" 2>&1) || SSH_EXIT=$?
-            printf '%s\n' "$SSH_OUTPUT"
+              "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF" \
+              >"$SSH_STDOUT_FILE" 2>"$SSH_STDERR_FILE" || SSH_EXIT=$?
+            cat "$SSH_STDOUT_FILE"
+            cat "$SSH_STDERR_FILE" >&2
 
             if [ "$SSH_EXIT" -eq 0 ]; then
+              rm -f "$SSH_STDOUT_FILE" "$SSH_STDERR_FILE"
               break
             fi
 
             IS_NETWORK_ERROR=false
-            if [ "$SSH_EXIT" -eq 255 ] && printf '%s' "$SSH_OUTPUT" | grep -qE "$NETWORK_ERROR_PATTERN"; then
+            if [ "$SSH_EXIT" -eq 255 ] && grep -E "$NETWORK_ERROR_PATTERN" "$SSH_STDERR_FILE" >/dev/null 2>&1; then
               IS_NETWORK_ERROR=true
             fi
+            # Diagnostic for the next occurrence: raw bytes and the exact
+            # pattern used, right here instead of requiring another guess.
+            # Plain echo, not ::debug:: - debug annotations are hidden
+            # unless step-debug logging is explicitly enabled, and this
+            # needs to be visible on a normal run. Only the stderr dump
+            # feeds the classification above; the stdout dump is context.
+            echo "Retry classification: SSH_EXIT=$SSH_EXIT IS_NETWORK_ERROR=$IS_NETWORK_ERROR"
+            echo "Pattern used: $NETWORK_ERROR_PATTERN"
+            echo "--- ssh client stderr (what classification is based on) ---"
+            od -c "$SSH_STDERR_FILE"
+            echo "--- remote command stdout, if any (NOT used for classification) ---"
+            od -c "$SSH_STDOUT_FILE"
 
             if [ "$IS_NETWORK_ERROR" = false ] || [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
               if [ "$IS_NETWORK_ERROR" = true ]; then
@@ -390,10 +404,12 @@ jobs:
               else
                 echo "::error::SSH deploy failed (exit $SSH_EXIT) - not a recognized network-level error, so not retrying (could mask a real problem, e.g. a stale SSH_KNOWN_HOSTS or revoked SSH_DEPLOY_KEY). Check the output above." >&2
               fi
+              rm -f "$SSH_STDOUT_FILE" "$SSH_STDERR_FILE"
               exit "$SSH_EXIT"
             fi
 
             echo "::warning::SSH network-level failure on attempt $ATTEMPT/$MAX_ATTEMPTS - retrying once on this same runner (same source IP) in case it's a one-off blip. If this is netcup's known IP-block pattern, this retry will likely fail the same way - a fresh workflow_dispatch (new runner, new IP) is the fix that has actually worked before. Retrying in 15s..."
+            rm -f "$SSH_STDOUT_FILE" "$SSH_STDERR_FILE"
             ATTEMPT=$((ATTEMPT + 1))
             sleep 15
           done
