@@ -120,6 +120,7 @@ jobs:
           persist-credentials: false
 
       - name: Check for new bare-threshold timing assertions (advisory)
+        continue-on-error: true
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -130,9 +131,9 @@ jobs:
           # existence check, not a wall-clock speed claim, and is virtually
           # never flaky - confirmed against this repo's own admin.test.ts,
           # which has both shapes side by side.
-          hits=$(git diff -U0 --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.test.ts' '*.test.tsx' '*.test.mjs' \
+          hits=$(git diff -U0 --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- '*.test.ts' '*.test.tsx' '*.test.mjs' '*.spec.ts' \
             | grep -E '^\+[^+]' \
-            | grep -E '\.to(BeLessThan|BeGreaterThan|BeCloseTo)\(\s*[1-9][0-9]*\s*\)' \
+            | grep -E '\.to(BeLessThan(OrEqual)?|BeGreaterThan(OrEqual)?|BeCloseTo)\(\s*[1-9][0-9]*\s*\)' \
             | grep -iE 'time|duration|elapsed|latency|timeout|delay|_ms\b|benchmark' \
             || true)
           if [ -n "$hits" ]; then
