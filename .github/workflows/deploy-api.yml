@@ -361,16 +361,32 @@ jobs:
           # without a trailing newline on the captured variable, matched
           # correctly here) - possibly some difference in the actual
           # ubuntu-latest runner's captured bytes this local shell can't
-          # reproduce. Rather than guess again: dropped the trailing `$`
-          # anchor (unnecessary for correctness - the prefix combined with
-          # SSH_EXIT==255 is already specific enough that removing it can't
-          # introduce a false positive, and removes one possible point of
-          # failure) and added an explicit diagnostic echo of the
-          # classification result and pattern used, so a third occurrence
-          # produces a real answer instead of another guess.
+          # reproduce. That attempt dropped the trailing `$` anchor entirely
+          # and added a diagnostic byte dump, on the theory that removing
+          # the anchor couldn't introduce a false positive on its own - true
+          # in isolation, but review caught that this variable also carries
+          # the forced remote command's own output (see above), so an
+          # unanchored prefix match is reachable by more than just ssh's own
+          # diagnostics. Third attempt: restored end-anchoring on both
+          # alternatives, tolerant of an optional trailing `\r` (`\r?$`)
+          # rather than the old bare `$`, since the runner's actual captured
+          # bytes were never confirmed to be free of one. Also switched the
+          # classification check from `grep -qE` to `grep -E ... >/dev/null`
+          # - `-q` closes its stdin as soon as it finds a match, which can
+          # make the writing end of the pipe (this `printf`) see SIGPIPE and
+          # exit non-zero; under GitHub Actions' default `pipefail`, that
+          # non-zero exit - not grep's own success - can become the
+          # pipeline's reported status, so `grep -qE` can evaluate as "no
+          # match" even when it matched. Not confirmed as the actual cause
+          # of either incident (a local repro with pipefail on did not
+          # reproduce it for this short a line) but it's a real gap with
+          # zero downside to closing. Also expanded the diagnostic dump to
+          # the full `od -c` output instead of the last 5 lines - the
+          # previous truncation could cut off exactly the bytes a fourth
+          # occurrence would need.
           MAX_ATTEMPTS=2
           ATTEMPT=1
-          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)|^ssh: Could not resolve hostname '
+          NETWORK_ERROR_PATTERN='^ssh: connect to host .* port [0-9]+: (Connection timed out|Connection refused|No route to host|Network is unreachable)\r?$|^ssh: Could not resolve hostname .*\r?$'
           while true; do
             if [ "$ATTEMPT" -gt 1 ]; then
               echo "Retry $ATTEMPT/$MAX_ATTEMPTS..."
@@ -396,7 +412,7 @@ jobs:
             fi
 
             IS_NETWORK_ERROR=false
-            if [ "$SSH_EXIT" -eq 255 ] && printf '%s' "$SSH_OUTPUT" | grep -qE "$NETWORK_ERROR_PATTERN"; then
+            if [ "$SSH_EXIT" -eq 255 ] && printf '%s' "$SSH_OUTPUT" | grep -E "$NETWORK_ERROR_PATTERN" >/dev/null 2>&1; then
               IS_NETWORK_ERROR=true
             fi
             # Diagnostic for the next occurrence, not just this one: if this
@@ -407,7 +423,7 @@ jobs:
             # to be visible on a normal run.
             echo "Retry classification: SSH_EXIT=$SSH_EXIT IS_NETWORK_ERROR=$IS_NETWORK_ERROR"
             echo "Pattern used: $NETWORK_ERROR_PATTERN"
-            printf '%s' "$SSH_OUTPUT" | od -c | tail -5
+            printf '%s' "$SSH_OUTPUT" | od -c
 
             if [ "$IS_NETWORK_ERROR" = false ] || [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
               if [ "$IS_NETWORK_ERROR" = true ]; then
