@@ -311,9 +311,49 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
 
           echo "Deploying $IMAGE_REF to $DEPLOY_HOST"
-          ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
-            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
-            "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF"
+
+          # Retry ONLY on ssh's own exit code 255 - its documented signal for
+          # "the connection itself failed" (protocol/network error), as
+          # distinct from any other exit code, which is the REMOTE command's
+          # own exit status passed through unchanged. Seen twice now
+          # (2026-08-11, 2026-08-22): "ssh: connect ... port 22: Connection
+          # timed out" with nothing reaching the host's own sshd/ufw logs at
+          # all - the connection never got past netcup's network edge.
+          # GitHub-hosted runners draw a fresh, effectively random source IP
+          # from Azure's range on every run, and a same-day manual retry has
+          # twice landed on a different, unaffected IP and succeeded - so
+          # this is safe to automate. Never retry a non-255 failure: that
+          # means the SSH connection succeeded and the remote deploy script
+          # itself ran and failed for a real reason, which blind retrying
+          # wouldn't fix and could mask.
+          MAX_ATTEMPTS=4
+          ATTEMPT=1
+          while true; do
+            if [ "$ATTEMPT" -gt 1 ]; then
+              echo "Retry $ATTEMPT/$MAX_ATTEMPTS..."
+            fi
+            # `cmd || VAR=$?`, not `if cmd; then ... fi` followed by reading
+            # `$?` - POSIX defines an if/fi with no branch taken (condition
+            # false, no else) as exiting 0 itself, not the condition's own
+            # exit status, so `$?` read after the fi would always be 0 and
+            # this retry logic would never fire. `cmd || VAR=$?` is also
+            # exempt from `set -e` (a command on the left of `||` never
+            # triggers -e), so this still can't abort the step early either.
+            SSH_EXIT=0
+            ssh -i "$RUNNER_TEMP/deploy_key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+              -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+              "$DEPLOY_USER@$DEPLOY_HOST" "$IMAGE_REF" || SSH_EXIT=$?
+            if [ "$SSH_EXIT" -eq 0 ]; then
+              break
+            fi
+            if [ "$SSH_EXIT" -ne 255 ] || [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+              echo "::error::SSH deploy failed (exit $SSH_EXIT) after $ATTEMPT attempt(s)" >&2
+              exit "$SSH_EXIT"
+            fi
+            echo "::warning::SSH connection-level failure (exit 255) on attempt $ATTEMPT/$MAX_ATTEMPTS - likely a transient netcup-network-edge drop of this run's source IP, not a real deploy failure. Retrying in 15s..."
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 15
+          done
 
       - name: Verify deployment health
         if: vars.PRODUCTION_API_URL != ''
