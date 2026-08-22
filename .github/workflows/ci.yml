@@ -110,11 +110,14 @@ jobs:
     name: Flaky timing assertion check (advisory)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check for new bare-threshold timing assertions (advisory)
         env:
