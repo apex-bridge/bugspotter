@@ -17,7 +17,8 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 **Corrections from #392's original combined spec**, found during review of PR #392 (Copilot) and independently verified here against the real merged `#352` code:
 
 1. The repository accessor on `DatabaseClient` is `db.oidcIdpConfigs`, not `db.oidcIdpConfigRepository` — confirmed at `packages/backend/src/db/client.ts:221`. #392's spec used the wrong accessor name in the wiring code and both test files; fixed throughout below.
-2. **Guard-vs-404 ordering in `admin-organizations.ts`, left undecided in #392's spec — resolved here.** The real handler (`admin-organizations.ts:519` onward) currently runs, in order: `db.organizations.findById(id)` (404 if missing) → `magic_login_enabled` check (400) → `db.users.findById(user_id)` (404) → membership check. The question: should the SSO guard run before or after the org lookup? Resolution: **before**, matching the other three endpoints (guard is always the first thing every guarded handler does, unconditionally) - this is safe and doesn't leak organization existence, because `assertSsoNotEnforced` is a no-op for a nonexistent tenant: `db.oidcIdpConfigs.findByTenantId` on a nonexistent org id resolves `null` (no matching row), so the guard resolves without throwing exactly as if SSO were simply not configured, and the handler proceeds to its existing `db.organizations.findById` check, which still 404s normally. A real org with `enforce_sso=true` gets the 403 immediately, before any other business-rule check (`magic_login_enabled`, user lookup, membership) - the same "guard first, unconditionally" shape already used for `/login`, `/register`, and `/magic-login`. Verified by Test D and the new Test L below.
+2. **Guard-vs-404 ordering in `admin-organizations.ts`, left undecided in #392's spec — resolved here.** The real handler (`admin-organizations.ts:519` onward) currently runs, in order: `db.organizations.findById(id)` (404 if missing) → `magic_login_enabled` check (400) → `db.users.findById(user_id)` (404) → membership check. The question: should the SSO guard run before or after the org lookup? Resolution: **before**, matching the other three endpoints (guard is always the first thing every guarded handler does, unconditionally) - this is safe and doesn't leak organization existence, because `assertSsoNotEnforced` is a no-op for a nonexistent tenant: `db.oidcIdpConfigs.findByTenantId` on a nonexistent org id resolves `null` (no matching row), so the guard resolves without throwing exactly as if SSO were simply not configured, and the handler proceeds to its existing `db.organizations.findById` check, which still 404s normally. A real org with `enforce_sso=true` gets the 403 immediately, before any other business-rule check (`magic_login_enabled`, user lookup, membership) - the same "guard first, unconditionally" shape already used for `/login`, `/register`, and `/magic-login`. Verified by Test D and the new Test L below. **This no-op-for-unknown-tenant property is specific to `saas` mode's per-tenant repository lookup** (see #394's `enforce-sso.ts`) - `selfhosted` mode's branch reads a single global `config.oidc.enforceSso` flag with no per-tenant awareness at all, so Test D/L below must actually exercise the `saas`-mode branch to prove this property, not just assert against whatever mode the shared test server happens to run in (see the test-harness correction below).
+3. **Tenant source for the guard call, left as a placeholder in #392's spec — resolved here.** `/login` and `/register` key on `request.organizationId` (optional; unset on the hub domain, where the existing `assertUserBelongsToTenant`/`isPasswordResetEnabledForRequest` helpers already no-op rather than require a tenant) - the guard is skipped when no tenant is resolved, since there is no specific tenant's `enforce_sso` to check on the hub domain. `/magic-login` keys on `decoded.organizationId` from the verified JWT claim instead, once the handler's own existing claim-shape check (`!decoded.organizationId || typeof ... !== 'string'`) has confirmed it's a real string - not `request.organizationId`, which the handler's own comment already documents as intentionally unset for hub-domain magic-logins and, more importantly, is not authoritative for which tenant a magic link was minted for (the existing tenant-match gate treats the token's own claim as the source of truth, not the request's resolved subdomain). No handler in `auth.ts` has a `resolvedTenantId` symbol; that name doesn't exist in this file.
 
 ## Problem
 
@@ -35,7 +36,7 @@ Four auth surfaces can currently establish a session for a user whose organizati
 ## Constraints
 
 1. The guard must be applied to all four surfaces, including `/register` (mints a session directly, bypassing `/login`) and the admin `magic-token` impersonation path — these are exactly the two surfaces PR #345's first review round missed.
-2. Response shape on block must be exactly `403 {"error":"sso_enforced"}`, identical across all four endpoints, so admin/API consumers can handle it with one branch. Construct this from `SsoEnforcedError`'s message (see #394) at each of the four call sites, not a hand-typed literal, so the four stay in sync with the guard's own identifier.
+2. Response shape on block must be exactly `403 {"error":"sso_enforced"}`, identical across all four endpoints, so admin/API consumers can handle it with one branch. Construct this from `SsoEnforcedError`'s own `.message` (see #394) at each of the four call sites - `reply.code(403).send({ error: err.message })` inside the narrowed `err instanceof SsoEnforcedError` branch - not a hand-typed `'sso_enforced'` literal, so the four stay in sync with the guard's own identifier if #394 ever changes it.
 3. Guard call must be the first thing every guarded handler does, before any other business-rule check, session minting, or impersonation-token creation — including, in `admin-organizations.ts`, before the target organization's own existence is checked (see the resolved ordering decision above).
 4. Change must be purely additive/behind-config: password/JWT login behavior for tenants without SSO configured must be unchanged (per the issue's own rollback framing).
 
@@ -45,29 +46,78 @@ Four auth surfaces can currently establish a session for a user whose organizati
 - [ ] `POST /api/v1/auth/register` returns `403 {"error":"sso_enforced"}` under the same condition, without minting a session — verified by Test B
 - [ ] `POST /api/v1/auth/magic-login` returns `403 {"error":"sso_enforced"}` under the same condition — verified by Test C
 - [ ] `POST /api/v1/admin/organizations/:id/magic-token` returns `403 {"error":"sso_enforced"}` when the target org has `enforce_sso=true`, before the org-existence/magic-login-enabled/user-existence checks run — verified by Test D
-- [ ] All four endpoints proceed normally (existing success/404 status codes) when `enforce_sso=false` or no `oidc_idp_config` row exists for the tenant — verified by Test E
+- [ ] All four endpoints proceed normally (existing success/404 status codes) when `enforce_sso=false` or no `oidc_idp_config` row exists for the tenant — verified by Test E (all three `auth.ts` endpoints, `OIDC_ENFORCE_SSO` unset and explicit `false`) and Test M (admin magic-token, explicit `enforceSso: false` row)
 - [ ] `POST /api/v1/admin/organizations/:id/magic-token` against a nonexistent organization id still returns `404` (not `403`) — the guard's no-op-for-unknown-tenant behavior doesn't mask the existing not-found check — verified by Test L
 
 ## Changes
 
 ### `packages/backend/src/api/routes/auth.ts` (ASSUMED, not verified)
 
-Call the guard at the top of the `login`, `register`, and `magic-login` handlers, before any session is minted.
+Call the guard at the top of the `login`, `register`, and `magic-login` handlers, before any session is minted. Each handler has a different real tenant source (see correction 3 above) - there is no single generic snippet that works for all three.
 
 **Correction:** `authRoutes(fastify, db)` only receives `db: DatabaseClient` — there is no `container` in scope in this file. Use `db.oidcIdpConfigs` (not `db.oidcIdpConfigRepository`, which does not exist).
 
+**`/login`** — insert as the first statement in the handler, before `checkLockoutStatus`/`db.users.findByEmail`:
+
 ```ts
-// Insert at the start of the existing login handler, register handler, and
-// magic-login handler, after tenant/org resolution and before session creation:
+async (request, reply) => {
+  if (request.organizationId) {
+    try {
+      await assertSsoNotEnforced(request.organizationId, db.oidcIdpConfigs);
+    } catch (err) {
+      if (err instanceof SsoEnforcedError) {
+        return reply.code(403).send({ error: err.message });
+      }
+      throw err;
+    }
+  }
+  // No tenant resolved (hub domain, or selfhosted where request.organizationId
+  // is never set) - nothing to key a per-tenant check on; skip rather than
+  // guess. In selfhosted mode the guard's own OIDC_ENFORCE_SSO branch doesn't
+  // use this tenantId anyway (see #394), so this only matters in saas mode.
+
+  const { email, password } = request.body;
+  // ...existing handler body unchanged...
+```
+
+**`/register`** — same pattern, inserted before the existing `config.auth.allowRegistration` check (constraint 3 requires the guard be the first business-rule check, and `allowRegistration` is itself one):
+
+```ts
+async (request, reply) => {
+  if (request.organizationId) {
+    try {
+      await assertSsoNotEnforced(request.organizationId, db.oidcIdpConfigs);
+    } catch (err) {
+      if (err instanceof SsoEnforcedError) {
+        return reply.code(403).send({ error: err.message });
+      }
+      throw err;
+    }
+  }
+
+  if (!config.auth.allowRegistration) {
+    // ...existing handler body unchanged...
+```
+
+**`/magic-login`** — insert after the existing tenant-match gate (the point where `decoded.organizationId` is both claim-validated and confirmed to match the request's own tenant, if any) and before `db.organizations.findById`:
+
+```ts
+// Insert immediately after the existing:
+//   if (request.organizationId !== undefined && request.organizationId !== decoded.organizationId) { throw ... }
+// block, and before the existing db.organizations.findById(decoded.organizationId) call.
+// decoded.organizationId is guaranteed a validated string here (the handler's
+// own earlier check already rejects a missing/non-string claim).
 try {
-  await assertSsoNotEnforced(resolvedTenantId, db.oidcIdpConfigs);
+  await assertSsoNotEnforced(decoded.organizationId, db.oidcIdpConfigs);
 } catch (err) {
   if (err instanceof SsoEnforcedError) {
-    return reply.code(403).send({ error: 'sso_enforced' });
+    return reply.code(403).send({ error: err.message });
   }
   throw err;
 }
 ```
+
+This sits inside the handler's existing outer `try { ... } catch (error) { ... }` (which only special-cases JWT verification errors and rethrows everything else) - the guard's own inner catch `return`s directly on `SsoEnforcedError`, so it never reaches the outer catch.
 
 ### `packages/backend/src/api/routes/admin-organizations.ts` (ASSUMED, not verified)
 
@@ -82,7 +132,7 @@ try {
   await assertSsoNotEnforced(request.params.id, db.oidcIdpConfigs);
 } catch (err) {
   if (err instanceof SsoEnforcedError) {
-    return reply.code(403).send({ error: 'sso_enforced' });
+    return reply.code(403).send({ error: err.message });
   }
   throw err;
 }
@@ -92,38 +142,58 @@ try {
 
 ### `packages/backend/tests/api/auth.test.ts`
 
-**Correction:** this file exercises a real Fastify server (`server: FastifyInstance`) against a real test-database `DatabaseClient` (`beforeAll` calls `createServer({ db, storage, pluginRegistry })`) — there is no service-container/mock-repository fixture anywhere in this file, so "add to the mock container fixture" doesn't apply. Spy on `db.oidcIdpConfigs` (not `db.oidcIdpConfigRepository`) per test instead. The `server.inject` calls below also use `server`, not `app` (this file never defines an `app` variable). Test cases B and C (register / magic-login) are moved here from `auth-handlers.test.ts`, which is a pure unit-test file for the API-key/JWT auth _middleware_ functions (`handleNewApiKeyAuth`, `handleJwtAuth`) — it has no Fastify instance, no route registration, and no `app`/`server` to call `.inject` on, so the register/magic-login HTTP-level tests cannot live there.
+**Correction:** this file exercises a real Fastify server (`server: FastifyInstance`) against a real test-database `DatabaseClient` (`beforeAll` calls `createServer({ db, storage, pluginRegistry })`) — there is no service-container/mock-repository fixture anywhere in this file, so "add to the mock container fixture" doesn't apply. The `server.inject` calls below also use `server`, not `app` (this file never defines an `app` variable). Test cases B and C (register / magic-login) are moved here from `auth-handlers.test.ts`, which is a pure unit-test file for the API-key/JWT auth _middleware_ functions (`handleNewApiKeyAuth`, `handleJwtAuth`) — it has no Fastify instance, no route registration, and no `app`/`server` to call `.inject` on, so the register/magic-login HTTP-level tests cannot live there.
+
+**Correction (test harness cannot drive the guard as originally written):** spying on `db.oidcIdpConfigs` here has no effect. `tests/setup.ts` sets `DEPLOYMENT_MODE=selfhosted` globally (it's the `globalSetup` for the default `vitest.config.ts` this file runs under), and #394's `assertSsoNotEnforced` only calls `oidcIdpConfigs.findByTenantId` on its `=== 'saas'` branch; in `selfhosted` mode it reads `config.oidc.enforceSso` (from `OIDC_ENFORCE_SSO`, evaluated once at `config.ts` import time) and never touches the repository. Separately, `/login` and `/register` would never even see a `request.organizationId` on the default `server`: saas-mode tenant middleware is only registered when `createServer()` is built under `DEPLOYMENT_MODE=saas` (`server.ts:99-100`), and `server` here was built under `selfhosted`. `selfhosted` is also the representative mode for these three endpoints regardless of that wrinkle — they're the single-tenant password/magic-link surfaces an actual self-hosted deployment uses `OIDC_ENFORCE_SSO` on. Drive the guard through that env var instead, following this file's own existing `createServerWithRegistration`/`createServerWithInvitationRequired` pattern (env var + `vi.resetModules()` + a freshly re-imported `createServer`) rather than mocking the repository:
 
 ```ts
-// Per-test setup (replaces the "mock container fixture" — db.oidcIdpConfigs
-// is a real, unmocked property from #352):
-beforeEach(() => {
-  vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue(null); // default: not enforced
-});
+// Mirrors createServerWithRegistration above — same file, same pattern.
+async function createServerWithSsoEnforced(db: DatabaseClient, enforced: boolean) {
+  const original = process.env.OIDC_ENFORCE_SSO;
+  process.env.OIDC_ENFORCE_SSO = String(enforced);
+  vi.resetModules();
+
+  const { createServer: freshCreateServer } = await import('../../src/api/server.js');
+  const server = await freshCreateServer({
+    db,
+    storage: createMockStorage(),
+    pluginRegistry: createMockPluginRegistry(),
+  });
+  await server.ready();
+
+  // Restore env var — doesn't affect the already-created server.
+  process.env.OIDC_ENFORCE_SSO = original;
+  vi.resetModules();
+
+  return server;
+}
 ```
 
-**Test case A — `/login` returns 403 when tenant has `enforce_sso=true` (AC #1):**
+**Test case A — `/login` returns 403 when SSO is enforced (AC #1):**
 
 ```ts
-it('returns 403 sso_enforced when the tenant enforces SSO', async () => {
+it('returns 403 sso_enforced when the deployment enforces SSO', async () => {
+  // Register on the default server first (OIDC_ENFORCE_SSO=false there),
+  // so the user exists before ssoServer's guard blocks the login attempt.
   await server.inject({
     method: 'POST',
     url: '/api/v1/auth/register',
     payload: { email: 'user@example.com', password: 'password123' },
   });
 
-  vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue({
-    enforceSso: true,
-  } as never);
+  const ssoServer = await createServerWithSsoEnforced(db, true);
+  try {
+    const response = await ssoServer.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { email: 'user@example.com', password: 'password123' },
+    });
 
-  const response = await server.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { email: 'user@example.com', password: 'password123' },
-  });
-
-  expect(response.statusCode).toBe(403);
-  expect(response.json()).toEqual({ error: 'sso_enforced' });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'sso_enforced' });
+  } finally {
+    await ssoServer.close();
+  }
 });
 ```
 
@@ -133,60 +203,64 @@ Note: `RegisterBody`/`registerSchema` accept only `email`, `name?`, `password`, 
 
 ```ts
 it('blocks register and does not create a session when SSO is enforced', async () => {
-  vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue({
-    enforceSso: true,
-  } as never);
+  const ssoServer = await createServerWithSsoEnforced(db, true);
+  try {
+    const response = await ssoServer.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      payload: { email: 'new@example.com', password: 'password123' },
+    });
 
-  const response = await server.inject({
-    method: 'POST',
-    url: '/api/v1/auth/register',
-    payload: { email: 'new@example.com', password: 'password123' },
-  });
-
-  expect(response.statusCode).toBe(403);
-  expect(response.json()).toEqual({ error: 'sso_enforced' });
-  expect(response.cookies).toHaveLength(0);
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'sso_enforced' });
+    expect(response.cookies).toHaveLength(0);
+  } finally {
+    await ssoServer.close();
+  }
 });
 ```
 
 **Test case C — `/magic-login` returns 403 (AC #3):**
 
-Note: the tenant for magic-login is only known from the token's `organizationId` claim (decoded inside the handler), so the guard necessarily runs after `fastify.jwt.verify` succeeds. A placeholder string like `'valid-magic-token'` is not a real JWT and would fail verification (→ 401) before the guard ever runs — sign a real magic token instead.
+Note: the tenant for magic-login is only known from the token's `organizationId` claim (decoded inside the handler), so the guard necessarily runs after `fastify.jwt.verify` succeeds. A placeholder string like `'valid-magic-token'` is not a real JWT and would fail verification (→ 401) before the guard ever runs — sign a real magic token instead. `selfhosted` mode's guard branch ignores the `organizationId`/`tenantId` argument entirely (it only reads `config.oidc.enforceSso`), so the claim's actual value doesn't affect the outcome here — it's still required so the handler's existing claim-shape/tenant-match checks upstream of the guard pass first.
 
 ```ts
 it('blocks magic-login when SSO is enforced', async () => {
-  vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue({
-    enforceSso: true,
-  } as never);
+  const ssoServer = await createServerWithSsoEnforced(db, true);
+  try {
+    const magicToken = ssoServer.jwt.sign({
+      userId: '00000000-0000-0000-0000-000000000003',
+      organizationId: '00000000-0000-0000-0000-000000000004',
+      type: 'magic',
+    });
 
-  const magicToken = server.jwt.sign({
-    userId: '00000000-0000-0000-0000-000000000003',
-    organizationId: '00000000-0000-0000-0000-000000000004',
-    type: 'magic',
-  });
+    const response = await ssoServer.inject({
+      method: 'POST',
+      url: '/api/v1/auth/magic-login',
+      payload: { token: magicToken },
+    });
 
-  const response = await server.inject({
-    method: 'POST',
-    url: '/api/v1/auth/magic-login',
-    payload: { token: magicToken },
-  });
-
-  expect(response.statusCode).toBe(403);
-  expect(response.json()).toEqual({ error: 'sso_enforced' });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'sso_enforced' });
+  } finally {
+    await ssoServer.close();
+  }
 });
 ```
 
-**Test case E — `/login` succeeds when `enforce_sso=false` or unset (AC #5):**
+**Test case E — all three `auth.ts` endpoints proceed normally when SSO is not enforced (AC #5):**
+
+The original single-test version only covered `/login` with `OIDC_ENFORCE_SSO` unset. This covers all three endpoints, plus the explicit `OIDC_ENFORCE_SSO=false` case alongside the default-unset case:
 
 ```ts
-it('logs in normally when SSO is not enforced', async () => {
+it('logs in normally when SSO is not enforced (OIDC_ENFORCE_SSO unset)', async () => {
+  // The default `server` from beforeAll never sets OIDC_ENFORCE_SSO, so
+  // config.oidc.enforceSso is already false — no extra server needed.
   await server.inject({
     method: 'POST',
     url: '/api/v1/auth/register',
     payload: { email: 'user2@example.com', password: 'password123' },
   });
-
-  vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue(null);
 
   const response = await server.inject({
     method: 'POST',
@@ -196,63 +270,168 @@ it('logs in normally when SSO is not enforced', async () => {
 
   expect(response.statusCode).toBe(200);
 });
+
+it('registers normally when OIDC_ENFORCE_SSO is explicitly false', async () => {
+  const ssoOffServer = await createServerWithSsoEnforced(db, false);
+  try {
+    const response = await ssoOffServer.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      payload: { email: 'user3@example.com', password: 'password123' },
+    });
+
+    expect(response.statusCode).toBe(201);
+  } finally {
+    await ssoOffServer.close();
+  }
+});
+
+it('logs in via magic-login normally when SSO is not enforced', async () => {
+  // Seed a user + magic_login_enabled org directly, following the same
+  // pattern as tests/integration/magic-login.integration.test.ts.
+  const user = await db.users.create({
+    email: 'magic-ok@example.com',
+    name: null,
+    password_hash: null,
+    role: 'user',
+  });
+  const org = await db.organizations.create({
+    name: 'Magic OK Org',
+    subdomain: 'magic-ok-org',
+    settings: { magic_login_enabled: true },
+  });
+  await db.organizationMembers.create({
+    organization_id: org.id,
+    user_id: user.id,
+    role: 'member',
+  });
+
+  const magicToken = server.jwt.sign({ userId: user.id, organizationId: org.id, type: 'magic' });
+
+  const response = await server.inject({
+    method: 'POST',
+    url: '/api/v1/auth/magic-login',
+    payload: { token: magicToken },
+  });
+
+  expect(response.statusCode).toBe(200);
+});
 ```
 
 ### `packages/backend/tests/api/admin-organizations.test.ts`
 
-**Correction:** same real-server/real-`db` note as above — spy on `db.oidcIdpConfigs` (not `db.oidcIdpConfigRepository`) rather than adding to a mock container fixture. `server.inject` (not `app.inject`) and `adminToken` (not `platformAdminToken`) match this file's actual variable names.
+**Correction:** same real-server/real-`db` note as above — `server.inject` (not `app.inject`) and `adminToken` (not `platformAdminToken`) match this file's actual variable names. This file's `import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';` (line 6) does not include `vi` — add it, since the fix below needs `vi.spyOn` and `vi.resetModules`.
+
+**Correction (test harness — different fix than `auth.test.ts`, not the same one repeated):** the "no-op for a nonexistent tenant" property Test D/L below exist to prove is specific to `saas` mode's per-tenant `db.oidcIdpConfigs.findByTenantId` lookup (see the resolved ordering decision at the top of this spec) — `selfhosted` mode's guard branch is a single global flag with no per-tenant concept at all, so it cannot exercise this property regardless of how it's mocked. Unlike `auth.test.ts`'s three endpoints, this one genuinely needs a `saas`-mode server. This file's own `server` is built under the same global `selfhosted` `tests/setup.ts` as `auth.test.ts`, so build a dedicated `saas`-mode server the same way `auth.test.ts`'s existing `POST /api/v1/auth/login — SaaS org-access revocation` describe block already does (`DEPLOYMENT_MODE=saas` + `resetDeploymentConfig()` + `vi.resetModules()` + a freshly re-imported `createServer`, then restore):
 
 ```ts
-beforeEach(() => {
-  vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue(null);
-});
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 ```
 
-**Test case D — admin magic-token impersonation returns 403, before other checks (AC #4):**
+**Test case D — admin magic-token impersonation returns 403, before other checks (AC #4).** **Test case L — nonexistent organization still 404s, not masked by the guard (AC #6, the ordering decision's safety property).** **Test case M — an existing but disabled `enforceSso: false` row also proceeds normally (AC #5, the admin endpoint's share of the success-path coverage Test E covers for the other three, and distinct from Test L's "no row at all" case).**
 
-Note: the `magic-token` route schema requires `params.id` to match `format: uuid` and `body.user_id` to be present (`required: ['user_id']`); a non-UUID id like `'org-123'` or a missing body would fail Fastify schema validation with 400 before the SSO guard ever runs. Since the guard is inserted at the very start of the handler (before the org/membership lookups), it doesn't need a real, existing org — just schema-valid params/body. This also proves the ordering decision above: the org id used here is never created in the test database, so if the guard ran _after_ `db.organizations.findById`, this would 404, not 403.
-
-```ts
-it('blocks admin magic-token impersonation when the target org enforces SSO, before the org lookup', async () => {
-  vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue({
-    enforceSso: true,
-  } as never);
-
-  const response = await server.inject({
-    method: 'POST',
-    url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000001/magic-token',
-    headers: { authorization: `Bearer ${adminToken}` },
-    payload: { user_id: '00000000-0000-0000-0000-000000000002' },
-  });
-
-  expect(response.statusCode).toBe(403);
-  expect(response.json()).toEqual({ error: 'sso_enforced' });
-});
-```
-
-**Test case L — nonexistent organization still 404s, not masked by the guard (AC #6, the ordering decision's safety property):**
+Note: the `magic-token` route schema requires `params.id` to match `format: uuid` and `body.user_id` to be present (`required: ['user_id']`); a non-UUID id like `'org-123'` or a missing body would fail Fastify schema validation with 400 before the SSO guard ever runs. Since the guard is inserted at the very start of the handler (before the org/membership lookups), Tests D/L/M don't need a real, existing org — just schema-valid params/body. This also proves the ordering decision above: the org id used in L/M is never created in the test database, so if the guard ran _after_ `db.organizations.findById`, those would 404 regardless of the guard, not exercise the guard's no-op path at all.
 
 ```ts
-it('still 404s for a nonexistent organization rather than leaking a 403', async () => {
-  // findByTenantId is not mocked to return an enforceSso row for this id -
-  // the default beforeEach mock (null) already models "no config for this tenant",
-  // which is also exactly what a nonexistent org's id resolves to.
-  const response = await server.inject({
-    method: 'POST',
-    url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000099/magic-token',
-    headers: { authorization: `Bearer ${adminToken}` },
-    payload: { user_id: '00000000-0000-0000-0000-000000000002' },
+describe('POST /:id/magic-token — SSO enforcement (saas mode)', () => {
+  let saasServer: FastifyInstance;
+
+  beforeAll(async () => {
+    const originalMode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'saas';
+    const { resetDeploymentConfig } = await import('../../src/saas/config.js');
+    resetDeploymentConfig();
+    vi.resetModules();
+
+    const { createServer: freshCreateServer } = await import('../../src/api/server.js');
+    saasServer = await freshCreateServer({
+      db,
+      storage: createMockStorage(),
+      pluginRegistry: createMockPluginRegistry(),
+    });
+    await saasServer.ready();
+
+    // Restore env var — the already-created saasServer has its config baked in.
+    // adminToken (from the outer beforeEach) validates on saasServer too: it's
+    // a JWT signed against the shared JWT_SECRET, and the admin user it names
+    // lives in `db`, which both server instances share.
+    process.env.DEPLOYMENT_MODE = originalMode;
+    resetDeploymentConfig();
+    vi.resetModules();
   });
 
-  expect(response.statusCode).toBe(404);
+  afterAll(async () => {
+    await saasServer.close();
+  });
+
+  it('blocks admin magic-token impersonation when the target org enforces SSO, before the org lookup', async () => {
+    const spy = vi
+      .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+      .mockResolvedValue({ enforceSso: true } as never);
+
+    try {
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000001/magic-token',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { user_id: '00000000-0000-0000-0000-000000000002' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: 'sso_enforced' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('still 404s for a nonexistent organization rather than leaking a 403', async () => {
+    const spy = vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue(null); // no row -> no-op
+
+    try {
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000099/magic-token',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { user_id: '00000000-0000-0000-0000-000000000002' },
+      });
+
+      expect(response.statusCode).toBe(404);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('proceeds past the guard when the org has an enforceSso:false config row', async () => {
+    const spy = vi
+      .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+      .mockResolvedValue({ enforceSso: false } as never);
+
+    try {
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000099/magic-token',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { user_id: '00000000-0000-0000-0000-000000000002' },
+      });
+
+      // Guard no-ops (enforceSso is false, not missing); falls through to the
+      // existing org-lookup 404, same outcome as the nonexistent-tenant case
+      // above but via a different guard branch (a real row vs. no row at all).
+      expect(response.statusCode).toBe(404);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 ```
 
 ## Verification
 
+**Correction:** `test:unit` (`vitest.unit.config.ts`) does not include `tests/api/auth.test.ts` or `tests/api/admin-organizations.test.ts` - its `include` list only has `tests/api/auth-handlers.test.ts` from this directory. Both files are integration-style (real Fastify server, real testcontainers Postgres via `tests/setup.ts`) and only run under the default config (`vitest.config.ts`, invoked by the plain `test` script), which needs Docker.
+
 ```bash
 pnpm --filter @bugspotter/backend typecheck
-pnpm --filter @bugspotter/backend test:unit
+pnpm --filter @bugspotter/backend test -- tests/api/auth.test.ts tests/api/admin-organizations.test.ts
 ```
 
 Rollback: revert the guard-call insertions in the four handlers. Additive/behind-config — password/JWT login is unchanged when the guard isn't invoked. No data migration or irreversible state change is introduced.
