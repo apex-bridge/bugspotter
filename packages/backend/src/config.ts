@@ -116,6 +116,7 @@ export const config: AppConfig = {
     // Trim + drop a trailing slash so route handlers can concatenate a
     // leading-slash path directly without ending up with `//api/v1/...`.
     redirectBaseUrl: process.env.OIDC_REDIRECT_BASE_URL?.trim().replace(/\/+$/, '') || null,
+    enforceSso: parseBooleanEnv(process.env.OIDC_ENFORCE_SSO) ?? false,
   },
   shareToken: {
     defaultExpirationHours: parseInt(process.env.SHARE_TOKEN_DEFAULT_EXPIRATION_HOURS ?? '24', 10),
