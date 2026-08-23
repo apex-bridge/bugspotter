@@ -684,10 +684,30 @@ if (qualityRemainingMs < QUALITY_MIN_BUDGET_MS) {
   // this file already guards against on the input side. A truncated file is
   // marked read-only and excluded below if the model tries to revise it
   // anyway, mirroring "you would silently delete the lines you cannot see."
+  // Both sets below feed the same "was this file actually shown to the
+  // model" check when validating revisions further down: a path missing
+  // from writtenFileSections — whether because it was truncated or because
+  // it could not be read at all — must not be accepted back, or the quality
+  // pass could silently overwrite a file it never saw with fabricated
+  // content, same class of issue as the truncation case this already guards.
   const truncatedWrittenPaths = new Set();
+  const unreadableWrittenPaths = new Set();
   const writtenFileSections = writtenPaths
     .map((p) => {
-      const content = readFileSync(resolve(repoRoot, p), 'utf8');
+      // Same defensive read as the currentFiles block above (line ~236): this
+      // script just wrote every one of these paths itself moments ago, so an
+      // unreadable path here should be near-impossible, but a quality-review
+      // hiccup must never abort a scaffold that otherwise succeeded (see the
+      // callClaude try/catch below) — an uncaught readFileSync would do
+      // exactly that.
+      let content;
+      try {
+        content = readFileSync(resolve(repoRoot, p), 'utf8');
+      } catch (err) {
+        console.warn(`Quality self-review: cannot read ${p}, excluding it: ${err.message}`);
+        unreadableWrittenPaths.add(p);
+        return null;
+      }
       const lines = content.split('\n');
       const lineCount = lines.length - (lines.at(-1) === '' ? 1 : 0);
       const isTruncated = lineCount > MAX_LINES_PER_FILE;
@@ -702,6 +722,7 @@ if (qualityRemainingMs < QUALITY_MIN_BUDGET_MS) {
         : `## ${p}`;
       return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
     })
+    .filter(Boolean)
     .join('\n\n');
 
   // Leading marker line, same purpose as the corrective-follow-up prompt's
@@ -792,18 +813,24 @@ ${writtenFileSections}`;
           );
           continue;
         }
-        if (truncatedWrittenPaths.has(relPath)) {
-          // Model was shown only the first MAX_LINES_PER_FILE lines of this
-          // file and told not to revise it. Enforce that server-side too:
-          // writing back "content" built from a partial view would silently
-          // truncate the file to what the model could see, regardless of
-          // whether it followed the instruction.
+        if (truncatedWrittenPaths.has(relPath) || unreadableWrittenPaths.has(relPath)) {
+          // The model was shown only a partial view of this file (or none at
+          // all — see unreadableWrittenPaths above) and told not to revise
+          // it. Enforce that server-side too: writing back "content" built
+          // from a partial or nonexistent view would silently corrupt or
+          // fabricate the file, regardless of whether the model followed the
+          // instruction.
           console.warn(
-            `Quality self-review proposed a change to a truncated file, skipping to avoid data loss: ${relPath}`
+            `Quality self-review proposed a change to a file excluded from its view, skipping to avoid data loss: ${relPath}`
           );
           continue;
         }
-        writeFileSync(resolve(repoRoot, relPath), content, 'utf8');
+        try {
+          writeFileSync(resolve(repoRoot, relPath), content, 'utf8');
+        } catch (err) {
+          console.warn(`Quality self-review could not write ${relPath}, skipping: ${err.message}`);
+          continue;
+        }
         console.log(`Quality self-review revised ${relPath}`);
         revisedCount += 1;
       }

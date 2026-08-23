@@ -464,4 +464,30 @@ describe('quality self-review pass', () => {
     const onDisk = readFileSync(join(REPO, 'packages/a.ts'), 'utf8');
     assert.equal(onDisk, 'export const a = 1;\n');
   });
+
+  test('rejects a revision targeting a written file the model only saw truncated', () => {
+    const overCapContent = `${Array.from(
+      { length: MAX_LINES_PER_FILE + 1 },
+      (_, i) => `const l${i} = ${i};`
+    ).join('\n')}\n`;
+    const r = runImpl(spec('packages/big.ts'), {
+      files: [{ path: 'packages/big.ts', content: overCapContent }],
+      qualityResponse: JSON.stringify({
+        files: [{ path: 'packages/big.ts', content: 'export const shortened = true;\n' }],
+        summary: 'should be rejected',
+      }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(
+      r.stderr,
+      /proposed a change to a file excluded from its view, skipping to avoid data loss/
+    );
+    assert.doesNotMatch(r.stdout, /Quality self-review revised/);
+    const onDisk = readFileSync(join(REPO, 'packages/big.ts'), 'utf8');
+    assert.equal(
+      onDisk,
+      overCapContent,
+      'the file must keep its full content, not be replaced by a revision built from a truncated view'
+    );
+  });
 });
