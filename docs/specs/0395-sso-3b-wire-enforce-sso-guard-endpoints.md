@@ -42,9 +42,9 @@ Four auth surfaces can currently establish a session for a user whose organizati
 
 ## Acceptance criteria
 
-- [ ] `POST /api/v1/auth/login` returns `403 {"error":"sso_enforced"}` when the resolved tenant has `enforce_sso=true` — verified by Test A
-- [ ] `POST /api/v1/auth/register` returns `403 {"error":"sso_enforced"}` under the same condition, without minting a session — verified by Test B
-- [ ] `POST /api/v1/auth/magic-login` returns `403 {"error":"sso_enforced"}` under the same condition — verified by Test C
+- [ ] `POST /api/v1/auth/login` returns `403 {"error":"sso_enforced"}` when the resolved tenant has `enforce_sso=true` — verified by Test A (selfhosted, `OIDC_ENFORCE_SSO`) and Test F (saas mode, proves the guard is keyed on the host-resolved `request.organizationId`)
+- [ ] `POST /api/v1/auth/register` returns `403 {"error":"sso_enforced"}` under the same condition, without minting a session — verified by Test B (selfhosted) and Test G (saas mode, same tenant-source proof as Test F)
+- [ ] `POST /api/v1/auth/magic-login` returns `403 {"error":"sso_enforced"}` under the same condition — verified by Test C (selfhosted) and Test H (saas mode, proves the guard is keyed on the JWT's `decoded.organizationId`, not `request.organizationId`)
 - [ ] `POST /api/v1/admin/organizations/:id/magic-token` returns `403 {"error":"sso_enforced"}` when the target org has `enforce_sso=true`, before the org-existence/magic-login-enabled/user-existence checks run — verified by Test D
 - [ ] All four endpoints proceed normally (existing success/404 status codes) when `enforce_sso=false` or no `oidc_idp_config` row exists for the tenant — verified by Test E (all three `auth.ts` endpoints, `OIDC_ENFORCE_SSO` unset and explicit `false`) and Test M (admin magic-token, explicit `enforceSso: false` row)
 - [ ] `POST /api/v1/admin/organizations/:id/magic-token` against a nonexistent organization id still returns `404` (not `403`) — the guard's no-op-for-unknown-tenant behavior doesn't mask the existing not-found check — verified by Test L
@@ -315,6 +315,133 @@ it('logs in via magic-login normally when SSO is not enforced', async () => {
   });
 
   expect(response.statusCode).toBe(200);
+});
+```
+
+**Test cases F/G/H — saas-mode tenant-source proof for AC #1–#3 (review gap):** Tests A–C above only ever exercise `selfhosted` mode's branch of `assertSsoNotEnforced`, which reads the global `config.oidc.enforceSso` flag and never touches its `tenantId`/repository arguments (see the harness correction above) — so a regression that passed the wrong tenant id (or the wrong repository) into the guard call would still pass all three. Each case below conditions the `db.oidcIdpConfigs.findByTenantId` spy on the _specific_ tenant id the guard is expected to pass; a wrong id makes the spy return `null` (guard no-ops, request proceeds) instead of `{ enforceSso: true }`, so the test fails on status code rather than on the spy call assertion alone — both are asserted for a precise failure signal. These three share one `saas`-mode server, built the same way the file's own existing `POST /api/v1/auth/login — SaaS org-access revocation` describe block (above) builds its `saasServer` — `DEPLOYMENT_MODE=saas` + `resetDeploymentConfig()` + `vi.resetModules()` + a freshly re-imported `createServer`, then restore:
+
+```ts
+describe('POST /api/v1/auth/{login,register,magic-login} — SSO enforcement (saas mode)', () => {
+  let saasServer: FastifyInstance;
+
+  beforeAll(async () => {
+    const originalMode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'saas';
+    const { resetDeploymentConfig } = await import('../../src/saas/config.js');
+    resetDeploymentConfig();
+    vi.resetModules();
+
+    const { createServer: freshCreateServer } = await import('../../src/api/server.js');
+    saasServer = await freshCreateServer({
+      db,
+      storage: createMockStorage(),
+      pluginRegistry: createMockPluginRegistry(),
+    });
+    await saasServer.ready();
+
+    // Restore env var — the already-created saasServer has its config baked in.
+    process.env.DEPLOYMENT_MODE = originalMode;
+    resetDeploymentConfig();
+    vi.resetModules();
+  });
+
+  afterAll(async () => {
+    await saasServer.close();
+  });
+
+  it('Test F: blocks /login on a host-resolved tenant, keyed on request.organizationId', async () => {
+    // subscription_status defaults to 'trial' (in ACTIVE_STATUSES), so the
+    // tenant middleware resolves this subdomain instead of 403ing first.
+    const org = await db.organizations.create({
+      name: 'SSO Login Org',
+      subdomain: 'sso-login-org',
+    });
+    const spy = vi
+      .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+      .mockImplementation(async (tenantId) =>
+        tenantId === org.id ? ({ enforceSso: true } as never) : null
+      );
+
+    try {
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        headers: { host: `${org.subdomain}.bugspotter.io` },
+        payload: { email: 'someone@example.com', password: 'password123' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: 'sso_enforced' });
+      expect(spy).toHaveBeenCalledWith(org.id);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('Test G: blocks /register on a host-resolved tenant, before allowRegistration/invite checks', async () => {
+    const org = await db.organizations.create({
+      name: 'SSO Register Org',
+      subdomain: 'sso-register-org',
+    });
+    const spy = vi
+      .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+      .mockImplementation(async (tenantId) =>
+        tenantId === org.id ? ({ enforceSso: true } as never) : null
+      );
+
+    try {
+      // No invite_token: saas mode's default requireInvitationToRegister
+      // would otherwise reject this with 403 InvitationRequired, but the
+      // guard runs first (constraint 3) and short-circuits before that
+      // check is ever reached — this also proves the ordering, not just
+      // the tenant source.
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register',
+        headers: { host: `${org.subdomain}.bugspotter.io` },
+        payload: { email: 'newuser@example.com', password: 'password123' },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: 'sso_enforced' });
+      expect(spy).toHaveBeenCalledWith(org.id);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('Test H: blocks /magic-login keyed on decoded.organizationId, not request.organizationId', async () => {
+    const tenantId = '00000000-0000-0000-0000-000000000005';
+    const spy = vi
+      .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+      .mockImplementation(async (id) => (id === tenantId ? ({ enforceSso: true } as never) : null));
+
+    try {
+      const magicToken = saasServer.jwt.sign({
+        userId: '00000000-0000-0000-0000-000000000006',
+        organizationId: tenantId,
+        type: 'magic',
+      });
+
+      // No host header override: the injected default host resolves no
+      // subdomain in saas mode, so request.organizationId stays undefined
+      // and the handler's own tenant-match gate no-ops. The guard must
+      // still block using decoded.organizationId from the token claim —
+      // proving the guard reads the claim, not request.organizationId
+      // (which is a different, and here absent, value).
+      const response = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/auth/magic-login',
+        payload: { token: magicToken },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: 'sso_enforced' });
+      expect(spy).toHaveBeenCalledWith(tenantId);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 ```
 
