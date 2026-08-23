@@ -11,6 +11,27 @@ caught immediately by re-running the same benign-command check this doc
 already prescribes, exactly why that check exists. Reverted on the host and
 in this doc; see the notes under steps 2 and 5 below.
 
+**Correction, 2026-08-22:** step 7's commands below were run with the
+`--env production` flag exactly as written, but the actual 2026-08-11
+execution set all four secrets at the **repository** level instead - not a
+doc error, an execution one. Because `deploy-production` declares
+`environment: production`, GitHub's own secret-precedence rules should have
+made an environment-scoped secret win over a same-named repository one, but
+no environment-scoped `DEPLOY_HOST`/`DEPLOY_USER`/`SSH_DEPLOY_KEY`/
+`SSH_KNOWN_HOSTS` existed yet at that point (they were still the original
+2026-04-09 Yandex-era values this doc's intro already flags as due for
+rotation) - so the job kept reading those stale values instead. Every
+`deploy-production` run from 2026-08-11 through 2026-08-22 timed out
+connecting to that old, by-then-reassigned IP, misread as a netcup
+network-edge flake and chased through several rounds of retry-logic
+hardening (PRs #384, #385) before the actual cause surfaced. Fixed by
+re-running step 7 at the correct scope with the same 2026-08-11 keypair
+(still present locally) and deleting the stale repository-level secrets
+entirely, so there is nothing left for a job to read by the wrong scope.
+Verified end-to-end through Actions itself the same day - see the
+"Verifying" section below, which previously only had a direct-SSH test to
+point to.
+
 `DEPLOY_HOST`, `DEPLOY_USER`, `SSH_DEPLOY_KEY`, `SSH_KNOWN_HOSTS` in
 `apex-bridge/bugspotter` were set 2026-04-09, four months before the
 2026-08-04 netcup migration. They hold Yandex-era values and will fail
@@ -257,10 +278,13 @@ running it, proving the key cannot escape the script. Then a real deploy
 against `ghcr.io/apex-bridge/bugspotter/api:sha-cb02c35` - the commit
 already running - which pulled, tagged, recreated `api` + `worker`, and
 returned exit 0 with both containers healthy. `curl /ready` confirmed 200
-externally. Only after that did the four GitHub secrets get set. The
-`gh workflow run` trigger above was not yet exercised as of this writing -
-that's the one remaining step to close the loop end-to-end through Actions
-itself rather than a direct SSH test.
+externally. Only after that did the four GitHub secrets get set.
+
+**Closed the loop, 2026-08-22:** the `gh workflow run` trigger above was
+finally exercised for real once the secrets were fixed at the correct scope
+(see the correction above) - `deploy-production` ran end-to-end through
+Actions, and both `app.kz.bugspotter.io/ready` and
+`api.kz.bugspotter.io/ready` returned 200 externally afterward.
 
 Rollback needs the **admin key** (`~/.ssh/bugspotter-netcup`, `root@...`),
 not the Path A deploy key - `ci-deploy.sh`'s forced command only accepts a
