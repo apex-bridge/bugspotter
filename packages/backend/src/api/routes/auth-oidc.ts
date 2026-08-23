@@ -153,10 +153,14 @@ export function oidcRoutes(fastify: FastifyInstance): void {
         response_types: ['code'],
       });
 
-      // openid-client validates iss/aud/nonce/exp/JWKS signature internally on callback()
+      // openid-client validates iss/aud/nonce/exp/JWKS signature internally on callback().
+      // `state` must be echoed in `params` too, not just `checks` — openid-client@5.7.1's
+      // callback() throws "state missing from the response" when checks.state is set but
+      // params.state isn't (lib/client.js), which would 401 every real callback while
+      // leaving the fully-mocked unit tests green.
       const tokenSet = await client.callback(
         statePayload.redirectUri,
-        { code },
+        { code, state: stateParam },
         { state: stateParam, nonce: statePayload.nonce, code_verifier: statePayload.codeVerifier }
       );
       claims = tokenSet.claims();
@@ -167,7 +171,11 @@ export function oidcRoutes(fastify: FastifyInstance): void {
     if (claims.email_verified !== true) {
       return unauthorized(reply);
     }
-    if (!claims.email) {
+    // The ID token's claim shape is IdP-controlled, not just signature-verified — a
+    // truthy non-string `email` (e.g. a number or object) would pass `!claims.email`
+    // and then throw on .split() below, outside this try/catch, turning a bad claim
+    // into an unhandled 500 instead of the generic 401 every other rejection returns.
+    if (typeof claims.email !== 'string' || claims.email.length === 0) {
       return unauthorized(reply);
     }
     const email = claims.email;
@@ -176,9 +184,15 @@ export function oidcRoutes(fastify: FastifyInstance): void {
       return unauthorized(reply);
     }
     // .toLowerCase() so the check isn't case-sensitive; split('@')[1] is still undefined
-    // for a malformed email with no '@', so the fail-closed check covers that too.
+    // for a malformed email with no '@', so the fail-closed check covers that too. The
+    // configured domains themselves aren't guaranteed lowercase (admin-entered free
+    // text), so each is normalized at comparison time too — .includes() alone would
+    // silently reject a valid user against e.g. an allowedDomains entry of 'Corp.Example.Com'.
     const emailDomain = email.split('@')[1]?.toLowerCase();
-    if (!emailDomain || !idpConfig.allowedDomains.includes(emailDomain)) {
+    if (
+      !emailDomain ||
+      !idpConfig.allowedDomains.some((domain) => domain.toLowerCase() === emailDomain)
+    ) {
       return unauthorized(reply);
     }
 

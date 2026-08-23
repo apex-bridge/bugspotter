@@ -282,6 +282,16 @@ describe('GET /api/v1/auth/oidc/:tenantId/callback', () => {
 
     expect(res.statusCode).toBeLessThan(400);
     expect(res.headers['set-cookie']).toMatch(/refresh_token=/);
+    // Regression guard: openid-client@5.7.1's callback() throws "state missing from
+    // the response" when checks.state is set but params.state isn't (verified against
+    // node_modules/openid-client's actual lib/client.js) — mockCallbackFn being fully
+    // mocked means a statusCode assertion alone can't catch a dropped `state` in the
+    // params object, so assert on the actual call arguments too.
+    expect(mockCallbackFn).toHaveBeenCalledWith(
+      'http://app/cb',
+      expect.objectContaining({ code: 'c', state: 's' }),
+      expect.objectContaining({ state: 's' })
+    );
   });
 
   // --- B: tampered signature --------------------------------------------
@@ -401,6 +411,26 @@ describe('GET /api/v1/auth/oidc/:tenantId/callback', () => {
     expect(mockUsers.findByEmail).not.toHaveBeenCalled();
   });
 
+  it('returns 401 instead of a 500 when the email claim is a non-string truthy value', async () => {
+    mockCacheService.getAndDelete.mockResolvedValue(validPayload);
+    mockOidcIdpConfigs.findByTenantId.mockResolvedValue(validConfig);
+    // A truthy, non-empty, non-string claim (e.g. a malformed/malicious IdP response)
+    // passes a bare `!claims.email` check and would previously reach `.split('@')`
+    // outside the try/catch, throwing an unhandled 500 instead of the generic 401
+    // every other rejection in this handler returns.
+    mockCallbackFn.mockResolvedValue({
+      claims: () => ({ email: 12345, email_verified: true, sub: 'sub-1' }),
+    });
+
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/v1/auth/oidc/tenant-abc/callback?code=c&state=s',
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(mockUsers.findByEmail).not.toHaveBeenCalled();
+  });
+
   // --- H: allowedDomains fail-closed ---------------------------------------
 
   it('returns 401 before any user lookup when allowedDomains is empty', async () => {
@@ -434,6 +464,25 @@ describe('GET /api/v1/auth/oidc/:tenantId/callback', () => {
 
     expect(res.statusCode).toBe(401);
     expect(mockUsers.findByEmail).not.toHaveBeenCalled();
+  });
+
+  it('links the account when allowedDomains has a mixed-case entry matching the lowercased email domain', async () => {
+    mockCacheService.getAndDelete.mockResolvedValue(validPayload);
+    mockOidcIdpConfigs.findByTenantId.mockResolvedValue({
+      ...validConfig,
+      allowedDomains: ['Corp.Example.Com'],
+    });
+    mockCallbackFn.mockResolvedValue(validTokenSet); // email: alice@corp.example.com
+    mockUsers.findByEmail.mockResolvedValue({ id: 'user-1' });
+    mockOrganizationMembers.findMembership.mockResolvedValue({ id: 'mem-1' });
+
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/v1/auth/oidc/tenant-abc/callback?code=c&state=s',
+    });
+
+    expect(res.statusCode).toBeLessThan(400);
+    expect(res.headers['set-cookie']).toMatch(/refresh_token=/);
   });
 
   // --- I: cross-tenant match rejected --------------------------------------
