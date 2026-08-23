@@ -676,11 +676,31 @@ if (qualityRemainingMs < QUALITY_MIN_BUDGET_MS) {
   );
 } else {
   const qualityTimeoutMs = Math.min(300_000, qualityRemainingMs);
+  // Same MAX_LINES_PER_FILE cap the currentFiles section above applies to
+  // pre-existing declared files, for the same reason: LLM_BACKEND=cli enforces
+  // no output-token cap (see MAX_TOKENS's comment above), so a file this run
+  // just wrote can already be arbitrarily large before it's re-injected here.
+  // Uncapped, that risks the same unbounded-prompt cost/truncation exposure
+  // this file already guards against on the input side. A truncated file is
+  // marked read-only and excluded below if the model tries to revise it
+  // anyway, mirroring "you would silently delete the lines you cannot see."
+  const truncatedWrittenPaths = new Set();
   const writtenFileSections = writtenPaths
     .map((p) => {
       const content = readFileSync(resolve(repoRoot, p), 'utf8');
-      const fence = fenceFor(content);
-      return `## ${p}\n${fence}${languageFor(p)}\n${content}\n${fence}`;
+      const lines = content.split('\n');
+      const lineCount = lines.length - (lines.at(-1) === '' ? 1 : 0);
+      const isTruncated = lineCount > MAX_LINES_PER_FILE;
+      const body = isTruncated ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') : content;
+      const fence = fenceFor(body);
+      if (isTruncated) {
+        truncatedWrittenPaths.add(p);
+      }
+      const header = isTruncated
+        ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lineCount}. ` +
+          `Reference only — do NOT propose changes to this file.`
+        : `## ${p}`;
+      return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
     })
     .join('\n\n');
 
@@ -704,7 +724,11 @@ Do NOT comment on or change:
 If neither issue is present, respond with exactly the word: NO_CHANGES_NEEDED
 
 Otherwise respond with ONLY valid JSON (no prose, no markdown fences around the JSON itself): { "files": [ { "path": "...", "content": "..." } ], "summary": "one sentence" } — include the COMPLETE revised content of every file you changed, reproduced in full except for the specific extraction/deduplication. Do not include a file you did not change, and do not change the file set — only revise the content of files listed below.
-
+${
+  truncatedWrittenPaths.size
+    ? `\nA file marked TRUNCATED below is shown only in part. Never propose a change to one: you would silently delete the lines you cannot see.\n`
+    : ''
+}
 FILES WRITTEN:
 ${writtenFileSections}`;
 
@@ -765,6 +789,17 @@ ${writtenFileSections}`;
         if (relPath === null || !writtenSet.has(relPath)) {
           console.warn(
             `Quality self-review named a path outside this run's own output, skipping: ${path}`
+          );
+          continue;
+        }
+        if (truncatedWrittenPaths.has(relPath)) {
+          // Model was shown only the first MAX_LINES_PER_FILE lines of this
+          // file and told not to revise it. Enforce that server-side too:
+          // writing back "content" built from a partial view would silently
+          // truncate the file to what the model could see, regardless of
+          // whether it followed the instruction.
+          console.warn(
+            `Quality self-review proposed a change to a truncated file, skipping to avoid data loss: ${relPath}`
           );
           continue;
         }
