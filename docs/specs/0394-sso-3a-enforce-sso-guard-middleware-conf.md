@@ -38,11 +38,12 @@ Four auth surfaces can currently establish a session for a user whose organizati
 ## Constraints
 
 1. Guard must read `enforce_sso` from the mode-appropriate source per ADR-0044 Decision 4: the tenant's `oidc_idp_config` row in `saas` mode (via `db.oidcIdpConfigs.findByTenantId`, reading the returned `enforceSso` field), the `OIDC_ENFORCE_SSO` env var in `selfhosted` mode.
-2. Must default to **not enforced** when the config source is absent/unset (missing `oidc_idp_config` row, or `OIDC_ENFORCE_SSO` unset) — the issue explicitly requires this default over throwing.
-3. This slice only consumes the `oidc_idp_config` repository from #352 — it must not implement repository methods itself.
-4. Change must be purely additive/behind-config: with nothing calling the guard yet (that's #395's job), these additions have zero runtime effect on any existing behavior.
-5. `SsoEnforcedError`'s carried identifier (its message, `'sso_enforced'`) is the single shared source #395 constructs its `403 {"error":"sso_enforced"}` responses from — keep it stable, since #395 depends on this exact value across all four endpoints for a consistent response shape.
-6. Use the existing `parseBooleanEnv` from `config/validators.ts` for the `OIDC_ENFORCE_SSO` env var — do not add a new boolean-env-parsing helper.
+2. Must default to **not enforced** when the config source is absent/unset (missing `oidc_idp_config` row, or `OIDC_ENFORCE_SSO` unset) — the issue explicitly requires this default over throwing. This applies only to an absent/unset config _value_, not to a failed lookup: if `oidcIdpConfigs.findByTenantId` itself throws (DB connection error, etc.), the guard must let that exception propagate rather than swallow it into `enforceSso: false` — a failed auth request is the correct fail-closed outcome for a security guard, versus silently treating an infrastructure error as "SSO not required."
+3. The deployment-mode branch must match `getDeploymentConfig()`'s own default (`packages/backend/src/saas/config.ts:33-36`: unset/unrecognized `DEPLOYMENT_MODE` resolves to `selfhosted`) and the pattern the rest of `config.ts` already uses (lines 104, 109: `process.env.DEPLOYMENT_MODE === 'saas'`) — branch on `=== 'saas'` for the DB-lookup path, with `selfhosted` (including unset/invalid) as the fallthrough default, not the other way around.
+4. This slice only consumes the `oidc_idp_config` repository from #352 — it must not implement repository methods itself.
+5. Change must be purely additive/behind-config: with nothing calling the guard yet (that's #395's job), these additions have zero runtime effect on any existing behavior.
+6. `SsoEnforcedError`'s carried identifier (its message, `'sso_enforced'`) is the single shared source #395 constructs its `403 {"error":"sso_enforced"}` responses from — keep it stable, since #395 depends on this exact value across all four endpoints for a consistent response shape.
+7. Use the existing `parseBooleanEnv` from `config/validators.ts` for the `OIDC_ENFORCE_SSO` env var — do not add a new boolean-env-parsing helper.
 
 ## Acceptance criteria
 
@@ -61,6 +62,8 @@ New shared guard function, to be called from each of the four handlers in #395; 
 
 **Correction:** the deployment-mode check below must not read `config.deploymentMode` — that field does not exist on `AppConfig` (`packages/backend/src/config/types.ts` has no `deploymentMode`, and `config.ts` never assigns one). Every other mode-dependent default in `config.ts` (e.g. `auth.allowRegistration`, `auth.selfServiceSignupEnabled`) reads `process.env.DEPLOYMENT_MODE` directly — do the same here, or use `getDeploymentConfig()` from `../../saas/config.js` (already imported by `auth.ts`) if a richer accessor is needed. That file wasn't in the verified source set for this review, so its exact return shape (e.g. whether it exposes `.mode`) is unverified.
 
+**Correction (review):** branch on `=== 'saas'`, not `=== 'selfhosted'`. `getDeploymentConfig()` (`packages/backend/src/saas/config.ts:33-36`) resolves an unset or unrecognized `DEPLOYMENT_MODE` to `selfhosted`, and `config.ts` (lines 104, 109) mirrors that by checking `=== 'saas'` for saas-only defaults. A guard that instead checks `=== 'selfhosted'` and falls through to the DB lookup on anything else inverts that default: an unset `DEPLOYMENT_MODE` would hit the `saas` repository-lookup path instead of the `selfhosted` env-var path. The DB-lookup branch must be the explicit `=== 'saas'` check, with `selfhosted` as the fallthrough.
+
 ```ts
 // New file
 import { config } from '../../config.js';
@@ -76,15 +79,20 @@ export async function assertSsoNotEnforced(
   tenantId: string,
   oidcIdpConfigs: OidcIdpConfigRepository
 ): Promise<void> {
-  if (process.env.DEPLOYMENT_MODE === 'selfhosted') {
-    if (config.oidc.enforceSso) {
+  if (process.env.DEPLOYMENT_MODE === 'saas') {
+    // DB errors here (connection failure, etc.) are intentionally not caught:
+    // they propagate and fail the auth request, rather than being treated as
+    // an absent config and silently resolving to "not enforced".
+    const idpConfig = await oidcIdpConfigs.findByTenantId(tenantId);
+    if (idpConfig?.enforceSso) {
       throw new SsoEnforcedError();
     }
     return;
   }
 
-  const idpConfig = await oidcIdpConfigs.findByTenantId(tenantId);
-  if (idpConfig?.enforceSso) {
+  // selfhosted mode — also the default when DEPLOYMENT_MODE is unset or
+  // unrecognized, matching getDeploymentConfig()'s own fallback.
+  if (config.oidc.enforceSso) {
     throw new SsoEnforcedError();
   }
 }
@@ -120,15 +128,23 @@ export interface OidcConfig {
 
 Direct unit test of `assertSsoNotEnforced` - mocks `OidcIdpConfigRepository` directly (a plain object with a mocked `findByTenantId`), no Fastify server, no real database. Isolates the guard's own mode-branching and error-throwing from any endpoint wiring (that's #395's job to test).
 
-**Test cases H/I — `selfhosted` mode:**
+**Correction (review):** all four cases (H/I/J/K) belong in a single `describe` block so they share `beforeEach`/`afterEach` env-var setup and reset, and so `mockRepo` is declared once instead of leaking between snippets. `process.env.DEPLOYMENT_MODE`/`OIDC_ENFORCE_SSO` are captured and restored in `afterEach`, following the existing pattern in `packages/backend/tests/config.test.ts:9-20` and `packages/backend/tests/db/user-repository-org-filter.test.ts` — mutating `process.env` without restoring it leaks state into unrelated tests.
+
+**Test cases H/I/J/K — all modes:**
 
 ```ts
 describe('assertSsoNotEnforced', () => {
+  const originalEnv = process.env;
   const mockRepo = { findByTenantId: vi.fn() } as unknown as OidcIdpConfigRepository;
 
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
   });
 
   it('throws SsoEnforcedError in selfhosted mode when config.oidc.enforceSso is true', async () => {
@@ -153,30 +169,28 @@ describe('assertSsoNotEnforced', () => {
 
     await expect(assertSsoNotEnforced('tenant-1', mockRepo)).resolves.toBeUndefined();
   });
-});
-```
 
-**Test cases J/K — `saas` mode:**
+  it('throws SsoEnforcedError in saas mode when the repository resolves enforceSso: true', async () => {
+    process.env.DEPLOYMENT_MODE = 'saas';
+    vi.resetModules();
+    const { assertSsoNotEnforced, SsoEnforcedError } = await import(
+      '../../../src/api/middleware/enforce-sso.js'
+    );
+    mockRepo.findByTenantId = vi.fn().mockResolvedValue({ enforceSso: true });
 
-```ts
-it('throws SsoEnforcedError in saas mode when the repository resolves enforceSso: true', async () => {
-  process.env.DEPLOYMENT_MODE = 'saas';
-  vi.resetModules();
-  const { assertSsoNotEnforced, SsoEnforcedError } = await import(
-    '../../../src/api/middleware/enforce-sso.js'
-  );
-  mockRepo.findByTenantId = vi.fn().mockResolvedValue({ enforceSso: true });
+    await expect(assertSsoNotEnforced('tenant-1', mockRepo)).rejects.toBeInstanceOf(
+      SsoEnforcedError
+    );
+  });
 
-  await expect(assertSsoNotEnforced('tenant-1', mockRepo)).rejects.toBeInstanceOf(SsoEnforcedError);
-});
+  it('resolves in saas mode when the repository resolves null', async () => {
+    process.env.DEPLOYMENT_MODE = 'saas';
+    vi.resetModules();
+    const { assertSsoNotEnforced } = await import('../../../src/api/middleware/enforce-sso.js');
+    mockRepo.findByTenantId = vi.fn().mockResolvedValue(null);
 
-it('resolves in saas mode when the repository resolves null', async () => {
-  process.env.DEPLOYMENT_MODE = 'saas';
-  vi.resetModules();
-  const { assertSsoNotEnforced } = await import('../../../src/api/middleware/enforce-sso.js');
-  mockRepo.findByTenantId = vi.fn().mockResolvedValue(null);
-
-  await expect(assertSsoNotEnforced('tenant-1', mockRepo)).resolves.toBeUndefined();
+    await expect(assertSsoNotEnforced('tenant-1', mockRepo)).resolves.toBeUndefined();
+  });
 });
 ```
 
