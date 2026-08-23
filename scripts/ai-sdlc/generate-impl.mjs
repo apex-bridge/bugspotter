@@ -646,6 +646,207 @@ if (correctionAttempted) {
   }
 }
 
+// Quality self-review: a second, narrowly-scoped LLM call that reviews ONLY
+// the files just written for two specific things — significant duplication
+// (3+ near-identical blocks) and extract-worthy complexity (a long inline
+// handler that should be a named function). Deliberately NOT security,
+// correctness, missing tests, or general style — that stays claude-review.yml's
+// and CodeRabbit's job; splitting one reviewer's attention across both axes
+// risks it doing both worse (that's why claude-review.yml's own prompt says
+// "skip nits, style, theoretical issues"). Motivated by issue #368: impl-agent's
+// own generated auth-oidc.ts had 12 copies of `reply.code(401).send({ error:
+// 'Authentication failed' })` and two ~50-120 line inline route handlers,
+// neither caught until a human noticed by hand afterward.
+//
+// Runs once per issue (here, inside generation), not once per push against an
+// open PR — same cost shape as spec-agent.yml's generate-spec.mjs +
+// verify-spec.mjs pair, and the same corrective-follow-up-call pattern above
+// for missing files. Time-budgeted against the SAME step budget that call
+// already uses: if turn 1 (plus a missing-file retry, if one fired) used most
+// of STEP_BUDGET_MS, this is skipped entirely rather than risking the step's
+// own timeout — a skipped quality pass costs nothing, but a timed-out step
+// loses the whole scaffold.
+const QUALITY_MIN_BUDGET_MS = parsePositiveMs(process.env.IMPL_QUALITY_MIN_BUDGET_MS, 90_000);
+const qualityRemainingMs = STEP_BUDGET_MS - SAFETY_BUFFER_MS - (Date.now() - scriptStartedAt);
+
+if (qualityRemainingMs < QUALITY_MIN_BUDGET_MS) {
+  console.log(
+    `Skipping quality self-review: only ~${Math.round(qualityRemainingMs / 1000)}s remain in ` +
+      `the step budget, below the ${Math.round(QUALITY_MIN_BUDGET_MS / 1000)}s floor.`
+  );
+} else {
+  const qualityTimeoutMs = Math.min(300_000, qualityRemainingMs);
+  // Same MAX_LINES_PER_FILE cap the currentFiles section above applies to
+  // pre-existing declared files, for the same reason: LLM_BACKEND=cli enforces
+  // no output-token cap (see MAX_TOKENS's comment above), so a file this run
+  // just wrote can already be arbitrarily large before it's re-injected here.
+  // Uncapped, that risks the same unbounded-prompt cost/truncation exposure
+  // this file already guards against on the input side. A truncated file is
+  // marked read-only and excluded below if the model tries to revise it
+  // anyway, mirroring "you would silently delete the lines you cannot see."
+  // Both sets below feed the same "was this file actually shown to the
+  // model" check when validating revisions further down: a path missing
+  // from writtenFileSections — whether because it was truncated or because
+  // it could not be read at all — must not be accepted back, or the quality
+  // pass could silently overwrite a file it never saw with fabricated
+  // content, same class of issue as the truncation case this already guards.
+  const truncatedWrittenPaths = new Set();
+  const unreadableWrittenPaths = new Set();
+  const writtenFileSections = writtenPaths
+    .map((p) => {
+      // Same defensive read as the currentFiles block above (line ~236): this
+      // script just wrote every one of these paths itself moments ago, so an
+      // unreadable path here should be near-impossible, but a quality-review
+      // hiccup must never abort a scaffold that otherwise succeeded (see the
+      // callClaude try/catch below) — an uncaught readFileSync would do
+      // exactly that.
+      let content;
+      try {
+        content = readFileSync(resolve(repoRoot, p), 'utf8');
+      } catch (err) {
+        console.warn(`Quality self-review: cannot read ${p}, excluding it: ${err.message}`);
+        unreadableWrittenPaths.add(p);
+        return null;
+      }
+      const lines = content.split('\n');
+      const lineCount = lines.length - (lines.at(-1) === '' ? 1 : 0);
+      const isTruncated = lineCount > MAX_LINES_PER_FILE;
+      const body = isTruncated ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') : content;
+      const fence = fenceFor(body);
+      if (isTruncated) {
+        truncatedWrittenPaths.add(p);
+      }
+      const header = isTruncated
+        ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lineCount}. ` +
+          `Reference only — do NOT propose changes to this file.`
+        : `## ${p}`;
+      return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+
+  // Leading marker line, same purpose as the corrective-follow-up prompt's
+  // own "--- CORRECTIVE FOLLOW-UP ---" header: lets tests (and, incidentally,
+  // anyone reading a CLI transcript) tell the three possible calls apart
+  // without guessing from prose.
+  const qualityPrompt = `\
+--- QUALITY SELF-REVIEW ---
+You are a code-quality reviewer. Review ONLY the files below — everything just written for GitHub issue #${ISSUE_NUMBER}: "${ISSUE_TITLE}". Check for exactly two things:
+
+1. Significant duplication — the same or near-identical block (3 or more times) that should collapse into one shared helper. Example: a route handler that returns \`reply.code(401).send({ error: 'Authentication failed' })\` many times inline should extract a single \`function unauthorized(reply) { return reply.code(401).send({ error: 'Authentication failed' }); }\` and call that instead — not just for brevity, but because scattering the literal risks one call site silently drifting from the others.
+2. Extract-worthy complexity — an inline anonymous handler or closure long enough (roughly 50+ lines) that a named function would make it more readable and give it a real name in stack traces. Example: an inline \`async (request, reply) => { ...120 lines... }\` passed directly to a route-registration call should become a named function declared alongside the registration (nested there if the surrounding code requires a single registration entry point, not necessarily pulled to module scope).
+
+Do NOT comment on or change:
+- Security, correctness, or auth logic — a separate reviewer already covers this
+- Missing tests
+- General style, formatting, or naming outside the two checks above
+- Anything that is not a clear instance of one of the two checks above
+
+If neither issue is present, respond with exactly the word: NO_CHANGES_NEEDED
+
+Otherwise respond with ONLY valid JSON (no prose, no markdown fences around the JSON itself): { "files": [ { "path": "...", "content": "..." } ], "summary": "one sentence" } — include the COMPLETE revised content of every file you changed, reproduced in full except for the specific extraction/deduplication. Do not include a file you did not change, and do not change the file set — only revise the content of files listed below.
+${
+  truncatedWrittenPaths.size
+    ? `\nA file marked TRUNCATED below is shown only in part. Never propose a change to one: you would silently delete the lines you cannot see.\n`
+    : ''
+}
+FILES WRITTEN:
+${writtenFileSections}`;
+
+  console.log(
+    `Reviewing ${writtenPaths.length} written file(s) for duplication/extraction (timeout ` +
+      `${Math.round(qualityTimeoutMs / 1000)}s)…`
+  );
+
+  let qualityText, qualityStopReason;
+  try {
+    ({ text: qualityText, stopReason: qualityStopReason } = await callClaude({
+      prompt: qualityPrompt,
+      maxTokens: MAX_TOKENS,
+      timeoutMs: qualityTimeoutMs,
+      model: MODEL,
+    }));
+  } catch (err) {
+    // Non-fatal, same philosophy as verify-spec.mjs: a quality-review hiccup
+    // must never block a scaffold that otherwise succeeded.
+    console.warn(`Quality self-review call failed, proceeding without it: ${err.message}`);
+    qualityText = null;
+  }
+
+  if (qualityStopReason === 'max_tokens') {
+    console.warn('Quality self-review response truncated (stop_reason=max_tokens) — skipping.');
+    qualityText = null;
+  }
+
+  const qualityResult = qualityText?.trim() ?? '';
+  if (qualityResult === 'NO_CHANGES_NEEDED') {
+    console.log(
+      'Quality self-review: no significant duplication or extract-worthy complexity found.'
+    );
+  } else if (qualityResult) {
+    let qualityParsed;
+    try {
+      const fenceMatch = qualityResult.match(/```json\s*([\s\S]*?)\s*```/i);
+      const raw = fenceMatch ? fenceMatch[1].trim() : qualityResult;
+      qualityParsed = JSON.parse(raw);
+    } catch (e) {
+      console.warn(`Quality self-review response was not parseable JSON, skipping: ${e.message}`);
+      qualityParsed = null;
+    }
+
+    if (qualityParsed && Array.isArray(qualityParsed.files) && qualityParsed.files.length > 0) {
+      const writtenSet = new Set(writtenPaths);
+      let revisedCount = 0;
+      for (const { path, content } of qualityParsed.files) {
+        if (typeof path !== 'string' || typeof content !== 'string' || !path || !content) {
+          continue;
+        }
+        const relPath = toRepoRelative(path);
+        // Only ever revises a file this run already wrote — never adds a new
+        // path or touches one outside this run's own output. A quality pass
+        // proposing a new path would silently desync check-impl-scope.mjs's
+        // exact-match gate against the spec, which the write loop above was
+        // already careful to satisfy.
+        if (relPath === null || !writtenSet.has(relPath)) {
+          console.warn(
+            `Quality self-review named a path outside this run's own output, skipping: ${path}`
+          );
+          continue;
+        }
+        if (truncatedWrittenPaths.has(relPath) || unreadableWrittenPaths.has(relPath)) {
+          // The model was shown only a partial view of this file (or none at
+          // all — see unreadableWrittenPaths above) and told not to revise
+          // it. Enforce that server-side too: writing back "content" built
+          // from a partial or nonexistent view would silently corrupt or
+          // fabricate the file, regardless of whether the model followed the
+          // instruction.
+          console.warn(
+            `Quality self-review proposed a change to a file excluded from its view, skipping to avoid data loss: ${relPath}`
+          );
+          continue;
+        }
+        try {
+          writeFileSync(resolve(repoRoot, relPath), content, 'utf8');
+        } catch (err) {
+          console.warn(`Quality self-review could not write ${relPath}, skipping: ${err.message}`);
+          continue;
+        }
+        console.log(`Quality self-review revised ${relPath}`);
+        revisedCount += 1;
+      }
+      if (revisedCount > 0) {
+        parsed.summary =
+          `${parsed.summary ?? ''} [quality self-review revised ${revisedCount} file(s): ` +
+          `${qualityParsed.summary ?? 'duplication/extraction cleanup'}]`;
+      }
+    } else if (qualityParsed) {
+      console.warn('Quality self-review response had no files array, skipping.');
+    }
+  } else {
+    console.warn('Quality self-review returned empty response, skipping.');
+  }
+}
+
 console.log(`\nSummary: ${parsed.summary}`);
 
 if (GITHUB_OUTPUT) {
