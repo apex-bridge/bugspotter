@@ -59,11 +59,19 @@ Call the guard at the top of the `login`, `register`, and `magic-login` handlers
 
 **`/login`** — insert as the first statement in the handler, before `checkLockoutStatus`/`db.users.findByEmail`:
 
+**Correction (review): do not gate the guard call on `request.organizationId` being truthy.** Selfhosted requests never set `request.organizationId` (saas-mode tenant middleware isn't registered under `DEPLOYMENT_MODE=selfhosted`), but `assertSsoNotEnforced`'s selfhosted branch ignores its `tenantId` argument entirely and reads `config.oidc.enforceSso` instead (see #394's `assertSsoNotEnforced`, which takes `tenantId: string` and only touches it on the `=== 'saas'` branch). A bare `if (request.organizationId)` gate therefore skips the guard on every selfhosted request regardless of `OIDC_ENFORCE_SSO`, silently defeating enforcement and contradicting Test A/B below, which require selfhosted `OIDC_ENFORCE_SSO=true` to 403. Skip the call only in the one case correction 3 above actually describes — `saas` mode with no tenant resolved (the hub domain) — not unconditionally on a falsy `request.organizationId`.
+
 ```ts
 async (request, reply) => {
-  if (request.organizationId) {
+  // Skip only on the saas hub domain (no tenant resolved) - matching the
+  // existing assertUserBelongsToTenant/isPasswordResetEnabledForRequest
+  // no-op-on-hub-domain pattern. This is always false in selfhosted mode,
+  // so the guard always runs there and reads config.oidc.enforceSso via
+  // its own branch, independent of request.organizationId.
+  const skipGuard = process.env.DEPLOYMENT_MODE === 'saas' && !request.organizationId;
+  if (!skipGuard) {
     try {
-      await assertSsoNotEnforced(request.organizationId, db.oidcIdpConfigs);
+      await assertSsoNotEnforced(request.organizationId ?? '', db.oidcIdpConfigs);
     } catch (err) {
       if (err instanceof SsoEnforcedError) {
         return reply.code(403).send({ error: err.message });
@@ -71,22 +79,19 @@ async (request, reply) => {
       throw err;
     }
   }
-  // No tenant resolved (hub domain, or selfhosted where request.organizationId
-  // is never set) - nothing to key a per-tenant check on; skip rather than
-  // guess. In selfhosted mode the guard's own OIDC_ENFORCE_SSO branch doesn't
-  // use this tenantId anyway (see #394), so this only matters in saas mode.
 
   const { email, password } = request.body;
   // ...existing handler body unchanged...
 ```
 
-**`/register`** — same pattern, inserted before the existing `config.auth.allowRegistration` check (constraint 3 requires the guard be the first business-rule check, and `allowRegistration` is itself one):
+**`/register`** — same pattern, inserted before the existing `config.auth.allowRegistration` check (constraint 3 requires the guard be the first business-rule check, and `allowRegistration` is itself one). Same correction as `/login` above applies: gate `skipGuard` on `saas` mode with no resolved tenant, not on a bare `request.organizationId` truthiness check.
 
 ```ts
 async (request, reply) => {
-  if (request.organizationId) {
+  const skipGuard = process.env.DEPLOYMENT_MODE === 'saas' && !request.organizationId;
+  if (!skipGuard) {
     try {
-      await assertSsoNotEnforced(request.organizationId, db.oidcIdpConfigs);
+      await assertSsoNotEnforced(request.organizationId ?? '', db.oidcIdpConfigs);
     } catch (err) {
       if (err instanceof SsoEnforcedError) {
         return reply.code(403).send({ error: err.message });
@@ -457,7 +462,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 
 **Test case D — admin magic-token impersonation returns 403, before other checks (AC #4).** **Test case L — nonexistent organization still 404s, not masked by the guard (AC #6, the ordering decision's safety property).** **Test case M — an existing but disabled `enforceSso: false` row also proceeds normally (AC #5, the admin endpoint's share of the success-path coverage Test E covers for the other three, and distinct from Test L's "no row at all" case).**
 
-Note: the `magic-token` route schema requires `params.id` to match `format: uuid` and `body.user_id` to be present (`required: ['user_id']`); a non-UUID id like `'org-123'` or a missing body would fail Fastify schema validation with 400 before the SSO guard ever runs. Since the guard is inserted at the very start of the handler (before the org/membership lookups), Tests D/L/M don't need a real, existing org — just schema-valid params/body. This also proves the ordering decision above: the org id used in L/M is never created in the test database, so if the guard ran _after_ `db.organizations.findById`, those would 404 regardless of the guard, not exercise the guard's no-op path at all.
+Note: the `magic-token` route schema requires `params.id` to match `format: uuid` and `body.user_id` to be present (`required: ['user_id']`); a non-UUID id like `'org-123'` or a missing body would fail Fastify schema validation with 400 before the SSO guard ever runs. Since the guard is inserted at the very start of the handler (before the org/membership lookups), Tests D/L don't need a real, existing org — just schema-valid params/body. This also proves the ordering decision above: the org id used in L is never created in the test database, so if the guard ran _after_ `db.organizations.findById`, it would 404 regardless of the guard, not exercise the guard's no-op path at all.
+
+**Correction (review): bind each mock to the exact route organization id, and give Test M a real success path.** As originally written, D/L/M each used `mockResolvedValue(...)` unconditionally — the mock returns the same value for _any_ argument, so a handler bug that passed the wrong id (e.g. `request.body.user_id` instead of `request.params.id`) into `assertSsoNotEnforced` would still pass. Follow the same `mockImplementation` + `toHaveBeenCalledWith(id)` pattern Tests F/G/H above already use, keyed on each test's specific org id, for D and L too. L's `expect(spy).toHaveBeenCalledWith(orgId)` also closes the gap CodeRabbit flagged: without it, a missing or reordered guard would produce the identical 404 (the org genuinely doesn't exist) without ever proving the guard ran at all. M's original version reused L's nonexistent org id, so its 404 was indistinguishable from "org not found" and never actually exercised an `enforceSso:false` row on a real, existing org reaching the handler's normal success path — rewritten below to create a real org (`POST /api/v1/admin/organizations` with `owner_user_id`, which atomically creates an `OWNER` membership too, per `OrganizationService.adminCreateOrganization`), enable `magic_login_enabled` via the existing `PATCH .../magic-login-status` endpoint, and assert a genuine `200` with a minted token.
 
 ```ts
 describe('POST /:id/magic-token — SSO enforcement (saas mode)', () => {
@@ -492,59 +499,90 @@ describe('POST /:id/magic-token — SSO enforcement (saas mode)', () => {
   });
 
   it('blocks admin magic-token impersonation when the target org enforces SSO, before the org lookup', async () => {
+    const orgId = '00000000-0000-0000-0000-000000000001';
     const spy = vi
       .spyOn(db.oidcIdpConfigs, 'findByTenantId')
-      .mockResolvedValue({ enforceSso: true } as never);
+      .mockImplementation(async (id) => (id === orgId ? ({ enforceSso: true } as never) : null));
 
     try {
       const response = await saasServer.inject({
         method: 'POST',
-        url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000001/magic-token',
+        url: `/api/v1/admin/organizations/${orgId}/magic-token`,
         headers: { authorization: `Bearer ${adminToken}` },
         payload: { user_id: '00000000-0000-0000-0000-000000000002' },
       });
 
       expect(response.statusCode).toBe(403);
       expect(response.json()).toEqual({ error: 'sso_enforced' });
+      expect(spy).toHaveBeenCalledWith(orgId);
     } finally {
       spy.mockRestore();
     }
   });
 
   it('still 404s for a nonexistent organization rather than leaking a 403', async () => {
-    const spy = vi.spyOn(db.oidcIdpConfigs, 'findByTenantId').mockResolvedValue(null); // no row -> no-op
+    const orgId = '00000000-0000-0000-0000-000000000099';
+    // no row -> no-op; a wrong-id call would also resolve null here, so the
+    // toHaveBeenCalledWith below is what actually proves the guard ran with
+    // the right id rather than being skipped or reordered.
+    const spy = vi
+      .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+      .mockImplementation(async (id) => (id === orgId ? null : ({ enforceSso: true } as never)));
 
     try {
       const response = await saasServer.inject({
         method: 'POST',
-        url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000099/magic-token',
+        url: `/api/v1/admin/organizations/${orgId}/magic-token`,
         headers: { authorization: `Bearer ${adminToken}` },
         payload: { user_id: '00000000-0000-0000-0000-000000000002' },
       });
 
       expect(response.statusCode).toBe(404);
+      expect(spy).toHaveBeenCalledWith(orgId);
     } finally {
       spy.mockRestore();
     }
   });
 
-  it('proceeds past the guard when the org has an enforceSso:false config row', async () => {
+  it('proceeds to a real success response when an existing org has an enforceSso:false config row', async () => {
+    // Real org + real OWNER membership (adminCreateOrganization creates both
+    // atomically from owner_user_id), plus magic_login_enabled - unlike the
+    // old version of this test (which reused Test L's nonexistent org id),
+    // this actually reaches the handler's normal body: org lookup succeeds,
+    // magic_login_enabled is true, regularUserId is a member, so a passing
+    // guard genuinely proves the enforceSso:false path, not an unrelated 404.
+    const subdomain = `sso-off-org-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const createResponse = await saasServer.inject({
+      method: 'POST',
+      url: '/api/v1/admin/organizations',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { name: 'SSO Off Org', subdomain, owner_user_id: regularUserId },
+    });
+    const orgId = createResponse.json().data.id;
+    createdOrgIds.push(orgId);
+
+    await saasServer.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/organizations/${orgId}/magic-login-status`,
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { enabled: true },
+    });
+
     const spy = vi
       .spyOn(db.oidcIdpConfigs, 'findByTenantId')
-      .mockResolvedValue({ enforceSso: false } as never);
+      .mockImplementation(async (id) => (id === orgId ? ({ enforceSso: false } as never) : null));
 
     try {
       const response = await saasServer.inject({
         method: 'POST',
-        url: '/api/v1/admin/organizations/00000000-0000-0000-0000-000000000099/magic-token',
+        url: `/api/v1/admin/organizations/${orgId}/magic-token`,
         headers: { authorization: `Bearer ${adminToken}` },
-        payload: { user_id: '00000000-0000-0000-0000-000000000002' },
+        payload: { user_id: regularUserId },
       });
 
-      // Guard no-ops (enforceSso is false, not missing); falls through to the
-      // existing org-lookup 404, same outcome as the nonexistent-tenant case
-      // above but via a different guard branch (a real row vs. no row at all).
-      expect(response.statusCode).toBe(404);
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.token).toBeTypeOf('string');
+      expect(spy).toHaveBeenCalledWith(orgId);
     } finally {
       spy.mockRestore();
     }
