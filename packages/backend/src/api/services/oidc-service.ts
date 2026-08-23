@@ -52,4 +52,17 @@ export async function storeOidcState(stateKey: string, payload: OidcStatePayload
   await getCacheService().set(`oidc:state:${stateKey}`, payload, STATE_TTL_SECONDS);
 }
 
+/**
+ * Atomically consume (read + delete in one round-trip) a stored CSRF state
+ * payload. Backed by `CacheService.getAndDelete` (#379), which goes straight
+ * to Redis's native GETDEL rather than checking the L1 memory cache first —
+ * checking L1 first would reintroduce the race this exists to prevent (two
+ * concurrent requests both observing a still-present L1 copy before either
+ * one deletes it). A `null` return means the state was never stored, already
+ * consumed, or expired — callers must treat all three identically.
+ */
+export async function consumeOidcState(stateKey: string): Promise<OidcStatePayload | null> {
+  return getCacheService().getAndDelete<OidcStatePayload>(`oidc:state:${stateKey}`);
+}
+
 export { generators };
