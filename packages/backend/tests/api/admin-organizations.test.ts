@@ -3,7 +3,7 @@
  * Tests for admin org creation, plan management, and admin invitations.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createServer } from '../../src/api/server.js';
 import { createDatabaseClient } from '../../src/db/client.js';
@@ -11,6 +11,27 @@ import type { DatabaseClient } from '../../src/db/client.js';
 import { createMockPluginRegistry, createMockStorage, createAdminUser } from '../test-helpers.js';
 
 const TEST_DB_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/bugspotter_test';
+
+/**
+ * assertSsoNotEnforced (enforce-sso.ts) reads process.env.DEPLOYMENT_MODE
+ * live on every call — unlike the saas tenant-resolution middleware, which
+ * bakes DEPLOYMENT_MODE in once at createServer() time via
+ * getDeploymentConfig()'s cached singleton. The saas-mode describe block
+ * below restores the env var immediately after building saasServer (so it
+ * doesn't leak into other describe blocks in this file), which means it's
+ * back to the outer 'selfhosted' value by the time a test actually calls
+ * saasServer.inject(...). Pin the env var to 'saas' for just the duration
+ * of the inject() call so the guard's live read sees the right mode.
+ */
+async function withDeploymentMode<T>(mode: string, fn: () => Promise<T>): Promise<T> {
+  const original = process.env.DEPLOYMENT_MODE;
+  process.env.DEPLOYMENT_MODE = mode;
+  try {
+    return await fn();
+  } finally {
+    process.env.DEPLOYMENT_MODE = original;
+  }
+}
 
 describe('Admin Organization Routes', () => {
   let server: FastifyInstance;
@@ -1379,6 +1400,135 @@ describe('Admin Organization Routes', () => {
       });
 
       expect(response.statusCode).toBe(401);
+    });
+  });
+
+  // ─── POST /:id/magic-token — SSO enforcement (saas mode) ───
+
+  describe('POST /:id/magic-token — SSO enforcement (saas mode)', () => {
+    let saasServer: FastifyInstance;
+
+    beforeAll(async () => {
+      const originalMode = process.env.DEPLOYMENT_MODE;
+      process.env.DEPLOYMENT_MODE = 'saas';
+      const { resetDeploymentConfig } = await import('../../src/saas/config.js');
+      resetDeploymentConfig();
+      vi.resetModules();
+
+      const { createServer: freshCreateServer } = await import('../../src/api/server.js');
+      saasServer = await freshCreateServer({
+        db,
+        storage: createMockStorage(),
+        pluginRegistry: createMockPluginRegistry(),
+      });
+      await saasServer.ready();
+
+      // Restore env var — the already-created saasServer has its config baked in.
+      // adminToken (from the outer beforeEach) validates on saasServer too: it's
+      // a JWT signed against the shared JWT_SECRET, and the admin user it names
+      // lives in `db`, which both server instances share.
+      process.env.DEPLOYMENT_MODE = originalMode;
+      resetDeploymentConfig();
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      await saasServer.close();
+    });
+
+    it('blocks admin magic-token impersonation when the target org enforces SSO, before the org lookup', async () => {
+      const orgId = '00000000-0000-0000-0000-000000000001';
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockImplementation(async (id) => (id === orgId ? ({ enforceSso: true } as never) : null));
+
+      try {
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'POST',
+            url: `/api/v1/admin/organizations/${orgId}/magic-token`,
+            headers: { authorization: `Bearer ${adminToken}` },
+            payload: { user_id: '00000000-0000-0000-0000-000000000002' },
+          })
+        );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: 'sso_enforced' });
+        expect(spy).toHaveBeenCalledWith(orgId);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('still 404s for a nonexistent organization rather than leaking a 403', async () => {
+      const orgId = '00000000-0000-0000-0000-000000000099';
+      // no row -> no-op; a wrong-id call would also resolve null here, so the
+      // toHaveBeenCalledWith below is what actually proves the guard ran with
+      // the right id rather than being skipped or reordered.
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockImplementation(async (id) => (id === orgId ? null : ({ enforceSso: true } as never)));
+
+      try {
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'POST',
+            url: `/api/v1/admin/organizations/${orgId}/magic-token`,
+            headers: { authorization: `Bearer ${adminToken}` },
+            payload: { user_id: '00000000-0000-0000-0000-000000000002' },
+          })
+        );
+
+        expect(response.statusCode).toBe(404);
+        expect(spy).toHaveBeenCalledWith(orgId);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('proceeds to a real success response when an existing org has an enforceSso:false config row', async () => {
+      // Real org + real OWNER membership (adminCreateOrganization creates both
+      // atomically from owner_user_id), plus magic_login_enabled - this
+      // actually reaches the handler's normal body: org lookup succeeds,
+      // magic_login_enabled is true, regularUserId is a member, so a passing
+      // guard genuinely proves the enforceSso:false path, not an unrelated 404.
+      const subdomain = `sso-off-org-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const createResponse = await saasServer.inject({
+        method: 'POST',
+        url: '/api/v1/admin/organizations',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { name: 'SSO Off Org', subdomain, owner_user_id: regularUserId },
+      });
+      const orgId = createResponse.json().data.id;
+      createdOrgIds.push(orgId);
+
+      await saasServer.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/organizations/${orgId}/magic-login-status`,
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { enabled: true },
+      });
+
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockImplementation(async (id) => (id === orgId ? ({ enforceSso: false } as never) : null));
+
+      try {
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'POST',
+            url: `/api/v1/admin/organizations/${orgId}/magic-token`,
+            headers: { authorization: `Bearer ${adminToken}` },
+            payload: { user_id: regularUserId },
+          })
+        );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().data.token).toBeTypeOf('string');
+        expect(spy).toHaveBeenCalledWith(orgId);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

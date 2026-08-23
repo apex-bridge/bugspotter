@@ -62,6 +62,51 @@ async function createServerWithInvitationRequired(db: DatabaseClient) {
   return server;
 }
 
+/**
+ * Create a server with a different OIDC_ENFORCE_SSO value.
+ * Mirrors createServerWithRegistration above — same file, same pattern.
+ */
+async function createServerWithSsoEnforced(db: DatabaseClient, enforced: boolean) {
+  const original = process.env.OIDC_ENFORCE_SSO;
+  process.env.OIDC_ENFORCE_SSO = String(enforced);
+  vi.resetModules();
+
+  const { createServer: freshCreateServer } = await import('../../src/api/server.js');
+  const server = await freshCreateServer({
+    db,
+    storage: createMockStorage(),
+    pluginRegistry: createMockPluginRegistry(),
+  });
+  await server.ready();
+
+  // Restore env var — doesn't affect the already-created server.
+  process.env.OIDC_ENFORCE_SSO = original;
+  vi.resetModules();
+
+  return server;
+}
+
+/**
+ * assertSsoNotEnforced (enforce-sso.ts) reads process.env.DEPLOYMENT_MODE
+ * live on every call — unlike the saas tenant-resolution middleware, which
+ * bakes DEPLOYMENT_MODE in once at createServer() time via
+ * getDeploymentConfig()'s cached singleton. The saas-mode describe blocks
+ * below restore the env var immediately after building saasServer (so it
+ * doesn't leak into other describe blocks in this file), which means it's
+ * back to the outer 'selfhosted' value by the time a test actually calls
+ * saasServer.inject(...). Pin the env var to 'saas' for just the duration
+ * of the inject() call so the guard's live read sees the right mode.
+ */
+async function withDeploymentMode<T>(mode: string, fn: () => Promise<T>): Promise<T> {
+  const original = process.env.DEPLOYMENT_MODE;
+  process.env.DEPLOYMENT_MODE = mode;
+  try {
+    return await fn();
+  } finally {
+    process.env.DEPLOYMENT_MODE = original;
+  }
+}
+
 describe('Auth Routes', () => {
   let server: FastifyInstance;
   let db: DatabaseClient;
@@ -711,6 +756,279 @@ describe('Auth Routes', () => {
       const json = response.json();
       expect(json.success).toBe(false);
       expect(json.error).toBe('Unauthorized');
+    });
+  });
+
+  describe('POST /api/v1/auth/{login,register,magic-login} — SSO enforcement (selfhosted mode)', () => {
+    beforeEach(async () => {
+      await db.query('DELETE FROM users');
+    });
+
+    it('returns 403 sso_enforced when the deployment enforces SSO', async () => {
+      // Register on the default server first (OIDC_ENFORCE_SSO=false there),
+      // so the user exists before ssoServer's guard blocks the login attempt.
+      await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register',
+        payload: { email: 'user@example.com', password: 'password123' },
+      });
+
+      const ssoServer = await createServerWithSsoEnforced(db, true);
+      try {
+        const response = await ssoServer.inject({
+          method: 'POST',
+          url: '/api/v1/auth/login',
+          payload: { email: 'user@example.com', password: 'password123' },
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: 'sso_enforced' });
+      } finally {
+        await ssoServer.close();
+      }
+    });
+
+    it('blocks register and does not create a session when SSO is enforced', async () => {
+      const ssoServer = await createServerWithSsoEnforced(db, true);
+      try {
+        const response = await ssoServer.inject({
+          method: 'POST',
+          url: '/api/v1/auth/register',
+          payload: { email: 'new@example.com', password: 'password123' },
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: 'sso_enforced' });
+        expect(response.cookies).toHaveLength(0);
+      } finally {
+        await ssoServer.close();
+      }
+    });
+
+    it('blocks magic-login when SSO is enforced', async () => {
+      const ssoServer = await createServerWithSsoEnforced(db, true);
+      try {
+        const magicToken = ssoServer.jwt.sign({
+          userId: '00000000-0000-0000-0000-000000000003',
+          organizationId: '00000000-0000-0000-0000-000000000004',
+          type: 'magic',
+        });
+
+        const response = await ssoServer.inject({
+          method: 'POST',
+          url: '/api/v1/auth/magic-login',
+          payload: { token: magicToken },
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: 'sso_enforced' });
+      } finally {
+        await ssoServer.close();
+      }
+    });
+
+    it('logs in normally when SSO is not enforced (OIDC_ENFORCE_SSO unset)', async () => {
+      // The default `server` from beforeAll never sets OIDC_ENFORCE_SSO, so
+      // config.oidc.enforceSso is already false — no extra server needed.
+      await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register',
+        payload: { email: 'user2@example.com', password: 'password123' },
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: 'user2@example.com', password: 'password123' },
+      });
+
+      expect(response.statusCode).toBe(200);
+    });
+
+    it('registers normally when OIDC_ENFORCE_SSO is explicitly false', async () => {
+      const ssoOffServer = await createServerWithSsoEnforced(db, false);
+      try {
+        const response = await ssoOffServer.inject({
+          method: 'POST',
+          url: '/api/v1/auth/register',
+          payload: { email: 'user3@example.com', password: 'password123' },
+        });
+
+        expect(response.statusCode).toBe(201);
+      } finally {
+        await ssoOffServer.close();
+      }
+    });
+
+    it('logs in via magic-login normally when SSO is not enforced', async () => {
+      // Seed a user + magic_login_enabled org directly, following the same
+      // pattern as tests/integration/magic-login.integration.test.ts. A real
+      // (unused) password hash is required: the `check_auth_method` DB
+      // constraint rejects password_hash IS NULL unless oauth_provider/
+      // oauth_id are both set, and magic-login never reads password_hash.
+      const bcrypt = (await import('bcrypt')).default;
+      const passwordHash = await bcrypt.hash('unused-password', 10);
+      const user = await db.users.create({
+        email: 'magic-ok@example.com',
+        name: null,
+        password_hash: passwordHash,
+        role: 'user',
+      });
+      const org = await db.organizations.create({
+        name: 'Magic OK Org',
+        subdomain: 'magic-ok-org',
+        settings: { magic_login_enabled: true },
+      });
+      await db.organizationMembers.create({
+        organization_id: org.id,
+        user_id: user.id,
+        role: 'member',
+      });
+
+      const magicToken = server.jwt.sign({
+        userId: user.id,
+        organizationId: org.id,
+        type: 'magic',
+      });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/v1/auth/magic-login',
+        payload: { token: magicToken },
+      });
+
+      expect(response.statusCode).toBe(200);
+    });
+  });
+
+  describe('POST /api/v1/auth/{login,register,magic-login} — SSO enforcement (saas mode)', () => {
+    let saasServer: FastifyInstance;
+
+    beforeAll(async () => {
+      const originalMode = process.env.DEPLOYMENT_MODE;
+      process.env.DEPLOYMENT_MODE = 'saas';
+      const { resetDeploymentConfig } = await import('../../src/saas/config.js');
+      resetDeploymentConfig();
+      vi.resetModules();
+
+      const { createServer: freshCreateServer } = await import('../../src/api/server.js');
+      saasServer = await freshCreateServer({
+        db,
+        storage: createMockStorage(),
+        pluginRegistry: createMockPluginRegistry(),
+      });
+      await saasServer.ready();
+
+      // Restore env var — the already-created saasServer has its config baked in.
+      process.env.DEPLOYMENT_MODE = originalMode;
+      resetDeploymentConfig();
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      await saasServer.close();
+    });
+
+    it('Test F: blocks /login on a host-resolved tenant, keyed on request.organizationId', async () => {
+      // subscription_status defaults to 'trial' (in ACTIVE_STATUSES), so the
+      // tenant middleware resolves this subdomain instead of 403ing first.
+      const org = await db.organizations.create({
+        name: 'SSO Login Org',
+        subdomain: 'sso-login-org',
+      });
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockImplementation(async (tenantId) =>
+          tenantId === org.id ? ({ enforceSso: true } as never) : null
+        );
+
+      try {
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'POST',
+            url: '/api/v1/auth/login',
+            headers: { host: `${org.subdomain}.bugspotter.io` },
+            payload: { email: 'someone@example.com', password: 'password123' },
+          })
+        );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: 'sso_enforced' });
+        expect(spy).toHaveBeenCalledWith(org.id);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Test G: blocks /register on a host-resolved tenant, before allowRegistration/invite checks', async () => {
+      const org = await db.organizations.create({
+        name: 'SSO Register Org',
+        subdomain: 'sso-register-org',
+      });
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockImplementation(async (tenantId) =>
+          tenantId === org.id ? ({ enforceSso: true } as never) : null
+        );
+
+      try {
+        // No invite_token: saas mode's default requireInvitationToRegister
+        // would otherwise reject this with 403 InvitationRequired, but the
+        // guard runs first (constraint 3) and short-circuits before that
+        // check is ever reached — this also proves the ordering, not just
+        // the tenant source.
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'POST',
+            url: '/api/v1/auth/register',
+            headers: { host: `${org.subdomain}.bugspotter.io` },
+            payload: { email: 'newuser@example.com', password: 'password123' },
+          })
+        );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: 'sso_enforced' });
+        expect(spy).toHaveBeenCalledWith(org.id);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Test H: blocks /magic-login keyed on decoded.organizationId, not request.organizationId', async () => {
+      const tenantId = '00000000-0000-0000-0000-000000000005';
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockImplementation(async (id) =>
+          id === tenantId ? ({ enforceSso: true } as never) : null
+        );
+
+      try {
+        const magicToken = saasServer.jwt.sign({
+          userId: '00000000-0000-0000-0000-000000000006',
+          organizationId: tenantId,
+          type: 'magic',
+        });
+
+        // No host header override: the injected default host resolves no
+        // subdomain in saas mode, so request.organizationId stays undefined
+        // and the handler's own tenant-match gate no-ops. The guard must
+        // still block using decoded.organizationId from the token claim —
+        // proving the guard reads the claim, not request.organizationId
+        // (which is a different, and here absent, value).
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'POST',
+            url: '/api/v1/auth/magic-login',
+            payload: { token: magicToken },
+          })
+        );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toEqual({ error: 'sso_enforced' });
+        expect(spy).toHaveBeenCalledWith(tenantId);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });
