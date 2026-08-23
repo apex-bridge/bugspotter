@@ -50,9 +50,11 @@ Four auth surfaces can currently establish a session for a user whose organizati
 - [ ] `assertSsoNotEnforced` throws `SsoEnforcedError` in `selfhosted` mode when `config.oidc.enforceSso` is `true` — verified by Test H
 - [ ] `assertSsoNotEnforced` resolves without throwing in `selfhosted` mode when `config.oidc.enforceSso` is `false` — verified by Test I
 - [ ] `assertSsoNotEnforced` throws `SsoEnforcedError` in `saas` mode when `db.oidcIdpConfigs.findByTenantId` resolves an object with `enforceSso: true` — verified by Test J
-- [ ] `assertSsoNotEnforced` resolves without throwing in `saas` mode when the repository resolves `null` or `enforceSso: false` — verified by Test K
+- [ ] `assertSsoNotEnforced` resolves without throwing in `saas` mode when the repository resolves `null` or `enforceSso: false` — verified by Test K (both outcomes)
+- [ ] `assertSsoNotEnforced` propagates the original error, unmodified, when `db.oidcIdpConfigs.findByTenantId` rejects in `saas` mode — verified by Test L
 - [ ] In `selfhosted` mode, an unset `OIDC_ENFORCE_SSO` env var results in `config.oidc.enforceSso` resolving to `false` (no error thrown) — verified by Test G
 - [ ] In `selfhosted` mode, `OIDC_ENFORCE_SSO=true` results in `config.oidc.enforceSso` resolving to `true` — verified by Test G
+- [ ] When `DEPLOYMENT_MODE` is unset or unrecognized, `assertSsoNotEnforced` takes the `selfhosted` path (does not call `findByTenantId`) — verified by Test M
 
 ## Changes
 
@@ -60,7 +62,7 @@ Four auth surfaces can currently establish a session for a user whose organizati
 
 New shared guard function, to be called from each of the four handlers in #395; resolves the enforcement flag per deployment mode and throws the standard error on block.
 
-**Correction:** the deployment-mode check below must not read `config.deploymentMode` — that field does not exist on `AppConfig` (`packages/backend/src/config/types.ts` has no `deploymentMode`, and `config.ts` never assigns one). Every other mode-dependent default in `config.ts` (e.g. `auth.allowRegistration`, `auth.selfServiceSignupEnabled`) reads `process.env.DEPLOYMENT_MODE` directly — do the same here, or use `getDeploymentConfig()` from `../../saas/config.js` (already imported by `auth.ts`) if a richer accessor is needed. That file wasn't in the verified source set for this review, so its exact return shape (e.g. whether it exposes `.mode`) is unverified.
+**Correction:** the deployment-mode check below must not read `config.deploymentMode` — that field does not exist on `AppConfig` (`packages/backend/src/config/types.ts` has no `deploymentMode`, and `config.ts` never assigns one). Every other mode-dependent default in `config.ts` (e.g. `auth.allowRegistration`, `auth.selfServiceSignupEnabled`) reads `process.env.DEPLOYMENT_MODE` directly — do the same here, or use `getDeploymentConfig()` from `../../saas/config.js` (already imported by `auth.ts`) if a richer accessor is needed. Confirmed: `getDeploymentConfig()` returns `{ mode: DeploymentMode; features: DeploymentFeatures }` (`packages/backend/src/saas/config.ts:21-24`), so `.mode` is available there if needed — the guard below still reads `process.env.DEPLOYMENT_MODE` directly, matching the rest of `config.ts`.
 
 **Correction (review):** branch on `=== 'saas'`, not `=== 'selfhosted'`. `getDeploymentConfig()` (`packages/backend/src/saas/config.ts:33-36`) resolves an unset or unrecognized `DEPLOYMENT_MODE` to `selfhosted`, and `config.ts` (lines 104, 109) mirrors that by checking `=== 'saas'` for saas-only defaults. A guard that instead checks `=== 'selfhosted'` and falls through to the DB lookup on anything else inverts that default: an unset `DEPLOYMENT_MODE` would hit the `saas` repository-lookup path instead of the `selfhosted` env-var path. The DB-lookup branch must be the explicit `=== 'saas'` check, with `selfhosted` as the fallthrough.
 
@@ -130,7 +132,7 @@ Direct unit test of `assertSsoNotEnforced` - mocks `OidcIdpConfigRepository` dir
 
 **Correction (review):** all four cases (H/I/J/K) belong in a single `describe` block so they share `beforeEach`/`afterEach` env-var setup and reset, and so `mockRepo` is declared once instead of leaking between snippets. `process.env.DEPLOYMENT_MODE`/`OIDC_ENFORCE_SSO` are captured and restored in `afterEach`, following the existing pattern in `packages/backend/tests/config.test.ts:9-20` and `packages/backend/tests/db/user-repository-org-filter.test.ts` — mutating `process.env` without restoring it leaks state into unrelated tests.
 
-**Test cases H/I/J/K — all modes:**
+**Test cases H/I/J/K/L/M — all modes:**
 
 ```ts
 describe('assertSsoNotEnforced', () => {
@@ -191,6 +193,35 @@ describe('assertSsoNotEnforced', () => {
 
     await expect(assertSsoNotEnforced('tenant-1', mockRepo)).resolves.toBeUndefined();
   });
+
+  it('resolves in saas mode when the repository resolves enforceSso: false', async () => {
+    process.env.DEPLOYMENT_MODE = 'saas';
+    vi.resetModules();
+    const { assertSsoNotEnforced } = await import('../../../src/api/middleware/enforce-sso.js');
+    mockRepo.findByTenantId = vi.fn().mockResolvedValue({ enforceSso: false });
+
+    await expect(assertSsoNotEnforced('tenant-1', mockRepo)).resolves.toBeUndefined();
+  });
+
+  it('propagates the original error when the repository lookup rejects in saas mode', async () => {
+    process.env.DEPLOYMENT_MODE = 'saas';
+    vi.resetModules();
+    const { assertSsoNotEnforced } = await import('../../../src/api/middleware/enforce-sso.js');
+    const dbError = new Error('connection refused');
+    mockRepo.findByTenantId = vi.fn().mockRejectedValue(dbError);
+
+    await expect(assertSsoNotEnforced('tenant-1', mockRepo)).rejects.toBe(dbError);
+  });
+
+  it('takes the selfhosted path (does not call findByTenantId) when DEPLOYMENT_MODE is unset', async () => {
+    delete process.env.DEPLOYMENT_MODE;
+    process.env.OIDC_ENFORCE_SSO = 'false';
+    vi.resetModules();
+    const { assertSsoNotEnforced } = await import('../../../src/api/middleware/enforce-sso.js');
+
+    await expect(assertSsoNotEnforced('tenant-1', mockRepo)).resolves.toBeUndefined();
+    expect(mockRepo.findByTenantId).not.toHaveBeenCalled();
+  });
 });
 ```
 
@@ -229,4 +260,4 @@ pnpm --filter @bugspotter/backend typecheck
 pnpm --filter @bugspotter/backend test:unit
 ```
 
-Rollback: revert the `enforce-sso.ts` middleware file, its test, and the `config.ts`/`config/types.ts` additions. All steps are additive and inert (default `false`, called by nothing) until #395 wires the guard into a live endpoint — no data migration or irreversible state change is introduced.
+Rollback: revert the `enforce-sso.ts` middleware file, its test, the `config.ts`/`config/types.ts` additions, and the added assertions in `config.test.ts` (they assert `config.oidc.enforceSso`, which no longer exists once the config change is reverted). All steps are additive and inert (default `false`, called by nothing) until #395 wires the guard into a live endpoint — no data migration or irreversible state change is introduced.
