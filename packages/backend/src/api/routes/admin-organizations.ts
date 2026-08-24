@@ -18,6 +18,7 @@ import type { EmailLocale } from '../../saas/services/invitation-email.service.j
 import { InvitationEmailService } from '../../saas/services/invitation-email.service.js';
 import { requirePlatformAdmin } from '../middleware/auth.js';
 import { AppError } from '../middleware/error.js';
+import { assertSsoNotEnforced, SsoEnforcedError } from '../middleware/enforce-sso.js';
 import { validateBillingMethodSwitch } from '../../saas/services/billing-method.js';
 import { sendSuccess, sendCreated, sendNoContent } from '../utils/response.js';
 import { generateMagicToken } from './auth.js';
@@ -537,6 +538,19 @@ export function adminOrganizationRoutes(fastify: FastifyInstance, db: DatabaseCl
       preHandler: [requirePlatformAdmin()],
     },
     async (request, reply) => {
+      // SSO enforcement guard — must be the first check (constraint 3),
+      // before the org-existence check. Safe: assertSsoNotEnforced no-ops
+      // for a nonexistent tenant (findByTenantId resolves null), so a
+      // nonexistent org id still falls through to the 404 below.
+      try {
+        await assertSsoNotEnforced(request.params.id, db.oidcIdpConfigs);
+      } catch (err) {
+        if (err instanceof SsoEnforcedError) {
+          return reply.code(403).send({ error: err.message });
+        }
+        throw err;
+      }
+
       const org = await db.organizations.findById(request.params.id);
       if (!org) {
         throw new AppError('Organization not found', 404, 'NotFound');

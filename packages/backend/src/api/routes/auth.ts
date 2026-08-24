@@ -45,6 +45,7 @@ import type { User } from '../../db/types.js';
 import { isPlatformAdmin } from '../middleware/auth.js';
 import { getDeploymentConfig } from '../../saas/config.js';
 import { assertUserBelongsToTenant } from '../../saas/middleware/tenant-match.js';
+import { assertSsoNotEnforced, SsoEnforcedError } from '../middleware/enforce-sso.js';
 
 /**
  * SaaS-mode access gate: reject the caller if the user has zero
@@ -173,6 +174,24 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       config: { public: true },
     },
     async (request, reply) => {
+      // SSO enforcement guard — must be the first check (constraint 3).
+      // Skip only on the saas hub domain (no tenant resolved) - matching the
+      // existing assertUserBelongsToTenant/isPasswordResetEnabledForRequest
+      // no-op-on-hub-domain pattern. This is always false in selfhosted mode,
+      // so the guard always runs there and reads config.oidc.enforceSso via
+      // its own branch, independent of request.organizationId.
+      const skipGuard = process.env.DEPLOYMENT_MODE === 'saas' && !request.organizationId;
+      if (!skipGuard) {
+        try {
+          await assertSsoNotEnforced(request.organizationId ?? '', db.oidcIdpConfigs);
+        } catch (err) {
+          if (err instanceof SsoEnforcedError) {
+            return reply.code(403).send({ error: err.message });
+          }
+          throw err;
+        }
+      }
+
       if (!config.auth.allowRegistration) {
         throw new AppError('Registration is currently disabled', 403, 'Forbidden');
       }
@@ -250,6 +269,21 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       config: { public: true },
     },
     async (request, reply) => {
+      // SSO enforcement guard — must be the first check (constraint 3).
+      // Skip only on the saas hub domain (no tenant resolved) - see the
+      // /register handler above for the full rationale.
+      const skipGuard = process.env.DEPLOYMENT_MODE === 'saas' && !request.organizationId;
+      if (!skipGuard) {
+        try {
+          await assertSsoNotEnforced(request.organizationId ?? '', db.oidcIdpConfigs);
+        } catch (err) {
+          if (err instanceof SsoEnforcedError) {
+            return reply.code(403).send({ error: err.message });
+          }
+          throw err;
+        }
+      }
+
       const { email, password } = request.body;
 
       /**
@@ -458,6 +492,21 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
           request.organizationId !== decoded.organizationId
         ) {
           throw new AppError('Invalid magic token: tenant mismatch', 401, 'Unauthorized');
+        }
+
+        // SSO enforcement guard. Keyed on decoded.organizationId (the JWT
+        // claim, already validated a real string above) - not
+        // request.organizationId, which is intentionally unset on
+        // hub-domain magic-logins and isn't authoritative for which tenant
+        // the token was minted for. The inner catch returns directly on
+        // SsoEnforcedError, so it never reaches the outer catch below.
+        try {
+          await assertSsoNotEnforced(decoded.organizationId, db.oidcIdpConfigs);
+        } catch (err) {
+          if (err instanceof SsoEnforcedError) {
+            return reply.code(403).send({ error: err.message });
+          }
+          throw err;
         }
 
         // Check if magic login is enabled for this organization (DB-backed setting)
