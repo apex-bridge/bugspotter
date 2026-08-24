@@ -20,6 +20,11 @@ import {
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
 import { detectNarratedToolCall } from './detect-narration.mjs';
 
+// Captured before any file reads (ADR numbering, example ADR, ADR index)
+// below so the retry budget math (see scriptStartedAt's use further down)
+// measures real elapsed step time, not elapsed-time-minus-setup-work.
+const scriptStartedAt = Date.now();
+
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
 requireLlmCredentials();
@@ -127,7 +132,6 @@ Rules:
 - Return ONLY the ADR document — no preamble, no explanation, no markdown fences`;
 
 const GENERATE_TIMEOUT_MS = 300_000;
-const scriptStartedAt = Date.now();
 let adrContent, stopReason;
 try {
   // 300s. The previous 120s rested on a premise that is no longer true: it
