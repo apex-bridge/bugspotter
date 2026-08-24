@@ -73,12 +73,16 @@ writeFileSync(
 );
 
 // --- fake `claude` on PATH -------------------------------------------------
-// FAKE_CLAUDE_TEXT       - raw text returned on a normal (first-turn) call.
-// FAKE_CLAUDE_RETRY_TEXT - raw text returned ONLY when the received prompt
-//                          contains "--- CORRECTIVE REMINDER ---" -
-//                          generate-spec.mjs's own retry prompt always
-//                          includes this, which is what lets the fake tell
-//                          the two calls apart across separate spawns.
+// FAKE_CLAUDE_TEXT             - raw text returned on a normal (first-turn) call.
+// FAKE_CLAUDE_STOP_REASON      - stop_reason override for that first-turn call
+//                                 (defaults to 'end_turn'; set to 'max_tokens'
+//                                 to exercise the initial-call truncation check).
+// FAKE_CLAUDE_RETRY_TEXT       - raw text returned ONLY when the received prompt
+//                                contains "--- CORRECTIVE REMINDER ---" -
+//                                generate-spec.mjs's own retry prompt always
+//                                includes this, which is what lets the fake tell
+//                                the two calls apart across separate spawns.
+// FAKE_CLAUDE_RETRY_STOP_REASON - same override, for the retry call only.
 const IMPL = join(BIN_DIR, 'fake-claude-spec.cjs');
 writeFileSync(
   IMPL,
@@ -94,10 +98,9 @@ writeFileSync(
     '  const result = isRetry',
     "    ? (process.env.FAKE_CLAUDE_RETRY_TEXT ?? '')",
     "    : (process.env.FAKE_CLAUDE_TEXT ?? '');",
-    '  const stop_reason =',
-    '    isRetry && process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
-    '      ? process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
-    "      : 'end_turn';",
+    '  const stop_reason = isRetry',
+    "    ? (process.env.FAKE_CLAUDE_RETRY_STOP_REASON ?? 'end_turn')",
+    "    : (process.env.FAKE_CLAUDE_STOP_REASON ?? 'end_turn');",
     "  process.stdout.write(JSON.stringify({ type: 'result', result, stop_reason }) + '\\n');",
     '});',
     '',
@@ -241,6 +244,22 @@ describe('generate-spec.mjs prompt', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.firstPrompt, /You have NO tools available/);
     assert.match(r.firstPrompt, /do not narrate one/);
+  });
+});
+
+describe('generate-spec.mjs initial-call truncation handling', () => {
+  test('an initial response truncated by max_tokens is rejected before narration detection runs', () => {
+    // Real, marker-free spec text - proves this is caught by the stopReason
+    // check itself, not by detectNarratedToolCall coincidentally flagging it.
+    const r = runGenerateSpec({
+      text: REAL_SPEC_TEXT,
+      env: { FAKE_CLAUDE_STOP_REASON: 'max_tokens' },
+    });
+    assert.equal(r.status, 1);
+    assert.equal(r.modelCallCount, 1, 'no corrective retry applies to initial-call truncation');
+    assert.match(r.stderr, /Claude response truncated \(stop_reason=max_tokens\)/);
+    const specPath = join(REPO, 'docs', 'specs', '0999-fixture-issue.md');
+    assert.equal(existsSync(specPath), false, 'a truncated initial response must never be written');
   });
 });
 

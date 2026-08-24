@@ -165,7 +165,7 @@ Rules:
 
 const GENERATE_TIMEOUT_MS = 450_000;
 const scriptStartedAt = Date.now();
-let specContent;
+let specContent, stopReason;
 try {
   // 450s. Was 420s (originally raised from 180_000, matching
   // verify-spec.mjs's own measured 283.9s for comparable work) - but that
@@ -185,13 +185,27 @@ try {
   // isn't enough. Note the job also runs verify-spec.mjs (its own 420s,
   // unchanged), so raising either further means re-checking the job's 22m
   // cap still contains both plus setup - see that file's comments.
-  ({ text: specContent } = await callClaude({
+  ({ text: specContent, stopReason } = await callClaude({
     prompt,
     maxTokens: 4096,
     timeoutMs: GENERATE_TIMEOUT_MS,
   }));
 } catch (err) {
   console.error(err.message);
+  process.exit(1);
+}
+
+// Fail fast if truncated — matches the check in generate-impl.mjs and
+// generate-adr.mjs. Without it, a response cut short by the 4096 maxTokens
+// cap would silently write a truncated spec to disk instead of erroring;
+// verify-spec.mjs runs afterward against whatever is already on disk and
+// checks its OWN verifier call's stopReason, not this one, so it would not
+// have caught a truncated spec that happens to contain no invented method
+// names before the cutoff.
+if (stopReason === 'max_tokens') {
+  console.error(
+    'Claude response truncated (stop_reason=max_tokens). Raise maxTokens in generate-spec.mjs.'
+  );
   process.exit(1);
 }
 

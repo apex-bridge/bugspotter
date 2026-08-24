@@ -23,7 +23,8 @@ after(() => {
   rmSync(REPO, { recursive: true, force: true });
 });
 
-// --- fake `claude` on PATH (identical shape to generate-spec.test.mjs's) --
+// --- fake `claude` on PATH (identical shape to generate-spec.test.mjs's,
+// including FAKE_CLAUDE_RETRY_STOP_REASON for exercising a truncated retry) -
 const IMPL = join(BIN_DIR, 'fake-claude-adr.cjs');
 writeFileSync(
   IMPL,
@@ -39,7 +40,11 @@ writeFileSync(
     '  const result = isRetry',
     "    ? (process.env.FAKE_CLAUDE_RETRY_TEXT ?? '')",
     "    : (process.env.FAKE_CLAUDE_TEXT ?? '');",
-    "  process.stdout.write(JSON.stringify({ type: 'result', result, stop_reason: 'end_turn' }) + '\\n');",
+    '  const stop_reason =',
+    '    isRetry && process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
+    '      ? process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
+    "      : 'end_turn';",
+    "  process.stdout.write(JSON.stringify({ type: 'result', result, stop_reason }) + '\\n');",
     '});',
     '',
   ].join('\n')
@@ -190,6 +195,27 @@ describe('generate-adr.mjs narration detection', () => {
     assert.match(r.stderr, /still looks like a narrated tool-call transcript/);
     assert.match(r.stderr, /after one corrective retry/);
     assert.equal(existsSync(adrPath()), false, 'must never write a detected transcript to disk');
+  });
+
+  test('a corrective retry truncated by max_tokens is rejected even with no narration markers left in it', () => {
+    // The retry content below deliberately contains none of the STRONG/WEAK
+    // markers detectNarratedToolCall looks for and does not open with a
+    // narration opener - without the stopReason check, this would pass
+    // narration detection and get written verbatim as a truncated ADR.
+    const r = runGenerateAdr({
+      text: NARRATED_TRANSCRIPT_TEXT,
+      retryText: '# ADR-0001: Fixture decision\n\n- Status: Proposed\n- Area: fixture',
+      env: { FAKE_CLAUDE_RETRY_STOP_REASON: 'max_tokens' },
+    });
+    assert.equal(r.status, 1);
+    assert.equal(r.modelCallCount, 2, 'the one allowed corrective retry should still fire');
+    assert.match(r.stderr, /::error::generate-adr\.mjs/);
+    assert.match(r.stderr, /corrective retry response truncated/);
+    assert.equal(
+      existsSync(adrPath()),
+      false,
+      'a truncated corrective retry must never be written, marker-free or not'
+    );
   });
 
   test('skips the retry and fails immediately when the step budget leaves no safe headroom', () => {
