@@ -4,6 +4,10 @@ import type { OidcIdpConfigRepository } from '../../db/repositories/oidc-idp-con
 export class SsoEnforcedError extends Error {
   constructor() {
     super('sso_enforced');
+    this.name = 'SsoEnforcedError';
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, SsoEnforcedError);
+    }
   }
 }
 

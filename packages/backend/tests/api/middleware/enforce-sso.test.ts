@@ -29,6 +29,17 @@ describe('assertSsoNotEnforced', () => {
     expect(mockRepo.findByTenantId).not.toHaveBeenCalled();
   });
 
+  it('sets name to SsoEnforcedError on the thrown error', async () => {
+    process.env.DEPLOYMENT_MODE = 'selfhosted';
+    process.env.OIDC_ENFORCE_SSO = 'true';
+    vi.resetModules();
+    const { assertSsoNotEnforced } = await import('../../../src/api/middleware/enforce-sso.js');
+
+    await expect(assertSsoNotEnforced('tenant-1', mockRepo)).rejects.toMatchObject({
+      name: 'SsoEnforcedError',
+    });
+  });
+
   it('resolves in selfhosted mode when config.oidc.enforceSso is false', async () => {
     process.env.DEPLOYMENT_MODE = 'selfhosted';
     process.env.OIDC_ENFORCE_SSO = 'false';
