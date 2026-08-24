@@ -145,11 +145,13 @@ describe('detectNarratedToolCall', () => {
   });
 
   test('does not fire on a legitimate spec even with its own "### Parameters"/"### Result" API-doc headings', () => {
-    // The sharpest adversarial case: LEGITIMATE_SPEC above already contains
-    // both headings (with colons, matching the exact style a narrated
-    // transcript uses) documenting a real endpoint - this must stay a
+    // LEGITIMATE_SPEC above already contains both headings, in their plain
+    // (no-colon) form, documenting a real endpoint - this must stay a
     // non-finding because the response opens with "# Spec: ..." (the
-    // required title), never narrated first-person intent.
+    // required title), never narrated first-person intent. The colon-suffixed
+    // variant ("### Parameters:"/"### Result:", matching the exact narrated-
+    // transcript style) is the sharper adversarial case and is covered
+    // separately below.
     assert.ok(LEGITIMATE_SPEC.includes('### Parameters'));
     assert.ok(LEGITIMATE_SPEC.includes('### Result'));
     assert.equal(detectNarratedToolCall(LEGITIMATE_SPEC), null);
