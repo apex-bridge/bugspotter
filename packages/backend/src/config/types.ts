@@ -80,6 +80,13 @@ export interface OidcConfig {
    * `null` when unset — fine for deployments with no tenant SSO configured.
    */
   redirectBaseUrl: string | null;
+  /**
+   * Whether SSO login is mandatory. In `selfhosted` mode this comes directly
+   * from `OIDC_ENFORCE_SSO`; in `saas` mode it is resolved per-tenant from
+   * the `oidc_idp_config` repository instead, and this field is unused.
+   * Defaults to `false` (not enforced) when unset.
+   */
+  enforceSso: boolean;
 }
 
 export interface ShareTokenConfig {

@@ -232,6 +232,26 @@ describe('Application Configuration', () => {
     });
   });
 
+  describe('OIDC configuration', () => {
+    it('defaults oidc.enforceSso to false when OIDC_ENFORCE_SSO is unset', async () => {
+      process.env.DEPLOYMENT_MODE = 'selfhosted';
+      delete process.env.OIDC_ENFORCE_SSO;
+
+      const { config } = await import('../src/config.js');
+
+      expect(config.oidc.enforceSso).toBe(false);
+    });
+
+    it('exposes oidc.enforceSso=true from OIDC_ENFORCE_SSO=true in selfhosted mode', async () => {
+      process.env.DEPLOYMENT_MODE = 'selfhosted';
+      process.env.OIDC_ENFORCE_SSO = 'true';
+
+      const { config } = await import('../src/config.js');
+
+      expect(config.oidc.enforceSso).toBe(true);
+    });
+  });
+
   describe('Storage configuration - local', () => {
     it('should load local storage configuration', async () => {
       process.env.STORAGE_BACKEND = 'local';
