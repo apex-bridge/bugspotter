@@ -250,14 +250,22 @@ if (narrationFinding) {
     `attempt a tool call and do not narrate one. Return ONLY the filled spec document, starting ` +
     `with "# Spec: <title>", exactly as instructed above.`;
 
+  let retryStopReason;
   try {
-    ({ text: specContent } = await callClaude({
+    ({ text: specContent, stopReason: retryStopReason } = await callClaude({
       prompt: correctionPrompt,
       maxTokens: 4096,
       timeoutMs: retryTimeoutMs,
     }));
   } catch (err) {
     console.error(`::error::generate-spec.mjs: corrective retry call failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (retryStopReason === 'max_tokens') {
+    console.error(
+      '::error::generate-spec.mjs: corrective retry response truncated (stop_reason=max_tokens).'
+    );
     process.exit(1);
   }
 

@@ -47,7 +47,7 @@ const WEAK_MARKERS = [
  * start with a "# Spec: ..." or "# ADR-NNNN: ..." title line - this pattern
  * essentially never legitimately appears as the very first line.
  */
-const NARRATION_OPENER = /^(i'll|i will|i'm going to|let me|i need to)\b/i;
+const NARRATION_OPENER = /^(?:i(?:['’]ll| will|['’]m going to| am going to| need to)|let me)\b/i;
 
 /**
  * Returns a human-readable finding string if `text` looks like a narrated

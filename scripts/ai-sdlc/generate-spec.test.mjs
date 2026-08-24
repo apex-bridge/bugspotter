@@ -94,7 +94,11 @@ writeFileSync(
     '  const result = isRetry',
     "    ? (process.env.FAKE_CLAUDE_RETRY_TEXT ?? '')",
     "    : (process.env.FAKE_CLAUDE_TEXT ?? '');",
-    "  process.stdout.write(JSON.stringify({ type: 'result', result, stop_reason: 'end_turn' }) + '\\n');",
+    '  const stop_reason =',
+    '    isRetry && process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
+    '      ? process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
+    "      : 'end_turn';",
+    "  process.stdout.write(JSON.stringify({ type: 'result', result, stop_reason }) + '\\n');",
     '});',
     '',
   ].join('\n')
@@ -280,6 +284,28 @@ describe('generate-spec.mjs narration detection', () => {
     assert.match(r.stderr, /after one corrective retry/);
     const specPath = join(REPO, 'docs', 'specs', '0999-fixture-issue.md');
     assert.equal(existsSync(specPath), false, 'must never write a detected transcript to disk');
+  });
+
+  test('a corrective retry truncated by max_tokens is rejected even with no narration markers left in it', () => {
+    // The retry content below deliberately contains none of the STRONG/WEAK
+    // markers detectNarratedToolCall looks for and does not open with a
+    // narration opener - without the stopReason check, this would pass
+    // narration detection and get written verbatim as a truncated spec.
+    const r = runGenerateSpec({
+      text: NARRATED_TRANSCRIPT_TEXT,
+      retryText: '# Spec: Fixture change\n\nLinked issue: Refs #999\nADR: n/a\n\n**Files touched',
+      env: { FAKE_CLAUDE_RETRY_STOP_REASON: 'max_tokens' },
+    });
+    assert.equal(r.status, 1);
+    assert.equal(r.modelCallCount, 2, 'the one allowed corrective retry should still fire');
+    assert.match(r.stderr, /::error::generate-spec\.mjs/);
+    assert.match(r.stderr, /corrective retry response truncated/);
+    const specPath = join(REPO, 'docs', 'specs', '0999-fixture-issue.md');
+    assert.equal(
+      existsSync(specPath),
+      false,
+      'a truncated corrective retry must never be written, marker-free or not'
+    );
   });
 
   test('the ACTUAL captured issue #355 content is detected and, with no fix-up retry text configured, fails loudly on both turns', () => {

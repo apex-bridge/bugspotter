@@ -198,6 +198,20 @@ describe('detectNarratedToolCall', () => {
     assert.match(finding, /narrated intent/);
   });
 
+  test('fires on an uncontracted "I am going to" opener combined with a weak marker', () => {
+    const text = 'I am going to check the API shape first.\n\n### Result:\n\nsome text\n';
+    const finding = detectNarratedToolCall(text);
+    assert.ok(finding);
+    assert.match(finding, /narrated intent/);
+  });
+
+  test('fires on a typographic-apostrophe "I’ll" opener combined with a weak marker', () => {
+    const text = 'I’ll check the API shape first.\n\n### Result:\n\nsome text\n';
+    const finding = detectNarratedToolCall(text);
+    assert.ok(finding);
+    assert.match(finding, /narrated intent/);
+  });
+
   test('fires on a strong marker (the "_Tool: ..._" label) alone, even without a narration opener', () => {
     const text = 'Some unrelated prose.\n\n_Tool: bash_\n\nmore text\n';
     const finding = detectNarratedToolCall(text);
