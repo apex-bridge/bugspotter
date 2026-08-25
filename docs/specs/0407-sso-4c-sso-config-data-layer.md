@@ -33,7 +33,7 @@ Tenants can configure an OIDC identity provider only via direct API calls today 
 - Backend validation of the config shape itself (#352).
 - The actual OIDC redirect/callback flow — not touched by this slice at all.
 - Any change to `bugspotter-sdk`, `bugspotter-extension`, or `bugspotter-landing`.
-- Promoting the ASSUMED raw endpoint path below into `apps/admin/src/lib/api-constants.ts` — inlined locally for now (matching the existing precedent in `integration-service.ts`'s `parsePluginCode`/`analyzeCode`) since the real path is still unconfirmed pending #353.
+- Promoting the ASSUMED raw endpoint path below into `apps/admin/src/lib/api-constants.ts` — inlined locally for now (matching the existing precedent in `integration-service.ts`'s `parsePluginCode`, which hardcodes its endpoint path directly rather than going through `API_ENDPOINTS`) since the real path is still unconfirmed pending #353.
 
 ## Constraints
 
@@ -143,7 +143,29 @@ New top-level `sso` section, mirroring the shape of the existing `intelligence` 
 
 ### `apps/admin/src/tests/hooks/use-sso-config.test.tsx` (new)
 
-Location and extension corrected from the original spec's `tests/use-sso-config.test.ts` (wrong directory — hook tests live in `tests/hooks/`, confirmed against `use-intelligence-status.test.tsx`, `use-integration-config-linear.test.tsx`, etc.) and wrong extension (`.test.tsx`, not `.test.ts` — every existing hook test uses `.tsx` even though the hook file itself is `.ts`, because the test wrapper renders a `QueryClientProvider`). Mocks `ssoService` directly (matching `use-intelligence-status.test.tsx`'s pattern of mocking the service module rather than `fetch`).
+Location and extension corrected from the original spec's `tests/use-sso-config.test.ts` (wrong directory — hook tests live in `tests/hooks/`, confirmed against `use-intelligence-status.test.tsx`, `use-integration-config-linear.test.tsx`, etc.) and wrong extension (`.test.tsx`, not `.test.ts` — every existing hook test uses `.tsx` even though the hook file itself is `.ts`, because the test wrapper renders a `QueryClientProvider`). Mocks `useOrganization` and `ssoService` directly (matching `use-intelligence-status.test.tsx`'s pattern of mocking the org context and the service module rather than `fetch`).
+
+Shared setup (mirrors `use-intelligence-status.test.tsx`):
+
+```tsx
+vi.mock('../../contexts/organization-context', () => ({
+  useOrganization: vi.fn(),
+}));
+vi.mock('../../services/sso-service', () => ({
+  ssoService: { getSettings: vi.fn(), updateSettings: vi.fn() },
+}));
+
+const orgId = 'org-sso-test';
+
+beforeEach(() => {
+  vi.mocked(useOrganization).mockReset();
+  vi.mocked(ssoService.getSettings).mockReset();
+  vi.mocked(ssoService.updateSettings).mockReset();
+  vi.mocked(useOrganization).mockReturnValue({
+    currentOrganization: { id: orgId },
+  } as unknown as ReturnType<typeof useOrganization>);
+});
+```
 
 **Test case A — GET response never exposes a raw secret (AC #1):**
 
@@ -167,6 +189,20 @@ it('never populates a secret value from the GET response', async () => {
 
 ```tsx
 it('omits clientSecret from the update payload when not edited', async () => {
+  vi.mocked(ssoService.getSettings).mockResolvedValue({
+    issuerUrl: 'https://idp.example.com',
+    clientId: 'abc',
+    hasClientSecret: false,
+    allowedDomains: [],
+    enforceSso: false,
+  });
+  vi.mocked(ssoService.updateSettings).mockResolvedValue({
+    issuerUrl: 'https://idp.example.com',
+    clientId: 'abc',
+    hasClientSecret: false,
+    allowedDomains: [],
+    enforceSso: false,
+  });
   const { result } = renderHook(() => useSsoConfig(), { wrapper: queryClientWrapper });
   await waitFor(() => expect(result.current.isLoading).toBe(false));
 
@@ -187,6 +223,20 @@ it('omits clientSecret from the update payload when not edited', async () => {
 
 ```tsx
 it('includes clientSecret in the update payload when provided', async () => {
+  vi.mocked(ssoService.getSettings).mockResolvedValue({
+    issuerUrl: 'https://idp.example.com',
+    clientId: 'abc',
+    hasClientSecret: true,
+    allowedDomains: [],
+    enforceSso: false,
+  });
+  vi.mocked(ssoService.updateSettings).mockResolvedValue({
+    issuerUrl: 'https://idp.example.com',
+    clientId: 'abc',
+    hasClientSecret: true,
+    allowedDomains: [],
+    enforceSso: false,
+  });
   const { result } = renderHook(() => useSsoConfig(), { wrapper: queryClientWrapper });
   await waitFor(() => expect(result.current.isLoading).toBe(false));
 
