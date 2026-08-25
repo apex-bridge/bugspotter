@@ -41,11 +41,13 @@ The login form has no way to route a user into an SSO flow, or to suppress passw
 
 ### `apps/admin/src/pages/login.tsx` (changed)
 
-This is the actual, only login form, already imported directly by `App.tsx`. Fetch SSO status in the same post-`isInitialized` `useEffect` that already calls `authService.getRegistrationStatus()`, add local state, and gate the password fields on it.
+This is the actual, only login form, already imported directly by `App.tsx`. Fetch SSO status in the same post-`isInitialized` `useEffect` that already calls `authService.getRegistrationStatus()`, add local state, and gate the password fields on it. The state is tri-state (`boolean | null`, starting `null`) rather than a plain boolean defaulting to `false`, specifically so password fields never render before the status is known — a plain `useState(false)` would render them on first paint and then hide them once `getSsoStatus()` resolves, which is the flash/layout-shift Constraint #1 rules out.
 
 ```tsx
-// New state, alongside the existing registrationAllowed/passwordResetEnabled:
-const [enforceSso, setEnforceSso] = useState(false);
+// New state, alongside the existing registrationAllowed/passwordResetEnabled.
+// `null` = not yet resolved. Password fields stay hidden until this is
+// `false`, so there's no flash of password UI on first paint.
+const [enforceSso, setEnforceSso] = useState<boolean | null>(null);
 
 // Inside the existing useEffect (after isInitialized), alongside the
 // existing authService.getRegistrationStatus() call:
@@ -55,12 +57,15 @@ authService.getSsoStatus().then(
     // Fail open to password fields on a status-check failure — matches
     // the existing getRegistrationStatus() error handling above, which
     // also fails to a safe default rather than blocking the page.
+    setEnforceSso(false);
   }
 );
 
-// In the JSX, wrap the existing email/password <Input> pair:
+// In the JSX, wrap the existing email/password <Input> pair. Gating on
+// `=== false` (not `!enforceSso`) keeps password fields hidden both while
+// the status is unresolved (null) and once it resolves true:
 {
-  !enforceSso && (
+  enforceSso === false && (
     <>
       <Input label={t('auth.emailAddress')} /* ...unchanged... */ />
       <Input label={t('auth.password')} /* ...unchanged... */ />
@@ -80,13 +85,25 @@ authService.getSsoStatus().then(
 
 No test file for `login.tsx` currently exists anywhere in the repo (checked `tests/pages/`, `tests/components/` — neither has one; the original spec's `login-form.test.tsx` assumed an existing file to change, which is wrong on two counts: wrong path and wrong new/changed status). This is a first-ever test for the page, so it needs the same mock surface `login.tsx` itself depends on: `useAuth`, `useSetupGuard`, `useInvitationPreview`, `authService` (both `getRegistrationStatus` and the new `getSsoStatus`), `sonner`'s `toast`, and `react-router-dom`'s `useNavigate`/`useSearchParams`.
 
+Follow the existing pattern from `tests/pages/register.test.tsx`: plain Vitest assertions only (no `@testing-library/jest-dom` matchers like `toBeInTheDocument()` — they have a known setup issue in this project, per that file's header comment), and a `renderLoginPage()` helper that wraps in `<BrowserRouter>` since `login.tsx` renders a `<Link>`:
+
+```tsx
+function renderLoginPage() {
+  return render(
+    <BrowserRouter>
+      <LoginPage />
+    </BrowserRouter>
+  );
+}
+```
+
 **Test case D — SSO button always present (AC #1):**
 
 ```tsx
 it('always renders the Sign in with SSO button', () => {
   vi.mocked(authService.getSsoStatus).mockResolvedValue({ enforceSso: false });
-  render(<LoginPage />);
-  expect(screen.getByRole('button', { name: /sign in with sso/i })).toBeInTheDocument();
+  renderLoginPage();
+  expect(screen.getByRole('button', { name: /sign in with sso/i })).toBeDefined();
 });
 ```
 
@@ -95,8 +112,8 @@ it('always renders the Sign in with SSO button', () => {
 ```tsx
 it('hides password fields when the tenant enforces SSO', async () => {
   vi.mocked(authService.getSsoStatus).mockResolvedValue({ enforceSso: true });
-  render(<LoginPage />);
-  await waitFor(() => expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument());
+  renderLoginPage();
+  await waitFor(() => expect(screen.queryByLabelText(/password/i)).toBeNull());
 });
 ```
 
@@ -105,8 +122,8 @@ it('hides password fields when the tenant enforces SSO', async () => {
 ```tsx
 it('shows password fields when SSO is not enforced', async () => {
   vi.mocked(authService.getSsoStatus).mockResolvedValue({ enforceSso: false });
-  render(<LoginPage />);
-  await waitFor(() => expect(screen.getByLabelText(/^password/i)).toBeInTheDocument());
+  renderLoginPage();
+  await waitFor(() => expect(screen.getByLabelText(/^password/i)).toBeDefined());
 });
 ```
 
