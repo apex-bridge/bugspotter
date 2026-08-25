@@ -14,7 +14,7 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 
 **Blocking prerequisites:**
 
-- #352 — defines the SSO config shape (issuer URL, client ID, `hasClientSecret`, allowed domains, `enforce_sso`) this data layer renders and submits
+- #352 — defines the SSO config shape (issuer URL, client ID, `hasClientSecret`, allowed domains, `enforceSso`) this data layer renders and submits
 - #353 — the GET/PUT endpoints this service/hook call must exist
 - #354 — those endpoints must already gate to tenant-admin server-side (already merged); this slice's page (#409) adds client-side gating on top, not instead of
 
@@ -40,7 +40,7 @@ Tenants can configure an OIDC identity provider only via direct API calls today 
 1. The GET response must never surface a real secret value into any form input's `value`/`defaultValue`; only the boolean `hasClientSecret` may drive a "secret is currently set" indicator, per ADR-0044 and the PR #345 fix it references. This data layer's job is to keep that boolean-only contract intact end to end — the config type never carries a raw `clientSecret` field on read.
 2. When the caller updates config without having supplied a new secret, the update payload must omit the `clientSecret` field entirely (not send `""`), so the backend's "omitted = keep existing" contract (per #355) is honored. `undefined` and `""` are easy to conflate in payload construction — the hook's update payload type must make the field optional, not nullable-string.
 3. The hook must be built on `@tanstack/react-query` (`useQuery`/`useMutation`) consuming a dedicated service module, not a raw `fetch`/`useState`/`useEffect` combination in the hook itself. This codebase's comparable data hooks (`use-integration-config.ts`, `use-onboarding-status.ts`, `use-intelligence-status.ts`) all go through `api`/`API_ENDPOINTS` plus a service module; none call `fetch` directly.
-4. The SSO config type (issuer URL, client ID, `hasClientSecret`, allowed domains, `enforce_sso`) must be imported from wherever #352 defines it. **Not** `packages/types/src/api-contract.ts` or `packages/types/src/api-types.ts` — both were checked in full and neither currently defines an `SsoConfig`/`SsoConfigUpdate` (or similarly-named) type as of this writing; #352 is a blocking prerequisite and has apparently not landed yet. `SsoConfig`/`SsoConfigUpdate` below are placeholder names — confirm the real export name, shape, and destination file once #352 lands before writing the hook's return type.
+4. The SSO config type (issuer URL, client ID, `hasClientSecret`, allowed domains, `enforceSso`) must be imported from wherever #352 defines it. **Not** `packages/types/src/api-contract.ts` or `packages/types/src/api-types.ts` — both were checked in full and neither currently defines an `SsoConfig`/`SsoConfigUpdate` (or similarly-named) type as of this writing; #352 is a blocking prerequisite and has apparently not landed yet. `SsoConfig`/`SsoConfigUpdate` below are placeholder names — confirm the real export name, shape, and destination file once #352 lands before writing the hook's return type.
 5. i18n keys must follow `apps/admin/CLAUDE.md` conventions and must be added identically to all three locale files (`en.json`, `ru.json`, `kk.json` — `pnpm validate:i18n` / `pnpm test:i18n` fails CI on drift). The config page's strings go in a new top-level `sso` section, mirroring the shape of the existing `intelligence` section (`title`, `description`, `settings.*`) — `intelligence` is the closest existing precedent for "new org-scoped admin settings feature gets its own top-level i18n section."
 6. `sso-service.ts` does not need its own dedicated `tests/services/sso-service.test.ts` file: `intelligence-service.ts`, the closest analogue, doesn't have one either, and its behavior is covered the same way, through the hook test (below) mocking the service module directly.
 
@@ -212,10 +212,8 @@ it('omits clientSecret from the update payload when not edited', async () => {
     allowedDomains: [],
     enforceSso: false,
   });
-  expect(ssoService.updateSettings).toHaveBeenCalledWith(
-    orgId,
-    expect.not.objectContaining({ clientSecret: expect.anything() })
-  );
+  const [, payload] = vi.mocked(ssoService.updateSettings).mock.calls[0];
+  expect(payload).not.toHaveProperty('clientSecret');
 });
 ```
 
