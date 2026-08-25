@@ -834,6 +834,14 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
    * Hub domain in saas mode (no request.organizationId) resolves to
    * false, matching the guard's own skip-on-hub-domain behavior at
    * /login and /register above.
+   *
+   * Unlike `assertSsoNotEnforced`, DB errors from `findByTenantId` here
+   * ARE caught and default to `enforceSso: false`. This is a status read
+   * the login page depends on before first paint (#408); the actual
+   * enforcement gate stays fail-closed at /login and /register
+   * regardless of what this endpoint reports, so defaulting to false
+   * here only risks showing password fields that a DB-down guard would
+   * then still reject — never a bypass.
    */
   fastify.get(
     '/api/v1/auth/sso-status',
@@ -842,12 +850,25 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
       config: { public: true },
     },
     async (request, reply) => {
-      const enforceSso =
-        process.env.DEPLOYMENT_MODE === 'saas'
-          ? request.organizationId
-            ? Boolean((await db.oidcIdpConfigs.findByTenantId(request.organizationId))?.enforceSso)
-            : false
-          : config.oidc.enforceSso;
+      let enforceSso: boolean;
+      if (process.env.DEPLOYMENT_MODE === 'saas') {
+        if (request.organizationId) {
+          try {
+            const idpConfig = await db.oidcIdpConfigs.findByTenantId(request.organizationId);
+            enforceSso = Boolean(idpConfig?.enforceSso);
+          } catch (err) {
+            request.log.error(
+              { err: err instanceof Error ? err.message : String(err) },
+              'sso-status: findByTenantId failed, defaulting to enforceSso: false'
+            );
+            enforceSso = false;
+          }
+        } else {
+          enforceSso = false;
+        }
+      } else {
+        enforceSso = config.oidc.enforceSso;
+      }
 
       return sendSuccess(reply, { enforceSso });
     }

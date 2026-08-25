@@ -1109,5 +1109,31 @@ describe('Auth Routes', () => {
       expect(response.statusCode).toBe(200);
       expect(response.json().data.enforceSso).toBe(false);
     });
+
+    it('Test K: GET /api/v1/auth/sso-status returns enforceSso: false (not 500) when findByTenantId throws', async () => {
+      const org = await db.organizations.create({
+        name: 'SSO Status Error Org',
+        subdomain: 'sso-status-error-org',
+      });
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockRejectedValue(new Error('connection failure'));
+
+      try {
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'GET',
+            url: '/api/v1/auth/sso-status',
+            headers: { host: `${org.subdomain}.bugspotter.io` },
+          })
+        );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().data.enforceSso).toBe(false);
+        expect(spy).toHaveBeenCalledWith(org.id);
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 });
