@@ -17,6 +17,12 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
+import { detectNarratedToolCall } from './detect-narration.mjs';
+
+// Captured before any file reads or BFS repo scanning below so the retry
+// budget math (see scriptStartedAt's use further down) measures real elapsed
+// step time, not elapsed-time-minus-setup-work.
+const scriptStartedAt = Date.now();
 
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, GITHUB_OUTPUT } = process.env;
 
@@ -148,6 +154,7 @@ ISSUE #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 ${ISSUE_BODY?.trim() || '(no description provided)'}
 
 Rules:
+- You have NO tools available — no Read, no Grep, no Bash. Everything you need is already in this prompt: the source file tree above, the architecture index (if present), and the issue body. Do not attempt a tool call and do not narrate one; use the source tree and architecture index as your source of truth for what exists, and if something you need is genuinely absent from them, make the smallest reasonable assumption and mark it "ASSUMED, not verified" in the spec text (per the method-name rule below) rather than stopping to explore or narrating an exploration you cannot actually perform.
 - "Linked issue:" line must say "Refs #${ISSUE_NUMBER}"
 - "ADR:" line: write "pending" if an ADR will be needed, "docs/adr/NNNN-slug.md" if the issue names one, or "n/a" if the change is purely additive with no architectural decision
 - "Files touched:" must list every file the spec edits or creates, using exact paths from the source tree above — if the issue describes work in a component the ADR index attributes to a different repo, say so explicitly in "Out of scope" instead of inventing a path in this repo
@@ -161,7 +168,8 @@ Rules:
 - "Rollback:" must describe a concrete undo action for any irreversible step, or "n/a" if all steps are additive
 - Return ONLY the filled spec document — no preamble, no explanation, no markdown fences`;
 
-let specContent;
+const GENERATE_TIMEOUT_MS = 450_000;
+let specContent, stopReason;
 try {
   // 450s. Was 420s (originally raised from 180_000, matching
   // verify-spec.mjs's own measured 283.9s for comparable work) - but that
@@ -181,10 +189,113 @@ try {
   // isn't enough. Note the job also runs verify-spec.mjs (its own 420s,
   // unchanged), so raising either further means re-checking the job's 22m
   // cap still contains both plus setup - see that file's comments.
-  ({ text: specContent } = await callClaude({ prompt, maxTokens: 4096, timeoutMs: 450_000 }));
+  ({ text: specContent, stopReason } = await callClaude({
+    prompt,
+    maxTokens: 4096,
+    timeoutMs: GENERATE_TIMEOUT_MS,
+  }));
 } catch (err) {
   console.error(err.message);
   process.exit(1);
+}
+
+// Fail fast if truncated — matches the check in generate-impl.mjs and
+// generate-adr.mjs. Without it, a response cut short by the 4096 maxTokens
+// cap would silently write a truncated spec to disk instead of erroring;
+// verify-spec.mjs runs afterward against whatever is already on disk and
+// checks its OWN verifier call's stopReason, not this one, so it would not
+// have caught a truncated spec that happens to contain no invented method
+// names before the cutoff.
+if (stopReason === 'max_tokens') {
+  console.error(
+    'Claude response truncated (stop_reason=max_tokens). Raise maxTokens in generate-spec.mjs.'
+  );
+  process.exit(1);
+}
+
+// Deterministic safeguard against a narrated (fake) tool-call transcript -
+// see detect-narration.mjs's header for the full failure history (#353,
+// #355). The prompt's own "you have NO tools" rule above is not guaranteed
+// reliable on its own (that is exactly how #355 still hit this after #353
+// had already surfaced the same shape) - this is the defense-in-depth check
+// that actually stops it from being written to disk as if it were a real
+// spec.
+//
+// One corrective retry with a stronger reminder before failing loudly,
+// mirroring generate-impl.mjs's missing-file self-correction (PR #375) -
+// time-budgeted the same way, so a retry only fires with real headroom left
+// in the step's own timeout rather than guaranteeing a step-level kill.
+// Defaults match spec-agent.yml's "Generate spec" step cap (raised alongside
+// this change specifically to give a retry room - see that file's comment).
+function parsePositiveMs(envValue, fallback) {
+  const trimmed = typeof envValue === 'string' ? envValue.trim() : envValue;
+  if (trimmed === undefined || trimmed === '') {
+    return fallback;
+  }
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const STEP_BUDGET_MS = parsePositiveMs(process.env.SPEC_STEP_BUDGET_MS, 14 * 60_000);
+const SAFETY_BUFFER_MS = parsePositiveMs(process.env.SPEC_SAFETY_BUFFER_MS, 30_000);
+const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.SPEC_RETRY_MIN_BUDGET_MS, 60_000);
+
+let narrationFinding = detectNarratedToolCall(specContent);
+if (narrationFinding) {
+  console.warn(
+    `Response looks like a narrated tool-call transcript, not a spec: ${narrationFinding}`
+  );
+
+  const remainingMs = STEP_BUDGET_MS - SAFETY_BUFFER_MS - (Date.now() - scriptStartedAt);
+  if (remainingMs < RETRY_MIN_BUDGET_MS) {
+    console.error(
+      `::error::generate-spec.mjs: response looks like a narrated tool-call transcript, and ` +
+        `only ~${Math.round(remainingMs / 1000)}s remain in the step budget - not enough for a ` +
+        `safe corrective retry. Refusing to write it as a spec. ${narrationFinding}`
+    );
+    process.exit(1);
+  }
+
+  const retryTimeoutMs = Math.min(GENERATE_TIMEOUT_MS, remainingMs);
+  console.warn(
+    `Retrying once with a stronger no-narration reminder (timeout ${Math.round(retryTimeoutMs / 1000)}s)...`
+  );
+  const correctionPrompt =
+    `${prompt}\n\n--- CORRECTIVE REMINDER ---\n` +
+    `Your previous response was rejected: it looked like a narrated tool-call transcript ` +
+    `(e.g. opening with something like "I'll inspect..." and/or containing "_Tool: ..._", ` +
+    `"### Parameters:", or "### Result:" markers, or an "<invoke name=...>" tag) instead of the ` +
+    `spec document itself. You have NO tools available — no Read, no Grep, no Bash. Do not ` +
+    `attempt a tool call and do not narrate one. Return ONLY the filled spec document, starting ` +
+    `with "# Spec: <title>", exactly as instructed above.`;
+
+  let retryStopReason;
+  try {
+    ({ text: specContent, stopReason: retryStopReason } = await callClaude({
+      prompt: correctionPrompt,
+      maxTokens: 4096,
+      timeoutMs: retryTimeoutMs,
+    }));
+  } catch (err) {
+    console.error(`::error::generate-spec.mjs: corrective retry call failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (retryStopReason === 'max_tokens') {
+    console.error(
+      '::error::generate-spec.mjs: corrective retry response truncated (stop_reason=max_tokens).'
+    );
+    process.exit(1);
+  }
+
+  narrationFinding = detectNarratedToolCall(specContent);
+  if (narrationFinding) {
+    console.error(
+      `::error::generate-spec.mjs: response still looks like a narrated tool-call transcript ` +
+        `after one corrective retry - refusing to write it as a spec. ${narrationFinding}`
+    );
+    process.exit(1);
+  }
+  console.log('Corrective retry produced real content — proceeding.');
 }
 
 mkdirSync('docs/specs', { recursive: true });

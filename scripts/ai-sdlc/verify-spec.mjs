@@ -79,6 +79,8 @@ ${
     ? `\nPROJECT ARCHITECTURE INDEX (docs/adr/README.md — canonical record of which repo owns which component, language, and service boundary):\n${adrIndex}\n`
     : ''
 }
+You have NO tools available — no Read, no Grep, no Bash. Everything you need (the spec, the source files it references, and the architecture index) is already shown above. Do not attempt a tool call and do not narrate one; if a file you would need is not among those shown above, flag it under check 0 below as unverified rather than trying to fetch it.
+
 Check for:
 0. A method called on a type imported from another package (\`import type { X } from '@bugspotter/other-pkg'\`) where that package's defining file is NOT among the source files above. You cannot confirm or deny the method exists without that file - flag this explicitly as "unverified: <package>'s defining file for <type> was not available to check" rather than assuming it's correct because nothing else looks wrong. This is not the same failure as item 1 below: item 1 is a check you can actually perform; this is a check you structurally cannot perform yet, and saying so is the correct output, not a cop-out. The same applies when that file IS listed above but is marked "[… truncated at 1000 lines]" and the method does not appear before the cutoff - the untruncated file may still define it beyond that point, so report it as unverified rather than as missing under item 1.
 1. Method or function names called in the spec that don't exist in the source files
