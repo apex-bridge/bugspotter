@@ -94,6 +94,34 @@ interface RefreshTokenBody {
 }
 
 /**
+ * Response schema for GET /api/v1/auth/sso-status. Kept local to this
+ * file (rather than promoted into
+ * packages/backend/src/api/schemas/auth-schema.ts) since it's a single
+ * small schema for one route, not shared — mirrors the shape of
+ * registrationStatusSchema in auth-schema.ts without adding a new file
+ * to this issue's declared scope.
+ */
+const ssoStatusSchema = {
+  response: {
+    200: {
+      type: 'object',
+      required: ['success', 'data', 'timestamp'],
+      properties: {
+        success: { type: 'boolean', enum: [true] },
+        data: {
+          type: 'object',
+          required: ['enforceSso'],
+          properties: {
+            enforceSso: { type: 'boolean' },
+          },
+        },
+        timestamp: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+} as const;
+
+/**
  * Generate a magic token for passwordless authentication
  * Used for demo users and email-based login links
  *
@@ -787,6 +815,41 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         requireInvitation: config.auth.requireInvitationToRegister,
         passwordResetEnabled: await isPasswordResetEnabledForRequest(request.organizationId),
       });
+    }
+  );
+
+  /**
+   * GET /api/v1/auth/sso-status
+   * Public endpoint — returns whether SSO is enforced (mandatory) for the
+   * tenant resolved from the request host/subdomain. The login page (#408)
+   * uses this to decide whether to hide the password fields before first
+   * paint, rather than showing them and letting a doomed password login
+   * fail against the SSO-enforcement guard.
+   *
+   * Resolution mirrors `assertSsoNotEnforced` (enforce-sso.ts, ADR-0044
+   * Decision 4): saas mode reads the tenant's oidc_idp_config row via
+   * `findByTenantId`, selfhosted mode reads OIDC_ENFORCE_SSO
+   * (config.oidc.enforceSso). This route resolves the same boolean
+   * instead of throwing — it's a status read, not a login-time gate.
+   * Hub domain in saas mode (no request.organizationId) resolves to
+   * false, matching the guard's own skip-on-hub-domain behavior at
+   * /login and /register above.
+   */
+  fastify.get(
+    '/api/v1/auth/sso-status',
+    {
+      schema: ssoStatusSchema,
+      config: { public: true },
+    },
+    async (request, reply) => {
+      const enforceSso =
+        process.env.DEPLOYMENT_MODE === 'saas'
+          ? request.organizationId
+            ? Boolean((await db.oidcIdpConfigs.findByTenantId(request.organizationId))?.enforceSso)
+            : false
+          : config.oidc.enforceSso;
+
+      return sendSuccess(reply, { enforceSso });
     }
   );
 }
