@@ -17,11 +17,11 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 
 ## Problem
 
-The login form has no way to know whether the current tenant has made SSO mandatory (`enforce_sso: true`), so it cannot yet decide whether to show or hide password fields, or resolve that decision before first paint. This slice adds the read path: an unauthenticated service method the login page (#408) can call to resolve that flag before rendering.
+The login form has no way to know whether the current tenant has made SSO mandatory (`enforce_sso: true`), so it cannot yet decide whether to show or hide password fields. This slice adds the read path: an unauthenticated service method the login page (#408) can call to resolve that flag. Whether #408 resolves it before first paint (a blocking initialization gate, mirroring `useSetupGuard`'s existing pattern) or after mount (a non-blocking `useEffect`, mirroring `getRegistrationStatus()`'s existing fire-and-forget pattern) is that slice's design decision, not this one's — see Out of scope below.
 
 ## Out of scope
 
-- Wiring this method into the login page's UI (fields, button, `useEffect` call) — that is #408.
+- Wiring this method into the login page's UI, including the before-first-paint-vs-post-render timing decision (fields, button, gate/hook choice) — that is #408.
 - The SSO config data layer (`sso-service.ts`, `use-sso-config.ts`) — that is #407.
 - The SSO config page and its route — that is #409.
 - Backend endpoint implementation for this status read — that is #414, this slice's blocking prerequisite; this slice's call target matches #414's specified route contract exactly, not a guess.
@@ -32,7 +32,7 @@ The login form has no way to know whether the current tenant has made SSO mandat
 ## Constraints
 
 1. This method must be **unauthenticated** and resolve the tenant by request host/subdomain via the backend's tenant middleware (per `apps/admin/CLAUDE.md`'s tenant-routing section), not by any client-supplied org id — it runs on the pre-login page, before any session exists. This mirrors how `authService.getRegistrationStatus()` already works today (same pre-auth, tenant-resolved-by-host shape).
-2. i18n keys must follow `apps/admin/CLAUDE.md` conventions (props-only strings into components, no inline literals) and must be added identically to all three locale files (`en.json`, `ru.json`, `kk.json` — `pnpm validate:i18n` / `pnpm test:i18n` fails CI on drift, per `apps/admin/src/i18n/README.md`). The login button's string goes in the existing `auth` section (already holds the other login-page strings — `auth.loginButton`, `auth.password`, etc.).
+2. i18n keys must follow `apps/admin/CLAUDE.md` conventions (props-only strings into components, no inline literals) and must be added identically to all three locale files (`en.json`, `ru.json`, `kk.json` — `pnpm validate:i18n` / `pnpm test:i18n` fails CI on drift, per `apps/admin/src/i18n/README.md`). The login button's string goes in the existing `auth` section (already holds the other login-page strings — `auth.loginButton`, `auth.password`, etc.). Each locale gets its own approved translation, not an English placeholder — `validate:i18n` only checks key-structure sync, not content, and every existing `auth.*` key already carries a real Russian/Kazakh translation (see Changes below for the exact values).
 3. The endpoint path this method calls (`/api/v1/auth/sso-status`) matches #414's specified route contract, not a guess — #414's spec (`docs/specs/0414-sso-add-get-api-v1-auth-sso-status-endpo.md`) fully grounds the route's public/unauthenticated shape and response shape (`{ success, data: { enforceSso: boolean }, timestamp }`). It is inlined directly in the service call rather than promoted to `apps/admin/src/lib/api-constants.ts`, matching the existing precedent in `integration-service.ts`'s `parsePluginCode`/`analyzeCode` (both slices in this split inline their own paths locally for the same reason).
 
 ## Acceptance criteria
@@ -63,11 +63,29 @@ getSsoStatus: async (): Promise<{ enforceSso: boolean }> => {
 
 ### `apps/admin/src/i18n/locales/en.json`, `ru.json`, `kk.json` (changed)
 
-Add one key to the existing `auth` section (which already holds `loginButton`, `password`, `forgotPassword`, etc.):
+Add one key to the existing `auth` section (which already holds `loginButton`, `password`, `forgotPassword`, etc.), with each locale's approved translation — not an English placeholder:
+
+`en.json`:
 
 ```json
 "auth": {
   "signInWithSso": "Sign in with SSO"
+}
+```
+
+`ru.json`:
+
+```json
+"auth": {
+  "signInWithSso": "Войти через SSO"
+}
+```
+
+`kk.json`:
+
+```json
+"auth": {
+  "signInWithSso": "SSO арқылы кіру"
 }
 ```
 
@@ -85,4 +103,4 @@ pnpm --filter @bugspotter/admin test
 pnpm validate:i18n
 ```
 
-Rollback: revert the `getSsoStatus()` addition to `auth-service.ts`, its test block, and the three locale-file key additions. Purely additive — nothing yet calls this method (that's #408's job), so reverting has zero effect on any existing behavior.
+Rollback: revert the `getSsoStatus()` addition to `auth-service.ts`, its test block, and the three locale-file key additions. Purely additive as of this slice landing alone — nothing yet calls this method (that's #408's job), so reverting now has zero effect on any existing behavior. Once #408 lands and calls `getSsoStatus()`, this order inverts: revert or disable #408 first, then remove this method and its related changes — removing this method first breaks #408's build/login-status handling.
