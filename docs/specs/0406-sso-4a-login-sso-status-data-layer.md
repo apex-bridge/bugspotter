@@ -11,9 +11,9 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 - `apps/admin/src/i18n/locales/ru.json` (changed)
 - `apps/admin/src/i18n/locales/kk.json` (changed)
 
-**Blocking prerequisites:** #354's server-side `enforce_sso` gating is already merged, but the `GET /api/v1/auth/sso-status` endpoint this slice's service method calls does not exist yet in the backend — implementation is blocked on #353 landing (or the path being confirmed against it). See Constraint 3 and Out of scope below.
+**Blocking prerequisites:** #414 — the `GET /api/v1/auth/sso-status` endpoint this slice's service method calls does not exist yet in the backend. It was briefly folded into this slice's own scope, but that pushed the file count to 7, over `check-spec-scope.mjs`'s hard 6-file cap, so it has been split out into its own small, standalone issue (#414, PR #415) that this slice depends on instead. #354's server-side `enforce_sso` gating is already merged and unaffected by this dependency. See Constraint 3 and Out of scope below.
 
-**Split note:** this is Slice 1 of #355 (Refs #355), split from that issue's combined spec (PR #405, `docs/specs/0355-sso-4-4-admin-ui-sso-config-page-and-log.md`) after it was blocked by `check-spec-scope.mjs`'s hard 6-file gate (13 files declared, once every wildcard in the original 7-file draft was grounded against the real admin-app tree, against a 6-file cap). Hand-extracted directly from #405's own already-grounded spec content — not regenerated from scratch, to avoid reintroducing grounding errors already fixed there, same reasoning #367/#368 and #394/#395 used for their splits. This is the smaller, independent half backing the login page's SSO awareness: no dependency on the other three slices. Slice 2 (#408, the login page UI itself) depends on this one landing and being implemented first. Slice 3 (#407, the config data layer) is independent of this slice.
+**Split note:** this is Slice 1 of #355 (Refs #355), split from that issue's combined spec (PR #405, `docs/specs/0355-sso-4-4-admin-ui-sso-config-page-and-log.md`) after it was blocked by `check-spec-scope.mjs`'s hard 6-file gate (13 files declared, once every wildcard in the original 7-file draft was grounded against the real admin-app tree, against a 6-file cap). Hand-extracted directly from #405's own already-grounded spec content — not regenerated from scratch, to avoid reintroducing grounding errors already fixed there, same reasoning #367/#368 and #394/#395 used for their splits. This is the smaller, independent half backing the login page's SSO awareness: no dependency on the other three slices beyond #414 above. Slice 2 (#408, the login page UI itself) depends on this one landing and being implemented first. Slice 3 (#407, the config data layer) is independent of this slice.
 
 ## Problem
 
@@ -24,7 +24,7 @@ The login form has no way to know whether the current tenant has made SSO mandat
 - Wiring this method into the login page's UI (fields, button, `useEffect` call) — that is #408.
 - The SSO config data layer (`sso-service.ts`, `use-sso-config.ts`) — that is #407.
 - The SSO config page and its route — that is #409.
-- Backend endpoint implementation for this status read (#353 is the blocking prerequisite for the real endpoint existing; this slice's call target is a best-effort path, confirmed below).
+- Backend endpoint implementation for this status read — that is #414, this slice's blocking prerequisite; this slice's call target matches #414's specified route contract exactly, not a guess.
 - Backend RBAC/tenant-admin gating (#354, already merged) and backend validation of the config shape (#352).
 - The actual OIDC redirect/callback flow — this issue only covers the button's presence/visibility in #408, not the auth handshake it triggers.
 - Any change to `bugspotter-sdk`, `bugspotter-extension`, or `bugspotter-landing`.
@@ -33,7 +33,7 @@ The login form has no way to know whether the current tenant has made SSO mandat
 
 1. This method must be **unauthenticated** and resolve the tenant by request host/subdomain via the backend's tenant middleware (per `apps/admin/CLAUDE.md`'s tenant-routing section), not by any client-supplied org id — it runs on the pre-login page, before any session exists. This mirrors how `authService.getRegistrationStatus()` already works today (same pre-auth, tenant-resolved-by-host shape).
 2. i18n keys must follow `apps/admin/CLAUDE.md` conventions (props-only strings into components, no inline literals) and must be added identically to all three locale files (`en.json`, `ru.json`, `kk.json` — `pnpm validate:i18n` / `pnpm test:i18n` fails CI on drift, per `apps/admin/src/i18n/README.md`). The login button's string goes in the existing `auth` section (already holds the other login-page strings — `auth.loginButton`, `auth.password`, etc.).
-3. The endpoint path this method calls is **assumed, not verified** — confirm against #353 once that endpoint lands. It is inlined directly in the service call rather than promoted to `apps/admin/src/lib/api-constants.ts`, matching the existing precedent in `integration-service.ts`'s `parsePluginCode`/`analyzeCode` (both slices in this split inline their own assumed paths locally for the same reason).
+3. The endpoint path this method calls (`/api/v1/auth/sso-status`) matches #414's specified route contract, not a guess — #414's spec (`docs/specs/0414-sso-add-get-api-v1-auth-sso-status-endpo.md`) fully grounds the route's public/unauthenticated shape and response shape (`{ success, data: { enforceSso: boolean }, timestamp }`). It is inlined directly in the service call rather than promoted to `apps/admin/src/lib/api-constants.ts`, matching the existing precedent in `integration-service.ts`'s `parsePluginCode`/`analyzeCode` (both slices in this split inline their own paths locally for the same reason).
 
 ## Acceptance criteria
 
@@ -51,8 +51,9 @@ Add `getSsoStatus()`, mirroring the existing `getRegistrationStatus()` right abo
 // Add alongside the existing getRegistrationStatus():
 getSsoStatus: async (): Promise<{ enforceSso: boolean }> => {
   const response = await api.get<{ success: boolean; data: { enforceSso: boolean } }>(
-    // ASSUMED path, not verified — confirm against #353. Inlined rather
-    // than added to api-constants.ts for now; mirrors auth.registrationStatus()'s
+    // Path matches #414's specified route contract (backend endpoint,
+    // tracked separately as this slice's blocking prerequisite). Inlined
+    // rather than added to api-constants.ts; mirrors auth.registrationStatus()'s
     // `/api/v1/auth/registration-status` naming.
     '/api/v1/auth/sso-status'
   );
