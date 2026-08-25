@@ -35,7 +35,15 @@ jobs:
     name: Draft ADR
     if: github.event.label.name == 'needs-adr'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 19m. Was 15m (6m step cap + ~9m setup headroom - checkout, setup-node,
+    # `npm install -g @anthropic-ai/claude-code`, the linked-spec `gh` lookup,
+    # prettier, git push, two more `gh` calls). Raised alongside the
+    # "Generate ADR" step's own timeout below, same reasoning as
+    # spec-agent.yml's identical change: generate-adr.mjs can now make a
+    # second, corrective LLM call when it detects a narrated-tool-call
+    # transcript (see detect-narration.mjs), so the job needs room for that
+    # second call too. 10m (gen, up from 6m) + the same ~9m setup headroom.
+    timeout-minutes: 19
     steps:
       - uses: actions/checkout@v4
 
@@ -67,10 +75,15 @@ jobs:
 
       - name: Generate ADR
         id: gen
-        # 6m > generate-adr.mjs's own 300s (5m) LLM timeout, so the script's
-        # error wins over a silent step kill. One LLM call in this job, so the
-        # 15m job cap has ample room around it.
-        timeout-minutes: 6
+        # 10m. Was 6m (> generate-adr.mjs's own 300s/5m LLM timeout alone).
+        # Raised so the script's own ADR_STEP_BUDGET_MS-gated corrective
+        # retry (see detect-narration.mjs and generate-adr.mjs's own comment
+        # - fires only on a detected narrated-tool-call transcript) has real
+        # room to run a second ~300s call. generate-adr.mjs's own
+        # ADR_STEP_BUDGET_MS default (10m) must match this step's
+        # timeout-minutes, or the script will think it has headroom this step
+        # doesn't actually have.
+        timeout-minutes: 10
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           # generate-adr.mjs never passes an explicit model to callClaude(),

@@ -18,6 +18,12 @@ import {
   existsSync,
 } from 'node:fs';
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
+import { detectNarratedToolCall } from './detect-narration.mjs';
+
+// Captured before any file reads (ADR numbering, example ADR, ADR index)
+// below so the retry budget math (see scriptStartedAt's use further down)
+// measures real elapsed step time, not elapsed-time-minus-setup-work.
+const scriptStartedAt = Date.now();
 
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
@@ -119,11 +125,13 @@ ${ISSUE_BODY?.trim() || '(no description)'}
 ${SPEC_CONTENT ? `\nLINKED SPEC:\n${SPEC_CONTENT.slice(0, 1500)}` : ''}
 
 Rules:
+- You have NO tools available — no Read, no Grep, no Bash. Everything you need is already in this prompt: the example ADR, the architecture index (if present), the issue body, and the linked spec (if any). Do not attempt a tool call and do not narrate one; if something you need is genuinely absent from them, make the smallest reasonable assumption and note it as a residual risk under Consequences rather than stopping to explore or narrating an exploration you cannot actually perform.
 - Status must be "Proposed" (human ratifies and changes it to "Accepted")
 - Be concrete about consequences; call out residual risks explicitly
 - Do not state or imply that a component lives in this repo, in a particular language, or behind a particular service boundary if the architecture index above attributes it to a different repo — if the issue concerns such a component, say so explicitly rather than inventing an in-repo shape for it
 - Return ONLY the ADR document — no preamble, no explanation, no markdown fences`;
 
+const GENERATE_TIMEOUT_MS = 300_000;
 let adrContent, stopReason;
 try {
   // 300s. The previous 120s rested on a premise that is no longer true: it
@@ -142,7 +150,7 @@ try {
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
     maxTokens: 2048,
-    timeoutMs: 300_000,
+    timeoutMs: GENERATE_TIMEOUT_MS,
   }));
 } catch (err) {
   console.error(err.message);
@@ -157,6 +165,90 @@ if (stopReason === 'max_tokens') {
     'Claude response truncated (stop_reason=max_tokens). Raise maxTokens in generate-adr.mjs.'
   );
   process.exit(1);
+}
+
+// Deterministic safeguard against a narrated (fake) tool-call transcript -
+// see detect-narration.mjs's header for the full failure history (#353,
+// #355) and generate-spec.mjs's identical guard (this script shares the
+// same generation shape: one plain-text document, LLM_BACKEND=cli with
+// --tools=). The prompt's own "you have NO tools" rule above is not
+// guaranteed reliable on its own - this is the defense-in-depth check that
+// actually stops it from being written to disk as if it were a real ADR.
+//
+// One corrective retry with a stronger reminder before failing loudly,
+// mirroring generate-impl.mjs's missing-file self-correction (PR #375) and
+// generate-spec.mjs's own copy of this same guard. Defaults match
+// adr-agent.yml's "Generate ADR" step cap (raised alongside this change
+// specifically to give a retry room - see that file's comment).
+function parsePositiveMs(envValue, fallback) {
+  const trimmed = typeof envValue === 'string' ? envValue.trim() : envValue;
+  if (trimmed === undefined || trimmed === '') {
+    return fallback;
+  }
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const STEP_BUDGET_MS = parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 10 * 60_000);
+const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
+const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 45_000);
+
+let narrationFinding = detectNarratedToolCall(adrContent);
+if (narrationFinding) {
+  console.warn(
+    `Response looks like a narrated tool-call transcript, not an ADR: ${narrationFinding}`
+  );
+
+  const remainingMs = STEP_BUDGET_MS - SAFETY_BUFFER_MS - (Date.now() - scriptStartedAt);
+  if (remainingMs < RETRY_MIN_BUDGET_MS) {
+    console.error(
+      `::error::generate-adr.mjs: response looks like a narrated tool-call transcript, and only ` +
+        `~${Math.round(remainingMs / 1000)}s remain in the step budget - not enough for a safe ` +
+        `corrective retry. Refusing to write it as an ADR. ${narrationFinding}`
+    );
+    process.exit(1);
+  }
+
+  const retryTimeoutMs = Math.min(GENERATE_TIMEOUT_MS, remainingMs);
+  console.warn(
+    `Retrying once with a stronger no-narration reminder (timeout ${Math.round(retryTimeoutMs / 1000)}s)...`
+  );
+  const correctionPrompt =
+    `${prompt}\n\n--- CORRECTIVE REMINDER ---\n` +
+    `Your previous response was rejected: it looked like a narrated tool-call transcript ` +
+    `(e.g. opening with something like "I'll inspect..." and/or containing "_Tool: ..._", ` +
+    `"### Parameters:", or "### Result:" markers, or an "<invoke name=...>" tag) instead of the ` +
+    `ADR document itself. You have NO tools available — no Read, no Grep, no Bash. Do not ` +
+    `attempt a tool call and do not narrate one. Return ONLY the ADR document, starting with ` +
+    `"# ADR-${padded}: <title>", exactly as instructed above.`;
+
+  let retryStopReason;
+  try {
+    ({ text: adrContent, stopReason: retryStopReason } = await callClaude({
+      prompt: correctionPrompt,
+      maxTokens: 2048,
+      timeoutMs: retryTimeoutMs,
+    }));
+  } catch (err) {
+    console.error(`::error::generate-adr.mjs: corrective retry call failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (retryStopReason === 'max_tokens') {
+    console.error(
+      '::error::generate-adr.mjs: corrective retry response truncated (stop_reason=max_tokens).'
+    );
+    process.exit(1);
+  }
+
+  narrationFinding = detectNarratedToolCall(adrContent);
+  if (narrationFinding) {
+    console.error(
+      `::error::generate-adr.mjs: response still looks like a narrated tool-call transcript ` +
+        `after one corrective retry - refusing to write it as an ADR. ${narrationFinding}`
+    );
+    process.exit(1);
+  }
+  console.log('Corrective retry produced real content — proceeding.');
 }
 
 writeFileSync(adrFile, adrContent, 'utf8');

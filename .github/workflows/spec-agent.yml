@@ -33,16 +33,17 @@ jobs:
     name: Draft spec
     if: github.event.label.name == 'needs-spec'
     runs-on: ubuntu-latest
-    # 22m. This job makes TWO sequential LLM calls - generate-spec.mjs (450s)
-    # and verify-spec.mjs (420s) - so the job cap has to contain 870s of model
-    # budget plus setup. At 15m (900s) it did not: worst case was ~870s of LLM
-    # plus checkout, setup-node, `npm install -g @anthropic-ai/claude-code`,
-    # prettier, git push and two `gh` calls. The failure mode was the worst
-    # available - GitHub cancels the job mid-call, so a spec that generate-spec
-    # already wrote to disk is discarded uncommitted, after both calls were
-    # paid for. Step caps below bound each call individually; this bounds the
-    # whole job with room for the setup around them.
-    timeout-minutes: 22
+    # 28m. Was 22m (870s of model budget - generate-spec.mjs's 450s +
+    # verify-spec.mjs's 420s - plus setup). Raised alongside the "Generate
+    # spec" step's own timeout below: generate-spec.mjs can now make a second,
+    # corrective LLM call when it detects a narrated-tool-call-transcript
+    # response (see detect-narration.mjs and that script's own comment), and
+    # the job cap has to have room for that second call too, not just the
+    # first. 14m (gen, up from 8m) + 8m (verify, unchanged) = 22m of step
+    # budget, plus the same ~6m of setup headroom the previous 22m/16m split
+    # already assumed (checkout, setup-node, `npm install -g
+    # @anthropic-ai/claude-code`, prettier, git push, two `gh` calls) = 28m.
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
 
@@ -56,9 +57,17 @@ jobs:
 
       - name: Generate spec
         id: gen
-        # 8m > generate-spec.mjs's own 450s (7.5m) LLM timeout, so the
-        # script's error message wins over a silent step kill.
-        timeout-minutes: 8
+        # 14m. Was 8m (> generate-spec.mjs's own 450s/7.5m LLM timeout alone).
+        # Raised so the script's own SPEC_STEP_BUDGET_MS-gated corrective
+        # retry (see detect-narration.mjs and generate-spec.mjs's own
+        # comment - fires only on a detected narrated-tool-call transcript,
+        # the exact shape issue #355/#401 hit) has real room to run a second
+        # ~450s call rather than being starved to near-zero budget the
+        # instant the first call returns. generate-spec.mjs's own
+        # SPEC_STEP_BUDGET_MS default (14m) must match this step's
+        # timeout-minutes, or the script will think it has headroom this step
+        # doesn't actually have.
+        timeout-minutes: 14
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           # generate-spec.mjs never passes an explicit model to callClaude(),
