@@ -129,11 +129,22 @@ it.each([true, false])(
 
 **Test case E — password fields hidden when enforced (AC #2):**
 
+Password fields are also absent in the unresolved (`enforceSso === null`) state, so a bare `waitFor(() => expect(queryByLabelText(...)).toBeNull())` right after `renderLoginPage()` would pass on the very first synchronous render, before `getSsoStatus()` has resolved, and before a broken resolved-branch implementation would have any chance to (incorrectly) reveal the fields. Await the actual promise the effect called, flushing the resulting state update, before asserting, so the check runs against the truly-resolved state:
+
 ```tsx
 it('hides password fields when the tenant enforces SSO', async () => {
-  vi.mocked(authService.getSsoStatus).mockResolvedValue({ enforceSso: true });
+  const mockedGetSsoStatus = vi
+    .mocked(authService.getSsoStatus)
+    .mockResolvedValue({ enforceSso: true });
   renderLoginPage();
-  await waitFor(() => expect(screen.queryByLabelText(/password/i)).toBeNull());
+  // `act` is imported from `@testing-library/react`, the same package as
+  // render/screen/waitFor. Awaiting the mock's own returned promise (rather
+  // than a bare `waitFor`) forces the effect's `.then()` and its state update
+  // to land before the assertion below runs.
+  await act(async () => {
+    await mockedGetSsoStatus.mock.results[0].value;
+  });
+  expect(screen.queryByLabelText(/password/i)).toBeNull();
 });
 ```
 
