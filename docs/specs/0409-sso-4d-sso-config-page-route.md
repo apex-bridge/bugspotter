@@ -21,15 +21,15 @@ Tenants can configure an OIDC identity provider only via direct API calls today 
 
 - The SSO config data layer (`sso-service.ts`, `use-sso-config.ts`) — that is #407 (this slice only consumes it).
 - Login-page SSO status and UI — that is #406/#408.
-- Backend endpoint implementation for reading/writing SSO config (#353).
-- Backend RBAC/tenant-admin gating for those endpoints (#354) — not yet merged; this slice's client-side gate is a UX affordance only, not a substitute for it.
-- Backend validation of the config shape itself (#352).
+- Backend endpoint implementation for reading/writing SSO config — not yet tracked by an issue (TBD); #353 is the OIDC login/callback path, not this.
+- Backend RBAC/tenant-admin gating for those endpoints — not yet tracked by an issue (TBD); #354 adds an `enforce_sso` guard to existing login endpoints (login/register/magic-login/admin impersonation), not authorization on SSO config reads/writes, so it doesn't cover this either. This slice's client-side gate is a UX affordance only, not a substitute for a real backend check.
+- Backend validation of the config shape itself — not yet tracked by an issue (TBD); #352 is schema/repository/encryption only, with no route or validation logic.
 - The actual OIDC redirect/callback flow — not touched by this slice.
 - Any change to `bugspotter-sdk`, `bugspotter-extension`, or `bugspotter-landing`.
 
 ## Constraints
 
-1. `/my-organization/sso` client-side gating (tenant-admin only) is a UX affordance, not a security boundary — #354's server-side check is the authoritative one, but #354 is not yet merged. The gate must fail closed (hide the settings form) regardless, and this spec doesn't rely on the backend enforcing anything beyond what #354 will cover once it lands.
+1. `/my-organization/sso` client-side gating (tenant-admin only) is a UX affordance, not a security boundary — the authoritative check has to live on whatever backend endpoint reads/writes SSO config, and per Out of scope above, no issue tracks that endpoint's RBAC gating yet. #354 is a related but different guard (`enforce_sso` on existing login endpoints), not authorization on SSO config itself. The gate must fail closed (hide the settings form) regardless, and this spec doesn't rely on the backend enforcing anything beyond what that future work will cover once it lands.
 2. **There is no `<AdminRoute requiredRole="...">` prop.** `apps/admin/src/components/admin-route.tsx` is a hardcoded `user?.role !== 'admin'` check with no `requiredRole` parameter — a route sketch using that prop doesn't compile against anything that exists. Billing, intelligence, and legal-details — the closest per-organization settings pages to this one — nest under `/my-organization/*` behind `OrgRoute` (which only checks `hasOrganization`, not role); `org-retention.tsx` is a _platform_-admin page routed at `organizations/retention` under `AdminRoute`, not `/my-organization/*`, so it isn't a precedent here despite the similar name. None of billing/intelligence/legal-details actually hides its whole page body behind a role check today: `org-billing.tsx` uses `useOrgPermissions().canManageBilling` only to hide specific buttons (cancel/upgrade), `org-intelligence.tsx` does no role check at all, and `org-legal-details.tsx` uses `currentOrganization?.my_role === 'owner'` to toggle a `readOnly` state on already-rendered inputs rather than blocking rendering. The `isSystemAdmin || orgRole === 'admin' || orgRole === 'owner'` boolean is real and already computed in `use-onboarding-status.ts:52`, but there it gates quick-action CTA visibility, not a whole page — this SSO page is the first to use that formula as a whole-page fail-closed gate. That's the right call here (the form surfaces a client secret indicator), it just isn't an existing page-level convention to lean on. ADR-0044 confirms the backend gate is `requireTenantOrgRole(db, ORG_MEMBER_ROLE.ADMIN)` — a minimum-role check, not an exact-match "tenant-admin" role string, so `orgRole === 'admin' || orgRole === 'owner'` is still the correct client-side mirror.
 3. The page must resolve `usePermissions()` before deciding whether to render the form, and fail closed (render nothing) rather than depending on a failed API call to discover the user lacks access. This also means the `useSsoConfig()` query itself must not fire for an unauthorized user just because the hook was called — React always runs a component's hooks regardless of an early return later in the same render, so `useSsoConfig()` must accept an `enabled` option (the same gating shape `use-onboarding-status.ts` already uses via `enabled: canConfigure && hasOrganization`), and this page must pass `enabled: canManageSso && !isLoadingPermissions`. #407's hook signature as currently spec'd doesn't expose that option — this is an additional requirement on #407 this slice depends on, beyond what's written there today.
 4. The GET response's rendering must never surface a real secret value into any form input's `value`/`defaultValue`; only the boolean `hasClientSecret` (from #407's data layer) may drive a "secret is currently set" indicator, per ADR-0044 and the PR #345 fix it references.
@@ -117,30 +117,52 @@ import OrgSsoPage from './pages/organization/org-sso';
 
 Corrected from the original spec's `sso-config-route.test.tsx`, which rendered `<App />` at a route to test gating — no existing page test in this codebase does that (checked all of `tests/pages/`). The established pattern (`org-billing.test.tsx`) instead renders the page component directly and mocks the permission hook to assert conditional rendering, which covers both the "admin sees it" and "non-admin doesn't" cases in one file instead of a separate route-level test.
 
-**Test case G — admin/owner sees the config form (AC #1):**
+`useSsoConfig()` is a `@tanstack/react-query` hook (per #407), so rendering `<OrgSsoPage />` bare would throw for lack of a `QueryClientProvider` ancestor. `dedup-rules-back-nav.test.tsx` hits the same problem for the react-query-backed `useDedupRules()` and solves it by mocking the hook module directly rather than wrapping the render in a provider — same fix here:
 
 ```tsx
-it('renders the SSO config form for an org admin', () => {
+vi.mock('../../hooks/use-sso-config', () => ({
+  useSsoConfig: vi.fn(),
+}));
+```
+
+**Test case G — admin/owner sees the config form and the query is enabled (AC #1):**
+
+```tsx
+it('renders the SSO config form for an org admin and enables the query', () => {
   vi.mocked(usePermissions).mockReturnValue({
     isSystemAdmin: false,
     orgRole: 'admin',
     isLoading: false,
   } as ReturnType<typeof usePermissions>);
+  vi.mocked(useSsoConfig).mockReturnValue({
+    config: undefined,
+    isLoading: true,
+    error: null,
+    updateConfig: vi.fn(),
+  } as ReturnType<typeof useSsoConfig>);
   render(<OrgSsoPage />);
+  expect(useSsoConfig).toHaveBeenCalledWith({ enabled: true });
   expect(screen.getByRole('heading', { name: /sso/i })).toBeInTheDocument();
 });
 ```
 
-**Test case H — member does not see the config form (AC #2):**
+**Test case H — member does not see the config form and the query stays disabled (AC #2):**
 
 ```tsx
-it('does not render the SSO config form for a regular member', () => {
+it('does not render the SSO config form for a regular member, and does not enable the query', () => {
   vi.mocked(usePermissions).mockReturnValue({
     isSystemAdmin: false,
     orgRole: 'member',
     isLoading: false,
   } as ReturnType<typeof usePermissions>);
+  vi.mocked(useSsoConfig).mockReturnValue({
+    config: undefined,
+    isLoading: false,
+    error: null,
+    updateConfig: vi.fn(),
+  } as ReturnType<typeof useSsoConfig>);
   render(<OrgSsoPage />);
+  expect(useSsoConfig).toHaveBeenCalledWith({ enabled: false });
   expect(screen.queryByRole('heading', { name: /sso/i })).not.toBeInTheDocument();
 });
 ```
@@ -152,4 +174,4 @@ pnpm --filter @bugspotter/admin build
 pnpm --filter @bugspotter/admin test
 ```
 
-Rollback: revert the new `org-sso.tsx` page, the route addition in `App.tsx`, and remove the new test file. Purely additive over the backend endpoints #354 will gate once merged — no backend or data effect to unwind.
+Rollback: revert the new `org-sso.tsx` page, the route addition in `App.tsx`, and remove the new test file. Purely additive over the (not yet implemented) backend SSO config endpoints — no backend or data effect to unwind.
