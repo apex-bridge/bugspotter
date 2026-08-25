@@ -42,14 +42,15 @@ The login page (#408) needs to know, before first paint, whether the current ten
 
 ### `packages/backend/src/api/routes/auth.ts` (changed)
 
-Add a `GET /api/v1/auth/sso-status` route at the end of `authRoutes()`, right after the existing `GET /api/v1/auth/registration-status` route it mirrors (registered around line 779) — same public/unauthenticated shape, same `request.organizationId` tenant source. Also add a small local response schema, `ssoStatusSchema`, right before the route (kept local to this file rather than promoted into `auth-schema.ts`, since it's a single small schema for one route — mirrors the shape of `registrationStatusSchema`):
+Add a `GET /api/v1/auth/sso-status` route at the end of `authRoutes()`, right after the existing `GET /api/v1/auth/registration-status` route it mirrors (registered around line 779) — same public/unauthenticated shape, same `request.organizationId` tenant source. Also add a small local response schema, `ssoStatusSchema`, right before the route (kept local to this file rather than promoted into `packages/backend/src/api/schemas/auth-schema.ts`, since it's a single small schema for one route — mirrors the shape of `registrationStatusSchema`):
 
 ```ts
 // Append near the top of the file, alongside the other local interfaces/schemas
 // (after the RefreshTokenBody interface):
 /**
  * Response schema for GET /api/v1/auth/sso-status. Kept local to this
- * file (rather than promoted into auth-schema.ts) since it's a single
+ * file (rather than promoted into
+ * packages/backend/src/api/schemas/auth-schema.ts) since it's a single
  * small schema for one route, not shared — mirrors the shape of
  * registrationStatusSchema in auth-schema.ts without adding a new file
  * to this issue's declared scope.
@@ -149,7 +150,7 @@ describe('GET /api/v1/auth/sso-status', () => {
 - One case inside the existing `describe('POST /api/v1/auth/{login,register,magic-login} — SSO enforcement (selfhosted mode)', ...)` block, using the already-present `createServerWithSsoEnforced(db, true)` helper:
 
 ```ts
-it('reports enforceSso: true from GET /sso-status when OIDC_ENFORCE_SSO is set', async () => {
+it('reports enforceSso: true from GET /api/v1/auth/sso-status when OIDC_ENFORCE_SSO is set', async () => {
   const ssoServer = await createServerWithSsoEnforced(db, true);
   try {
     const response = await ssoServer.inject({
@@ -168,7 +169,7 @@ it('reports enforceSso: true from GET /sso-status when OIDC_ENFORCE_SSO is set',
 - Two cases inside the existing `describe('POST /api/v1/auth/{login,register,magic-login} — SSO enforcement (saas mode)', ...)` block (which already builds `saasServer` and uses `withDeploymentMode('saas', ...)`), following the file's own `Test F`/`Test G`/`Test H` labeling convention as `Test I`/`Test J`:
 
 ```ts
-it("Test I: GET /sso-status resolves enforceSso: true from the tenant's oidc_idp_config row on a host-resolved tenant", async () => {
+it("Test I: GET /api/v1/auth/sso-status resolves enforceSso: true from the tenant's oidc_idp_config row on a host-resolved tenant", async () => {
   const org = await db.organizations.create({
     name: 'SSO Status Org',
     subdomain: 'sso-status-org',
@@ -196,7 +197,7 @@ it("Test I: GET /sso-status resolves enforceSso: true from the tenant's oidc_idp
   }
 });
 
-it('Test J: GET /sso-status resolves enforceSso: false on the hub domain (no host-resolved tenant)', async () => {
+it('Test J: GET /api/v1/auth/sso-status resolves enforceSso: false on the hub domain (no host-resolved tenant)', async () => {
   const response = await withDeploymentMode('saas', () =>
     saasServer.inject({
       method: 'GET',
