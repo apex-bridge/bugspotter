@@ -11,7 +11,7 @@ ADR: docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md
 - `apps/admin/src/i18n/locales/ru.json` (changed)
 - `apps/admin/src/i18n/locales/kk.json` (changed)
 
-**Blocking prerequisites:** none beyond what's already merged — #354's server-side `enforce_sso` gating is already live; this slice only adds an unauthenticated read of that same flag for the login page to consume.
+**Blocking prerequisites:** #354's server-side `enforce_sso` gating is already merged, but the `GET /api/v1/auth/sso-status` endpoint this slice's service method calls does not exist yet in the backend — implementation is blocked on #353 landing (or the path being confirmed against it). See Constraint 3 and Out of scope below.
 
 **Split note:** this is Slice 1 of #355 (Refs #355), split from that issue's combined spec (PR #405, `docs/specs/0355-sso-4-4-admin-ui-sso-config-page-and-log.md`) after it was blocked by `check-spec-scope.mjs`'s hard 6-file gate (13 files declared, once every wildcard in the original 7-file draft was grounded against the real admin-app tree, against a 6-file cap). Hand-extracted directly from #405's own already-grounded spec content — not regenerated from scratch, to avoid reintroducing grounding errors already fixed there, same reasoning #367/#368 and #394/#395 used for their splits. This is the smaller, independent half backing the login page's SSO awareness: no dependency on the other three slices. Slice 2 (#408, the login page UI itself) depends on this one landing and being implemented first. Slice 3 (#407, the config data layer) is independent of this slice.
 
