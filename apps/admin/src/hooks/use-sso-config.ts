@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useOrganization } from '../contexts/organization-context';
 import { ssoService } from '../services/sso-service';
-import type { SsoConfigUpdate } from '../types/sso';
+import type { SsoConfig, SsoConfigUpdate } from '../types/sso';
 
 /**
  * Read and update the current org's SSO (OIDC) configuration.
@@ -21,25 +21,47 @@ export function useSsoConfig() {
   const queryClient = useQueryClient();
 
   const {
-    data: config,
+    data: rawConfig,
     isLoading,
     error,
+    isError,
   } = useQuery({
     queryKey: ['sso-config', orgId],
     queryFn: () => ssoService.getSettings(orgId!),
     enabled: !!orgId,
   });
 
+  // Defense in depth: strip a raw `clientSecret` even if the backend regresses
+  // and returns one — the `SsoConfig` type alone is a compile-time contract,
+  // not a runtime guarantee (ADR-0044 exists because a similar contract was
+  // missed in review once already, see PR #345).
+  const config = rawConfig ? stripClientSecret(rawConfig) : rawConfig;
+
   const updateMutation = useMutation({
-    mutationFn: (payload: SsoConfigUpdate) => ssoService.updateSettings(orgId!, payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sso-config', orgId] }),
+    // `orgId` travels in the mutation variables, not just the outer closure,
+    // so `onSuccess` invalidates the cache for the org the request actually
+    // went to even if the viewer switches orgs while the request is in
+    // flight (react-query re-binds callbacks to the latest render's
+    // closures for an in-flight mutation, but `variables` stay fixed).
+    mutationFn: ({ orgId: targetOrgId, payload }: { orgId: string; payload: SsoConfigUpdate }) =>
+      ssoService.updateSettings(targetOrgId, payload),
+    onSuccess: (_data, variables) =>
+      queryClient.invalidateQueries({ queryKey: ['sso-config', variables.orgId] }),
   });
 
   return {
     config,
     isLoading,
-    error: error as Error | null,
-    updateConfig: updateMutation.mutateAsync,
+    error: isError ? (error as Error) : null,
+    updateConfig: (payload: SsoConfigUpdate) =>
+      updateMutation.mutateAsync({ orgId: orgId!, payload }),
     isSaving: updateMutation.isPending,
   };
+}
+
+function stripClientSecret(config: SsoConfig): SsoConfig {
+  const { clientSecret: _clientSecret, ...safeConfig } = config as SsoConfig & {
+    clientSecret?: unknown;
+  };
+  return safeConfig;
 }

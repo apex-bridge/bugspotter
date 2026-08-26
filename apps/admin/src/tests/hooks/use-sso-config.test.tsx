@@ -31,13 +31,18 @@ beforeEach(() => {
 
 describe('useSsoConfig', () => {
   it('never populates a secret value from the GET response', async () => {
+    // Include a raw clientSecret even though SsoConfig's type declares no
+    // such field — proves the hook actively strips it rather than merely
+    // relying on a type that a backend regression could silently violate.
     vi.mocked(ssoService.getSettings).mockResolvedValue({
       issuerUrl: 'https://idp.example.com',
       clientId: 'abc',
       hasClientSecret: true,
       allowedDomains: [],
       enforceSso: false,
-    });
+      clientSecret: 'leaked-secret',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
     const { result } = renderHook(() => useSsoConfig(), { wrapper: queryClientWrapper });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.config).not.toHaveProperty('clientSecret');
