@@ -750,7 +750,15 @@ function applyEdits(resolvedPath, relPath, edits, isTruncated) {
     }
     if (isTruncated) {
       const matchStartLine = parts[0].split('\n').length;
-      const matchEndLine = matchStartLine + edit.oldString.split('\n').length - 1;
+      // Same trailing-newline adjustment as the whole-file lineCount above:
+      // if oldString itself ends in "\n" (the model quoted a full line block
+      // INCLUDING the newline that terminates its last line), split('\n')
+      // adds one bogus trailing empty element that does not start a new
+      // line. Counting it raw would over-count the span by 1 and could
+      // reject a match that never actually leaves the visible window.
+      const oldStringLines = edit.oldString.split('\n');
+      const oldStringLineSpan = oldStringLines.length - (oldStringLines.at(-1) === '' ? 1 : 0);
+      const matchEndLine = matchStartLine + oldStringLineSpan - 1;
       if (matchEndLine > MAX_LINES_PER_FILE) {
         console.error(
           `::error::Rejected ${relPath}: ${label}'s oldString matches uniquely, but the match ` +

@@ -486,6 +486,35 @@ describe('edit-mode: targeted edits to a large declared file', () => {
     assert.match(onDisk, /const l999 = 999; \/\/ edited/);
   });
 
+  test('an oldString with a trailing newline that still ends exactly on the last visible line succeeds', () => {
+    // oldString ends with "\n" here because it quotes line 1000 (l999)
+    // INCLUDING the newline that terminates it - a shape the model can
+    // produce whenever it anchors on a full line block. split('\n') on a
+    // string ending in "\n" yields one extra empty trailing element, so
+    // naively using `oldString.split('\n').length` as the line span would
+    // over-count by 1 and compute matchEndLine as 1001 - past the window -
+    // even though the match never leaves line 1000. Mirrors the same
+    // trailing-newline adjustment already applied to whole-file line counts.
+    const target = freshOverCapFixture();
+    const r = runImpl(spec(target), {
+      files: [
+        {
+          path: target,
+          edits: [
+            {
+              oldString: 'const l998 = 998;\nconst l999 = 999;\n',
+              newString: 'const l998 = 998;\nconst l999 = 999; // edited\n',
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Wrote.*over-cap.*\(1 edit\(s\) applied\)/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.match(onDisk, /const l999 = 999; \/\/ edited/);
+  });
+
   test('a failing edit partway through a multi-edit array leaves the file completely untouched, not half-edited', () => {
     const target = freshOverCapFixture();
     const companion = freshSmallFixture();
