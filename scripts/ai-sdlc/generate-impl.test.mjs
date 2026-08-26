@@ -1,22 +1,36 @@
-// Tests for generate-impl.mjs's over-cap preflight (the MAX_LINES_PER_FILE
-// guard that refuses to call the model when the spec declares a file too big
-// to show the model in full).
+// Tests for generate-impl.mjs's MAX_LINES_PER_FILE handling of large declared
+// files: the read-side truncation shown to the model (unchanged), and the
+// write-side "edits" mode (new) that lets the model change a file it can only
+// see truncated without ever reproducing it in full.
+//
+// Until this file's own history, ANY declared file over MAX_LINES_PER_FILE
+// made generate-impl.mjs refuse to call the model at all ("the agent cannot
+// safely return a file it can only partially see") - safe, but total: real
+// issues #395 (admin-organizations.test.ts, 1384 lines), #414 (auth.test.ts,
+// 1034 lines), and #407 (three 2119-line i18n locale files) each hit that
+// abort for what was, in every case, a small targeted change. The fix is a
+// second response shape - { path, edits: [{oldString, newString}] } - applied
+// to the file's real on-disk content and verified fresh at write time, same
+// semantics as this environment's own Edit tool. The old preflight abort is
+// gone; a declared over-cap file now proceeds, shown TRUNCATED (reference
+// only, unchanged), with the model told to use "edits" instead of "content"
+// for it.
 //
 // generate-impl.mjs is a top-level script with no exports — importing it runs
-// it — so the guard is exercised the way check-impl-scope.test.mjs exercises
-// its main(): by spawning the real CLI. Two things make that safe and
-// network-free here:
+// it — so all of this is exercised the way check-impl-scope.test.mjs
+// exercises its main(): by spawning the real CLI. Two things make that safe
+// and network-free here:
 //   - a temp dir is passed as cwd, and generate-impl.mjs takes `repoRoot` from
 //     process.cwd(), so fixtures of an exact line count can stand in for real
 //     repo files;
 //   - LLM_BACKEND=cli plus a fake `claude` ahead of everything on PATH (the
-//     same harness llm-client.test.mjs uses), so a run that gets *past* the
-//     guard talks to the fake instead of the API.
+//     same harness llm-client.test.mjs uses), so every call talks to the fake
+//     instead of the API.
 //
-// The fake dumps the prompt it received. That is what makes the pass-side
-// assertions non-vacuous: absence of the dump proves the guard fired before
-// the model call, and its contents prove an at-cap file was injected whole
-// rather than silently labelled TRUNCATED.
+// The fake dumps the prompt(s) it received. That is what makes the
+// edit-mode-instructions assertions non-vacuous: the dump's contents prove
+// what the model was actually told, not just what the write loop did
+// afterward.
 //
 // Zero-dependency, run with `node --test`.
 
@@ -136,6 +150,26 @@ const AT_CAP = writeFixture('packages/at-cap.ts', MAX_LINES_PER_FILE);
 const OVER_CAP = writeFixture('packages/over-cap.ts', MAX_LINES_PER_FILE + 1);
 const SMALL = writeFixture('packages/small.ts', 12);
 
+// The edit-mode tests below apply real edits to real files on disk, so - unlike
+// the tests above, most of which never actually write to their fixture (the
+// default fake response targets an unrelated undeclared path) - each of them
+// gets its OWN fresh over-cap-shaped fixture rather than sharing OVER_CAP.
+// Without this, a later test's assertions about exact resulting content would
+// depend on what an earlier test already did to the same file - order-coupled
+// in a way that's easy to get subtly wrong and hard for a future reader to
+// verify by inspection. A fresh fixture per test sidesteps that class of bug
+// entirely instead of reasoning around it.
+let editFixtureSeq = 0;
+function freshOverCapFixture() {
+  return writeFixture(
+    `packages/edit-fixtures/over-cap-${editFixtureSeq++}.ts`,
+    MAX_LINES_PER_FILE + 1
+  );
+}
+function freshSmallFixture() {
+  return writeFixture(`packages/edit-fixtures/small-${editFixtureSeq++}.ts`, 12);
+}
+
 function spec(...paths) {
   return [
     '# Spec: fixture',
@@ -203,15 +237,30 @@ function runImpl(specContent, fakeResponses = {}) {
 }
 
 describe('over-cap preflight', () => {
-  test('refuses before the model call when a declared file is over the cap', () => {
-    const r = runImpl(spec(OVER_CAP));
-    assert.equal(r.status, 1, r.stderr);
-    assert.match(r.stderr, /Refusing to call the model/);
-    assert.match(r.stderr, /packages\/over-cap\.ts/);
+  test('a declared over-cap file no longer aborts the run - the model is called and told to use edits', () => {
+    const r = runImpl(spec(OVER_CAP), {
+      files: [
+        {
+          path: OVER_CAP,
+          edits: [{ oldString: 'const l5 = 5;', newString: 'const l5 = 5; // edited' }],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /Refusing to call the model/);
+    // Informational now, not a hard exit - proves this is a log, not a gate.
+    assert.match(r.stdout, /1 declared file\(s\) exceed the \d+-line context/);
+    assert.match(r.stdout, /packages\/over-cap\.ts/);
     // The reported count is the file's real line count, not split('\n').length.
-    assert.match(r.stderr, new RegExp(`\\(${MAX_LINES_PER_FILE + 1} lines\\)`));
-    // The whole point of the guard: no paid run happened.
-    assert.equal(r.modelWasCalled, false, 'guard must fire before the model call');
+    assert.match(r.stdout, new RegExp(`\\(${MAX_LINES_PER_FILE + 1} lines\\)`));
+    assert.equal(r.modelWasCalled, true, 'the model must still be called');
+    // The prompt actually carries both the TRUNCATED marker and the
+    // edits-shape instructions - the write-side assertions elsewhere in this
+    // file prove behavior; this proves the model was told about it.
+    assert.match(r.prompt, /TRUNCATED: showing lines 1-\d+ of \d+/);
+    assert.match(r.prompt, /EDITING A TRUNCATED FILE/);
+    assert.match(r.prompt, /"edits": \[ \{ "oldString"/);
+    assert.match(r.stdout, /Wrote packages\/over-cap\.ts \(1 edit\(s\) applied\)/);
   });
 
   test('a file of exactly MAX_LINES_PER_FILE lines is at the cap, not over it', () => {
@@ -241,14 +290,243 @@ describe('over-cap preflight', () => {
     assert.match(r.stdout, /Injecting current content of 1 existing declared file/);
   });
 
-  test('names every over-cap file, not just the first', () => {
-    const r = runImpl(spec(SMALL, OVER_CAP, AT_CAP));
-    assert.equal(r.status, 1, r.stderr);
-    assert.match(r.stderr, /declares 1 file\(s\) larger/);
-    assert.match(r.stderr, /packages\/over-cap\.ts/);
-    // At-cap and under-cap siblings must not be listed as offenders.
-    assert.doesNotMatch(r.stderr, /packages\/at-cap\.ts/);
-    assert.doesNotMatch(r.stderr, /packages\/small\.ts/);
+  test('names every over-cap file in the informational log, not just the first', () => {
+    const r = runImpl(spec(SMALL, OVER_CAP, AT_CAP), {
+      files: [
+        { path: SMALL, content: 'export const small = 1;\n' },
+        {
+          path: OVER_CAP,
+          edits: [{ oldString: 'const l5 = 5;', newString: 'const l5 = 5; // edited' }],
+        },
+        { path: AT_CAP, content: 'export const atCap = 1;\n' },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /1 declared file\(s\) exceed/);
+    assert.match(r.stdout, /packages\/over-cap\.ts/);
+    // At-cap and under-cap siblings must not be listed as offenders - they're
+    // shown in full and returned as ordinary "content".
+    assert.doesNotMatch(r.stdout, /packages\/at-cap\.ts \(\d+ lines\)/);
+    assert.doesNotMatch(r.stdout, /packages\/small\.ts \(\d+ lines\)/);
+    assert.match(r.stdout, /Wrote packages\/small\.ts/);
+    assert.match(r.stdout, /Wrote packages\/over-cap\.ts \(1 edit\(s\) applied\)/);
+    assert.match(r.stdout, /Wrote packages\/at-cap\.ts/);
+  });
+});
+
+describe('edit-mode: targeted edits to a large declared file', () => {
+  test('applies a clean single edit and leaves the rest of the file - including the invisible tail past the truncation window - byte-for-byte untouched', () => {
+    const target = freshOverCapFixture();
+    const r = runImpl(spec(target), {
+      files: [
+        {
+          path: target,
+          edits: [{ oldString: 'const l5 = 5;', newString: 'const l5 = 5; // edited' }],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(
+      r.stdout,
+      new RegExp(
+        `Wrote ${target.replace(/\//g, '\\/').replace(/\./g, '\\.')} \\(1 edit\\(s\\) applied\\)`
+      )
+    );
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.match(onDisk, /const l5 = 5; \/\/ edited/);
+    assert.doesNotMatch(
+      onDisk,
+      /^const l5 = 5;$/m,
+      'the old line must actually be gone, not just appended near'
+    );
+    // l1000 is the file's LAST line (1001 lines total, i=0..1000) - entirely
+    // past the 1000-line window the model was shown. If edit-mode regressed
+    // to reconstructing the file from what the model saw, this line would be
+    // gone; it must survive exactly as it was.
+    assert.match(onDisk, /^const l1000 = 1000;$/m);
+    // Every other line is untouched too - only the targeted line changed.
+    assert.equal(onDisk.split('\n').filter(Boolean).length, MAX_LINES_PER_FILE + 1);
+  });
+
+  test('applies multiple edits to the same file in order, where a later edit depends on an earlier one', () => {
+    const target = freshOverCapFixture();
+    const r = runImpl(spec(target), {
+      files: [
+        {
+          path: target,
+          edits: [
+            { oldString: 'const l10 = 10;', newString: 'const l10 = 10; // A' },
+            // This oldString does not exist in the ORIGINAL file - it only
+            // exists after the edit above has already been applied. If edits
+            // were (incorrectly) verified independently against the
+            // original content instead of applied sequentially, this would
+            // fail as "0 occurrences".
+            { oldString: 'const l10 = 10; // A', newString: 'const l10 = 10; // A then B' },
+            // An unrelated second location, to prove multiple distinct
+            // edits in one array both land, not just chained ones.
+            { oldString: 'const l900 = 900;', newString: 'const l900 = 900; // C' },
+          ],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /\(3 edit\(s\) applied\)/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.match(onDisk, /const l10 = 10; \/\/ A then B/);
+    assert.match(onDisk, /const l900 = 900; \/\/ C/);
+  });
+
+  test('an edit whose oldString does not match anywhere fails loudly and leaves the file untouched', () => {
+    const target = freshOverCapFixture();
+    const companion = freshSmallFixture();
+    const original = readFileSync(join(REPO, target), 'utf8');
+    const r = runImpl(spec(target, companion), {
+      files: [
+        { path: companion, content: 'export const companion = 1;\n' },
+        { path: target, edits: [{ oldString: 'const doesNotExist = 999;', newString: 'x' }] },
+      ],
+    });
+    // Companion still lands and the run still exits 0 - one bad edit does not
+    // nuke an otherwise-good scaffold. The failure is reported loudly and
+    // left for check-impl-scope.mjs to catch as an unwritten declared file
+    // (a spec's own contract, same as any other under-delivery this pipeline
+    // already handles), not a hard process exit.
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /0 occurrences/);
+    assert.match(r.stdout, /Wrote/);
+    assert.doesNotMatch(r.stdout, /Wrote.*over-cap/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(onDisk, original, 'a failed edit must not touch the file at all');
+  });
+
+  test('an edit whose oldString matches more than once fails loudly as ambiguous and leaves the file untouched', () => {
+    const target = freshOverCapFixture();
+    const companion = freshSmallFixture();
+    const original = readFileSync(join(REPO, target), 'utf8');
+    const r = runImpl(spec(target, companion), {
+      files: [
+        { path: companion, content: 'export const companion = 1;\n' },
+        {
+          // "const l" is a prefix of every single line in this fixture -
+          // matches 1001 times, nowhere near unique.
+          path: target,
+          edits: [{ oldString: 'const l', newString: 'const XX' }],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /matches 1001 times/);
+    assert.match(r.stderr, /ambiguous, refusing to guess/);
+    assert.match(r.stdout, /Wrote/);
+    assert.doesNotMatch(r.stdout, /Wrote.*over-cap/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(onDisk, original, 'an ambiguous edit must not touch the file at all');
+  });
+
+  test('a failing edit partway through a multi-edit array leaves the file completely untouched, not half-edited', () => {
+    const target = freshOverCapFixture();
+    const companion = freshSmallFixture();
+    const original = readFileSync(join(REPO, target), 'utf8');
+    const r = runImpl(spec(target, companion), {
+      files: [
+        { path: companion, content: 'export const companion = 1;\n' },
+        {
+          path: target,
+          edits: [
+            // This one matches cleanly and, verified in isolation, would
+            // succeed.
+            { oldString: 'const l20 = 20;', newString: 'const l20 = 20; // should not land' },
+            // This one is ambiguous - the whole array must be rejected as a
+            // unit, so edit 1's change must not survive on disk either.
+            { oldString: 'const l', newString: 'x' },
+          ],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /edit 2\/2/);
+    assert.doesNotMatch(r.stdout, /Wrote.*over-cap/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(
+      onDisk,
+      original,
+      "the first edit's match must not be written when a later edit in the same array fails"
+    );
+  });
+
+  test('returning full "content" for a file shown only TRUNCATED is rejected, avoiding silent data loss', () => {
+    const target = freshOverCapFixture();
+    const companion = freshSmallFixture();
+    const original = readFileSync(join(REPO, target), 'utf8');
+    const r = runImpl(spec(target, companion), {
+      files: [
+        { path: companion, content: 'export const companion = 1;\n' },
+        // A model ignoring the "do NOT return this file's full content"
+        // instruction and reconstructing it from the truncated view would
+        // produce exactly this shape - short, and missing everything past
+        // line 1000.
+        { path: target, content: 'export const reconstructed = true;\n' },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /shown to the model only TRUNCATED/);
+    assert.match(r.stderr, /skipping to avoid data loss/);
+    assert.doesNotMatch(r.stdout, /Wrote.*over-cap/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(
+      onDisk,
+      original,
+      'the real file must survive, not be replaced by the truncated reconstruction'
+    );
+  });
+
+  test('providing both "content" and "edits" for the same file is rejected as ambiguous', () => {
+    const target = freshSmallFixture();
+    const companion = freshSmallFixture();
+    const original = readFileSync(join(REPO, target), 'utf8');
+    const r = runImpl(spec(target, companion), {
+      files: [
+        { path: companion, content: 'export const companion = 1;\n' },
+        {
+          path: target,
+          content: 'export const small = 2;\n',
+          edits: [{ oldString: 'const l0 = 0;', newString: 'const l0 = 0; // x' }],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /included both "content" and "edits"/);
+    assert.match(r.stdout, /Wrote/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(onDisk, original);
+  });
+
+  test('a small, non-truncated existing file is completely unaffected by edit-mode - plain "content" still works exactly as before', () => {
+    const target = freshSmallFixture();
+    const r = runImpl(spec(target), {
+      files: [{ path: target, content: 'export const small = "rewritten";\n' }],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Wrote/);
+    assert.doesNotMatch(r.stdout, /edit\(s\) applied/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(onDisk, 'export const small = "rewritten";\n');
+  });
+
+  test('a brand-new file is unaffected by edit-mode - "content" still creates it exactly as before', () => {
+    const r = runImpl(spec('packages/edit-fixtures/brand-new.ts'), {
+      files: [
+        { path: 'packages/edit-fixtures/brand-new.ts', content: 'export const fresh = 1;\n' },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Wrote packages\/edit-fixtures\/brand-new\.ts/);
+    const onDisk = readFileSync(join(REPO, 'packages/edit-fixtures/brand-new.ts'), 'utf8');
+    assert.equal(onDisk, 'export const fresh = 1;\n');
   });
 });
 

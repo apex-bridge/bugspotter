@@ -225,6 +225,22 @@ function fenceFor(body) {
 const MAX_LINES_PER_FILE = 1000;
 const declaredPaths = extractDeclaredPaths(SPEC_CONTENT) ?? [];
 let truncatedCount = 0;
+// {path, relPath, lines}[] — every declared, currently-existing file over the
+// cap. Until 2026-08, any spec declaring one of these made this whole script
+// refuse to call the model at all (see git history for the removed preflight
+// abort) — safe, but total: issues #395 (admin-organizations.test.ts, 1384
+// lines), #414 (auth.test.ts, 1034 lines), and #407 (three 2119-line i18n
+// locale files) each hit that abort for what was, in every case, a small
+// targeted change to an otherwise-fine large file. The fix isn't to make the
+// model reproduce the whole file (that's what was unsafe to begin with) — a
+// truncated file still gets shown here as reference (first MAX_LINES_PER_FILE
+// lines, read-only), but the write side below now also accepts a targeted
+// `edits: [{oldString, newString}]` shape for these paths instead of
+// requiring `content`. `relPath` (not just `path`) is cached here because the
+// write loop needs the exact same repo-relative form the model's response
+// paths resolve to, to check "is this path one of the truncated ones" —
+// recomputing it there instead of trusting a second `toRepoRelative` call to
+// agree isn't worth the duplication.
 const truncatedFiles = [];
 const currentFiles = declaredPaths
   .filter((p) => isAllowedRepoPath(p) && existsSync(p))
@@ -243,53 +259,63 @@ const currentFiles = declaredPaths
     // one: split('\n') on "a\nb\n" yields three entries, the last of them
     // empty. Counting entries raw would read every file written with the
     // usual trailing newline as one line longer than it is, so a file of
-    // exactly MAX_LINES_PER_FILE lines would land over the cap. That was
-    // merely a mislabel while over-cap files were only annotated TRUNCATED;
-    // the preflight below turns over-cap into a hard exit, so the same
-    // off-by-one would now reject a spec that sits exactly at the cap and is
-    // perfectly satisfiable.
+    // exactly MAX_LINES_PER_FILE lines would wrongly be treated as over the
+    // cap - shown TRUNCATED, and (before edit-mode existed) hard-rejected by
+    // the preflight that used to sit below - for a spec that was actually
+    // perfectly satisfiable as a plain "content" file.
     const lineCount = lines.length - (lines.at(-1) === '' ? 1 : 0);
     const isTruncated = lineCount > MAX_LINES_PER_FILE;
     const body = isTruncated ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') : content;
     const fence = fenceFor(body);
     if (isTruncated) {
       truncatedCount += 1;
-      truncatedFiles.push({ path: p, lines: lineCount });
+      truncatedFiles.push({ path: p, relPath: toRepoRelative(p), lines: lineCount });
     }
     // A truncated file must be labelled at its own header, not just in the
     // preamble: the repo has source and test files well past this cap
     // (packages/backend/tests/api/storage-urls.test.ts is ~1800 lines), and
     // "reproduce it verbatim" applied to a body missing its tail means the
-    // agent silently deletes everything past line 1000.
+    // agent silently deletes everything past line 1000. The model may still
+    // change this file — via a targeted "edits" entry, never "content" — but
+    // it must never propose an edit whose oldString would need to reach past
+    // line MAX_LINES_PER_FILE, since it cannot see that far to quote it
+    // accurately in the first place.
     const header = isTruncated
-      ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lineCount}. ` +
-        `Reference only — do NOT return this file.`
+      ? `## ${p}\n\nTRUNCATED: showing lines 1-${MAX_LINES_PER_FILE} of ${lineCount}. Reference ` +
+        `only — do NOT return this file's full "content" (see EDITING A TRUNCATED FILE below).`
       : `## ${p}`;
     return `${header}\n${fence}${languageFor(p)}\n${body}\n${fence}`;
   })
   .filter(Boolean);
 
-// Fail BEFORE the model call if the spec is unsatisfiable by construction.
-// Two individually-correct rules collide: the prompt above tells the model
-// never to return a TRUNCATED file (returning one would silently delete
-// everything past the cap), while check-impl-scope.mjs hard-fails when a
-// declared file is not written. A spec declaring an over-cap file therefore
-// deadlocks - the model correctly refuses, the gate correctly fails, and a
-// re-run fails identically. 27 files in packages/backend alone are over the
-// cap, so this is reachable, not theoretical. Detecting it here costs
-// milliseconds; detecting it downstream costs a full 9-13 minute paid run
-// that cannot succeed.
+// Used to be a hard preflight abort here: two individually-correct rules
+// collided (the prompt told the model never to return a TRUNCATED file whole,
+// while check-impl-scope.mjs hard-fails when a declared file is not written),
+// so a spec declaring an over-cap file deadlocked - the model correctly
+// refused, the gate correctly failed, and a re-run failed identically. That
+// was the right call while "return the file" was the ONLY way to change it -
+// but it made every edit to a large existing file impossible to automate at
+// all, down to adding one route or one i18n key, and it was reachable: 27
+// files in packages/backend alone are over the cap, and issues #395, #407,
+// and #414 hit this exact abort in a single session. The write loop below now
+// accepts a second response shape for exactly these paths - a list of
+// {oldString, newString} edits applied to the file's real on-disk content,
+// verified fresh at write time (see applyEdits below) - so the deadlock no
+// longer applies and this only needs to inform the model, not refuse to call
+// it.
 if (truncatedFiles.length > 0) {
-  console.error(
-    `Refusing to call the model: the spec declares ${truncatedFiles.length} file(s) larger ` +
-      `than the ${MAX_LINES_PER_FILE}-line context cap:\n` +
-      truncatedFiles.map((f) => `  ${f.path} (${f.lines} lines)`).join('\n') +
-      `\n\nThe agent cannot safely return a file it can only partially see, but the impl-scope ` +
-      `gate requires every declared file to be written - so this spec cannot succeed as ` +
-      `written. Narrow the spec to smaller files, split the change, or make this edit by hand.`
+  console.log(
+    `${truncatedFiles.length} declared file(s) exceed the ${MAX_LINES_PER_FILE}-line context ` +
+      `cap and are shown TRUNCATED (reference only) below. The model must use "edits" rather ` +
+      `than "content" for these:\n` +
+      truncatedFiles.map((f) => `  ${f.relPath} (${f.lines} lines)`).join('\n')
   );
-  process.exit(1);
 }
+// Repo-relative paths of every truncated declared file, for the write loop's
+// "content" vs "edits" enforcement below. Built from `relPath`, the exact
+// same `toRepoRelative` output the write loop computes for the model's own
+// response paths, so the two sides compare like-for-like.
+const truncatedPathSet = new Set(truncatedFiles.map((f) => f.relPath));
 
 const currentFilesSection = currentFiles.length
   ? `# Current content of the files you must edit\n\nThese are the current contents of these ` +
@@ -297,9 +323,23 @@ const currentFilesSection = currentFiles.length
     `specific changes the spec calls for. Do not rewrite, reformat, reorder, or "improve" ` +
     `anything the spec does not explicitly ask you to change.` +
     (truncatedCount
-      ? `\n\nA file marked TRUNCATED is shown only in part. Never return one: you would ` +
-        `silently delete the lines you cannot see. Treat it as read-only reference, and if ` +
-        `the spec requires changing it, say so in your summary instead of returning it.`
+      ? `\n\n## EDITING A TRUNCATED FILE\n\nA file marked TRUNCATED above is shown only in ` +
+        `part (its first ${MAX_LINES_PER_FILE} lines) — you cannot see, and must not guess at, ` +
+        `anything past that. Each entry in your "files" array is EITHER:\n` +
+        `  - { "path": "...", "content": "..." } — the file's COMPLETE new content, verbatim ` +
+        `except for your change. Only valid for a file NOT marked TRUNCATED above; returning ` +
+        `"content" for a TRUNCATED file is rejected (it would silently delete everything past ` +
+        `line ${MAX_LINES_PER_FILE}).\n` +
+        `  - { "path": "...", "edits": [ { "oldString": "...", "newString": "..." }, ... ] } — ` +
+        `one or more targeted edits, applied in the order listed. Each "oldString" must be ` +
+        `copied byte-for-byte from the content shown above and must be the UNIQUE occurrence ` +
+        `of that text in the real file — include enough surrounding lines that it cannot match ` +
+        `more than once. "newString" replaces it exactly; use an empty string to delete. This ` +
+        `is the ONLY valid shape for a TRUNCATED file, and it is also allowed for a ` +
+        `non-TRUNCATED one if it is simpler than reproducing the whole file.\n` +
+        `If the change a TRUNCATED file needs is at a location past line ${MAX_LINES_PER_FILE} ` +
+        `— beyond what you can see — do not guess at an edit: say so in a TODO comment (in a ` +
+        `file you ARE returning) or in your summary instead.`
       : '') +
     `\n\n${currentFiles.join('\n\n')}`
   : '';
@@ -307,7 +347,7 @@ const currentFilesSection = currentFiles.length
 console.log(
   currentFiles.length
     ? `Injecting current content of ${currentFiles.length} existing declared file(s) into the ` +
-        `prompt${truncatedCount ? ` (${truncatedCount} truncated, marked read-only)` : ''}.`
+        `prompt${truncatedCount ? ` (${truncatedCount} truncated — edits-only, not content)` : ''}.`
     : 'No existing declared files to inject (all-new-files spec, or no parseable "Files touched" line).'
 );
 
@@ -322,8 +362,16 @@ console.log(
 // than asserting a cap that isn't in force — LLM_BACKEND is `cli` today.
 // No preflight hard-stop: it would have to guess which declared files the
 // agent will actually return, and a wrong guess blocks a run that would
-// have succeeded. A diff-shaped response schema is the structural fix; see
-// this PR's description.
+// have succeeded. A diff-shaped response schema is the structural fix for
+// the general case; the "edits" shape above is that fix applied narrowly, to
+// exactly the files too large to re-emit safely at all. `declaredBytes`
+// below still sums every declared file's shown (possibly truncated) size as
+// if it were re-emitted whole, which now overestimates the real output for a
+// truncated file returned as "edits" instead — a diff is far cheaper than
+// the ~1000-line reference block it's computed from. Left as an
+// overestimate deliberately: the failure mode this warns about is an
+// under-budgeted call truncating mid-response, and erring toward "warns too
+// often" is the safe direction, not "misses a real risk."
 const MAX_TOKENS = 16384;
 const declaredBytes = currentFiles.reduce((n, s) => n + s.length, 0);
 const estimatedOutputTokens = Math.round(declaredBytes / 3.6);
@@ -356,7 +404,11 @@ ${currentFilesSection ? `\n${currentFilesSection}\n` : ''}
 RULES:
 0. You have NO tools available — no Read, no Grep, no Bash. Everything you need is already in this prompt. Do not attempt a tool call and do not narrate one; if a file you must edit is shown above, use that content as the source of truth, and if something you need is genuinely absent, make the smallest reasonable assumption and note it in a TODO comment rather than stopping to ask for it.
 1. Return ONLY valid JSON — no prose, no markdown fences around the JSON itself.
-2. Schema: { "files": [ { "path": "...", "content": "..." } ], "summary": "one sentence" }
+2. Schema: { "files": [ { "path": "...", "content": "..." } ], "summary": "one sentence" }${
+  truncatedCount
+    ? ` — where each entry in "files" is EITHER the {path, content} shape above OR { "path": "...", "edits": [ { "oldString": "...", "newString": "..." } ] } (see EDITING A TRUNCATED FILE above for exactly when to use which).`
+    : ''
+}
 3. Paths are relative to the repo root (e.g. "packages/backend/src/api/routes/foo.ts").
 4. Include a route file AND a test file at minimum if the spec mentions an API endpoint.
 5. Include a migration file if the spec mentions a DB schema change.
@@ -583,14 +635,122 @@ if (missingPaths.length > 0 && declaredPathsForRetry.length > 0) {
   }
 }
 
+/**
+ * Applies a stable-ordered list of {oldString, newString} edits to a file
+ * that already exists on disk. Mirrors the Edit tool's own old_string/
+ * new_string contract deliberately — it's a shape the model is already
+ * well-trained on, and "must match exactly once" is a safety property that
+ * transfers directly.
+ *
+ * Always re-reads the file fresh from disk right here rather than reusing
+ * anything built earlier for the prompt (`currentFiles`/the TRUNCATED
+ * content shown to the model). This is not just hygiene — it is the actual
+ * fix for the truncation-boundary edge case: a TRUNCATED file is shown only
+ * lines 1-MAX_LINES_PER_FILE, so an oldString the model picked because it
+ * looked unique WITHIN that window can still have a second, identical copy
+ * sitting in the invisible tail (lines MAX_LINES_PER_FILE+1..N) that the
+ * model had no way to know about. Checking uniqueness against the prompt's
+ * own (truncated) view would wrongly call that "safe" and let
+ * String.prototype.replace silently apply to whichever of the two
+ * occurrences it happens to hit first. Checking against a fresh read of the
+ * WHOLE real file instead makes that exact case correctly fail closed as
+ * "matches 2 times" below — the same ambiguous-match guard that would catch
+ * it anywhere else in the file, not a special case bolted on for the
+ * boundary.
+ *
+ * Sequential, not independent: edit N's oldString is matched against the
+ * content AFTER edits 1..N-1 in the SAME list have already been applied
+ * in-memory (not the original file), so a later edit can target text an
+ * earlier edit in the same list just introduced. Every edit in the list is
+ * verified this way before ANY of them is written to disk — a failure on
+ * edit 3 of 4 leaves the file completely untouched, not half-edited.
+ *
+ * Uses split(oldString).join(newString) rather than
+ * working.replace(oldString, newString): String.prototype.replace treats
+ * "$&", "$$", "$1".."$9" etc. in its REPLACEMENT argument as special
+ * substitution patterns even when the search argument is a plain string —
+ * and newString is arbitrary model-generated code, which can easily contain
+ * a literal "$" followed by a digit (template literals, regex source,
+ * prices). split/join performs a literal, non-interpolating substitution;
+ * having already confirmed exactly one occurrence, split produces exactly
+ * two parts and join reassembles them around the literal newString.
+ *
+ * Returns { ok: true } and leaves the caller to log success, or { ok: false }
+ * having already logged a ::error:: explaining exactly why (which edit,
+ * which file, how many times its oldString actually matched) and left the
+ * file byte-for-byte untouched.
+ */
+function applyEdits(resolvedPath, relPath, edits) {
+  let original;
+  try {
+    original = readFileSync(resolvedPath, 'utf8');
+  } catch (err) {
+    console.error(
+      `::error::Cannot apply edits to ${relPath}: could not read the file fresh from disk ` +
+        `(${err.message}). Left untouched.`
+    );
+    return { ok: false };
+  }
+
+  let working = original;
+  for (let i = 0; i < edits.length; i++) {
+    const edit = edits[i];
+    const label = `edit ${i + 1}/${edits.length}`;
+    if (
+      !edit ||
+      typeof edit.oldString !== 'string' ||
+      typeof edit.newString !== 'string' ||
+      !edit.oldString
+    ) {
+      console.error(
+        `::error::Rejected ${relPath}: ${label} is malformed (oldString/newString must be ` +
+          `strings, oldString non-empty). Left untouched.`
+      );
+      return { ok: false };
+    }
+    if (edit.oldString === edit.newString) {
+      console.error(
+        `::error::Rejected ${relPath}: ${label} has an identical oldString and newString - a ` +
+          `no-op edit almost always means the model matched the wrong location. Left untouched.`
+      );
+      return { ok: false };
+    }
+    const parts = working.split(edit.oldString);
+    const matchCount = parts.length - 1;
+    if (matchCount === 0) {
+      console.error(
+        `::error::Rejected ${relPath}: ${label}'s oldString does not match the file's real ` +
+          `current content (0 occurrences) - it may have targeted a location past line ` +
+          `${MAX_LINES_PER_FILE} that was never shown, or the file has since changed. Left ` +
+          `untouched. oldString: ${JSON.stringify(edit.oldString.slice(0, 200))}`
+      );
+      return { ok: false };
+    }
+    if (matchCount > 1) {
+      console.error(
+        `::error::Rejected ${relPath}: ${label}'s oldString matches ${matchCount} times in the ` +
+          `file's real current content - ambiguous, refusing to guess which one was intended. ` +
+          `Include more surrounding context to make it unique. Left untouched. oldString: ` +
+          `${JSON.stringify(edit.oldString.slice(0, 200))}`
+      );
+      return { ok: false };
+    }
+    working = parts.join(edit.newString);
+  }
+
+  writeFileSync(resolvedPath, working, 'utf8');
+  return { ok: true };
+}
+
 // Write files (repoRoot + FORBIDDEN_PATH_PATTERNS are declared above, shared
 // with the read side of the prompt-injection boundary)
 const writtenPaths = [];
 const seenPaths = new Set();
-for (const { path, content } of parsed.files) {
-  if (typeof path !== 'string' || typeof content !== 'string' || !path || !content) {
+for (const entry of parsed.files) {
+  if (!entry || typeof entry.path !== 'string' || !entry.path) {
     continue;
   }
+  const { path } = entry;
   // eslint-disable-next-line no-control-regex -- deliberate: rejects paths containing raw control characters
   if (/[\x00-\x1f]/.test(path)) {
     console.error(`Rejected path with control characters: ${JSON.stringify(path)}`);
@@ -606,11 +766,54 @@ for (const { path, content } of parsed.files) {
     console.error(`Rejected forbidden/duplicate target path: ${relPath}`);
     continue;
   }
+
+  const hasContent = typeof entry.content === 'string' && entry.content !== '';
+  const hasEdits = Array.isArray(entry.edits) && entry.edits.length > 0;
+  if (!hasContent && !hasEdits) {
+    // Matches the old bare "!content" skip: no valid payload for this path
+    // at all, so it never occupies a seenPaths slot - a later entry for the
+    // same path (e.g. from the corrective follow-up merge above) still gets
+    // a fair shot.
+    continue;
+  }
+  // A real attempt at this path either way - claim the slot now so a
+  // duplicate entry for the same path (valid or not) is rejected as such,
+  // rather than silently retried with a second guess.
   seenPaths.add(relPath);
-  mkdirSync(dirname(resolvedPath), { recursive: true });
-  writeFileSync(resolvedPath, content, 'utf8');
-  console.log(`Wrote ${relPath}`);
-  writtenPaths.push(relPath);
+
+  if (hasContent && hasEdits) {
+    console.error(
+      `::error::Rejected ${relPath}: response included both "content" and "edits" for the ` +
+        `same file - ambiguous, pick one. Left untouched.`
+    );
+    continue;
+  }
+
+  if (hasContent) {
+    if (truncatedPathSet.has(relPath)) {
+      console.error(
+        `::error::Rejected "content" for ${relPath}: this file was shown to the model only ` +
+          `TRUNCATED (lines 1-${MAX_LINES_PER_FILE}), and writing "content" back would silently ` +
+          `delete everything past that line. The model should have returned "edits" for this ` +
+          `path instead - skipping to avoid data loss.`
+      );
+      continue;
+    }
+    mkdirSync(dirname(resolvedPath), { recursive: true });
+    writeFileSync(resolvedPath, entry.content, 'utf8');
+    console.log(`Wrote ${relPath}`);
+    writtenPaths.push(relPath);
+    continue;
+  }
+
+  // hasEdits — applyEdits already logs a ::error:: with the exact reason and
+  // leaves the file untouched on failure, so there is nothing more to log
+  // here beyond the success case.
+  const result = applyEdits(resolvedPath, relPath, entry.edits);
+  if (result.ok) {
+    console.log(`Wrote ${relPath} (${entry.edits.length} edit(s) applied)`);
+    writtenPaths.push(relPath);
+  }
 }
 
 if (writtenPaths.length === 0) {
