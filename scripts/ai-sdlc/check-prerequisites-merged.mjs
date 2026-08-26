@@ -530,9 +530,15 @@ function main() {
     try {
       specTexts.push(fetchSpecFileContent(repo, specPath, pr.headRefOid));
     } catch (err) {
-      console.warn(
-        `Prerequisite-merge check: could not read ${specPath} at ${pr.headRefOid}: ${err.message} - continuing without it.`
+      // Fail closed: same reasoning as the issue-body read above. A spec doc
+      // the PR touches is a source this check needs (it may be the only
+      // place a prerequisite is declared - see the file header), so a read
+      // failure here must not silently drop it and pass anyway.
+      console.error(
+        `::error::Prerequisite-merge check could not read ${specPath} at ${pr.headRefOid} ` +
+          `(touched by PR #${prNumber}): ${err.message}. Failing closed rather than silently skipping.`
       );
+      process.exit(1);
     }
   }
 
