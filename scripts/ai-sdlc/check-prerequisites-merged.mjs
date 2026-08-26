@@ -448,6 +448,17 @@ function fetchSpecFileContent(repo, path, ref) {
   return Buffer.from(b64, 'base64').toString('utf8');
 }
 
+// GitHub's Search API hard-caps any single query at 1000 results (10 pages
+// of 100), no matter how high a limit is requested - `gh` paginates
+// automatically up to whatever cap it's given. 1000 is passed here (not a
+// smaller number like the previous 50) because a low cap silently drops
+// real candidates once a heavily cross-referenced issue number accumulates
+// enough merged-PR body mentions to fill it - confirmed against this repo's
+// own history: a same-digit search for "1 in:body" already returns 83
+// merged PRs today, well past 50, even though no currently declared
+// prerequisite number is that collision-prone yet.
+const GH_SEARCH_RESULT_CAP = 1000;
+
 function searchPrsByBodyNumber(repo, issueNumber, state, limit) {
   const rows = ghJson([
     'pr',
@@ -486,8 +497,8 @@ function searchPrsByBodyNumber(repo, issueNumber, state, limit) {
  * stays representative of open/closed referencing PRs too.
  */
 function findCandidatePrsViaGh(repo, issueNumber) {
-  const merged = searchPrsByBodyNumber(repo, issueNumber, 'merged', 50);
-  const all = searchPrsByBodyNumber(repo, issueNumber, 'all', 50);
+  const merged = searchPrsByBodyNumber(repo, issueNumber, 'merged', GH_SEARCH_RESULT_CAP);
+  const all = searchPrsByBodyNumber(repo, issueNumber, 'all', GH_SEARCH_RESULT_CAP);
   const byNumber = new Map();
   for (const pr of [...merged, ...all]) {
     byNumber.set(pr.number, pr);
