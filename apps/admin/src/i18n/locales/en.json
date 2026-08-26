@@ -2001,6 +2001,20 @@
       "clearConfirm": "Clear this bot token? Rules using this channel will skip cleanly until you configure a new token."
     }
   },
+  "sso": {
+    "title": "SSO Configuration",
+    "description": "Configure an OIDC identity provider for this organization",
+    "settings": {
+      "issuerUrl": "Issuer URL",
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "clientSecretConfigured": "A secret is currently configured",
+      "clientSecretPlaceholder": "Leave blank to keep the existing secret",
+      "allowedDomains": "Allowed Domains",
+      "enforceSso": "Require SSO",
+      "enforceSsoDescription": "Members must sign in with SSO; password login is disabled"
+    }
+  },
   "orgRetention": {
     "title": "Pending permanent deletion",
     "description": "Soft-deleted organizations that have been inactive longer than {{retentionDays}} days. Permanent deletion cascades to all projects, bug reports, subscriptions, and memberships — it cannot be undone.",
