@@ -53,8 +53,16 @@ export function useSsoConfig() {
     config,
     isLoading,
     error: isError ? (error as Error) : null,
-    updateConfig: (payload: SsoConfigUpdate) =>
-      updateMutation.mutateAsync({ orgId: orgId!, payload }),
+    // Guarded (not `orgId!`) — `currentOrganization` is nullable, and a
+    // consumer calling this before the org loads (or in a no-org state)
+    // must get a rejected promise, not an `undefined` orgId silently
+    // reaching the request URL.
+    updateConfig: (payload: SsoConfigUpdate) => {
+      if (!orgId) {
+        return Promise.reject(new Error('No organization selected.'));
+      }
+      return updateMutation.mutateAsync({ orgId, payload });
+    },
     isSaving: updateMutation.isPending,
   };
 }

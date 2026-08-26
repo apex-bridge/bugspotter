@@ -107,4 +107,21 @@ describe('useSsoConfig', () => {
       expect.objectContaining({ clientSecret: 'new-secret' })
     );
   });
+
+  it('rejects updateConfig instead of sending an undefined orgId when no org is selected', async () => {
+    vi.mocked(useOrganization).mockReturnValue({
+      currentOrganization: null,
+    } as unknown as ReturnType<typeof useOrganization>);
+    const { result } = renderHook(() => useSsoConfig(), { wrapper: queryClientWrapper });
+
+    await expect(
+      result.current.updateConfig({
+        issuerUrl: 'https://idp.example.com',
+        clientId: 'abc',
+        allowedDomains: [],
+        enforceSso: false,
+      })
+    ).rejects.toThrow('No organization selected.');
+    expect(ssoService.updateSettings).not.toHaveBeenCalled();
+  });
 });
