@@ -17,15 +17,26 @@ name: AI-SDLC Guards
 # PR-diff-level comparison that check-impl-scope.mjs explicitly does not attempt
 # (see its own header) plus spec resolution from the linked issue. That is new
 # logic rather than a relocation, and it is filed separately.
+#
+# The `paths: docs/specs/**` filter below used to gate this whole workflow,
+# not just the spec-guards job - which was fine while every job in the file
+# only cared about spec PRs. The prerequisites-merged job added below does
+# not: the real incident that motivated it (PR #399, an impl/ PR, stacked on
+# PR #398, another impl/ PR, before #398 merged) touches no file under
+# docs/specs/** at all, so a path-filtered trigger would simply never run it
+# for the PRs it exists to check. Trigger on every PR instead; spec-guards
+# keeps its own existing no-op behavior for a non-spec PR via
+# `steps.specs.outputs.count`, so this only adds coverage, it does not change
+# spec-guards' own behavior on non-spec PRs.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'docs/specs/**'
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: ai-sdlc-guards-${{ github.event.pull_request.number }}
@@ -157,3 +168,30 @@ jobs:
             echo "::error::Spec scope check failed. A spec is unreadable, has no parseable \"Files touched:\" line, or declares more files than generate-impl.mjs's own 6-file generation limit - see the group log above for which spec(s), which reason, and why this blocks merge rather than just warning."
             exit 1
           }
+
+  # Runs on every PR (see the "on:" trigger comment above for why this can't
+  # be paths-filtered to docs/specs/**), checking the PR content a reviewer
+  # actually merges - same "hard, on the real PR" placement as "Check spec
+  # scope (hard)" above, for the same reason: PR #283 showed that a guard
+  # living only on the machine (agent) path does not catch a hand-written or
+  # hand-edited delivery.
+  prerequisites-merged:
+    name: Prerequisite PRs merged
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check declared prerequisite PRs have merged
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/ai-sdlc/check-prerequisites-merged.mjs
