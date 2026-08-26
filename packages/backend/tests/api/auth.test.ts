@@ -704,6 +704,30 @@ describe('Auth Routes', () => {
     });
   });
 
+  describe('GET /api/v1/auth/sso-status', () => {
+    it('should return enforceSso: false when SSO is not enforced (OIDC_ENFORCE_SSO unset)', async () => {
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/auth/sso-status',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      expect(json.success).toBe(true);
+      expect(json.data.enforceSso).toBe(false);
+    });
+
+    it('should be accessible without authentication', async () => {
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/v1/auth/sso-status',
+      });
+
+      // No Authorization header — should still work (public endpoint)
+      expect(response.statusCode).toBe(200);
+    });
+  });
+
   describe('POST /api/v1/auth/refresh', () => {
     beforeEach(async () => {
       await db.query('DELETE FROM users');
@@ -899,6 +923,21 @@ describe('Auth Routes', () => {
 
       expect(response.statusCode).toBe(200);
     });
+
+    it('reports enforceSso: true from GET /api/v1/auth/sso-status when OIDC_ENFORCE_SSO is set', async () => {
+      const ssoServer = await createServerWithSsoEnforced(db, true);
+      try {
+        const response = await ssoServer.inject({
+          method: 'GET',
+          url: '/api/v1/auth/sso-status',
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().data.enforceSso).toBe(true);
+      } finally {
+        await ssoServer.close();
+      }
+    });
   });
 
   describe('POST /api/v1/auth/{login,register,magic-login} — SSO enforcement (saas mode)', () => {
@@ -1026,6 +1065,72 @@ describe('Auth Routes', () => {
         expect(response.statusCode).toBe(403);
         expect(response.json()).toEqual({ error: 'sso_enforced' });
         expect(spy).toHaveBeenCalledWith(tenantId);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("Test I: GET /api/v1/auth/sso-status resolves enforceSso: true from the tenant's oidc_idp_config row on a host-resolved tenant", async () => {
+      const org = await db.organizations.create({
+        name: 'SSO Status Org',
+        subdomain: 'sso-status-org',
+      });
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockImplementation(async (tenantId) =>
+          tenantId === org.id ? ({ enforceSso: true } as never) : null
+        );
+
+      try {
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'GET',
+            url: '/api/v1/auth/sso-status',
+            headers: { host: `${org.subdomain}.bugspotter.io` },
+          })
+        );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().data.enforceSso).toBe(true);
+        expect(spy).toHaveBeenCalledWith(org.id);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Test J: GET /api/v1/auth/sso-status resolves enforceSso: false on the hub domain (no host-resolved tenant)', async () => {
+      const response = await withDeploymentMode('saas', () =>
+        saasServer.inject({
+          method: 'GET',
+          url: '/api/v1/auth/sso-status',
+        })
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.enforceSso).toBe(false);
+    });
+
+    it('Test K: GET /api/v1/auth/sso-status returns enforceSso: false (not 500) when findByTenantId throws', async () => {
+      const org = await db.organizations.create({
+        name: 'SSO Status Error Org',
+        subdomain: 'sso-status-error-org',
+      });
+      const spy = vi
+        .spyOn(db.oidcIdpConfigs, 'findByTenantId')
+        .mockRejectedValue(new Error('connection failure'));
+
+      try {
+        const response = await withDeploymentMode('saas', () =>
+          saasServer.inject({
+            method: 'GET',
+            url: '/api/v1/auth/sso-status',
+            headers: { host: `${org.subdomain}.bugspotter.io` },
+          })
+        );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().data.enforceSso).toBe(false);
+        expect(spy).toHaveBeenCalledWith(org.id);
       } finally {
         spy.mockRestore();
       }
