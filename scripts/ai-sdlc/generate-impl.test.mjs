@@ -147,18 +147,18 @@ function writeFixture(relPath, count) {
 }
 
 const AT_CAP = writeFixture('packages/at-cap.ts', MAX_LINES_PER_FILE);
-const OVER_CAP = writeFixture('packages/over-cap.ts', MAX_LINES_PER_FILE + 1);
 const SMALL = writeFixture('packages/small.ts', 12);
 
-// The edit-mode tests below apply real edits to real files on disk, so - unlike
-// the tests above, most of which never actually write to their fixture (the
-// default fake response targets an unrelated undeclared path) - each of them
-// gets its OWN fresh over-cap-shaped fixture rather than sharing OVER_CAP.
-// Without this, a later test's assertions about exact resulting content would
-// depend on what an earlier test already did to the same file - order-coupled
-// in a way that's easy to get subtly wrong and hard for a future reader to
-// verify by inspection. A fresh fixture per test sidesteps that class of bug
-// entirely instead of reasoning around it.
+// Any test below that actually applies a real edit to real content on disk
+// (as opposed to most of the tests above, where the default fake response
+// targets an unrelated undeclared path and the over-cap fixture is never
+// touched) gets its OWN fresh over-cap-shaped fixture rather than sharing one
+// module-level constant. Without this, a later test's assertions about exact
+// resulting content - or even just whether an oldString still matches at all -
+// would depend on what an earlier test already did to the same file on disk:
+// order-coupled in a way that's easy to get subtly wrong and hard for a
+// future reader to verify by inspection. A fresh fixture per test sidesteps
+// that class of bug entirely instead of reasoning around it.
 let editFixtureSeq = 0;
 function freshOverCapFixture() {
   return writeFixture(
@@ -238,10 +238,17 @@ function runImpl(specContent, fakeResponses = {}) {
 
 describe('over-cap preflight', () => {
   test('a declared over-cap file no longer aborts the run - the model is called and told to use edits', () => {
-    const r = runImpl(spec(OVER_CAP), {
+    // A fresh fixture, not the shared OVER_CAP: this test actually applies a
+    // real edit to real content on disk, and 'names every over-cap file in
+    // the informational log' below applies the exact same oldString/newString
+    // pair - sharing one fixture would make the second test's match depend on
+    // whether the first already ran (and already rewrote the line it targets).
+    const target = freshOverCapFixture();
+    const targetPattern = target.replace(/\//g, '\\/').replace(/\./g, '\\.');
+    const r = runImpl(spec(target), {
       files: [
         {
-          path: OVER_CAP,
+          path: target,
           edits: [{ oldString: 'const l5 = 5;', newString: 'const l5 = 5; // edited' }],
         },
       ],
@@ -250,7 +257,7 @@ describe('over-cap preflight', () => {
     assert.doesNotMatch(r.stderr, /Refusing to call the model/);
     // Informational now, not a hard exit - proves this is a log, not a gate.
     assert.match(r.stdout, /1 declared file\(s\) exceed the \d+-line context/);
-    assert.match(r.stdout, /packages\/over-cap\.ts/);
+    assert.match(r.stdout, new RegExp(targetPattern));
     // The reported count is the file's real line count, not split('\n').length.
     assert.match(r.stdout, new RegExp(`\\(${MAX_LINES_PER_FILE + 1} lines\\)`));
     assert.equal(r.modelWasCalled, true, 'the model must still be called');
@@ -260,7 +267,7 @@ describe('over-cap preflight', () => {
     assert.match(r.prompt, /TRUNCATED: showing lines 1-\d+ of \d+/);
     assert.match(r.prompt, /EDITING A TRUNCATED FILE/);
     assert.match(r.prompt, /"edits": \[ \{ "oldString"/);
-    assert.match(r.stdout, /Wrote packages\/over-cap\.ts \(1 edit\(s\) applied\)/);
+    assert.match(r.stdout, new RegExp(`Wrote ${targetPattern} \\(1 edit\\(s\\) applied\\)`));
   });
 
   test('a file of exactly MAX_LINES_PER_FILE lines is at the cap, not over it', () => {
@@ -291,11 +298,17 @@ describe('over-cap preflight', () => {
   });
 
   test('names every over-cap file in the informational log, not just the first', () => {
-    const r = runImpl(spec(SMALL, OVER_CAP, AT_CAP), {
+    // A fresh fixture, not shared with the first test in this describe block -
+    // both apply the identical oldString/newString pair, so reusing one
+    // fixture would make this test's match outcome depend on whether the
+    // other one already ran and already rewrote the targeted line.
+    const target = freshOverCapFixture();
+    const targetPattern = target.replace(/\//g, '\\/').replace(/\./g, '\\.');
+    const r = runImpl(spec(SMALL, target, AT_CAP), {
       files: [
         { path: SMALL, content: 'export const small = 1;\n' },
         {
-          path: OVER_CAP,
+          path: target,
           edits: [{ oldString: 'const l5 = 5;', newString: 'const l5 = 5; // edited' }],
         },
         { path: AT_CAP, content: 'export const atCap = 1;\n' },
@@ -303,13 +316,13 @@ describe('over-cap preflight', () => {
     });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /1 declared file\(s\) exceed/);
-    assert.match(r.stdout, /packages\/over-cap\.ts/);
+    assert.match(r.stdout, new RegExp(targetPattern));
     // At-cap and under-cap siblings must not be listed as offenders - they're
     // shown in full and returned as ordinary "content".
     assert.doesNotMatch(r.stdout, /packages\/at-cap\.ts \(\d+ lines\)/);
     assert.doesNotMatch(r.stdout, /packages\/small\.ts \(\d+ lines\)/);
     assert.match(r.stdout, /Wrote packages\/small\.ts/);
-    assert.match(r.stdout, /Wrote packages\/over-cap\.ts \(1 edit\(s\) applied\)/);
+    assert.match(r.stdout, new RegExp(`Wrote ${targetPattern} \\(1 edit\\(s\\) applied\\)`));
     assert.match(r.stdout, /Wrote packages\/at-cap\.ts/);
   });
 });
@@ -425,6 +438,54 @@ describe('edit-mode: targeted edits to a large declared file', () => {
     assert.equal(onDisk, original, 'an ambiguous edit must not touch the file at all');
   });
 
+  test('an edit whose unique match falls past the visible truncation window is rejected even though it is unique', () => {
+    const target = freshOverCapFixture();
+    const companion = freshSmallFixture();
+    const original = readFileSync(join(REPO, target), 'utf8');
+    const r = runImpl(spec(target, companion), {
+      files: [
+        { path: companion, content: 'export const companion = 1;\n' },
+        {
+          // l1000 is the fixture's LAST line (1001 lines, i=0..1000) - line
+          // 1001, one past the MAX_LINES_PER_FILE=1000 lines actually shown
+          // to the model. It is unique in the file, so uniqueness alone
+          // would have let this land pre-fix even though the model could
+          // never have quoted it from what it was shown.
+          path: target,
+          edits: [{ oldString: 'const l1000 = 1000;', newString: 'const l1000 = 1000; // edited' }],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /::error::/);
+    assert.match(r.stderr, /falls past the \d+-line window/);
+    assert.match(r.stderr, /could not have seen this content/);
+    assert.match(r.stdout, /Wrote/);
+    assert.doesNotMatch(r.stdout, /Wrote.*over-cap/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(onDisk, original, 'a rejected out-of-window edit must not touch the file at all');
+  });
+
+  test('an edit whose unique match sits exactly at the last visible line still succeeds', () => {
+    // l999 is line 1000 (i=0..999 -> lines 1..1000) - the LAST line still
+    // inside the MAX_LINES_PER_FILE=1000 window, not past it. Pins the
+    // boundary as "> MAX_LINES_PER_FILE is rejected", not
+    // ">= MAX_LINES_PER_FILE".
+    const target = freshOverCapFixture();
+    const r = runImpl(spec(target), {
+      files: [
+        {
+          path: target,
+          edits: [{ oldString: 'const l999 = 999;', newString: 'const l999 = 999; // edited' }],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Wrote.*over-cap.*\(1 edit\(s\) applied\)/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.match(onDisk, /const l999 = 999; \/\/ edited/);
+  });
+
   test('a failing edit partway through a multi-edit array leaves the file completely untouched, not half-edited', () => {
     const target = freshOverCapFixture();
     const companion = freshSmallFixture();
@@ -503,6 +564,42 @@ describe('edit-mode: targeted edits to a large declared file', () => {
     assert.match(r.stdout, /Wrote/);
     const onDisk = readFileSync(join(REPO, target), 'utf8');
     assert.equal(onDisk, original);
+  });
+
+  test('a rejected content-for-truncated-file entry does not block a later, valid edits entry for the same path', () => {
+    const target = freshOverCapFixture();
+    const r = runImpl(spec(target), {
+      files: [
+        // Rejected on shape alone before any write is attempted (same as
+        // the dedicated test above) - must not consume the path's one
+        // "real attempt" slot.
+        { path: target, content: 'export const reconstructed = true;\n' },
+        {
+          path: target,
+          edits: [{ oldString: 'const l5 = 5;', newString: 'const l5 = 5; // edited' }],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /shown to the model only TRUNCATED/);
+    assert.doesNotMatch(r.stderr, /forbidden\/duplicate target path/);
+    assert.match(r.stdout, /\(1 edit\(s\) applied\)/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.match(onDisk, /const l5 = 5; \/\/ edited/);
+  });
+
+  test('two genuinely valid entries for the same path still only let the first one land - the duplicate guard survives the fix above', () => {
+    const target = freshSmallFixture();
+    const r = runImpl(spec(target), {
+      files: [
+        { path: target, content: 'export const first = 1;\n' },
+        { path: target, content: 'export const second = 2;\n' },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /forbidden\/duplicate target path/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(onDisk, 'export const first = 1;\n');
   });
 
   test('a small, non-truncated existing file is completely unaffected by edit-mode - plain "content" still works exactly as before', () => {

@@ -675,12 +675,25 @@ if (missingPaths.length > 0 && declaredPathsForRetry.length > 0) {
  * having already confirmed exactly one occurrence, split produces exactly
  * two parts and join reassembles them around the literal newString.
  *
+ * `isTruncated` (true for a path in `truncatedPathSet`) adds one more guard on
+ * top of uniqueness: a unique match is not, by itself, proof the model quoted
+ * real content it actually saw. The prompt shows a TRUNCATED file only lines
+ * 1-MAX_LINES_PER_FILE, so an oldString that does not literally come from that
+ * window could still land a single, coincidentally-unique match somewhere
+ * past it (or straddling the boundary) — content the model had no way to see
+ * and so no way to quote correctly except by chance. That match is rejected
+ * even though it is unique, by checking where it falls in `working` (the
+ * current in-progress content, re-derived fresh each iteration so a later
+ * edit targeting text an earlier edit in this same array just introduced —
+ * which has no "original" line number of its own — is judged by where it
+ * actually sits now, not by the original file's line numbers).
+ *
  * Returns { ok: true } and leaves the caller to log success, or { ok: false }
  * having already logged a ::error:: explaining exactly why (which edit,
  * which file, how many times its oldString actually matched) and left the
  * file byte-for-byte untouched.
  */
-function applyEdits(resolvedPath, relPath, edits) {
+function applyEdits(resolvedPath, relPath, edits, isTruncated) {
   let original;
   try {
     original = readFileSync(resolvedPath, 'utf8');
@@ -735,6 +748,20 @@ function applyEdits(resolvedPath, relPath, edits) {
       );
       return { ok: false };
     }
+    if (isTruncated) {
+      const matchStartLine = parts[0].split('\n').length;
+      const matchEndLine = matchStartLine + edit.oldString.split('\n').length - 1;
+      if (matchEndLine > MAX_LINES_PER_FILE) {
+        console.error(
+          `::error::Rejected ${relPath}: ${label}'s oldString matches uniquely, but the match ` +
+            `(current lines ${matchStartLine}-${matchEndLine}) falls past the ` +
+            `${MAX_LINES_PER_FILE}-line window this TRUNCATED file was shown within - the model ` +
+            `could not have seen this content to quote it correctly. Left untouched. oldString: ` +
+            `${JSON.stringify(edit.oldString.slice(0, 200))}`
+        );
+        return { ok: false };
+      }
+    }
     working = parts.join(edit.newString);
   }
 
@@ -777,8 +804,15 @@ for (const entry of parsed.files) {
     continue;
   }
   // A real attempt at this path either way - claim the slot now so a
-  // duplicate entry for the same path (valid or not) is rejected as such,
-  // rather than silently retried with a second guess.
+  // duplicate entry for the same path is rejected as such, rather than
+  // silently retried with a second guess. The two shape-rejection branches
+  // just below (ambiguous content+edits, and content-for-truncated) release
+  // this claim again before continuing - those entries never reached an
+  // actual write attempt, so a genuinely valid later entry for the same path
+  // still deserves a shot. An entry that DID reach a real write attempt
+  // (content written, or applyEdits accepted or rejected the edits on their
+  // merits) keeps the claim, so a second guess at an already-attempted path
+  // is still refused below.
   seenPaths.add(relPath);
 
   if (hasContent && hasEdits) {
@@ -786,6 +820,16 @@ for (const entry of parsed.files) {
       `::error::Rejected ${relPath}: response included both "content" and "edits" for the ` +
         `same file - ambiguous, pick one. Left untouched.`
     );
+    // This entry never got a real shot at writing anything - it was thrown
+    // out on shape alone, before any content or edit was even looked at.
+    // Un-claim the slot so a later, well-formed entry for the same path
+    // (e.g. from the corrective follow-up merge above) still gets to try,
+    // rather than being punished for a sibling entry's malformed shape. This
+    // is narrower than removing the seenPaths guard entirely: two entries
+    // that both reach the write attempt (valid or a failed applyEdits) still
+    // count as a "second guess" and the second one is still rejected as a
+    // duplicate below.
+    seenPaths.delete(relPath);
     continue;
   }
 
@@ -797,6 +841,10 @@ for (const entry of parsed.files) {
           `delete everything past that line. The model should have returned "edits" for this ` +
           `path instead - skipping to avoid data loss.`
       );
+      // Same reasoning as the content+edits rejection above: wrong shape for
+      // this path, never attempted a write, so it must not block a later
+      // valid "edits" entry for the same path.
+      seenPaths.delete(relPath);
       continue;
     }
     mkdirSync(dirname(resolvedPath), { recursive: true });
@@ -809,7 +857,7 @@ for (const entry of parsed.files) {
   // hasEdits — applyEdits already logs a ::error:: with the exact reason and
   // leaves the file untouched on failure, so there is nothing more to log
   // here beyond the success case.
-  const result = applyEdits(resolvedPath, relPath, entry.edits);
+  const result = applyEdits(resolvedPath, relPath, entry.edits, truncatedPathSet.has(relPath));
   if (result.ok) {
     console.log(`Wrote ${relPath} (${entry.edits.length} edit(s) applied)`);
     writtenPaths.push(relPath);
