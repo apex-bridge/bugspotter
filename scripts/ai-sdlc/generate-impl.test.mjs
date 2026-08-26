@@ -515,6 +515,38 @@ describe('edit-mode: targeted edits to a large declared file', () => {
     assert.match(onDisk, /const l999 = 999; \/\/ edited/);
   });
 
+  test('an oldString with a trailing newline whose match genuinely extends past the window is still rejected', () => {
+    // Same trailing-newline shape as the success case above, but this time
+    // the block spans line 1000 (last visible) through line 1001 (one past
+    // MAX_LINES_PER_FILE=1000) - a real out-of-window match, not just an
+    // artifact of the split('\n') bogus-trailing-element adjustment. Pins
+    // that the trailing-newline fix only strips the phantom element and
+    // does not also mask a genuinely out-of-window span.
+    const target = freshOverCapFixture();
+    const companion = freshSmallFixture();
+    const original = readFileSync(join(REPO, target), 'utf8');
+    const r = runImpl(spec(target, companion), {
+      files: [
+        { path: companion, content: 'export const companion = 1;\n' },
+        {
+          path: target,
+          edits: [
+            {
+              oldString: 'const l999 = 999;\nconst l1000 = 1000;\n',
+              newString: 'const l999 = 999;\nconst l1000 = 1000; // edited\n',
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /falls past the \d+-line window/);
+    assert.match(r.stdout, /Wrote/);
+    assert.doesNotMatch(r.stdout, /Wrote.*over-cap/);
+    const onDisk = readFileSync(join(REPO, target), 'utf8');
+    assert.equal(onDisk, original, 'a rejected out-of-window edit must not touch the file at all');
+  });
+
   test('a failing edit partway through a multi-edit array leaves the file completely untouched, not half-edited', () => {
     const target = freshOverCapFixture();
     const companion = freshSmallFixture();
