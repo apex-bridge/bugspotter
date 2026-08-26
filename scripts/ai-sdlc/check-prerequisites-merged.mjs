@@ -109,23 +109,20 @@ import { pathToFileURL } from 'node:url';
 // as a side effect of loading this module. Keep this pattern in sync with
 // check-pr-link.mjs's REFERENCE by hand if that one ever changes.
 const ISSUE_KEYWORD_REF =
-  /(?<!\p{L})(?:Closes|Refs|Fixes|Tracks|Resolves|References)\s+((?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?)#([0-9]+)(?![0-9\p{L}])/iu;
+  /(?<!\p{L})(?:Closes|Refs|Fixes|Tracks|Resolves|References)\s+((?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?)#([0-9]+)(?![0-9\p{L}])/giu;
 
-/** Every same-repo issue number a keyword reference in `text` points at, in first-seen order, deduped. Cross-repo ("owner/repo#NNN") references are excluded - a prerequisite in another repo can't be resolved against this repo's PR list. */
+/** Every same-repo issue number a keyword reference in `text` points at, in first-seen order, deduped. Cross-repo ("owner/repo#NNN") references are excluded - a prerequisite in another repo can't be resolved against this repo's PR list. Scans every match on a line (not just the first), so a line carrying two references (or a cross-repo reference followed by a same-repo one) doesn't lose anything after the first match. */
 export function extractKeywordReferencedIssues(text) {
   const found = [];
   for (const line of (text ?? '').split(/\r?\n/)) {
-    const m = line.match(ISSUE_KEYWORD_REF);
-    if (!m) {
-      continue;
-    }
-    const [, crossRepoPrefix, num] = m;
-    if (crossRepoPrefix) {
-      continue;
-    }
-    const n = Number(num);
-    if (!found.includes(n)) {
-      found.push(n);
+    for (const [, crossRepoPrefix, num] of line.matchAll(ISSUE_KEYWORD_REF)) {
+      if (crossRepoPrefix) {
+        continue;
+      }
+      const n = Number(num);
+      if (!found.includes(n)) {
+        found.push(n);
+      }
     }
   }
   return found;
@@ -451,16 +448,7 @@ function fetchSpecFileContent(repo, path, ref) {
   return Buffer.from(b64, 'base64').toString('utf8');
 }
 
-/**
- * Broad-then-narrow: GitHub's numeric search is a candidate filter, not the
- * source of truth - it matches "#407" appearing ANYWHERE in a PR body,
- * including prose that merely mentions the number (see PR #410's body, which
- * mentions #407/#408/#409 as sibling slices with no keyword attached, and
- * would otherwise false-positive as "referencing" every one of them). The
- * real decision is findResolvingPr's local, keyword-anchored regex over
- * these candidates' bodies - this only narrows which PRs are worth fetching.
- */
-function findCandidatePrsViaGh(repo, issueNumber) {
+function searchPrsByBodyNumber(repo, issueNumber, state, limit) {
   const rows = ghJson([
     'pr',
     'list',
@@ -469,13 +457,42 @@ function findCandidatePrsViaGh(repo, issueNumber) {
     '--search',
     `${issueNumber} in:body`,
     '--state',
-    'all',
+    state,
     '--json',
     'number,state,body',
     '--limit',
-    '50',
+    String(limit),
   ]);
   return rows.map((r) => ({ number: r.number, state: r.state, body: r.body ?? '' }));
+}
+
+/**
+ * Broad-then-narrow: GitHub's numeric search is a candidate filter, not the
+ * source of truth - it matches "#407" appearing ANYWHERE in a PR body,
+ * including prose that merely mentions the number (see PR #410's body, which
+ * mentions #407/#408/#409 as sibling slices with no keyword attached, and
+ * would otherwise false-positive as "referencing" every one of them). The
+ * real decision is findResolvingPr's local, keyword-anchored regex over
+ * these candidates' bodies - this only narrows which PRs are worth fetching.
+ *
+ * Queried as two separate searches, not one `--state all` search: the
+ * all-state search result is capped at `--limit`, and unrelated open/closed
+ * PRs that merely mention the number can fill that cap before the one
+ * merged, actually-resolving PR is reached, making a genuinely resolved
+ * prerequisite look unresolved. The merged-only search can't be crowded out
+ * by non-merged noise, so it is the one findResolvingPr's resolution check
+ * relies on; the all-state search still runs (and is merged into the
+ * result) purely so buildUnresolvedMessage's "N PR(s) reference it" count
+ * stays representative of open/closed referencing PRs too.
+ */
+function findCandidatePrsViaGh(repo, issueNumber) {
+  const merged = searchPrsByBodyNumber(repo, issueNumber, 'merged', 50);
+  const all = searchPrsByBodyNumber(repo, issueNumber, 'all', 50);
+  const byNumber = new Map();
+  for (const pr of [...merged, ...all]) {
+    byNumber.set(pr.number, pr);
+  }
+  return [...byNumber.values()];
 }
 
 function parsePrNumberArg() {
@@ -523,6 +540,11 @@ function main() {
   }
 
   const specPaths = (pr.files ?? [])
+    // Deleted spec files don't exist at pr.headRefOid, so fetching their
+    // content 404s - that's an expected deletion, not an infra failure the
+    // fail-closed read below should trip on. Only added/modified/renamed
+    // paths can actually be read at the head commit.
+    .filter((f) => f.changeType !== 'DELETED')
     .map((f) => f.path)
     .filter((p) => p.startsWith('docs/specs/') && p.endsWith('.md'));
   const specTexts = [];

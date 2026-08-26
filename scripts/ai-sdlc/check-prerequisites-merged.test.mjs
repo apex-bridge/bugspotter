@@ -43,6 +43,17 @@ describe('extractKeywordReferencedIssues / referencesIssue', () => {
   test('dedupes repeated references to the same issue', () => {
     assert.deepEqual(extractKeywordReferencedIssues('Refs #367.\nAlso Refs #367 again.'), [367]);
   });
+
+  test('finds every reference on a line with more than one', () => {
+    assert.deepEqual(extractKeywordReferencedIssues('Closes #400, Refs #414'), [400, 414]);
+  });
+
+  test('a cross-repo reference earlier on the line does not swallow a same-repo one after it', () => {
+    assert.deepEqual(
+      extractKeywordReferencedIssues('Refs apex-bridge/bugspotter-intelligence#48, Closes #200'),
+      [200]
+    );
+  });
 });
 
 describe('resolvePrimaryIssue', () => {
