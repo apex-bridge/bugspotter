@@ -131,6 +131,25 @@ describe('Auth Service', () => {
     });
   });
 
+  describe('getSsoStatus', () => {
+    it('should return enforceSso: true when SSO is mandatory for the tenant', async () => {
+      vi.mocked(api.get).mockResolvedValueOnce({
+        data: { success: true, data: { enforceSso: true } },
+      } as AxiosResponse);
+
+      const result = await authService.getSsoStatus();
+
+      expect(result).toEqual({ enforceSso: true });
+      expect(api.get).toHaveBeenCalledWith('/api/v1/auth/sso-status');
+    });
+
+    it('should propagate API errors', async () => {
+      vi.mocked(api.get).mockRejectedValueOnce(new Error('Network error'));
+
+      await expect(authService.getSsoStatus()).rejects.toThrow('Network error');
+    });
+  });
+
   describe('login', () => {
     it('should login with email and password', async () => {
       const mockResponse = {
