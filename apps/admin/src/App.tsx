@@ -47,6 +47,7 @@ import OrgBillingPage from './pages/organization/org-billing';
 import OrgInvoicesPage from './pages/organization/org-invoices';
 import OrgInvoiceDetailPage from './pages/organization/org-invoice-detail';
 import OrgLegalDetailsPage from './pages/organization/org-legal-details';
+import OrgSsoPage from './pages/organization/org-sso';
 import OrgIntelligencePage from './pages/organization/org-intelligence';
 import OrgObservabilityPage from './pages/organization/org-observability';
 import AcceptInvitationPage from './pages/invitations/accept';
@@ -305,6 +306,14 @@ function App() {
                         <SaaSRoute>
                           <OrgLegalDetailsPage />
                         </SaaSRoute>
+                      </OrgRoute>
+                    }
+                  />
+                  <Route
+                    path="my-organization/sso"
+                    element={
+                      <OrgRoute>
+                        <OrgSsoPage />
                       </OrgRoute>
                     }
                   />

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import { KeyRound, Save, AlertCircle } from 'lucide-react';
 import { usePermissions } from '../../hooks/use-permissions';
 import { useSsoConfig } from '../../hooks/use-sso-config';
 
@@ -17,19 +19,28 @@ const DEFAULT_FORM_VALUES: SsoFormValues = {
   enforceSso: false,
 };
 
+const INPUT_CLASSES =
+  'w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500';
+
 export default function OrgSsoPage() {
+  const { t } = useTranslation();
   const { isSystemAdmin, orgRole, isLoading: isLoadingPermissions } = usePermissions();
   const canManageSso = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
-  // Hooks always run regardless of the early returns below, so the query
-  // itself (not just the rendered form) must stay disabled for a
-  // non-admin or while permissions are still resolving.
-  const { config, isLoading, error, updateConfig } = useSsoConfig({
-    enabled: canManageSso && !isLoadingPermissions,
-  });
+  // useSsoConfig() (#407 / PR #419, already merged) takes no arguments and
+  // always fires whenever the current org is resolved - it does not expose
+  // an `enabled` option, unlike what spec 0409 originally called for. This
+  // page can't suppress the query itself for a non-admin as a result; it
+  // still fails closed on rendering below (never showing the form or a
+  // client-secret indicator to an unauthorized user), which is what the
+  // acceptance criteria actually require. The authoritative access check
+  // has to live on the backend endpoint per spec 0409 constraint 1 anyway.
+  const { config, isLoading, error, updateConfig } = useSsoConfig();
 
   const [formValues, setFormValues] = useState<SsoFormValues>(DEFAULT_FORM_VALUES);
   const [clientSecretInput, setClientSecretInput] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!config) {
@@ -48,90 +59,168 @@ export default function OrgSsoPage() {
   }
   if (!canManageSso) {
     // Fails closed without an API round trip: orgRole/isSystemAdmin come
-    // from the already-resolved usePermissions() query, and useSsoConfig()
-    // above never fired for this user.
+    // from the already-resolved usePermissions() query.
     return null;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await updateConfig({
-      issuerUrl: formValues.issuerUrl,
-      clientId: formValues.clientId,
-      allowedDomains: formValues.allowedDomains
-        .split(',')
-        .map((domain) => domain.trim())
-        .filter(Boolean),
-      enforceSso: formValues.enforceSso,
-      // Omit clientSecret entirely when the user didn't type a new one -
-      // never coerce to an empty string, which would defeat the
-      // optional-field contract on the backend.
-      ...(clientSecretInput ? { clientSecret: clientSecretInput } : {}),
-    });
-    setClientSecretInput('');
+    setSubmitError(null);
+    setIsSaving(true);
+    try {
+      await updateConfig({
+        issuerUrl: formValues.issuerUrl,
+        clientId: formValues.clientId,
+        allowedDomains: formValues.allowedDomains
+          .split(',')
+          .map((domain) => domain.trim())
+          .filter(Boolean),
+        enforceSso: formValues.enforceSso,
+        // Omit clientSecret entirely when the user didn't type a new one -
+        // never coerce to an empty string, which would defeat the
+        // optional-field contract on the backend.
+        ...(clientSecretInput ? { clientSecret: clientSecretInput } : {}),
+      });
+      setClientSecretInput('');
+    } catch {
+      setSubmitError(t('errors.failedToSaveConfiguration'));
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   return (
-    <div>
-      <h1>SSO Configuration</h1>
-      {isLoading && <p>Loading...</p>}
-      {error && <p role="alert">{error.message}</p>}
-      <form onSubmit={handleSubmit}>
-        <label htmlFor="sso-issuer-url">Issuer URL</label>
-        <input
-          id="sso-issuer-url"
-          type="text"
-          value={formValues.issuerUrl}
-          onChange={(event) =>
-            setFormValues((prev) => ({ ...prev, issuerUrl: event.target.value }))
-          }
-        />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">
+          <KeyRound className="inline-block h-6 w-6 mr-2" aria-hidden="true" />
+          {t('sso.title')}
+        </h1>
+        <p className="mt-1 text-sm text-gray-500">{t('sso.description')}</p>
+      </div>
 
-        <label htmlFor="sso-client-id">Client ID</label>
-        <input
-          id="sso-client-id"
-          type="text"
-          value={formValues.clientId}
-          onChange={(event) => setFormValues((prev) => ({ ...prev, clientId: event.target.value }))}
-        />
+      {isLoading ? (
+        <div className="text-center py-12 text-gray-500">{t('common.loading')}</div>
+      ) : (
+        <form className="space-y-4 max-w-xl" onSubmit={handleSubmit}>
+          {error && (
+            <div className="flex items-center gap-2 text-sm text-red-600" role="alert">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              {error.message}
+            </div>
+          )}
 
-        {/* Never populate value/defaultValue with a real secret - only the
-            boolean hasClientSecret drives the "currently set" indicator. */}
-        <label htmlFor="sso-client-secret">
-          Client Secret {config?.hasClientSecret ? '(currently set)' : '(not set)'}
-        </label>
-        <input
-          id="sso-client-secret"
-          type="password"
-          value={clientSecretInput}
-          placeholder={config?.hasClientSecret ? '••••••••' : ''}
-          onChange={(event) => setClientSecretInput(event.target.value)}
-        />
+          <div>
+            <label
+              htmlFor="sso-issuer-url"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              {t('sso.settings.issuerUrl')}
+            </label>
+            <input
+              id="sso-issuer-url"
+              type="text"
+              value={formValues.issuerUrl}
+              onChange={(event) =>
+                setFormValues((prev) => ({ ...prev, issuerUrl: event.target.value }))
+              }
+              className={INPUT_CLASSES}
+            />
+          </div>
 
-        <label htmlFor="sso-allowed-domains">Allowed Domains (comma-separated)</label>
-        <input
-          id="sso-allowed-domains"
-          type="text"
-          value={formValues.allowedDomains}
-          onChange={(event) =>
-            setFormValues((prev) => ({ ...prev, allowedDomains: event.target.value }))
-          }
-        />
+          <div>
+            <label htmlFor="sso-client-id" className="block text-sm font-medium text-gray-700 mb-1">
+              {t('sso.settings.clientId')}
+            </label>
+            <input
+              id="sso-client-id"
+              type="text"
+              value={formValues.clientId}
+              onChange={(event) =>
+                setFormValues((prev) => ({ ...prev, clientId: event.target.value }))
+              }
+              className={INPUT_CLASSES}
+            />
+          </div>
 
-        <label htmlFor="sso-enforce">
-          <input
-            id="sso-enforce"
-            type="checkbox"
-            checked={formValues.enforceSso}
-            onChange={(event) =>
-              setFormValues((prev) => ({ ...prev, enforceSso: event.target.checked }))
-            }
-          />
-          Enforce SSO
-        </label>
+          <div>
+            <label
+              htmlFor="sso-client-secret"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              {t('sso.settings.clientSecret')}
+              {config?.hasClientSecret && (
+                <span className="ml-2 text-xs font-normal text-gray-500">
+                  ({t('sso.settings.clientSecretConfigured')})
+                </span>
+              )}
+            </label>
+            {/* Never populate value/defaultValue with a real secret - only the
+                boolean hasClientSecret drives the "currently set" indicator. */}
+            <input
+              id="sso-client-secret"
+              type="password"
+              value={clientSecretInput}
+              placeholder={config?.hasClientSecret ? '••••••••' : ''}
+              onChange={(event) => setClientSecretInput(event.target.value)}
+              className={INPUT_CLASSES}
+            />
+            <p className="mt-1 text-xs text-gray-400">
+              {t('sso.settings.clientSecretPlaceholder')}
+            </p>
+          </div>
 
-        <button type="submit">Save</button>
-      </form>
+          <div>
+            <label
+              htmlFor="sso-allowed-domains"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              {t('sso.settings.allowedDomains')}
+            </label>
+            <input
+              id="sso-allowed-domains"
+              type="text"
+              value={formValues.allowedDomains}
+              onChange={(event) =>
+                setFormValues((prev) => ({ ...prev, allowedDomains: event.target.value }))
+              }
+              className={INPUT_CLASSES}
+            />
+          </div>
+
+          <div className="flex items-start gap-2">
+            <input
+              id="sso-enforce"
+              type="checkbox"
+              checked={formValues.enforceSso}
+              onChange={(event) =>
+                setFormValues((prev) => ({ ...prev, enforceSso: event.target.checked }))
+              }
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <label htmlFor="sso-enforce" className="text-sm text-gray-700">
+              <span className="font-medium">{t('sso.settings.enforceSso')}</span>
+              <p className="text-xs text-gray-500">{t('sso.settings.enforceSsoDescription')}</p>
+            </label>
+          </div>
+
+          {submitError && (
+            <div className="flex items-center gap-2 text-sm text-red-600" role="alert">
+              <AlertCircle className="h-4 w-4" aria-hidden="true" />
+              {submitError}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={isSaving}
+            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            <Save className="h-4 w-4" />
+            {t('common.save')}
+          </button>
+        </form>
+      )}
     </div>
   );
 }
