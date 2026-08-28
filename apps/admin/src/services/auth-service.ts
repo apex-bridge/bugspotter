@@ -64,11 +64,7 @@ export const authService = {
    */
   getSsoStatus: async (): Promise<{ enforceSso: boolean }> => {
     const response = await api.get<{ success: boolean; data: { enforceSso: boolean } }>(
-      // Path matches #414's specified route contract (backend endpoint,
-      // tracked separately as this slice's blocking prerequisite). Inlined
-      // rather than added to api-constants.ts; mirrors auth.registrationStatus()'s
-      // `/api/v1/auth/registration-status` naming.
-      '/api/v1/auth/sso-status'
+      API_ENDPOINTS.auth.ssoStatus()
     );
     return response.data.data;
   },

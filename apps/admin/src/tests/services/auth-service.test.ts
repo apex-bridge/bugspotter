@@ -143,6 +143,16 @@ describe('Auth Service', () => {
       expect(api.get).toHaveBeenCalledWith('/api/v1/auth/sso-status');
     });
 
+    it('should return enforceSso: false when SSO is not mandatory for the tenant', async () => {
+      vi.mocked(api.get).mockResolvedValueOnce({
+        data: { success: true, data: { enforceSso: false } },
+      } as AxiosResponse);
+
+      const result = await authService.getSsoStatus();
+
+      expect(result).toEqual({ enforceSso: false });
+    });
+
     it('should propagate API errors', async () => {
       vi.mocked(api.get).mockRejectedValueOnce(new Error('Network error'));
 
