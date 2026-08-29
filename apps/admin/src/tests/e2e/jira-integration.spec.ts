@@ -99,7 +99,7 @@ async function loginAsAdmin(page: Page) {
   await page.fill('input[type="email"]', 'admin@bugspotter.io');
   await page.fill('input[type="password"]', 'admin123');
 
-  const loginButton = page.getByRole('button', { name: /sign in|login/i });
+  const loginButton = page.getByRole('button', { name: /^(sign in|login)$/i });
   await loginButton.waitFor({ state: 'visible', timeout: 10000 });
 
   // Use Promise.all to prevent race condition
