@@ -69,8 +69,20 @@ on:
 # in-flight runs. Comment events queue behind / run alongside, and any
 # without `@claude` get filtered out by the job-level `if:` guard
 # anyway.
+#
+# The group key itself must be scoped per-PR, not per-ref (#425):
+# `github.ref` resolves to the default branch for `issue_comment` and
+# `pull_request_review_comment` events regardless of which PR the
+# comment is on, so every comment-triggered review across the whole
+# repo used to share one queue slot — a run on PR A could silently
+# evict a still-queued run on unrelated PR B, with no error visible to
+# whoever asked for the review. `github.event.issue.number` covers
+# `issue_comment` (present even for PR comments); `github.event.
+# pull_request.number` covers both `pull_request` and
+# `pull_request_review_comment`; `github.ref` is only a fallback for
+# any other trigger.
 concurrency:
-  group: claude-review-${{ github.ref }}
+  group: claude-review-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
