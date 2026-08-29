@@ -23,18 +23,29 @@ const INPUT_CLASSES =
   'w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500';
 
 export default function OrgSsoPage() {
-  const { t } = useTranslation();
   const { isSystemAdmin, orgRole, isLoading: isLoadingPermissions } = usePermissions();
   const canManageSso = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
 
-  // useSsoConfig() (#407 / PR #419, already merged) takes no arguments and
-  // always fires whenever the current org is resolved - it does not expose
-  // an `enabled` option, unlike what spec 0409 originally called for. This
-  // page can't suppress the query itself for a non-admin as a result; it
-  // still fails closed on rendering below (never showing the form or a
-  // client-secret indicator to an unauthorized user), which is what the
-  // acceptance criteria actually require. The authoritative access check
-  // has to live on the backend endpoint per spec 0409 constraint 1 anyway.
+  if (isLoadingPermissions) {
+    return null;
+  }
+  if (!canManageSso) {
+    // Fails closed without an API round trip, and without even mounting
+    // useSsoConfig()'s query: OrgSsoForm - the only thing that calls that
+    // hook - is simply never rendered for a non-admin. useSsoConfig()
+    // (#407 / PR #419, already merged) takes no arguments and has no
+    // `enabled` option, so it can't be told not to fire; keeping it out of
+    // this component entirely is what actually keeps the request from
+    // going out for a member. orgRole/isSystemAdmin come from the
+    // already-resolved usePermissions() query.
+    return null;
+  }
+
+  return <OrgSsoForm />;
+}
+
+function OrgSsoForm() {
+  const { t } = useTranslation();
   const { config, isLoading, error, updateConfig } = useSsoConfig();
 
   const [formValues, setFormValues] = useState<SsoFormValues>(DEFAULT_FORM_VALUES);
@@ -53,15 +64,6 @@ export default function OrgSsoPage() {
       enforceSso: config.enforceSso ?? false,
     });
   }, [config]);
-
-  if (isLoadingPermissions) {
-    return null;
-  }
-  if (!canManageSso) {
-    // Fails closed without an API round trip: orgRole/isSystemAdmin come
-    // from the already-resolved usePermissions() query.
-    return null;
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -216,7 +218,7 @@ export default function OrgSsoPage() {
             disabled={isSaving}
             className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            <Save className="h-4 w-4" />
+            <Save className="h-4 w-4" aria-hidden="true" />
             {t('common.save')}
           </button>
         </form>
