@@ -22,6 +22,7 @@ export const API_ENDPOINTS = {
     magicLogin: () => `${API_VERSION}/auth/magic-login`,
     register: () => `${API_VERSION}/auth/register`,
     registrationStatus: () => `${API_VERSION}/auth/registration-status`,
+    ssoStatus: () => `${API_VERSION}/auth/sso-status`,
     me: () => `${API_VERSION}/auth/me`,
     verifyEmail: () => `${API_VERSION}/auth/verify-email`,
     resendVerification: () => `${API_VERSION}/auth/resend-verification`,

@@ -128,7 +128,8 @@
     "resetPasswordTokenMissing": "В ссылке для сброса отсутствует токен. Запросите новую.",
     "resetPasswordTokenDead": "Ссылка для сброса недействительна или истекла. Запросите новую.",
     "requestNewResetLink": "Запросить новую ссылку",
-    "newPassword": "Новый пароль"
+    "newPassword": "Новый пароль",
+    "signInWithSso": "Войти через SSO"
   },
   "dashboard": {
     "title": "Панель управления",

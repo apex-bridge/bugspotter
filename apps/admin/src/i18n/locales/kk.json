@@ -128,7 +128,8 @@
     "resetPasswordTokenMissing": "Сілтемеде токен жоқ. Жаңасын сұраңыз.",
     "resetPasswordTokenDead": "Бұл сілтеме жарамсыз немесе мерзімі өтіп кетті. Жаңасын сұраңыз.",
     "requestNewResetLink": "Жаңа сілтеме сұрау",
-    "newPassword": "Жаңа құпиясөз"
+    "newPassword": "Жаңа құпиясөз",
+    "signInWithSso": "SSO арқылы кіру"
   },
   "dashboard": {
     "title": "Басқару тақтасы",
