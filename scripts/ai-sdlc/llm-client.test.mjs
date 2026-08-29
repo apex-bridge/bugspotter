@@ -79,6 +79,42 @@ writeFileSync(
     "  process.stdout.write('FAKE_STDOUT_MARKER: upstream billing failure detail');",
     '  process.exit(2);',
     '}',
+    // Reproduces, portably (POSIX and Windows alike), the shape that makes
+    // callViaCli's 'close' event arrive well after SIGKILL actually landed:
+    // a detached grandchild inherits this process's stdout/stderr pipe
+    // handles and keeps them open even once this process itself is killed,
+    // so the parent doesn't see EOF (and therefore no 'close') until that
+    // grandchild also exits. This is the same "immediate child dies, but
+    // something else still holds the pipe" shape as the real Windows
+    // shell:true wrapper (see llm-client.mjs's `settled` guard comment and
+    // #428) — engineered here with a short, controllable delay instead of
+    // relying on that platform-specific incidental timing.
+    "if (mode === 'orphan_survives_kill') {",
+    "  const cp = require('node:child_process');",
+    "  const delayMs = Number(process.env.FAKE_CLAUDE_ORPHAN_DELAY_MS || '300');",
+    '  const donePath = process.env.FAKE_CLAUDE_ORPHAN_DONE_FILE;',
+    '  const grandchild = cp.spawn(',
+    '    process.execPath,',
+    "    ['-e', `setTimeout(() => { try { require('fs').writeFileSync(${JSON.stringify(donePath)}, 'done'); } catch (e) {} process.exit(0); }, ${delayMs});`],",
+    "    { stdio: 'inherit', detached: true }",
+    '  );',
+    '  grandchild.unref();',
+    "  process.stdout.write(JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 1 }) + '\\n');",
+    // On POSIX, callViaCli's real SIGKILL reaches this process directly and
+    // it dies well before this fires. This exists only as a safety net for
+    // when it does not — e.g. if callViaCli's kill only reaches an
+    // intermediate shell wrapper and not this actual process (the
+    // platform-specific mechanic #428 is about) — so this process is
+    // guaranteed to exit on its own and never leak, mirroring the existing
+    // 'hang' mode's self-exit fallback above. Deliberately the *same*
+    // delayMs as the grandchild's own exit (not a longer one): the pipe
+    // this process and the grandchild both hold open only closes once BOTH
+    // have exited, so this must not outlive the grandchild by much, or the
+    // donePath poll below would report "done" well before the pipe (and
+    // therefore the real delayed close) actually closes.
+    '  setTimeout(function () { process.exit(0); }, delayMs);',
+    '  return;',
+    '}',
     // stream-json shape: one or more NDJSON lines, the terminal one typed
     // "result" — mirrors the real CLI's `--output-format stream-json` output.
     "process.stdout.write(JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 7 }) + '\\n');",
@@ -480,6 +516,92 @@ test('callViaCli never writes a transcript on success, even when AI_SDLC_CLI_TRA
     assert.equal(existsSync(transcriptPath), false);
   } finally {
     delete process.env.AI_SDLC_CLI_TRANSCRIPT_PATH;
+  }
+});
+
+test('callViaCli does not act on a delayed close event after the timeout has already settled (regression for #428)', async () => {
+  // #428: the timeout path kills the child and settles the promise
+  // synchronously, without waiting for the child's real 'close' event. On
+  // Windows, `claude` is spawned via shell:true, so the killed `child` is
+  // the cmd.exe wrapper, not the real process underneath it — killing it
+  // does not kill that grandchild, so the tracked child's 'close' event
+  // doesn't fire until the grandchild eventually exits on its own, well
+  // after the timeout promise already settled. When it does fire, it used
+  // to re-run the `code !== 0 || signal` branch and dump a transcript a
+  // second time, reading whatever AI_SDLC_CLI_TRANSCRIPT_PATH happened to
+  // be set to *at that later moment* — potentially a different, unrelated
+  // call's path.
+  //
+  // 'orphan_survives_kill' reproduces the same "immediate child dies but
+  // something else still holds the stdio pipe open" shape portably (POSIX
+  // and Windows alike) via a detached grandchild with a short, controllable
+  // delay, instead of depending on that platform-specific incidental
+  // timing.
+  const donePath = join(DIR, 'orphan-done.marker');
+  const transcriptOwn = join(DIR, 'transcript-race-own.txt');
+  const transcriptLater = join(DIR, 'transcript-race-later.txt');
+  rmSync(donePath, { force: true });
+  rmSync(transcriptOwn, { force: true });
+  rmSync(transcriptLater, { force: true });
+
+  process.env.FAKE_CLAUDE_MODE = 'orphan_survives_kill';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  process.env.FAKE_CLAUDE_ORPHAN_DELAY_MS = '300';
+  process.env.FAKE_CLAUDE_ORPHAN_DONE_FILE = donePath;
+  process.env.AI_SDLC_CLI_TRANSCRIPT_PATH = transcriptOwn;
+
+  try {
+    // timeoutMs is well under the grandchild's 300ms delay, so the timeout
+    // path fires and kills the immediate child while the grandchild is
+    // still alive holding the stdout/stderr pipes open.
+    await assert.rejects(callClaude({ prompt: 'hi', maxTokens: 100, timeoutMs: 100 }), (err) => {
+      assert.match(err.message, /claude CLI timed out after 100ms/);
+      return true;
+    });
+
+    // The FIRST (real) terminal event's own side effects must be intact —
+    // the guard must not suppress legitimate work, only a second firing.
+    assert.equal(existsSync(transcriptOwn), true);
+
+    // Simulate a later, unrelated call setting its own transcript path —
+    // exactly what the next test(s) in this file do in the real suite.
+    process.env.AI_SDLC_CLI_TRANSCRIPT_PATH = transcriptLater;
+
+    // Poll deterministically for proof the orphaned grandchild has actually
+    // exited — and therefore the real, delayed 'close' event for the killed
+    // child has had every chance to fire — instead of sleeping a fixed
+    // guess and hoping it was long enough.
+    const deadline = Date.now() + 5000;
+    while (!existsSync(donePath) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(
+      existsSync(donePath),
+      true,
+      'the orphaned grandchild never exited — test harness is broken, not necessarily the fix'
+    );
+
+    // A brief grace period: fake-claude-impl's own self-destruct fallback
+    // (see the harness above) fires at the same delay as the grandchild, so
+    // this covers ordinary scheduling jitter between the two nearly
+    // simultaneous exits, plus the time for the now-closed pipe to actually
+    // propagate through Node's event loop as a 'close' event.
+    await new Promise((r) => setTimeout(r, 800));
+
+    // The fix under test: once the timeout path has settled the promise,
+    // the delayed 'close' that follows must be a complete no-op. Before the
+    // `settled` guard, this assertion failed intermittently depending on
+    // exactly when a later test's own AI_SDLC_CLI_TRANSCRIPT_PATH happened
+    // to be current.
+    assert.equal(
+      existsSync(transcriptLater),
+      false,
+      "a delayed close event after settle wrote into a later, unrelated call's transcript path"
+    );
+  } finally {
+    delete process.env.AI_SDLC_CLI_TRANSCRIPT_PATH;
+    delete process.env.FAKE_CLAUDE_ORPHAN_DELAY_MS;
+    delete process.env.FAKE_CLAUDE_ORPHAN_DONE_FILE;
   }
 });
 
