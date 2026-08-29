@@ -57,14 +57,26 @@ describe('parsePositiveMs', () => {
 
 describe('computeRemainingBudgetMs', () => {
   test('subtracts the safety buffer and elapsed time from the step budget', () => {
-    const scriptStartedAt = Date.now() - 10_000; // 10s elapsed
+    const before = Date.now();
+    const scriptStartedAt = before - 10_000; // 10s elapsed
     const remaining = computeRemainingBudgetMs({
       stepBudgetMs: 60_000,
       safetyBufferMs: 5_000,
       scriptStartedAt,
     });
-    // 60_000 - 5_000 - ~10_000 = ~45_000; allow scheduler jitter.
-    assert.ok(remaining > 44_000 && remaining <= 45_100, `unexpected remaining: ${remaining}`);
+    const after = Date.now();
+    // remaining = 60_000 - 5_000 - (Date.now() - scriptStartedAt), and the
+    // function's own Date.now() call landed somewhere in [before, after].
+    // Deriving the expected bounds from that *measured* window - rather than
+    // assuming the call is instantaneous, or padding a fixed guess with
+    // extra slack - makes this exact regardless of scheduler jitter, instead
+    // of merely less likely to hit an arbitrary threshold under CI load.
+    const maxRemaining = 60_000 - 5_000 - (before - scriptStartedAt); // == 45_000
+    const minRemaining = 60_000 - 5_000 - (after - scriptStartedAt);
+    assert.ok(
+      remaining <= maxRemaining && remaining >= minRemaining,
+      `expected remaining in [${minRemaining}, ${maxRemaining}], got ${remaining}`
+    );
   });
 
   test('can go negative when elapsed time plus buffer exceed the budget', () => {
@@ -78,13 +90,25 @@ describe('computeRemainingBudgetMs', () => {
   });
 
   test('returns exactly stepBudgetMs - safetyBufferMs when scriptStartedAt is now', () => {
-    const scriptStartedAt = Date.now();
+    const before = Date.now();
+    const scriptStartedAt = before;
     const remaining = computeRemainingBudgetMs({
       stepBudgetMs: 60_000,
       safetyBufferMs: 5_000,
       scriptStartedAt,
     });
-    assert.ok(remaining <= 55_000 && remaining > 54_900, `unexpected remaining: ${remaining}`);
+    const after = Date.now();
+    // Same reasoning as the test above: bound against the real elapsed
+    // window around the call (before/after), not a fixed ms guess, so this
+    // can't flake under scheduler jitter. Equality with the 55_000 upper
+    // bound holds only if the internal Date.now() call lands in the same
+    // millisecond as `before`.
+    const maxRemaining = 60_000 - 5_000 - (before - scriptStartedAt); // == 55_000
+    const minRemaining = 60_000 - 5_000 - (after - scriptStartedAt);
+    assert.ok(
+      remaining <= maxRemaining && remaining >= minRemaining,
+      `expected remaining in [${minRemaining}, ${maxRemaining}], got ${remaining}`
+    );
   });
 });
 
