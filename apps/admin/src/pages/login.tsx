@@ -33,6 +33,9 @@ export default function LoginPage() {
   const [registrationAllowed, setRegistrationAllowed] = useState(false);
   const [passwordResetEnabled, setPasswordResetEnabled] = useState(false);
   const [accessRevoked, setAccessRevoked] = useState(false);
+  // `null` = not yet resolved. Password fields stay hidden until this is
+  // `false`, so there's no flash of password UI on first paint.
+  const [enforceSso, setEnforceSso] = useState<boolean | null>(null);
   const { login } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -73,7 +76,16 @@ export default function LoginPage() {
     [login, navigate, postLoginPath]
   );
 
-  // Login-specific post-setup logic: registration status + magic token
+  // TODO(#408 follow-up, out of scope for this slice): implement the actual
+  // OIDC redirect/callback handshake. This spec covers only the button's
+  // presence/visibility, not the auth flow it triggers.
+  const handleSsoLogin = () => {
+    if (import.meta.env.DEV) {
+      console.warn('SSO login handshake not yet implemented');
+    }
+  };
+
+  // Login-specific post-setup logic: registration status + SSO status + magic token
   useEffect(() => {
     if (!isInitialized) {
       return;
@@ -93,6 +105,18 @@ export default function LoginPage() {
         if (import.meta.env.DEV) {
           console.warn('Failed to check registration status:', error);
         }
+      }
+    );
+
+    // Check SSO enforcement status (fire-and-forget, non-blocking). `?? false`
+    // normalizes an absent flag to false so password fields render when
+    // enforce_sso is false OR absent, not just when it's explicitly false.
+    authService.getSsoStatus().then(
+      (status) => setEnforceSso(status.enforceSso ?? false),
+      () => {
+        // Fail open to password fields on a status-check failure — matches
+        // the getRegistrationStatus() error handling above.
+        setEnforceSso(false);
       }
     );
 
@@ -154,27 +178,36 @@ export default function LoginPage() {
         </Alert>
       )}
       <form onSubmit={handleSubmit} className="space-y-4">
-        <Input
-          label={t('auth.emailAddress')}
-          type="email"
-          placeholder="admin@example.com"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <Input
-          label={t('auth.password')}
-          type="password"
-          placeholder="••••••••"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <Button type="submit" className="w-full" isLoading={isLoading}>
-          <LogIn className="w-4 h-4 mr-2" aria-hidden="true" />
-          {isLoading ? t('auth.loggingIn') : t('auth.loginButton')}
+        {enforceSso === false && (
+          <>
+            <Input
+              label={t('auth.emailAddress')}
+              type="email"
+              placeholder="admin@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+            <Input
+              label={t('auth.password')}
+              type="password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </>
+        )}
+        {enforceSso === false && (
+          <Button type="submit" className="w-full" isLoading={isLoading}>
+            <LogIn className="w-4 h-4 mr-2" aria-hidden="true" />
+            {isLoading ? t('auth.loggingIn') : t('auth.loginButton')}
+          </Button>
+        )}
+        <Button type="button" onClick={handleSsoLogin} className="w-full" variant="outline">
+          {t('auth.signInWithSso')}
         </Button>
-        {passwordResetEnabled && (
+        {passwordResetEnabled && enforceSso === false && (
           <div className="text-right">
             <Link to="/forgot-password" className="text-sm text-blue-600 hover:underline">
               {t('auth.forgotPassword')}
