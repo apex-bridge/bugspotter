@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { KeyRound, Save, AlertCircle } from 'lucide-react';
@@ -53,10 +53,22 @@ function OrgSsoForm() {
   const [isSaving, setIsSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // useSsoConfig() rebuilds `config` via `stripClientSecret`'s object
+  // spread on every call (use-sso-config.ts), so it's a new object
+  // identity on every render even when the underlying data hasn't
+  // changed. A plain `[config]` dependency would therefore re-fire this
+  // effect - and stomp any in-progress edit back to the loaded values -
+  // on every keystroke, since each keystroke's setFormValues triggers a
+  // re-render that calls the hook again. Guard with a ref so the form is
+  // hydrated from the loaded config exactly once per mount, not once per
+  // render.
+  const hasHydratedRef = useRef(false);
+
   useEffect(() => {
-    if (!config) {
+    if (!config || hasHydratedRef.current) {
       return;
     }
+    hasHydratedRef.current = true;
     setFormValues({
       issuerUrl: config.issuerUrl ?? '',
       clientId: config.clientId ?? '',

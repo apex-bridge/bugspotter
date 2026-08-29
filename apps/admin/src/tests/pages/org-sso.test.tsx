@@ -170,4 +170,51 @@ describe('OrgSsoPage', () => {
       clientSecret: 'shh-secret',
     });
   });
+
+  it('does not wipe an in-progress edit when useSsoConfig returns a new config object every render (regression)', async () => {
+    const user = userEvent.setup();
+    vi.mocked(usePermissions).mockReturnValue({
+      isSystemAdmin: false,
+      orgRole: 'admin',
+      isLoading: false,
+    } as ReturnType<typeof usePermissions>);
+
+    // The real useSsoConfig() rebuilds `config` via stripClientSecret's
+    // object spread on every call, so it hands back a new reference every
+    // render even when the data hasn't changed. mockReturnValue (used by
+    // the other tests above) instead returns the SAME reference every
+    // call, which is exactly why they don't exercise this bug -
+    // mockImplementation is required here to reproduce it.
+    vi.mocked(useSsoConfig).mockImplementation(
+      () =>
+        ({
+          config: {
+            issuerUrl: 'https://idp.example.com',
+            clientId: 'client-123',
+            hasClientSecret: false,
+            allowedDomains: ['example.com'],
+            enforceSso: false,
+          },
+          isLoading: false,
+          error: null,
+          updateConfig: vi.fn(),
+          isSaving: false,
+        }) as ReturnType<typeof useSsoConfig>
+    );
+
+    render(<OrgSsoPage />);
+
+    const issuerInput = screen.getByLabelText(/issuer url/i) as HTMLInputElement;
+    expect(issuerInput).toHaveValue('https://idp.example.com');
+
+    await user.clear(issuerInput);
+    await user.type(issuerInput, 'https://changed.example.com');
+
+    // Each keystroke re-renders OrgSsoForm, which calls useSsoConfig()
+    // again and gets a fresh `config` object back. Without a hydrate-once
+    // guard, the sync effect would see `config` as "changed" on every one
+    // of those re-renders and reset the field back to the loaded value,
+    // reverting the edit as it's typed.
+    expect(issuerInput).toHaveValue('https://changed.example.com');
+  });
 });
