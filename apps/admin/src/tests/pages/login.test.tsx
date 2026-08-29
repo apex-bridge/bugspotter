@@ -152,6 +152,62 @@ describe('LoginPage', () => {
     await waitFor(() => expect(screen.getByLabelText(/password/i)).toBeDefined());
   });
 
+  // Regression test for claude[bot] review comment 3886849512 on PR #424:
+  // selfhosted mode (and the saas hub domain) always resolves `tenantId`
+  // to `null` — see getSsoStatus()'s doc comment — so `enforceSso: true`
+  // there previously hid the password form while the always-rendered SSO
+  // button had no login target to redirect to (handleSsoLogin just toasts
+  // an error), a total login lockout. The password form must stay
+  // available whenever there's no working SSO redirect target, regardless
+  // of `enforceSso`, so there's always at least one path to authenticate —
+  // the backend's assertSsoNotEnforced (enforce-sso.ts) remains the real
+  // fail-closed gate on submit.
+  it('shows the password form when SSO is enforced but no SSO login target is resolved (selfhosted lockout)', async () => {
+    const mockedGetSsoStatus = vi
+      .mocked(authService.getSsoStatus)
+      .mockResolvedValue({ enforceSso: true, tenantId: null });
+    renderLoginPage();
+    await waitFor(() => expect(mockedGetSsoStatus).toHaveBeenCalled());
+    await act(async () => {
+      await mockedGetSsoStatus.mock.results[0].value;
+    });
+    expect(screen.getByLabelText(/password/i)).toBeDefined();
+    expect(screen.getByRole('button', { name: 'auth.loginButton' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'auth.signInWithSso' })).toBeDefined();
+  });
+
+  // Regression test for CodeRabbit review comment 3886860805 on PR #424:
+  // the SSO status probe's rejection handler used to call
+  // `setEnforceSso(false)`, which rendered the password form as though
+  // SSO were confirmed off even though the backend might still 403 the
+  // submit via assertSsoNotEnforced if SSO really is enforced — a
+  // misleading dead end. On a failed probe, `enforceSso` must stay
+  // unresolved (`null`), which renders the same as the pre-resolution
+  // state: no password form, no submit button, SSO button only.
+  it('does not render the password form when the SSO status probe fails', async () => {
+    const mockedGetSsoStatus = vi
+      .mocked(authService.getSsoStatus)
+      .mockRejectedValue(new Error('network error'));
+    renderLoginPage();
+    await waitFor(() => expect(mockedGetSsoStatus).toHaveBeenCalled());
+    await act(async () => {
+      await mockedGetSsoStatus.mock.results[0].value.catch(() => {});
+    });
+    expect(screen.queryByLabelText(/password/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'auth.loginButton' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'auth.signInWithSso' })).toBeDefined();
+  });
+
+  // Regression test for CodeRabbit review comment 3886860807 on PR #424:
+  // the email input's placeholder must come from i18n, not a hardcoded
+  // English string, so it can be localized like every other user-facing
+  // string on this page.
+  it('localizes the email input placeholder', async () => {
+    renderLoginPage();
+    const emailInput = await screen.findByLabelText(/email/i);
+    expect(emailInput.getAttribute('placeholder')).toBe('auth.emailPlaceholder');
+  });
+
   // Test cases G/H (#424 — fix for Copilot review comment 3886667718 on
   // PR #424): clicking "Sign in with SSO" must trigger a real browser
   // navigation to the backend's OIDC login-initiation route, not a no-op.

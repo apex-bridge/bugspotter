@@ -33,8 +33,11 @@ export default function LoginPage() {
   const [registrationAllowed, setRegistrationAllowed] = useState(false);
   const [passwordResetEnabled, setPasswordResetEnabled] = useState(false);
   const [accessRevoked, setAccessRevoked] = useState(false);
-  // `null` = not yet resolved. Password fields stay hidden until this is
-  // `false`, so there's no flash of password UI on first paint.
+  // `null` = not yet resolved (including a failed status probe — see the
+  // getSsoStatus().then rejection handler below). Password fields stay
+  // hidden while this is `null`, so there's no flash of password UI on
+  // first paint. Once resolved, `showPasswordForm` below is what actually
+  // decides visibility — it isn't a bare `enforceSso === false` check.
   const [enforceSso, setEnforceSso] = useState<boolean | null>(null);
   // Host-resolved org id from getSsoStatus() — null until resolved, and
   // stays null in selfhosted mode / on the saas hub domain (see that
@@ -132,11 +135,20 @@ export default function LoginPage() {
         setEnforceSso(status.enforceSso ?? false);
         setSsoTenantId(status.tenantId ?? null);
       },
-      () => {
-        // Fail open to password fields on a status-check failure — matches
-        // the getRegistrationStatus() error handling above. ssoTenantId
-        // stays null, which handleSsoLogin already treats as "unavailable".
-        setEnforceSso(false);
+      (error) => {
+        // Fail CLOSED to "unresolved" (not `false`) on a status-check
+        // failure — unlike getRegistrationStatus() above, `false` here
+        // isn't a safe default: it would render the password form as
+        // though SSO were confirmed off, while the backend's
+        // assertSsoNotEnforced (enforce-sso.ts) still fail-closes on the
+        // real submit and 403s if SSO actually is enforced. That's a
+        // misleading dead-end UI, not a bypass — but it's still worse
+        // than staying in the pre-resolution state (SSO button only,
+        // same as before this probe ever resolves) until a retry (e.g.
+        // page reload) gets a real answer.
+        if (import.meta.env.DEV) {
+          console.warn('Failed to check SSO status:', error);
+        }
       }
     );
 
@@ -182,6 +194,28 @@ export default function LoginPage() {
     return <SetupLoadingScreen />;
   }
 
+  // The password form (and its submit button) render whenever SSO
+  // enforcement has resolved to "off" (`enforceSso === false`), OR
+  // resolved to "on" but with no tenant-scoped SSO login target to
+  // redirect to (`ssoTenantId` null) — selfhosted mode, or the saas hub
+  // domain, per getSsoStatus()'s doc comment. That second case is a real
+  // gap, not a hypothetical one: a selfhosted operator can set
+  // `OIDC_ENFORCE_SSO=true` (ADR-0044 Decision 4) before the selfhosted
+  // OIDC login route (#353) exists, and the always-rendered SSO button's
+  // handleSsoLogin has nothing to navigate to (`ssoTenantId` is always
+  // null off saas). Hiding the password form there leaves no clickable
+  // path to authenticate at all. Showing it here is never a bypass: the
+  // backend's assertSsoNotEnforced (enforce-sso.ts) is the actual
+  // fail-closed gate on submit, and rejects with a clear 403 if SSO
+  // really is enforced — this is only about giving the operator
+  // something to click and a real error to read, instead of a blank gap
+  // between an invisible form and a button that just toasts.
+  // `enforceSso === null` (not yet resolved, or the status probe failed —
+  // see the `getSsoStatus().then` rejection handler above) always hides
+  // the form, matching the "no flash of password UI" intent this page
+  // already had.
+  const showPasswordForm = enforceSso === false || (enforceSso === true && !ssoTenantId);
+
   return (
     <AuthPageLayout title="BugSpotter Admin" description={t('auth.loginToContinue')}>
       {inviteToken && (
@@ -198,12 +232,12 @@ export default function LoginPage() {
         </Alert>
       )}
       <form onSubmit={handleSubmit} className="space-y-4">
-        {enforceSso === false && (
+        {showPasswordForm && (
           <>
             <Input
               label={t('auth.emailAddress')}
               type="email"
-              placeholder="admin@example.com"
+              placeholder={t('auth.emailPlaceholder')}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -218,7 +252,7 @@ export default function LoginPage() {
             />
           </>
         )}
-        {enforceSso === false && (
+        {showPasswordForm && (
           <Button type="submit" className="w-full" isLoading={isLoading}>
             <LogIn className="w-4 h-4 mr-2" aria-hidden="true" />
             {isLoading ? t('auth.loggingIn') : t('auth.loginButton')}
@@ -227,7 +261,7 @@ export default function LoginPage() {
         <Button type="button" onClick={handleSsoLogin} className="w-full" variant="outline">
           {t('auth.signInWithSso')}
         </Button>
-        {passwordResetEnabled && enforceSso === false && (
+        {passwordResetEnabled && showPasswordForm && (
           <div className="text-right">
             <Link to="/forgot-password" className="text-sm text-blue-600 hover:underline">
               {t('auth.forgotPassword')}
