@@ -29,7 +29,7 @@ async function loginAsAdmin(page: Page) {
   await page.fill('input[type="email"]', 'admin@bugspotter.io');
   await page.fill('input[type="password"]', 'admin123');
 
-  await page.getByRole('button', { name: /sign in|login/i }).click();
+  await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
   await page.waitForURL('/dashboard', { timeout: 10000 });
   await page.waitForLoadState('networkidle');

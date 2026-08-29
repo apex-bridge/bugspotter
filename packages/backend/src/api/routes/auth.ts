@@ -100,6 +100,17 @@ interface RefreshTokenBody {
  * small schema for one route, not shared — mirrors the shape of
  * registrationStatusSchema in auth-schema.ts without adding a new file
  * to this issue's declared scope.
+ *
+ * `tenantId` (#424 follow-up to #408/#422) is the host-resolved
+ * organization id, the same value `oidcIdpConfigs.findByTenantId` is
+ * keyed on — it's what the login page needs to build the login-initiation
+ * URL (`GET /api/v1/auth/oidc/:tenantId/login`, already merged in #367)
+ * without inventing a second tenant-resolution mechanism on the client.
+ * `null` in selfhosted mode and on the saas hub domain (no host-resolved
+ * tenant) — same cases `enforceSso` already treats as "no tenant". Not
+ * secret: this route is itself public and unauthenticated, and the OIDC
+ * login route it feeds already accepts an explicit `:tenantId` from any
+ * caller with zero auth.
  */
 const ssoStatusSchema = {
   response: {
@@ -110,9 +121,10 @@ const ssoStatusSchema = {
         success: { type: 'boolean', enum: [true] },
         data: {
           type: 'object',
-          required: ['enforceSso'],
+          required: ['enforceSso', 'tenantId'],
           properties: {
             enforceSso: { type: 'boolean' },
+            tenantId: { type: ['string', 'null'] },
           },
         },
         timestamp: { type: 'string', format: 'date-time' },
@@ -842,6 +854,14 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
    * regardless of what this endpoint reports, so defaulting to false
    * here only risks showing password fields that a DB-down guard would
    * then still reject — never a bypass.
+   *
+   * `tenantId` (#424) is `request.organizationId` verbatim — independent
+   * of whether the `findByTenantId` lookup below succeeds, since it's
+   * just the host-resolved org id, not a fact about that org's IdP
+   * config. `null` in selfhosted mode: there is no per-tenant row to
+   * target there, and the corresponding no-`:tenant` OIDC login route
+   * for selfhosted (ADR-0044 Decision 1's selfhosted note) doesn't exist
+   * yet — tracked by #353's still-open remaining scope, not this route.
    */
   fastify.get(
     '/api/v1/auth/sso-status',
@@ -870,7 +890,10 @@ export function authRoutes(fastify: FastifyInstance, db: DatabaseClient) {
         enforceSso = config.oidc.enforceSso;
       }
 
-      return sendSuccess(reply, { enforceSso });
+      const tenantId =
+        process.env.DEPLOYMENT_MODE === 'saas' ? (request.organizationId ?? null) : null;
+
+      return sendSuccess(reply, { enforceSso, tenantId });
     }
   );
 }

@@ -288,7 +288,7 @@ test.describe('Setup Flow - Initialized System', () => {
 
     await page.getByLabel(/email/i).fill('admin@bugspotter.io');
     await page.getByLabel(/password/i).fill('admin123');
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Should redirect to dashboard
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
@@ -302,7 +302,7 @@ test.describe('Setup Flow - Initialized System', () => {
 
     await page.getByLabel(/email/i).fill('admin@bugspotter.io');
     await page.getByLabel(/password/i).fill('wrongpassword');
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Should show error
     await expect(page.getByText(/invalid|incorrect|failed|wrong/i)).toBeVisible({
@@ -332,7 +332,7 @@ test.describe('Setup Flow - Initialized System', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill('admin@bugspotter.io');
     await page.getByLabel(/password/i).fill('admin123');
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
 
@@ -351,7 +351,7 @@ test.describe('Setup Flow - Initialized System', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill('admin@bugspotter.io');
     await page.getByLabel(/password/i).fill('admin123');
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
 

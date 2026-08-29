@@ -25,8 +25,13 @@ export async function loginAsAdmin(page: Page): Promise<void> {
   await page.fill('input[type="email"]', 'admin@bugspotter.io');
   await page.fill('input[type="password"]', 'admin123');
 
-  // Wait for login button to be enabled and click it
-  const loginButton = page.getByRole('button', { name: /sign in|login/i });
+  // Wait for login button to be enabled and click it.
+  // Anchored (^...$) so this matches only the password-submit button's
+  // exact label ("Login") — not the always-rendered "Sign in with SSO"
+  // button (#408/#424), which also contains "sign in" under the old
+  // unanchored /sign in|login/i pattern and made this a 2-element
+  // strict-mode violation once that button shipped.
+  const loginButton = page.getByRole('button', { name: /^(sign in|login)$/i });
   await loginButton.waitFor({ state: 'visible', timeout: 10000 });
 
   // Use Promise.all to wait for navigation triggered by button click
@@ -54,7 +59,7 @@ export async function loginAs(
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', password);
 
-  const loginButton = page.getByRole('button', { name: /sign in|login/i });
+  const loginButton = page.getByRole('button', { name: /^(sign in|login)$/i });
   await loginButton.waitFor({ state: 'visible', timeout: 10000 });
 
   await Promise.all([page.waitForURL(expectedRedirect, { timeout: 30000 }), loginButton.click()]);

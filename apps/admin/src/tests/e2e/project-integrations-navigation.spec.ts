@@ -28,7 +28,7 @@ async function loginAsAdmin(page: Page) {
   await page.goto('/login', { waitUntil: 'networkidle' });
   await page.fill('input[type="email"]', TEST_ADMIN.email);
   await page.fill('input[type="password"]', TEST_ADMIN.password);
-  await page.getByRole('button', { name: /sign in|login/i }).click();
+  await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
   await page.waitForURL('/dashboard', { timeout: 30000 });
   await page.waitForLoadState('networkidle');
   await waitForI18nReady(page, { match: 'some' });

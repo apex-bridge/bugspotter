@@ -715,6 +715,7 @@ describe('Auth Routes', () => {
       const json = response.json();
       expect(json.success).toBe(true);
       expect(json.data.enforceSso).toBe(false);
+      expect(json.data.tenantId).toBeNull();
     });
 
     it('should be accessible without authentication', async () => {
@@ -934,6 +935,11 @@ describe('Auth Routes', () => {
 
         expect(response.statusCode).toBe(200);
         expect(response.json().data.enforceSso).toBe(true);
+        // #424: selfhosted mode has no per-tenant oidc_idp_config row and
+        // no `:tenant`-less OIDC login route yet (ADR-0044 Decision 1's
+        // selfhosted note, tracked by #353's remaining scope) — tenantId
+        // is always null there, regardless of enforceSso.
+        expect(response.json().data.tenantId).toBeNull();
       } finally {
         await ssoServer.close();
       }
@@ -1092,6 +1098,9 @@ describe('Auth Routes', () => {
 
         expect(response.statusCode).toBe(200);
         expect(response.json().data.enforceSso).toBe(true);
+        // #424: tenantId is the host-resolved org id verbatim — the login
+        // page uses it to build the OIDC login-initiation URL.
+        expect(response.json().data.tenantId).toBe(org.id);
         expect(spy).toHaveBeenCalledWith(org.id);
       } finally {
         spy.mockRestore();
@@ -1108,6 +1117,9 @@ describe('Auth Routes', () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.json().data.enforceSso).toBe(false);
+      // #424: no host-resolved tenant on the hub domain — nothing to
+      // build a login-initiation URL from.
+      expect(response.json().data.tenantId).toBeNull();
     });
 
     it('Test K: GET /api/v1/auth/sso-status returns enforceSso: false (not 500) when findByTenantId throws', async () => {
@@ -1130,6 +1142,9 @@ describe('Auth Routes', () => {
 
         expect(response.statusCode).toBe(200);
         expect(response.json().data.enforceSso).toBe(false);
+        // #424: tenantId resolution doesn't depend on findByTenantId
+        // succeeding — it's just the host-resolved org id.
+        expect(response.json().data.tenantId).toBe(org.id);
         expect(spy).toHaveBeenCalledWith(org.id);
       } finally {
         spy.mockRestore();

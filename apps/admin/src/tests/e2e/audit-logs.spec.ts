@@ -32,7 +32,7 @@ async function loginAsAdmin(page: Page) {
   // Click login and wait for navigation away from login page
   await Promise.all([
     page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 30000 }),
-    page.getByRole('button', { name: /sign in|login/i }).click(),
+    page.getByRole('button', { name: /^(sign in|login)$/i }).click(),
   ]);
 
   // Wait for page to fully load

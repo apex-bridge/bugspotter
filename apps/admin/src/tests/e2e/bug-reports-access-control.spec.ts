@@ -36,7 +36,7 @@ async function loginAsUser(page: Page, email: string, password: string) {
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', password);
 
-  await page.getByRole('button', { name: /sign in|login/i }).click();
+  await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
   // Wait for navigation after login (app redirects to /projects or /dashboard)
   await page.waitForURL(/\/(dashboard|projects)/, { timeout: 30000 });

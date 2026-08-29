@@ -91,7 +91,7 @@ test.describe('Authentication Flow - Initialized System', () => {
     // Login form should be visible
     await expect(page.getByLabel(/email/i)).toBeVisible({ timeout: 5000 });
     await expect(page.getByLabel(/password/i)).toBeVisible();
-    await expect(page.getByRole('button', { name: /sign in|login/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^(sign in|login)$/i })).toBeVisible();
   });
 
   test('should successfully login with valid credentials', async ({ page }) => {
@@ -102,7 +102,7 @@ test.describe('Authentication Flow - Initialized System', () => {
     await page.getByLabel(/password/i).fill(TEST_ADMIN.password);
 
     // Submit form
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Should redirect to dashboard/projects after successful login
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
@@ -121,7 +121,7 @@ test.describe('Authentication Flow - Initialized System', () => {
     await page.getByLabel(/password/i).fill('wrongpassword');
 
     // Submit form
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Should show error message (toast notification)
     // Sonner toasts appear in list items, fallback to any visible error text
@@ -141,7 +141,7 @@ test.describe('Authentication Flow - Initialized System', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill(TEST_ADMIN.email);
     await page.getByLabel(/password/i).fill(TEST_ADMIN.password);
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Wait for navigation to dashboard
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
@@ -161,7 +161,7 @@ test.describe('Authentication Flow - Initialized System', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill(TEST_ADMIN.email);
     await page.getByLabel(/password/i).fill(TEST_ADMIN.password);
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Wait for dashboard
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
@@ -192,7 +192,7 @@ test.describe('Authentication Flow - Initialized System', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill(TEST_ADMIN.email);
     await page.getByLabel(/password/i).fill(TEST_ADMIN.password);
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Wait for dashboard
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
@@ -221,7 +221,7 @@ test.describe('Authentication Flow - Initialized System', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill(TEST_ADMIN.email);
     await page.getByLabel(/password/i).fill(TEST_ADMIN.password);
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Wait for dashboard
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
@@ -344,7 +344,7 @@ test.describe('Authentication Context Behavior', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill(TEST_ADMIN.email);
     await page.getByLabel(/password/i).fill(TEST_ADMIN.password);
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Wait for dashboard
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
@@ -374,7 +374,7 @@ test.describe('Authentication Context Behavior', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill(TEST_ADMIN.email);
     await page.getByLabel(/password/i).fill(TEST_ADMIN.password);
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
     // Navigate to dashboard
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });

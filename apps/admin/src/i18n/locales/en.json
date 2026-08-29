@@ -129,7 +129,8 @@
     "resetPasswordTokenDead": "This reset link is invalid or has expired. Request a new one.",
     "requestNewResetLink": "Request a new reset link",
     "newPassword": "New password",
-    "signInWithSso": "Sign in with SSO"
+    "signInWithSso": "Sign in with SSO",
+    "ssoLoginUnavailable": "SSO login isn't available right now. Please try again shortly or contact your administrator."
   },
   "dashboard": {
     "title": "Dashboard",

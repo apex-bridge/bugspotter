@@ -83,7 +83,7 @@ async function loginAsAdmin(page: Page) {
   await page.fill('input[type="password"]', 'admin123');
 
   // Wait for login button to be enabled and click it
-  const loginButton = page.getByRole('button', { name: /sign in|login/i });
+  const loginButton = page.getByRole('button', { name: /^(sign in|login)$/i });
   await loginButton.waitFor({ state: 'visible', timeout: TIMEOUTS.ELEMENT_VISIBLE });
 
   // Use Promise.all to wait for navigation triggered by button click

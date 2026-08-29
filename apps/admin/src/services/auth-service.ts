@@ -61,11 +61,18 @@ export const authService = {
   /**
    * Resolve whether the current tenant (by host/subdomain) has made SSO
    * mandatory. Unauthenticated, same pre-auth shape as getRegistrationStatus().
+   *
+   * `tenantId` is the same host-resolved org id the backend's
+   * `oidcIdpConfigs.findByTenantId` is keyed on — `login.tsx` uses it to
+   * build the OIDC login-initiation URL (`API_ENDPOINTS.auth.ssoLogin`).
+   * `null` in selfhosted mode or when no tenant resolves (saas hub
+   * domain) — same cases where SSO login-initiation isn't available.
    */
-  getSsoStatus: async (): Promise<{ enforceSso: boolean }> => {
-    const response = await api.get<{ success: boolean; data: { enforceSso: boolean } }>(
-      API_ENDPOINTS.auth.ssoStatus()
-    );
+  getSsoStatus: async (): Promise<{ enforceSso: boolean; tenantId: string | null }> => {
+    const response = await api.get<{
+      success: boolean;
+      data: { enforceSso: boolean; tenantId: string | null };
+    }>(API_ENDPOINTS.auth.ssoStatus());
     return response.data.data;
   },
 

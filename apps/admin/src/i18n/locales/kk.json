@@ -129,7 +129,8 @@
     "resetPasswordTokenDead": "Бұл сілтеме жарамсыз немесе мерзімі өтіп кетті. Жаңасын сұраңыз.",
     "requestNewResetLink": "Жаңа сілтеме сұрау",
     "newPassword": "Жаңа құпиясөз",
-    "signInWithSso": "SSO арқылы кіру"
+    "signInWithSso": "SSO арқылы кіру",
+    "ssoLoginUnavailable": "SSO арқылы кіру қазір қолжетімсіз. Сәл кейін қайталап көріңіз немесе әкімшіге хабарласыңыз."
   },
   "dashboard": {
     "title": "Басқару тақтасы",

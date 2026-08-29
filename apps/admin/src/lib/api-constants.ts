@@ -23,6 +23,10 @@ export const API_ENDPOINTS = {
     register: () => `${API_VERSION}/auth/register`,
     registrationStatus: () => `${API_VERSION}/auth/registration-status`,
     ssoStatus: () => `${API_VERSION}/auth/sso-status`,
+    // Login-initiation redirect (#367, already merged). `tenantId` is the
+    // host-resolved org id `getSsoStatus()` returns — saas mode only, see
+    // that method's own doc comment in auth-service.ts.
+    ssoLogin: (tenantId: string) => `${API_VERSION}/auth/oidc/${tenantId}/login`,
     me: () => `${API_VERSION}/auth/me`,
     verifyEmail: () => `${API_VERSION}/auth/verify-email`,
     resendVerification: () => `${API_VERSION}/auth/resend-verification`,

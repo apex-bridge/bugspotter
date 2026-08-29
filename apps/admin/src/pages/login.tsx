@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import { useAuth } from '../contexts/auth-context';
 import { authService } from '../services/api';
-import { handleApiError } from '../lib/api-client';
+import { API_BASE_URL, API_ENDPOINTS, handleApiError } from '../lib/api-client';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '../components/ui/alert';
@@ -33,6 +33,18 @@ export default function LoginPage() {
   const [registrationAllowed, setRegistrationAllowed] = useState(false);
   const [passwordResetEnabled, setPasswordResetEnabled] = useState(false);
   const [accessRevoked, setAccessRevoked] = useState(false);
+  // `null` = not yet resolved (including a failed status probe — see the
+  // getSsoStatus().then rejection handler below). Password fields stay
+  // hidden while this is `null`, so there's no flash of password UI on
+  // first paint. Once resolved, `showPasswordForm` below is what actually
+  // decides visibility — it isn't a bare `enforceSso === false` check.
+  const [enforceSso, setEnforceSso] = useState<boolean | null>(null);
+  // Host-resolved org id from getSsoStatus() — null until resolved, and
+  // stays null in selfhosted mode / on the saas hub domain (see that
+  // method's doc comment). Needed to build the OIDC login-initiation URL;
+  // kept separate from `enforceSso` because the SSO button is offered
+  // even when SSO isn't mandatory (AC #1 in spec #408).
+  const [ssoTenantId, setSsoTenantId] = useState<string | null>(null);
   const { login } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -73,7 +85,26 @@ export default function LoginPage() {
     [login, navigate, postLoginPath]
   );
 
-  // Login-specific post-setup logic: registration status + magic token
+  // Navigates the browser to the backend's OIDC login-initiation route
+  // (#367, already merged), which redirects to the tenant's IdP. A real
+  // navigation, not an XHR — the browser must leave the SPA for the IdP's
+  // authorization endpoint and later land on the backend's callback route.
+  // `ssoTenantId` is null in selfhosted mode and on the saas hub domain
+  // (no host-resolved tenant) — selfhosted's own OIDC login route is
+  // separate, not-`:tenant`-scoped work still tracked by #353 (ADR-0044
+  // Decision 1's selfhosted note) and doesn't exist yet, so there's
+  // nothing to navigate to there. Surface that as a visible error rather
+  // than silently doing nothing, since the button is always rendered
+  // (AC #1, spec #408) regardless of whether a tenant resolved.
+  const handleSsoLogin = () => {
+    if (!ssoTenantId) {
+      toast.error(t('auth.ssoLoginUnavailable'));
+      return;
+    }
+    window.location.href = `${API_BASE_URL}${API_ENDPOINTS.auth.ssoLogin(ssoTenantId)}`;
+  };
+
+  // Login-specific post-setup logic: registration status + SSO status + magic token
   useEffect(() => {
     if (!isInitialized) {
       return;
@@ -92,6 +123,31 @@ export default function LoginPage() {
         // hidden as a safe default if the status probe fails.
         if (import.meta.env.DEV) {
           console.warn('Failed to check registration status:', error);
+        }
+      }
+    );
+
+    // Check SSO enforcement status (fire-and-forget, non-blocking). `?? false`
+    // normalizes an absent flag to false so password fields render when
+    // enforce_sso is false OR absent, not just when it's explicitly false.
+    authService.getSsoStatus().then(
+      (status) => {
+        setEnforceSso(status.enforceSso ?? false);
+        setSsoTenantId(status.tenantId ?? null);
+      },
+      (error) => {
+        // Fail CLOSED to "unresolved" (not `false`) on a status-check
+        // failure — unlike getRegistrationStatus() above, `false` here
+        // isn't a safe default: it would render the password form as
+        // though SSO were confirmed off, while the backend's
+        // assertSsoNotEnforced (enforce-sso.ts) still fail-closes on the
+        // real submit and 403s if SSO actually is enforced. That's a
+        // misleading dead-end UI, not a bypass — but it's still worse
+        // than staying in the pre-resolution state (SSO button only,
+        // same as before this probe ever resolves) until a retry (e.g.
+        // page reload) gets a real answer.
+        if (import.meta.env.DEV) {
+          console.warn('Failed to check SSO status:', error);
         }
       }
     );
@@ -138,6 +194,28 @@ export default function LoginPage() {
     return <SetupLoadingScreen />;
   }
 
+  // The password form (and its submit button) render whenever SSO
+  // enforcement has resolved to "off" (`enforceSso === false`), OR
+  // resolved to "on" but with no tenant-scoped SSO login target to
+  // redirect to (`ssoTenantId` null) — selfhosted mode, or the saas hub
+  // domain, per getSsoStatus()'s doc comment. That second case is a real
+  // gap, not a hypothetical one: a selfhosted operator can set
+  // `OIDC_ENFORCE_SSO=true` (ADR-0044 Decision 4) before the selfhosted
+  // OIDC login route (#353) exists, and the always-rendered SSO button's
+  // handleSsoLogin has nothing to navigate to (`ssoTenantId` is always
+  // null off saas). Hiding the password form there leaves no clickable
+  // path to authenticate at all. Showing it here is never a bypass: the
+  // backend's assertSsoNotEnforced (enforce-sso.ts) is the actual
+  // fail-closed gate on submit, and rejects with a clear 403 if SSO
+  // really is enforced — this is only about giving the operator
+  // something to click and a real error to read, instead of a blank gap
+  // between an invisible form and a button that just toasts.
+  // `enforceSso === null` (not yet resolved, or the status probe failed —
+  // see the `getSsoStatus().then` rejection handler above) always hides
+  // the form, matching the "no flash of password UI" intent this page
+  // already had.
+  const showPasswordForm = enforceSso === false || (enforceSso === true && !ssoTenantId);
+
   return (
     <AuthPageLayout title="BugSpotter Admin" description={t('auth.loginToContinue')}>
       {inviteToken && (
@@ -154,27 +232,36 @@ export default function LoginPage() {
         </Alert>
       )}
       <form onSubmit={handleSubmit} className="space-y-4">
-        <Input
-          label={t('auth.emailAddress')}
-          type="email"
-          placeholder="admin@example.com"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <Input
-          label={t('auth.password')}
-          type="password"
-          placeholder="••••••••"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <Button type="submit" className="w-full" isLoading={isLoading}>
-          <LogIn className="w-4 h-4 mr-2" aria-hidden="true" />
-          {isLoading ? t('auth.loggingIn') : t('auth.loginButton')}
+        {showPasswordForm && (
+          <>
+            <Input
+              label={t('auth.emailAddress')}
+              type="email"
+              placeholder={t('auth.emailPlaceholder')}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+            <Input
+              label={t('auth.password')}
+              type="password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </>
+        )}
+        {showPasswordForm && (
+          <Button type="submit" className="w-full" isLoading={isLoading}>
+            <LogIn className="w-4 h-4 mr-2" aria-hidden="true" />
+            {isLoading ? t('auth.loggingIn') : t('auth.loginButton')}
+          </Button>
+        )}
+        <Button type="button" onClick={handleSsoLogin} className="w-full" variant="outline">
+          {t('auth.signInWithSso')}
         </Button>
-        {passwordResetEnabled && (
+        {passwordResetEnabled && showPasswordForm && (
           <div className="text-right">
             <Link to="/forgot-password" className="text-sm text-blue-600 hover:underline">
               {t('auth.forgotPassword')}
