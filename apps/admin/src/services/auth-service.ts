@@ -58,6 +58,17 @@ export const authService = {
     return response.data.data;
   },
 
+  /**
+   * Resolve whether the current tenant (by host/subdomain) has made SSO
+   * mandatory. Unauthenticated, same pre-auth shape as getRegistrationStatus().
+   */
+  getSsoStatus: async (): Promise<{ enforceSso: boolean }> => {
+    const response = await api.get<{ success: boolean; data: { enforceSso: boolean } }>(
+      API_ENDPOINTS.auth.ssoStatus()
+    );
+    return response.data.data;
+  },
+
   logout: async (): Promise<void> => {
     await api.post(API_ENDPOINTS.auth.logout());
   },

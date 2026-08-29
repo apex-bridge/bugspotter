@@ -128,7 +128,8 @@
     "resetPasswordTokenMissing": "This reset link is missing its token. Request a new one.",
     "resetPasswordTokenDead": "This reset link is invalid or has expired. Request a new one.",
     "requestNewResetLink": "Request a new reset link",
-    "newPassword": "New password"
+    "newPassword": "New password",
+    "signInWithSso": "Sign in with SSO"
   },
   "dashboard": {
     "title": "Dashboard",
