@@ -77,8 +77,8 @@ on:
 # repo used to share one queue slot — a run on PR A could silently
 # evict a still-queued run on unrelated PR B, with no error visible to
 # whoever asked for the review. `github.event.issue.number` covers
-# `issue_comment` (present even for PR comments); `github.event.
-# pull_request.number` covers both `pull_request` and
+# `issue_comment` (present even for PR comments);
+# `github.event.pull_request.number` covers both `pull_request` and
 # `pull_request_review_comment`; `github.ref` is only a fallback for
 # any other trigger.
 concurrency:
