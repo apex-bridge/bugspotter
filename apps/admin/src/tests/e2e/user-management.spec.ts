@@ -18,7 +18,7 @@ test.describe('User Management', () => {
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByLabel(/email/i).fill('admin@bugspotter.io');
     await page.getByLabel(/password/i).fill('admin123');
-    await page.getByRole('button', { name: /sign in|login/i }).click();
+    await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
     await expect(page).toHaveURL(/\/(dashboard|projects|health)/, { timeout: 10000 });
 
     // Navigate to users page

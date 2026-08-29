@@ -25,7 +25,7 @@ async function loginAsAdmin(page: Page) {
   await page.fill('input[type="email"]', TEST_ADMIN.email);
   await page.fill('input[type="password"]', TEST_ADMIN.password);
 
-  await page.getByRole('button', { name: /sign in|login/i }).click();
+  await page.getByRole('button', { name: /^(sign in|login)$/i }).click();
 
   // Wait for navigation to dashboard
   await page.waitForURL('/dashboard', { timeout: 30000 });
