@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import { useAuth } from '../contexts/auth-context';
 import { authService } from '../services/api';
-import { handleApiError } from '../lib/api-client';
+import { API_BASE_URL, API_ENDPOINTS, handleApiError } from '../lib/api-client';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '../components/ui/alert';
@@ -36,6 +36,12 @@ export default function LoginPage() {
   // `null` = not yet resolved. Password fields stay hidden until this is
   // `false`, so there's no flash of password UI on first paint.
   const [enforceSso, setEnforceSso] = useState<boolean | null>(null);
+  // Host-resolved org id from getSsoStatus() — null until resolved, and
+  // stays null in selfhosted mode / on the saas hub domain (see that
+  // method's doc comment). Needed to build the OIDC login-initiation URL;
+  // kept separate from `enforceSso` because the SSO button is offered
+  // even when SSO isn't mandatory (AC #1 in spec #408).
+  const [ssoTenantId, setSsoTenantId] = useState<string | null>(null);
   const { login } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -76,13 +82,23 @@ export default function LoginPage() {
     [login, navigate, postLoginPath]
   );
 
-  // TODO(#408 follow-up, out of scope for this slice): implement the actual
-  // OIDC redirect/callback handshake. This spec covers only the button's
-  // presence/visibility, not the auth flow it triggers.
+  // Navigates the browser to the backend's OIDC login-initiation route
+  // (#367, already merged), which redirects to the tenant's IdP. A real
+  // navigation, not an XHR — the browser must leave the SPA for the IdP's
+  // authorization endpoint and later land on the backend's callback route.
+  // `ssoTenantId` is null in selfhosted mode and on the saas hub domain
+  // (no host-resolved tenant) — selfhosted's own OIDC login route is
+  // separate, not-`:tenant`-scoped work still tracked by #353 (ADR-0044
+  // Decision 1's selfhosted note) and doesn't exist yet, so there's
+  // nothing to navigate to there. Surface that as a visible error rather
+  // than silently doing nothing, since the button is always rendered
+  // (AC #1, spec #408) regardless of whether a tenant resolved.
   const handleSsoLogin = () => {
-    if (import.meta.env.DEV) {
-      console.warn('SSO login handshake not yet implemented');
+    if (!ssoTenantId) {
+      toast.error(t('auth.ssoLoginUnavailable'));
+      return;
     }
+    window.location.href = `${API_BASE_URL}${API_ENDPOINTS.auth.ssoLogin(ssoTenantId)}`;
   };
 
   // Login-specific post-setup logic: registration status + SSO status + magic token
@@ -112,10 +128,14 @@ export default function LoginPage() {
     // normalizes an absent flag to false so password fields render when
     // enforce_sso is false OR absent, not just when it's explicitly false.
     authService.getSsoStatus().then(
-      (status) => setEnforceSso(status.enforceSso ?? false),
+      (status) => {
+        setEnforceSso(status.enforceSso ?? false);
+        setSsoTenantId(status.tenantId ?? null);
+      },
       () => {
         // Fail open to password fields on a status-check failure — matches
-        // the getRegistrationStatus() error handling above.
+        // the getRegistrationStatus() error handling above. ssoTenantId
+        // stays null, which handleSsoLogin already treats as "unavailable".
         setEnforceSso(false);
       }
     );

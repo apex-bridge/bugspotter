@@ -129,7 +129,8 @@
     "resetPasswordTokenDead": "Ссылка для сброса недействительна или истекла. Запросите новую.",
     "requestNewResetLink": "Запросить новую ссылку",
     "newPassword": "Новый пароль",
-    "signInWithSso": "Войти через SSO"
+    "signInWithSso": "Войти через SSO",
+    "ssoLoginUnavailable": "Вход через SSO сейчас недоступен. Повторите попытку позже или обратитесь к администратору."
   },
   "dashboard": {
     "title": "Панель управления",
