@@ -19,6 +19,11 @@ import {
 } from 'node:fs';
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
 import { detectNarratedToolCall } from './detect-narration.mjs';
+import {
+  parsePositiveMs,
+  computeRemainingBudgetMs,
+  runWithCorrectiveRetry,
+} from './generation-retry.mjs';
 
 // Captured before any file reads (ADR numbering, example ADR, ADR index)
 // below so the retry budget math (see scriptStartedAt's use further down)
@@ -177,17 +182,10 @@ if (stopReason === 'max_tokens') {
 //
 // One corrective retry with a stronger reminder before failing loudly,
 // mirroring generate-impl.mjs's missing-file self-correction (PR #375) and
-// generate-spec.mjs's own copy of this same guard. Defaults match
-// adr-agent.yml's "Generate ADR" step cap (raised alongside this change
-// specifically to give a retry room - see that file's comment).
-function parsePositiveMs(envValue, fallback) {
-  const trimmed = typeof envValue === 'string' ? envValue.trim() : envValue;
-  if (trimmed === undefined || trimmed === '') {
-    return fallback;
-  }
-  const n = Number(trimmed);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
+// generate-spec.mjs's own copy of this same guard - time-budgeted the same
+// way (see generation-retry.mjs). Defaults match adr-agent.yml's "Generate
+// ADR" step cap (raised alongside this change specifically to give a retry
+// room - see that file's comment).
 const STEP_BUDGET_MS = parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 10 * 60_000);
 const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
 const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 45_000);
@@ -198,57 +196,62 @@ if (narrationFinding) {
     `Response looks like a narrated tool-call transcript, not an ADR: ${narrationFinding}`
   );
 
-  const remainingMs = STEP_BUDGET_MS - SAFETY_BUFFER_MS - (Date.now() - scriptStartedAt);
-  if (remainingMs < RETRY_MIN_BUDGET_MS) {
-    console.error(
-      `::error::generate-adr.mjs: response looks like a narrated tool-call transcript, and only ` +
-        `~${Math.round(remainingMs / 1000)}s remain in the step budget - not enough for a safe ` +
-        `corrective retry. Refusing to write it as an ADR. ${narrationFinding}`
-    );
-    process.exit(1);
-  }
+  const remainingMs = computeRemainingBudgetMs({
+    stepBudgetMs: STEP_BUDGET_MS,
+    safetyBufferMs: SAFETY_BUFFER_MS,
+    scriptStartedAt,
+  });
 
-  const retryTimeoutMs = Math.min(GENERATE_TIMEOUT_MS, remainingMs);
-  console.warn(
-    `Retrying once with a stronger no-narration reminder (timeout ${Math.round(retryTimeoutMs / 1000)}s)...`
-  );
-  const correctionPrompt =
-    `${prompt}\n\n--- CORRECTIVE REMINDER ---\n` +
-    `Your previous response was rejected: it looked like a narrated tool-call transcript ` +
-    `(e.g. opening with something like "I'll inspect..." and/or containing "_Tool: ..._", ` +
-    `"### Parameters:", or "### Result:" markers, or an "<invoke name=...>" tag) instead of the ` +
-    `ADR document itself. You have NO tools available — no Read, no Grep, no Bash. Do not ` +
-    `attempt a tool call and do not narrate one. Return ONLY the ADR document, starting with ` +
-    `"# ADR-${padded}: <title>", exactly as instructed above.`;
-
-  let retryStopReason;
-  try {
-    ({ text: adrContent, stopReason: retryStopReason } = await callClaude({
-      prompt: correctionPrompt,
-      maxTokens: 2048,
-      timeoutMs: retryTimeoutMs,
-    }));
-  } catch (err) {
-    console.error(`::error::generate-adr.mjs: corrective retry call failed: ${err.message}`);
-    process.exit(1);
-  }
-
-  if (retryStopReason === 'max_tokens') {
-    console.error(
-      '::error::generate-adr.mjs: corrective retry response truncated (stop_reason=max_tokens).'
-    );
-    process.exit(1);
-  }
-
-  narrationFinding = detectNarratedToolCall(adrContent);
-  if (narrationFinding) {
-    console.error(
-      `::error::generate-adr.mjs: response still looks like a narrated tool-call transcript ` +
-        `after one corrective retry - refusing to write it as an ADR. ${narrationFinding}`
-    );
-    process.exit(1);
-  }
-  console.log('Corrective retry produced real content — proceeding.');
+  await runWithCorrectiveRetry({
+    remainingMs,
+    retryMinBudgetMs: RETRY_MIN_BUDGET_MS,
+    maxTimeoutMs: GENERATE_TIMEOUT_MS,
+    buildPrompt: () =>
+      `${prompt}\n\n--- CORRECTIVE REMINDER ---\n` +
+      `Your previous response was rejected: it looked like a narrated tool-call transcript ` +
+      `(e.g. opening with something like "I'll inspect..." and/or containing "_Tool: ..._", ` +
+      `"### Parameters:", or "### Result:" markers, or an "<invoke name=...>" tag) instead of the ` +
+      `ADR document itself. You have NO tools available — no Read, no Grep, no Bash. Do not ` +
+      `attempt a tool call and do not narrate one. Return ONLY the ADR document, starting with ` +
+      `"# ADR-${padded}: <title>", exactly as instructed above.`,
+    callFn: (retryPrompt, timeoutMs) =>
+      callClaude({ prompt: retryPrompt, maxTokens: 2048, timeoutMs }),
+    onNoBudget: (remaining) => {
+      console.error(
+        `::error::generate-adr.mjs: response looks like a narrated tool-call transcript, and only ` +
+          `~${Math.round(remaining / 1000)}s remain in the step budget - not enough for a safe ` +
+          `corrective retry. Refusing to write it as an ADR. ${narrationFinding}`
+      );
+      process.exit(1);
+    },
+    onAttempt: (timeoutMs) => {
+      console.warn(
+        `Retrying once with a stronger no-narration reminder (timeout ${Math.round(timeoutMs / 1000)}s)...`
+      );
+    },
+    onCallError: (err) => {
+      console.error(`::error::generate-adr.mjs: corrective retry call failed: ${err.message}`);
+      process.exit(1);
+    },
+    onTruncated: () => {
+      console.error(
+        '::error::generate-adr.mjs: corrective retry response truncated (stop_reason=max_tokens).'
+      );
+      process.exit(1);
+    },
+    onSuccess: (text) => {
+      adrContent = text;
+      const finding = detectNarratedToolCall(adrContent);
+      if (finding) {
+        console.error(
+          `::error::generate-adr.mjs: response still looks like a narrated tool-call transcript ` +
+            `after one corrective retry - refusing to write it as an ADR. ${finding}`
+        );
+        process.exit(1);
+      }
+      console.log('Corrective retry produced real content — proceeding.');
+    },
+  });
 }
 
 writeFileSync(adrFile, adrContent, 'utf8');

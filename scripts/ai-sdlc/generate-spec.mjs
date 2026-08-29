@@ -18,6 +18,11 @@ import {
 import { join } from 'node:path';
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
 import { detectNarratedToolCall } from './detect-narration.mjs';
+import {
+  parsePositiveMs,
+  computeRemainingBudgetMs,
+  runWithCorrectiveRetry,
+} from './generation-retry.mjs';
 
 // Captured before any file reads or BFS repo scanning below so the retry
 // budget math (see scriptStartedAt's use further down) measures real elapsed
@@ -223,18 +228,11 @@ if (stopReason === 'max_tokens') {
 //
 // One corrective retry with a stronger reminder before failing loudly,
 // mirroring generate-impl.mjs's missing-file self-correction (PR #375) -
-// time-budgeted the same way, so a retry only fires with real headroom left
-// in the step's own timeout rather than guaranteeing a step-level kill.
-// Defaults match spec-agent.yml's "Generate spec" step cap (raised alongside
-// this change specifically to give a retry room - see that file's comment).
-function parsePositiveMs(envValue, fallback) {
-  const trimmed = typeof envValue === 'string' ? envValue.trim() : envValue;
-  if (trimmed === undefined || trimmed === '') {
-    return fallback;
-  }
-  const n = Number(trimmed);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
+// time-budgeted the same way (see generation-retry.mjs), so a retry only
+// fires with real headroom left in the step's own timeout rather than
+// guaranteeing a step-level kill. Defaults match spec-agent.yml's "Generate
+// spec" step cap (raised alongside this change specifically to give a retry
+// room - see that file's comment).
 const STEP_BUDGET_MS = parsePositiveMs(process.env.SPEC_STEP_BUDGET_MS, 14 * 60_000);
 const SAFETY_BUFFER_MS = parsePositiveMs(process.env.SPEC_SAFETY_BUFFER_MS, 30_000);
 const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.SPEC_RETRY_MIN_BUDGET_MS, 60_000);
@@ -245,57 +243,62 @@ if (narrationFinding) {
     `Response looks like a narrated tool-call transcript, not a spec: ${narrationFinding}`
   );
 
-  const remainingMs = STEP_BUDGET_MS - SAFETY_BUFFER_MS - (Date.now() - scriptStartedAt);
-  if (remainingMs < RETRY_MIN_BUDGET_MS) {
-    console.error(
-      `::error::generate-spec.mjs: response looks like a narrated tool-call transcript, and ` +
-        `only ~${Math.round(remainingMs / 1000)}s remain in the step budget - not enough for a ` +
-        `safe corrective retry. Refusing to write it as a spec. ${narrationFinding}`
-    );
-    process.exit(1);
-  }
+  const remainingMs = computeRemainingBudgetMs({
+    stepBudgetMs: STEP_BUDGET_MS,
+    safetyBufferMs: SAFETY_BUFFER_MS,
+    scriptStartedAt,
+  });
 
-  const retryTimeoutMs = Math.min(GENERATE_TIMEOUT_MS, remainingMs);
-  console.warn(
-    `Retrying once with a stronger no-narration reminder (timeout ${Math.round(retryTimeoutMs / 1000)}s)...`
-  );
-  const correctionPrompt =
-    `${prompt}\n\n--- CORRECTIVE REMINDER ---\n` +
-    `Your previous response was rejected: it looked like a narrated tool-call transcript ` +
-    `(e.g. opening with something like "I'll inspect..." and/or containing "_Tool: ..._", ` +
-    `"### Parameters:", or "### Result:" markers, or an "<invoke name=...>" tag) instead of the ` +
-    `spec document itself. You have NO tools available — no Read, no Grep, no Bash. Do not ` +
-    `attempt a tool call and do not narrate one. Return ONLY the filled spec document, starting ` +
-    `with "# Spec: <title>", exactly as instructed above.`;
-
-  let retryStopReason;
-  try {
-    ({ text: specContent, stopReason: retryStopReason } = await callClaude({
-      prompt: correctionPrompt,
-      maxTokens: 4096,
-      timeoutMs: retryTimeoutMs,
-    }));
-  } catch (err) {
-    console.error(`::error::generate-spec.mjs: corrective retry call failed: ${err.message}`);
-    process.exit(1);
-  }
-
-  if (retryStopReason === 'max_tokens') {
-    console.error(
-      '::error::generate-spec.mjs: corrective retry response truncated (stop_reason=max_tokens).'
-    );
-    process.exit(1);
-  }
-
-  narrationFinding = detectNarratedToolCall(specContent);
-  if (narrationFinding) {
-    console.error(
-      `::error::generate-spec.mjs: response still looks like a narrated tool-call transcript ` +
-        `after one corrective retry - refusing to write it as a spec. ${narrationFinding}`
-    );
-    process.exit(1);
-  }
-  console.log('Corrective retry produced real content — proceeding.');
+  await runWithCorrectiveRetry({
+    remainingMs,
+    retryMinBudgetMs: RETRY_MIN_BUDGET_MS,
+    maxTimeoutMs: GENERATE_TIMEOUT_MS,
+    buildPrompt: () =>
+      `${prompt}\n\n--- CORRECTIVE REMINDER ---\n` +
+      `Your previous response was rejected: it looked like a narrated tool-call transcript ` +
+      `(e.g. opening with something like "I'll inspect..." and/or containing "_Tool: ..._", ` +
+      `"### Parameters:", or "### Result:" markers, or an "<invoke name=...>" tag) instead of the ` +
+      `spec document itself. You have NO tools available — no Read, no Grep, no Bash. Do not ` +
+      `attempt a tool call and do not narrate one. Return ONLY the filled spec document, starting ` +
+      `with "# Spec: <title>", exactly as instructed above.`,
+    callFn: (retryPrompt, timeoutMs) =>
+      callClaude({ prompt: retryPrompt, maxTokens: 4096, timeoutMs }),
+    onNoBudget: (remaining) => {
+      console.error(
+        `::error::generate-spec.mjs: response looks like a narrated tool-call transcript, and ` +
+          `only ~${Math.round(remaining / 1000)}s remain in the step budget - not enough for a ` +
+          `safe corrective retry. Refusing to write it as a spec. ${narrationFinding}`
+      );
+      process.exit(1);
+    },
+    onAttempt: (timeoutMs) => {
+      console.warn(
+        `Retrying once with a stronger no-narration reminder (timeout ${Math.round(timeoutMs / 1000)}s)...`
+      );
+    },
+    onCallError: (err) => {
+      console.error(`::error::generate-spec.mjs: corrective retry call failed: ${err.message}`);
+      process.exit(1);
+    },
+    onTruncated: () => {
+      console.error(
+        '::error::generate-spec.mjs: corrective retry response truncated (stop_reason=max_tokens).'
+      );
+      process.exit(1);
+    },
+    onSuccess: (text) => {
+      specContent = text;
+      const finding = detectNarratedToolCall(specContent);
+      if (finding) {
+        console.error(
+          `::error::generate-spec.mjs: response still looks like a narrated tool-call transcript ` +
+            `after one corrective retry - refusing to write it as a spec. ${finding}`
+        );
+        process.exit(1);
+      }
+      console.log('Corrective retry produced real content — proceeding.');
+    },
+  });
 }
 
 mkdirSync('docs/specs', { recursive: true });
