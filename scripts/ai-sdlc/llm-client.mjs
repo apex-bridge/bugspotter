@@ -451,6 +451,28 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     // stop requiring manual transcript archaeology to diagnose.
     let latestVisibleText = null;
     const startedAt = Date.now();
+    // Set the instant any one of the three terminal handlers below (timeout,
+    // 'error', 'close') has settled the promise. All three guard on it and
+    // bail out before doing ANY work — including dumpCliTranscriptOnFailure —
+    // on a second firing.
+    //
+    // This exists because those three handlers race independently on the
+    // same child, and `child.kill('SIGKILL')` in the timeout handler is not
+    // synchronous with the child's actual death: on Windows, `claude` is
+    // spawned via `shell: true` (see the spawn() call below), so `child` is
+    // the intermediate cmd.exe wrapper, not the real process running under
+    // it — killing the wrapper does not kill that grandchild. Confirmed
+    // empirically (temporary instrumentation, since removed) that the
+    // 'close' event this file listens for can then arrive seconds after the
+    // timeout handler already rejected: it fires once the orphaned
+    // grandchild eventually exits on its own, not when SIGKILL was sent.
+    // Without this guard, that delayed 'close' still matches
+    // `code !== 0 || signal` (signal is 'SIGKILL') and calls
+    // dumpCliTranscriptOnFailure a second time, reading whatever
+    // AI_SDLC_CLI_TRANSCRIPT_PATH happens to be set to at that later,
+    // unrelated moment — corrupting a different call's transcript file. See
+    // #428.
+    let settled = false;
 
     function consumeLine(line) {
       if (!line.trim()) {
@@ -498,6 +520,10 @@ async function callViaCli({ prompt, timeoutMs, model }) {
     heartbeat.unref?.();
 
     const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearInterval(heartbeat);
       // Mirrors the close handler below: a complete NDJSON record can be
       // sitting in lineBuf without its trailing newline yet (the child's
@@ -541,12 +567,20 @@ async function callViaCli({ prompt, timeoutMs, model }) {
       stderr += d;
     });
     child.on('error', (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(timer);
       clearInterval(heartbeat);
       dumpCliTranscriptOnFailure(stdout, stderr);
       reject(err);
     });
     child.on('close', (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(timer);
       clearInterval(heartbeat);
       if (lineBuf.trim()) {
