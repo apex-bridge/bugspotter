@@ -950,10 +950,18 @@ describe('Full-Scope API Key Integration Tests', () => {
       // Remaining 5 should be rate limited
       expect(rateLimited).toHaveLength(5);
 
-      // All rate limited responses should have proper headers
+      // All rate limited responses should have proper headers AND come
+      // from our own per-key minute-window limiter (checkRateLimit), not
+      // Fastify's separately-registered global @fastify/rate-limit plugin
+      // (src/api/server.ts) — both return statusCode 429 with
+      // error: 'TooManyRequests' plus a retry-after header, so without
+      // checking the message/retryAfter body field this assertion can't
+      // tell the two apart. See #430.
       rateLimited.forEach((response) => {
         const body = JSON.parse(response.body);
         expect(body.error).toBe('TooManyRequests');
+        expect(body.message).toContain('minute');
+        expect(body.retryAfter).toBeDefined();
         expect(response.headers['retry-after']).toBeDefined();
       });
     });
