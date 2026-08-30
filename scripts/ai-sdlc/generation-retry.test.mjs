@@ -296,6 +296,60 @@ describe('runWithCorrectiveRetry - call outcomes', () => {
     assert.equal(result.ok, false);
   });
 
+  test('normalizes a non-Error thrown by callFn (string) into a real Error before onCallError', async () => {
+    let caughtErr;
+    await runWithCorrectiveRetry({
+      remainingMs: 10_000,
+      retryMinBudgetMs: 1000,
+      maxTimeoutMs: 60_000,
+      buildPrompt: () => 'prompt',
+      callFn: async () => {
+        throw 'plain string failure';
+      },
+      onCallError: (err) => {
+        caughtErr = err;
+      },
+    });
+    assert.ok(caughtErr instanceof Error, 'onCallError must receive an Error instance');
+    assert.equal(caughtErr.message, 'plain string failure');
+  });
+
+  test('normalizes a non-Error thrown by callFn (plain object with a message) into a real Error before onCallError', async () => {
+    let caughtErr;
+    await runWithCorrectiveRetry({
+      remainingMs: 10_000,
+      retryMinBudgetMs: 1000,
+      maxTimeoutMs: 60_000,
+      buildPrompt: () => 'prompt',
+      callFn: async () => {
+        throw { code: 'ECONNRESET', message: 'socket hang up' };
+      },
+      onCallError: (err) => {
+        caughtErr = err;
+      },
+    });
+    assert.ok(caughtErr instanceof Error, 'onCallError must receive an Error instance');
+    assert.equal(caughtErr.message, 'socket hang up');
+  });
+
+  test('normalizes a non-Error thrown by callFn (plain object with no message) into a real Error before onCallError', async () => {
+    let caughtErr;
+    await runWithCorrectiveRetry({
+      remainingMs: 10_000,
+      retryMinBudgetMs: 1000,
+      maxTimeoutMs: 60_000,
+      buildPrompt: () => 'prompt',
+      callFn: async () => {
+        throw { code: 'ECONNRESET' };
+      },
+      onCallError: (err) => {
+        caughtErr = err;
+      },
+    });
+    assert.ok(caughtErr instanceof Error, 'onCallError must receive an Error instance');
+    assert.equal(caughtErr.message, '[object Object]');
+  });
+
   test('onTruncated fires and onSuccess does not when stopReason is max_tokens', async () => {
     let truncatedFired = false;
     let successCalled = false;

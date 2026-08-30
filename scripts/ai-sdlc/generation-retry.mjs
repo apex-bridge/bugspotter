@@ -138,7 +138,19 @@ export async function runWithCorrectiveRetry({
   try {
     ({ text, stopReason } = await callFn(prompt, timeoutMs));
   } catch (err) {
-    onCallError(err, timeoutMs);
+    // callFn is caller-supplied and may throw anything (a string, a plain
+    // object) - normalize to a real Error here so onCallError's documented
+    // `(err: Error, timeoutMs: number)` contract is actually enforced,
+    // rather than relying on every caller's `err.message` access to survive
+    // whatever callFn happened to throw. A plain object with its own
+    // `message` string (a common shape for a non-Error throw, e.g. a
+    // hand-built API error payload) keeps that message instead of
+    // collapsing to `String(err)`'s uninformative "[object Object]".
+    const normalizedErr =
+      err instanceof Error
+        ? err
+        : new Error(err && typeof err.message === 'string' ? err.message : String(err));
+    onCallError(normalizedErr, timeoutMs);
     return { attempted: true, ok: false, timeoutMs };
   }
 
