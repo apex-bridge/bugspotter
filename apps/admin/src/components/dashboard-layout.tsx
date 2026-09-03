@@ -10,6 +10,7 @@ import { QuickSetupActions } from './onboarding/quick-setup-actions';
 import { AdminOrgFilter } from './admin-org-filter';
 import { usePermissions } from '../hooks/use-permissions';
 import { useOrgFilter } from '../hooks/use-org-filter';
+import { canManageSso } from '../lib/sso-permissions';
 import {
   Activity,
   Settings,
@@ -28,6 +29,7 @@ import {
   ClipboardList,
   Brain,
   Trash2,
+  ShieldCheck,
   LucideIcon,
 } from 'lucide-react';
 
@@ -37,6 +39,13 @@ interface NavItem {
   icon: LucideIcon;
   adminOnly?: boolean;
   saasOnly?: boolean;
+  /**
+   * Org-nav only: hide from members who can't act on the page behind it.
+   * `ORG_NAV_ITEMS` historically filtered on `saasOnly` alone, which is fine
+   * while every org page renders something for every member - SSO config is
+   * the first that doesn't.
+   */
+  orgAdminOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -86,6 +95,9 @@ const ORG_NAV_ITEMS: NavItem[] = [
     saasOnly: true,
   },
   { path: '/my-organization/intelligence', label: 'nav.intelligence', icon: Brain },
+  // No `saasOnly`: the route itself isn't wrapped in `SaaSRoute`, so the nav
+  // matches it rather than hiding a page selfhosted users can still open.
+  { path: '/my-organization/sso', label: 'nav.sso', icon: ShieldCheck, orgAdminOnly: true },
 ];
 
 // Matches ROLE_COLORS in organizations/role-badge.tsx
@@ -109,7 +121,12 @@ export default function DashboardLayout() {
 
   // Org role for the user-info badge below. Shared with `useOrgPermissions`
   // and `useOnboardingStatus` via `usePermissions()` — single round-trip.
-  const { orgRole: myOrgRole } = usePermissions();
+  const { orgRole: myOrgRole, isSystemAdmin } = usePermissions();
+  // Drives `orgAdminOnly`. Uses the same `usePermissions()` values `OrgSsoPage`
+  // reads — not the JWT-local `isAdmin` below — so the link and the page agree.
+  // While the query is still loading this resolves false for a plain member,
+  // so the link appears once permissions land rather than flashing first.
+  const canConfigureSso = canManageSso(isSystemAdmin, myOrgRole);
   const location = useLocation();
   const { pathname } = location;
 
@@ -221,6 +238,9 @@ export default function DashboardLayout() {
                 </div>
                 {ORG_NAV_ITEMS.map((item) => {
                   if (item.saasOnly && !isSaaS) {
+                    return null;
+                  }
+                  if (item.orgAdminOnly && !canConfigureSso) {
                     return null;
                   }
                   const Icon = item.icon;

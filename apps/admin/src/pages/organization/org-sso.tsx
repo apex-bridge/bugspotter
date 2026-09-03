@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { KeyRound, Save, AlertCircle } from 'lucide-react';
 import { usePermissions } from '../../hooks/use-permissions';
 import { useSsoConfig } from '../../hooks/use-sso-config';
+import { canManageSso } from '../../lib/sso-permissions';
 
 interface SsoFormValues {
   issuerUrl: string;
@@ -24,12 +25,14 @@ const INPUT_CLASSES =
 
 export default function OrgSsoPage() {
   const { isSystemAdmin, orgRole, isLoading: isLoadingPermissions } = usePermissions();
-  const canManageSso = isSystemAdmin || orgRole === 'admin' || orgRole === 'owner';
+  // Same rule the sidebar entry applies, so the link can't offer a page this
+  // then refuses to render. See `lib/sso-permissions.ts`.
+  const allowed = canManageSso(isSystemAdmin, orgRole);
 
   if (isLoadingPermissions) {
     return null;
   }
-  if (!canManageSso) {
+  if (!allowed) {
     // Fails closed without an API round trip, and without even mounting
     // useSsoConfig()'s query: OrgSsoForm - the only thing that calls that
     // hook - is simply never rendered for a non-admin. useSsoConfig()
