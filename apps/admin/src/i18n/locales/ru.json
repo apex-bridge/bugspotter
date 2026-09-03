@@ -75,6 +75,7 @@
     "invoices": "Счета",
     "legalDetails": "Реквизиты",
     "intelligence": "Интеллект",
+    "sso": "SSO",
     "organizationRequests": "Заявки",
     "orgRetention": "Удаление"
   },
