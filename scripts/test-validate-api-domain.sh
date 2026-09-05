@@ -107,6 +107,62 @@ else
 fi
 unset GIT_COMMIT RAILWAY_GIT_COMMIT_SHA
 
+# IMAGE_GIT_COMMIT precedence (#434). The baked value describes the code in the
+# image; the runtime GIT_COMMIT is host configuration that has gone stale.
+# Helper: run validate_git_commit with a given (baked, runtime) pair and
+# assert the resulting GIT_COMMIT.
+test_commit_precedence() {
+    test_name="$1"
+    baked="$2"
+    runtime="$3"
+    expected="$4"
+
+    unset GIT_COMMIT IMAGE_GIT_COMMIT RAILWAY_GIT_COMMIT_SHA
+    [ -n "$baked" ] && export IMAGE_GIT_COMMIT="$baked"
+    [ -n "$runtime" ] && export GIT_COMMIT="$runtime"
+
+    validate_git_commit > /dev/null 2>&1
+    if [ "$GIT_COMMIT" = "$expected" ]; then
+        echo "${GREEN}✓${NC} PASS: $test_name"
+        PASSED=$((PASSED + 1))
+    else
+        echo "${RED}✗${NC} FAIL: $test_name (expected '$expected', got '$GIT_COMMIT')"
+        FAILED=$((FAILED + 1))
+    fi
+    unset GIT_COMMIT IMAGE_GIT_COMMIT RAILWAY_GIT_COMMIT_SHA
+}
+
+# The bug itself: a stale host GIT_COMMIT must not win over the built image.
+test_commit_precedence "Baked revision beats a stale runtime GIT_COMMIT" \
+    "0c11a15" "cb02c35" "0c11a15"
+test_commit_precedence "Baked revision used when no runtime GIT_COMMIT is set" \
+    "0c11a15" "" "0c11a15"
+# Back-compat: an image built without the build arg behaves exactly as before.
+test_commit_precedence "Unbaked image still uses the runtime GIT_COMMIT" \
+    "unknown" "cb02c35" "cb02c35"
+test_commit_precedence "Absent IMAGE_GIT_COMMIT still uses the runtime GIT_COMMIT" \
+    "" "cb02c35" "cb02c35"
+test_commit_precedence "Unbaked image with nothing set falls back to unknown" \
+    "unknown" "" "unknown"
+# The baked value is injected into JavaScript like any other, so it goes
+# through the same hex validation rather than being trusted for being baked.
+test_commit_precedence "Malformed baked revision falls back to unknown, not injected" \
+    "'; alert(1); //" "" "unknown"
+
+# Railway's SHA must still win when the image bakes nothing.
+unset GIT_COMMIT IMAGE_GIT_COMMIT
+export IMAGE_GIT_COMMIT="unknown"
+export RAILWAY_GIT_COMMIT_SHA="ABC1234567"
+validate_git_commit > /dev/null 2>&1
+if [ "$GIT_COMMIT" = "ABC1234567" ]; then
+    echo "${GREEN}✓${NC} PASS: Railway fallback survives an unbaked image"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: Railway fallback broken by IMAGE_GIT_COMMIT"
+    FAILED=$((FAILED + 1))
+fi
+unset GIT_COMMIT IMAGE_GIT_COMMIT RAILWAY_GIT_COMMIT_SHA
+
 echo ""
 echo "${YELLOW}=== Testing validate_api_domain() ===${NC}"
 

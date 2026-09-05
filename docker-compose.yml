@@ -409,7 +409,12 @@ services:
       # API domain added to the admin CSP connect-src for a cross-origin API
       # (Pattern B). Empty => same-domain. Consumed by docker-entrypoint.sh.
       API_DOMAIN: ${API_DOMAIN:-}
-      # Git commit hash for version display (injected at runtime)
+      # Git commit hash for version display (injected at runtime). Fallback
+      # only: an image built by CI carries its own revision in IMAGE_GIT_COMMIT
+      # and the entrypoint prefers that, because this value comes from whatever
+      # the host exported at `docker compose up` time and went three weeks stale
+      # in production that way (#434). Still used by locally-built images, which
+      # bake nothing.
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
       # Object-storage host for the admin CSP (runtime; bare host defaults to
       # https, or an explicit http(s):// scheme is preserved for HTTP-only
