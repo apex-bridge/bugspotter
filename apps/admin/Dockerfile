@@ -118,5 +118,17 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Expose port
 EXPOSE 80
 
+# The revision this image was built from. Set by deploy-admin.yml
+# (`build-args: IMAGE_GIT_COMMIT=${{ github.sha }}`); left "unknown" by a plain
+# local `docker build`, which falls back to the runtime GIT_COMMIT exactly as
+# before. The entrypoint prefers this over the runtime value because the host's
+# GIT_COMMIT is deploy-time configuration that has gone stale (#434) - see
+# validate_git_commit() in scripts/shared/validate-api-domain.sh.
+#
+# Deliberately the last thing in the stage: its value changes on every commit,
+# so anything below it would be rebuilt on every single build.
+ARG IMAGE_GIT_COMMIT=unknown
+ENV IMAGE_GIT_COMMIT=${IMAGE_GIT_COMMIT}
+
 # Use custom entrypoint that processes template
 ENTRYPOINT ["/docker-entrypoint.sh"]
