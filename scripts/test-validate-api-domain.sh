@@ -238,6 +238,11 @@ test_invalid "Parentheses injection" "API_DOMAIN" "https://evil.com()" "validate
 test_invalid "Angle brackets" "API_DOMAIN" "https://evil.com<script>" "validate_api_domain"
 test_invalid "JavaScript protocol" "API_DOMAIN" "javascript:alert(1)" "validate_api_domain"
 test_invalid "Data URI" "API_DOMAIN" "data:text/html,<script>alert(1)</script>" "validate_api_domain"
+# Regression: the anchored grep matches per line, so a newline satisfies it with
+# line one while the whole value reaches the CSP - where a newline is whitespace
+# between sources, i.e. the exact outcome the space check above blocks.
+test_invalid "Newline smuggles a second CSP source" "API_DOMAIN" "$(printf 'https://api.example.com\nevil.com')" "validate_api_domain"
+test_invalid "Carriage return smuggles a second CSP source" "API_DOMAIN" "$(printf 'https://api.example.com\revil.com')" "validate_api_domain"
 
 echo ""
 echo "${YELLOW}=== Testing validate_api_url() ===${NC}"
@@ -259,6 +264,9 @@ test_invalid "Semicolon injection" "API_URL" "https://evil.com; malicious: true"
 test_invalid "Parentheses injection" "API_URL" "https://evil.com()" "validate_api_url"
 test_invalid "JavaScript protocol" "API_URL" "javascript:alert(1)" "validate_api_url"
 test_invalid "Data URI" "API_URL" "data:text/html,<script>alert(1)</script>" "validate_api_url"
+# Same bypass; here the value lands in a JS string literal in config.js, where a
+# raw newline is a syntax error that breaks the whole runtime config.
+test_invalid "Newline breaks out of the config.js string literal" "API_URL" "$(printf 'https://api.example.com\nfoo')" "validate_api_url"
 
 # Test empty value behavior
 unset API_URL

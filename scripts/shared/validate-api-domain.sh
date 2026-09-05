@@ -121,10 +121,20 @@ validate_commit_date() {
 # Security: Validate API_DOMAIN to prevent CSP injection attacks
 validate_api_domain() {
     if [ -n "$API_DOMAIN" ]; then
+        # Reject control characters first - see has_control_chars(). The space
+        # check in the case statement below exists because "https://evil.com
+        # https://attacker.com" would add BOTH to the CSP; a newline reaches the
+        # same end, since CSP treats it as whitespace between sources, and the
+        # anchored grep is satisfied by the first line alone.
+        if has_control_chars "$API_DOMAIN"; then
+            echo "ERROR: API_DOMAIN contains control characters" >&2
+            echo "Newlines, tabs, and other control characters are not allowed (CSP injection risk)" >&2
+            exit 1
+        fi
         # Validate URL format: must be https:// or http:// followed by valid domain
         # Allow: https://a.com, http://localhost, https://api.example.com:8080
         # Block: javascript:, data:, spaces, quotes, semicolons (CSP injection vectors)
-        if ! echo "$API_DOMAIN" | grep -qE '^https?://[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?(/[^[:space:]]*)?$'; then
+        if ! printf '%s' "$API_DOMAIN" | grep -qE '^https?://[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?(/[^[:space:]]*)?$'; then
             echo "ERROR: Invalid API_DOMAIN format: $API_DOMAIN" >&2
             echo "API_DOMAIN must be a valid HTTP(S) URL without special characters" >&2
             echo "Example: https://api.example.com or http://localhost:3000" >&2
@@ -155,10 +165,19 @@ validate_api_domain() {
 # Security: Ensure API_URL only contains safe characters before embedding in JavaScript
 validate_api_url() {
     if [ -n "$API_URL" ]; then
+        # Reject control characters first - see has_control_chars(). This one
+        # is interpolated into a JavaScript string literal in config.js, where
+        # a raw newline is a syntax error that takes the whole runtime config
+        # down with it; the anchored grep below is satisfied by line one.
+        if has_control_chars "$API_URL"; then
+            echo "ERROR: API_URL contains control characters" >&2
+            echo "Newlines, tabs, and other control characters are not allowed (XSS injection risk)" >&2
+            exit 1
+        fi
         # Validate URL format: must be https:// or http:// followed by valid domain
         # Allow: https://a.com, http://localhost, https://api.example.com:8080
         # Block: javascript:, data:, quotes, backticks (XSS injection vectors)
-        if ! echo "$API_URL" | grep -qE '^https?://[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?(/[^[:space:]]*)?$'; then
+        if ! printf '%s' "$API_URL" | grep -qE '^https?://[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*(:[0-9]+)?(/[^[:space:]]*)?$'; then
             echo "ERROR: Invalid API_URL format: $API_URL" >&2
             echo "API_URL must be a valid HTTP(S) URL without special characters" >&2
             echo "Example: https://api.example.com or http://localhost:3000" >&2
