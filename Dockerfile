@@ -372,6 +372,16 @@ EXPOSE 3000 3001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://127.0.0.1:3000/ready && curl -f http://127.0.0.1:3001/health || exit 1
 
+# The revision this image was built from, for the same reason as the standalone
+# admin image - see the longer note in apps/admin/Dockerfile and
+# validate_git_commit() in scripts/shared/validate-api-domain.sh. This image is
+# built by hand rather than by a workflow, so pass it yourself to get a truthful
+# version string:
+#   docker build --build-arg IMAGE_GIT_COMMIT=$(git rev-parse HEAD) .
+# Omitting it leaves "unknown" and the runtime GIT_COMMIT is used, as before.
+ARG IMAGE_GIT_COMMIT=unknown
+ENV IMAGE_GIT_COMMIT=${IMAGE_GIT_COMMIT}
+
 # Use dumb-init for proper signal handling
 ENTRYPOINT ["dumb-init", "--"]
 

@@ -5,6 +5,22 @@
 # Validate GIT_COMMIT to prevent XSS injection
 # Security: Ensure GIT_COMMIT only contains safe characters before embedding in JavaScript
 validate_git_commit() {
+    # An image built by CI bakes the revision it was built from into
+    # IMAGE_GIT_COMMIT (see the ARG/ENV pair in the Dockerfiles). That is
+    # authoritative - it describes the code actually inside this image - so it
+    # wins over a runtime GIT_COMMIT, which is host configuration and has
+    # drifted in practice: production reported a three-week-old commit for
+    # weeks because `poll-deploy.sh` runs `docker compose up` without exporting
+    # GIT_COMMIT, so the container inherited whatever the last manual deploy
+    # happened to leave in the host environment (#434).
+    #
+    # Images built without the build arg leave it "unknown" and fall straight
+    # through to the previous behaviour, so local builds, the Railway path
+    # below, and any deployment that does set GIT_COMMIT are unaffected.
+    if [ -n "${IMAGE_GIT_COMMIT:-}" ] && [ "${IMAGE_GIT_COMMIT:-}" != "unknown" ]; then
+        export GIT_COMMIT="$IMAGE_GIT_COMMIT"
+    fi
+
     # Use Railway's built-in commit SHA if GIT_COMMIT not explicitly set
     if [ -z "$GIT_COMMIT" ] && [ -n "$RAILWAY_GIT_COMMIT_SHA" ]; then
         export GIT_COMMIT="$RAILWAY_GIT_COMMIT_SHA"
