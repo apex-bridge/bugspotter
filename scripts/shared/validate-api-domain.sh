@@ -2,6 +2,22 @@
 # Shared validation logic for environment variables
 # Used by both standalone admin and unified Docker deployments
 
+# True when $1 contains a C0 control character or DEL.
+#
+# Security: the anchored ^...$ checks below are applied with grep, which matches
+# per line and succeeds if ANY single line matches - while the value injected
+# into JavaScript is the whole original string. So "20260905\n'; alert(1); //"
+# (a real newline) passes an ^[0-9]{8}$ check on its first line and then breaks
+# out of the string literal. Using printf instead of echo does not help; the
+# newline has to be rejected outright. validate_storage_domain() below guards
+# the same way for the same reason.
+#
+# An octal tr range is portable across busybox/dash sh, where a [[:cntrl:]]
+# case glob is not.
+has_control_chars() {
+    [ "$1" != "$(printf '%s' "$1" | tr -d '\000-\037\177')" ]
+}
+
 # Validate GIT_COMMIT to prevent XSS injection
 # Security: Ensure GIT_COMMIT only contains safe characters before embedding in JavaScript
 validate_git_commit() {
@@ -28,10 +44,19 @@ validate_git_commit() {
     fi
 
     if [ -n "$GIT_COMMIT" ]; then
+        # Reject control characters before the per-line grep below can be
+        # fooled by a multi-line value - see has_control_chars().
+        if has_control_chars "$GIT_COMMIT"; then
+            echo "ERROR: GIT_COMMIT contains control characters" >&2
+            export GIT_COMMIT="unknown"
+            echo "WARNING: Using fallback value 'unknown' for invalid GIT_COMMIT" >&2
+            return 0
+        fi
         # Git commit hashes are hex: 7-40 chars (short or full SHA)
         # Also allow fallback values: "unknown", "dev"
         # Note: Railway provides uppercase hex in RAILWAY_GIT_COMMIT_SHA
-        if ! echo "$GIT_COMMIT" | grep -qiE '^[0-9a-f]{7,40}$|^(unknown|dev)$'; then
+        # printf, not echo: echo's option and escape handling varies by shell.
+        if ! printf '%s' "$GIT_COMMIT" | grep -qiE '^[0-9a-f]{7,40}$|^(unknown|dev)$'; then
             echo "ERROR: Invalid GIT_COMMIT format: $GIT_COMMIT" >&2
             echo "GIT_COMMIT must be a 7-40 character hex string, 'unknown', or 'dev'" >&2
             echo "Example: abc1234, 44ab08a (7 chars), or full 40-char SHA" >&2
@@ -57,17 +82,28 @@ validate_git_commit() {
 # genuinely newer. Two disagreeing "build dates" is worse than none. The commit
 # date is a property of the revision, matches `git log`, and cannot drift.
 validate_commit_date() {
-    # Set by CI as a build arg and baked into the image, exactly like
-    # IMAGE_GIT_COMMIT. There is no runtime equivalent to fall back to.
+    # Precedence mirrors validate_git_commit(): a revision baked in by CI wins,
+    # because it describes the code actually inside this image. A runtime
+    # COMMIT_DATE is still honoured when the image bakes nothing (an unbaked or
+    # locally-built image), and is the only source in that case.
     if [ -n "${IMAGE_COMMIT_DATE:-}" ] && [ "${IMAGE_COMMIT_DATE:-}" != "unknown" ]; then
         export COMMIT_DATE="$IMAGE_COMMIT_DATE"
     fi
 
     if [ -n "${COMMIT_DATE:-}" ]; then
+        # Reject control characters before the per-line grep below can be
+        # fooled by a multi-line value - see has_control_chars().
+        if has_control_chars "$COMMIT_DATE"; then
+            echo "ERROR: COMMIT_DATE contains control characters" >&2
+            export COMMIT_DATE="unknown"
+            echo "WARNING: Using fallback value 'unknown' for invalid COMMIT_DATE" >&2
+            return 0
+        fi
         # Exactly 8 digits, or the "unknown" fallback. Deliberately not a
         # calendar check - the point is that nothing but digits can reach the
         # JavaScript, not that 20261345 is a real day.
-        if ! echo "$COMMIT_DATE" | grep -qE '^[0-9]{8}$|^unknown$'; then
+        # printf, not echo: echo's option and escape handling varies by shell.
+        if ! printf '%s' "$COMMIT_DATE" | grep -qE '^[0-9]{8}$|^unknown$'; then
             echo "ERROR: Invalid COMMIT_DATE format: $COMMIT_DATE" >&2
             echo "COMMIT_DATE must be 8 digits (YYYYMMDD) or 'unknown'" >&2
             export COMMIT_DATE="unknown"

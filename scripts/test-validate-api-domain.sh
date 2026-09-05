@@ -107,6 +107,20 @@ else
 fi
 unset GIT_COMMIT RAILWAY_GIT_COMMIT_SHA
 
+# Regression: the anchored grep matches per line, so a value whose FIRST line is
+# a valid SHA used to validate while the whole string - quote and all - was what
+# got injected into config.js. Pre-existed the COMMIT_DATE work; same surface.
+export GIT_COMMIT="$(printf 'abc1234\n%s' "'; alert(1); //")"
+validate_git_commit > /dev/null 2>&1
+if [ "$GIT_COMMIT" = "unknown" ]; then
+    echo "${GREEN}✓${NC} PASS: Newline cannot smuggle a valid first line past GIT_COMMIT validation"
+    PASSED=$((PASSED + 1))
+else
+    echo "${RED}✗${NC} FAIL: Multi-line GIT_COMMIT passed validation"
+    FAILED=$((FAILED + 1))
+fi
+unset GIT_COMMIT
+
 # IMAGE_GIT_COMMIT precedence (#434). The baked value describes the code in the
 # image; the runtime GIT_COMMIT is host configuration that has gone stale.
 # Helper: run validate_git_commit with a given (baked, runtime) pair and
@@ -196,6 +210,13 @@ test_commit_date "Quote-escape attempt falls back to unknown" "'; alert(1); //" 
 test_commit_date "Non-numeric value falls back to unknown" "2026-09-05" "" "unknown"
 test_commit_date "Too-short value falls back to unknown" "2026905" "" "unknown"
 test_commit_date "Too-long value falls back to unknown" "202609051" "" "unknown"
+# Regression: a real newline used to sneak a matching first line past the
+# anchored grep (grep -q succeeds if ANY line matches) while the whole
+# original value - quote and all - is what gets injected into config.js.
+test_commit_date "Embedded newline cannot smuggle a matching first line" \
+    "$(printf '20260905\n%s' "'; alert(1); //")" "" "unknown"
+test_commit_date "Embedded carriage return is rejected too" \
+    "$(printf '20260905\r%s' "'; alert(1); //")" "" "unknown"
 
 echo ""
 echo "${YELLOW}=== Testing validate_api_domain() ===${NC}"
