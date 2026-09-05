@@ -164,6 +164,40 @@ fi
 unset GIT_COMMIT IMAGE_GIT_COMMIT RAILWAY_GIT_COMMIT_SHA
 
 echo ""
+echo "${YELLOW}=== Testing validate_commit_date() ===${NC}"
+
+test_commit_date() {
+    test_name="$1"
+    baked="$2"
+    runtime="$3"
+    expected="$4"
+
+    unset COMMIT_DATE IMAGE_COMMIT_DATE
+    [ -n "$baked" ] && export IMAGE_COMMIT_DATE="$baked"
+    [ -n "$runtime" ] && export COMMIT_DATE="$runtime"
+
+    validate_commit_date > /dev/null 2>&1
+    if [ "$COMMIT_DATE" = "$expected" ]; then
+        echo "${GREEN}✓${NC} PASS: $test_name"
+        PASSED=$((PASSED + 1))
+    else
+        echo "${RED}✗${NC} FAIL: $test_name (expected '$expected', got '$COMMIT_DATE')"
+        FAILED=$((FAILED + 1))
+    fi
+    unset COMMIT_DATE IMAGE_COMMIT_DATE
+}
+
+test_commit_date "Baked YYYYMMDD is used" "20260905" "" "20260905"
+test_commit_date "Baked value beats a runtime COMMIT_DATE" "20260905" "20260101" "20260905"
+test_commit_date "Unbaked image falls back to runtime COMMIT_DATE" "unknown" "20260101" "20260101"
+test_commit_date "Nothing set falls back to unknown" "" "" "unknown"
+# Same injection surface as GIT_COMMIT - this lands inside a JS string literal.
+test_commit_date "Quote-escape attempt falls back to unknown" "'; alert(1); //" "" "unknown"
+test_commit_date "Non-numeric value falls back to unknown" "2026-09-05" "" "unknown"
+test_commit_date "Too-short value falls back to unknown" "2026905" "" "unknown"
+test_commit_date "Too-long value falls back to unknown" "202609051" "" "unknown"
+
+echo ""
 echo "${YELLOW}=== Testing validate_api_domain() ===${NC}"
 
 # Valid API_DOMAIN URLs

@@ -47,6 +47,40 @@ validate_git_commit() {
     fi
 }
 
+# Validate COMMIT_DATE (YYYYMMDD) to prevent XSS injection
+# Security: same rules as GIT_COMMIT - this is embedded in JavaScript, so an
+# unvalidated value could break out of the string literal.
+#
+# This is the *commit* date, not a build clock. The distinction is load-bearing:
+# a build that changes no frontend source reuses the cached Vite layer, so the
+# bundle keeps the date it was originally compiled on while the image is
+# genuinely newer. Two disagreeing "build dates" is worse than none. The commit
+# date is a property of the revision, matches `git log`, and cannot drift.
+validate_commit_date() {
+    # Set by CI as a build arg and baked into the image, exactly like
+    # IMAGE_GIT_COMMIT. There is no runtime equivalent to fall back to.
+    if [ -n "${IMAGE_COMMIT_DATE:-}" ] && [ "${IMAGE_COMMIT_DATE:-}" != "unknown" ]; then
+        export COMMIT_DATE="$IMAGE_COMMIT_DATE"
+    fi
+
+    if [ -n "${COMMIT_DATE:-}" ]; then
+        # Exactly 8 digits, or the "unknown" fallback. Deliberately not a
+        # calendar check - the point is that nothing but digits can reach the
+        # JavaScript, not that 20261345 is a real day.
+        if ! echo "$COMMIT_DATE" | grep -qE '^[0-9]{8}$|^unknown$'; then
+            echo "ERROR: Invalid COMMIT_DATE format: $COMMIT_DATE" >&2
+            echo "COMMIT_DATE must be 8 digits (YYYYMMDD) or 'unknown'" >&2
+            export COMMIT_DATE="unknown"
+            echo "WARNING: Using fallback value 'unknown' for invalid COMMIT_DATE" >&2
+            return 0
+        fi
+        echo "COMMIT_DATE validated: $COMMIT_DATE"
+    else
+        export COMMIT_DATE="unknown"
+        echo "COMMIT_DATE not set - using 'unknown'"
+    fi
+}
+
 # Validate and prepare API_DOMAIN for CSP formatting
 # Security: Validate API_DOMAIN to prevent CSP injection attacks
 validate_api_domain() {

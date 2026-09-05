@@ -130,5 +130,12 @@ EXPOSE 80
 ARG IMAGE_GIT_COMMIT=unknown
 ENV IMAGE_GIT_COMMIT=${IMAGE_GIT_COMMIT}
 
+# The date of that commit (YYYYMMDD, UTC), so the version string says when as
+# well as what. Deliberately the commit's own date and not a build clock: a
+# build touching no frontend source reuses the cached Vite layer, so a
+# build-time date would disagree with the bundle's own baked VITE_BUILD_DATE.
+ARG IMAGE_COMMIT_DATE=unknown
+ENV IMAGE_COMMIT_DATE=${IMAGE_COMMIT_DATE}
+
 # Use custom entrypoint that processes template
 ENTRYPOINT ["/docker-entrypoint.sh"]

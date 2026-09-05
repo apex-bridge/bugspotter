@@ -101,6 +101,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # The commit's own date, not the runner's clock: a build that changes no
+      # frontend source reuses the cached Vite layer, so a build-time date would
+      # contradict the bundle's baked VITE_BUILD_DATE. HEAD is present even at
+      # the default fetch-depth of 1.
+      - name: Resolve commit date
+        id: commit_date
+        run: echo "date=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -135,6 +143,7 @@ jobs:
           # to have exported at `docker compose up` time (#434).
           build-args: |
             IMAGE_GIT_COMMIT=${{ github.sha }}
+            IMAGE_COMMIT_DATE=${{ steps.commit_date.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Note: VITE_API_URL is intentionally not set here
