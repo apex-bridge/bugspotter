@@ -36,6 +36,8 @@ export default defineConfig({
       'tests/api/auth-handlers.test.ts',
       // OIDC login-initiation route (#367) — mocked container/cache/openid-client, no DB.
       'tests/api/auth-oidc.test.ts',
+      // SSO config CRUD routes (#438) - guard and SSRF validator mocked, no DB.
+      'tests/api/organization-sso.test.ts',
       'tests/api/trust-proxy.test.ts',
       'tests/api/analytics-routes.test.ts',
       'tests/api/media-urls.test.ts',
@@ -46,6 +48,8 @@ export default defineConfig({
       'tests/analytics/analytics-auth.test.ts',
       // Only include pure unit tests from middleware (no database/server)
       'tests/api/middleware/authorization.test.ts',
+      // Audit body redaction (#438) - pure function, no DB.
+      'tests/api/middleware/audit-sanitize.test.ts',
       'tests/api/middleware/require-project-role.test.ts',
       'tests/api/routes/rbac-enforcement.test.ts',
       'tests/api/routes/permissions.test.ts',

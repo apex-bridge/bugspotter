@@ -228,6 +228,10 @@ export const API_ENDPOINTS = {
     get: (id: string) => `${API_VERSION}/organizations/${id}`,
     update: (id: string) => `${API_VERSION}/organizations/${id}`,
     quota: (id: string) => `${API_VERSION}/organizations/${id}/quota`,
+    // OIDC IdP config, GET + PUT (#438). Spec 0407 deferred promoting this out
+    // of sso-service.ts until the backend route was confirmed to exist; it now
+    // does, so the path lives here with every other endpoint.
+    sso: (id: string) => `${API_VERSION}/organizations/${id}/sso`,
     subscription: (id: string) => `${API_VERSION}/organizations/${id}/subscription`,
     members: (id: string) => `${API_VERSION}/organizations/${id}/members`,
     removeMember: (id: string, userId: string) =>

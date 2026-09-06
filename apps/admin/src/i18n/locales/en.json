@@ -2024,12 +2024,13 @@
         "createApp": "In your identity provider, create a new OIDC application (also called a client or app registration) for BugSpotter.",
         "registerRedirect": "Register the redirect URI below with that application. It must match exactly, including the organization id.",
         "copyCredentials": "Copy the provider's issuer URL, client ID and client secret into the form below. The issuer URL is the base the provider publishes its discovery document under, not the discovery URL itself.",
-        "allowedDomains": "Set the allowed domains to the email domains you trust the provider to vouch for. Leaving this empty accepts any domain the provider asserts.",
+        "allowedDomains": "List the email domains the provider may vouch for. At least one is required: the check runs on every login, and a configuration with no domains rejects every sign-in.",
         "verifyLogin": "Save, then sign in through \"Sign in with SSO\" in a private window to confirm the whole round trip works.",
         "enforce": "Only once that succeeds, turn on \"Require SSO\"."
       },
       "redirectUriLabel": "Redirect URI to register",
       "redirectUriHint": "Append this path to your BugSpotter API base URL, for example https://api.example.com",
+      "redirectUriExact": "Register this exact value with your identity provider. It must match character for character.",
       "lockoutWarning": "\"Require SSO\" disables password login for everyone in this organization. If the provider is misconfigured when you enable it, no member can sign in - including you. Always confirm a real SSO login works first.",
       "providers": "Works with any OpenID Connect provider, including Keycloak, Microsoft Entra ID, Okta and Google Workspace."
     }

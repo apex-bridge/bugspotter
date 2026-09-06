@@ -107,8 +107,19 @@ function extractResourceId(request: FastifyRequest): string | null {
 /**
  * Sanitize request data for audit logging
  * Recursively remove sensitive fields like passwords, tokens, and keys
+ *
+ * Exported for tests: this is the only thing standing between a credential in
+ * a request body and a durable row in `audit_logs`, so it is worth asserting
+ * on directly rather than through the middleware's DB path.
+ *
+ * Returns an array when handed one. `typeof [] === 'object'`, so a top-level
+ * array body has always passed the guard below and come back as an array;
+ * the old `Record<string, unknown>` signature simply lied about it via a cast.
+ * Sanitizing arrays is the correct behaviour - a JSON array body can carry
+ * credentials in its elements - so the type is widened to match rather than the
+ * input rejected.
  */
-function sanitizeData(data: unknown): Record<string, unknown> | null {
+export function sanitizeData(data: unknown): Record<string, unknown> | unknown[] | null {
   if (!data || typeof data !== 'object') {
     return null;
   }
@@ -129,6 +140,37 @@ function sanitizeData(data: unknown): Record<string, unknown> | null {
     'bearer',
   ];
 
+  // Exact-name matching above is fragile: it already needed both `api_key` and
+  // `apikey` spelled out, and a field named `clientSecret` (the OIDC IdP
+  // credential, PUT /organizations/:id/sso) lowercases to `clientsecret`, which
+  // matches none of them - so the plaintext secret would land in
+  // `audit_logs.details.body`, readable through /api/v1/audit-logs.
+  //
+  // These two substrings are matched instead of enumerated because no field
+  // whose name contains them should ever be written to an audit record,
+  // whatever the casing or word order.
+  const sensitiveSubstrings = ['secret', 'password'];
+
+  // `token` gets a suffix rule rather than a substring one. The enumerated list
+  // above covers only snake_case (`access_token`, `refresh_token`, ...), so the
+  // camelCase spellings that arrive from clients - `accessToken`,
+  // `refreshToken`, `authToken` - fell through exactly as `clientSecret` did.
+  // That is not theoretical: `integrations.ts` accepts
+  // `credentials: Record<string, unknown>`, arbitrary client-named keys that
+  // reach this function on their way into audit_logs.
+  //
+  // A plain substring match would also swallow `tokenCount`, `maxTokens` and
+  // `tokenLimit`, which are legitimate audit detail. Ending with `token` is the
+  // discriminating rule: credentials are named `<kind>Token`, counters are not.
+  function isSensitiveKey(key: string): boolean {
+    const lower = key.toLowerCase();
+    return (
+      sensitiveFields.includes(lower) ||
+      sensitiveSubstrings.some((fragment) => lower.includes(fragment)) ||
+      lower.endsWith('token')
+    );
+  }
+
   /**
    * Recursively sanitize an object or array
    */
@@ -146,7 +188,7 @@ function sanitizeData(data: unknown): Record<string, unknown> | null {
     const sanitized: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
       // Check if field name is sensitive
-      if (sensitiveFields.includes(key.toLowerCase())) {
+      if (isSensitiveKey(key)) {
         sanitized[key] = '[REDACTED]';
       } else if (value && typeof value === 'object') {
         // Recursively sanitize nested objects/arrays
@@ -158,7 +200,7 @@ function sanitizeData(data: unknown): Record<string, unknown> | null {
     return sanitized;
   }
 
-  return sanitizeRecursive(data) as Record<string, unknown>;
+  return sanitizeRecursive(data) as Record<string, unknown> | unknown[];
 }
 
 /**
