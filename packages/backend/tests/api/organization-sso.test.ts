@@ -70,7 +70,12 @@ async function buildServer() {
   upsert = vi.fn().mockImplementation(async (input) => ({ ...storedConfig, ...input }));
 
   const db = { oidcIdpConfigs: { findByTenantId, upsert } };
-  const app = Fastify();
+  // Must mirror server.ts's ajv options, not Fastify's defaults. The real
+  // server sets `removeAdditional: false` deliberately ("Default (true)
+  // silently strips extra properties, which can mask injection attempts"), so
+  // a bare `Fastify()` here would validate bodies under different rules than
+  // production and quietly assert the wrong behaviour for unknown fields.
+  const app = Fastify({ ajv: { customOptions: { removeAdditional: false } } });
   organizationSsoRoutes(app, db as never);
   await app.ready();
   return app;
@@ -261,15 +266,15 @@ describe('PUT /api/v1/organizations/:id/sso', () => {
     expect(res.json().data.hasClientSecret).toBe(true);
   });
 
-  it('strips unknown fields before anything can persist them', async () => {
-    // `additionalProperties: false` plus Fastify's default ajv
-    // `removeAdditional` deletes the key during validation rather than
-    // returning 400 - so it is gone from `request.body` by the time the global
-    // audit hook writes that body into audit_logs.details.
+  it('rejects unknown fields outright rather than silently dropping them', async () => {
+    // `additionalProperties: false` plus the server's `removeAdditional: false`
+    // means ajv fails the request instead of quietly deleting the key. The
+    // request never reaches the guard, the handler, or the audit hook that
+    // would otherwise persist the body into audit_logs.details.
     const res = await put({ ...validBody, sneaky: 'value' });
 
-    expect(res.statusCode).toBe(200);
-    expect(bodiesSeenByGuard).toHaveLength(1);
-    expect(bodiesSeenByGuard[0]).not.toHaveProperty('sneaky');
+    expect(res.statusCode).toBe(400);
+    expect(bodiesSeenByGuard).toHaveLength(0);
+    expect(upsert).not.toHaveBeenCalled();
   });
 });
