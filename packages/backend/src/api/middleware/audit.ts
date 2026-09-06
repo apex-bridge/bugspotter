@@ -111,8 +111,15 @@ function extractResourceId(request: FastifyRequest): string | null {
  * Exported for tests: this is the only thing standing between a credential in
  * a request body and a durable row in `audit_logs`, so it is worth asserting
  * on directly rather than through the middleware's DB path.
+ *
+ * Returns an array when handed one. `typeof [] === 'object'`, so a top-level
+ * array body has always passed the guard below and come back as an array;
+ * the old `Record<string, unknown>` signature simply lied about it via a cast.
+ * Sanitizing arrays is the correct behaviour - a JSON array body can carry
+ * credentials in its elements - so the type is widened to match rather than the
+ * input rejected.
  */
-export function sanitizeData(data: unknown): Record<string, unknown> | null {
+export function sanitizeData(data: unknown): Record<string, unknown> | unknown[] | null {
   if (!data || typeof data !== 'object') {
     return null;
   }
@@ -193,7 +200,7 @@ export function sanitizeData(data: unknown): Record<string, unknown> | null {
     return sanitized;
   }
 
-  return sanitizeRecursive(data) as Record<string, unknown>;
+  return sanitizeRecursive(data) as Record<string, unknown> | unknown[];
 }
 
 /**

@@ -82,6 +82,23 @@ function resolveRedirectUri(tenantId: string): string | null {
   return base ? `${base}/api/v1/auth/oidc/${tenantId}/callback` : null;
 }
 
+/**
+ * Trim, lowercase and de-duplicate the domain list before it is stored.
+ *
+ * The callback compares `domain.toLowerCase() === emailDomain` with no trim, so
+ * a stored `"example.com "` matches nothing and rejects every login - saved
+ * happily, broken silently, and indistinguishable from a misconfigured IdP.
+ * Lowercasing here too means what is stored is what is compared, rather than
+ * relying on the callback to keep normalizing.
+ *
+ * The admin UI already trims, but the API is the contract: a direct caller, or
+ * any future client, gets the same guarantee.
+ */
+function normalizeAllowedDomains(domains: string[]): string[] {
+  const normalized = domains.map((domain) => domain.trim().toLowerCase()).filter(Boolean);
+  return [...new Set(normalized)];
+}
+
 /** Read shape. Never includes the secret itself - only whether one is stored. */
 function toResponse(tenantId: string, stored: OidcIdpConfig | null) {
   return {
@@ -139,9 +156,19 @@ export function organizationSsoRoutes(fastify: FastifyInstance, db: DatabaseClie
 
       // The issuer is fetched server-side at every login (Issuer.discover), so
       // a tenant admin - a lower-trust actor than an operator - controls an
-      // outbound request target. Same validator the discovery path applies,
-      // run here so a bad value is rejected at save time instead of becoming a
-      // login-time failure nobody can trace back to this form.
+      // outbound request target. Reject the obvious cases at save time rather
+      // than leaving them as a login-time failure nobody can trace back to this
+      // form.
+      //
+      // This is the string-level check only: it blocks literal private and
+      // link-local addresses, alternative IPv4 encodings and non-http(s)
+      // schemes. It does NOT resolve DNS, so a public hostname pointing at a
+      // private address still passes here. That is deliberate - the real
+      // control is at login, where `pinHostnameToIp` resolves once and
+      // `assertResolvedIpAllowed` checks the actual IP the request will reach.
+      // Resolving here as well would only be advisory (DNS can change between
+      // save and login) while adding latency and a transient-failure mode to
+      // saving a form.
       let parsedIssuer: URL;
       try {
         parsedIssuer = validateSSRFProtection(issuerUrl);
@@ -156,13 +183,27 @@ export function organizationSsoRoutes(fastify: FastifyInstance, db: DatabaseClie
         throw new AppError('Issuer URL must use https', 400, 'ValidationError');
       }
 
-      const existing = await db.oidcIdpConfigs.findByTenantId(id);
+      // `minItems: 1` on the schema rejects a literally empty list, but not one
+      // that becomes empty here (e.g. [" "]). Both end up storing a config that
+      // rejects every login, so both are refused.
+      const normalizedDomains = normalizeAllowedDomains(allowedDomains);
+      if (normalizedDomains.length === 0) {
+        throw new AppError(
+          'allowedDomains must contain at least one non-blank domain',
+          400,
+          'ValidationError'
+        );
+      }
 
-      // Omitted secret means "keep the stored one" - the admin UI omits the key
-      // rather than sending '' precisely so this branch is reachable. There is
-      // nothing to keep on first configuration, so require it then.
-      const effectiveSecret = clientSecret ?? existing?.clientSecret;
+      // Only read the stored config when the secret was omitted and we need to
+      // carry it forward - on the common "update including the secret" path
+      // this query would be pure overhead.
+      const effectiveSecret =
+        clientSecret ?? (await db.oidcIdpConfigs.findByTenantId(id))?.clientSecret;
       if (!effectiveSecret) {
+        // Omitted secret means "keep the stored one" - the admin UI omits the
+        // key rather than sending '' precisely so that path is reachable. There
+        // is nothing to keep on first configuration, so require it then.
         throw new AppError(
           'clientSecret is required when configuring SSO for the first time',
           400,
@@ -175,7 +216,7 @@ export function organizationSsoRoutes(fastify: FastifyInstance, db: DatabaseClie
         issuerUrl,
         clientId,
         clientSecret: effectiveSecret,
-        allowedDomains,
+        allowedDomains: normalizedDomains,
         enforceSso,
       });
 

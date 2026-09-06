@@ -107,4 +107,15 @@ describe('sanitizeData', () => {
     expect(sanitizeData(null)).toBeNull();
     expect(sanitizeData('a string')).toBeNull();
   });
+
+  it('sanitizes a top-level array body and returns it as an array', () => {
+    // `typeof [] === 'object'`, so an array body has always reached the
+    // recursive walk; the old signature just claimed otherwise via a cast.
+    // A JSON array body can carry credentials in its elements, so sanitizing
+    // it is the point - the type now says what it does.
+    const result = sanitizeData([{ clientSecret: 'a' }, { accessToken: 'b' }]);
+
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toEqual([{ clientSecret: '[REDACTED]' }, { accessToken: '[REDACTED]' }]);
+  });
 });

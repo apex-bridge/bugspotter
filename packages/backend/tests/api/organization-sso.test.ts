@@ -239,6 +239,38 @@ describe('PUT /api/v1/organizations/:id/sso', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  it('normalizes domains before storing them', async () => {
+    // The callback compares `domain.toLowerCase() === emailDomain` with no
+    // trim, so a stored "example.com " matches nothing and rejects every login
+    // while looking saved. Duplicates that differ only by case collapse too.
+    const res = await put({
+      ...validBody,
+      allowedDomains: ['  Example.COM  ', 'example.com', 'Other.Example.com'],
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedDomains: ['example.com', 'other.example.com'] })
+    );
+  });
+
+  it('refuses a domain list that is only blanks', async () => {
+    // `minItems: 1` sees one element and passes; it is empty by the time it
+    // would be stored, which is the same dead config by another route.
+    const res = await put({ ...validBody, allowedDomains: ['   '] });
+
+    expect(res.statusCode).toBe(400);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('skips the config read when the secret is supplied', async () => {
+    // Only needed to carry forward an omitted secret; on this path it is
+    // avoidable load on every save.
+    await put(validBody);
+
+    expect(findByTenantId).not.toHaveBeenCalled();
+  });
+
   it('rejects a non-https issuer', async () => {
     const res = await put({ ...validBody, issuerUrl: 'http://idp.example.com' });
 
