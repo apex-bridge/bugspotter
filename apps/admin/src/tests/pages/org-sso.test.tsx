@@ -43,7 +43,9 @@ describe('OrgSsoPage', () => {
     // query from firing for a non-admin. See the "does not render" test
     // below and the comment on the page component.
     expect(useSsoConfig).toHaveBeenCalledWith();
-    expect(screen.getByRole('heading', { name: /sso/i })).toBeInTheDocument();
+    // `level: 1` since #439: the setup-instructions panel adds its own h2 that
+    // also matches /sso/i, and an unqualified heading query is ambiguous.
+    expect(screen.getByRole('heading', { name: /sso/i, level: 1 })).toBeInTheDocument();
     expect(screen.getByLabelText(/issuer url/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/client id/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument();
