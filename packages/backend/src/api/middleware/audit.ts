@@ -141,16 +141,26 @@ export function sanitizeData(data: unknown): Record<string, unknown> | null {
   //
   // These two substrings are matched instead of enumerated because no field
   // whose name contains them should ever be written to an audit record,
-  // whatever the casing or word order. Deliberately not extended to `token`:
-  // legitimate non-secret fields (token counts, limits) contain it, and
-  // over-redacting those would silently gut audit detail.
+  // whatever the casing or word order.
   const sensitiveSubstrings = ['secret', 'password'];
 
+  // `token` gets a suffix rule rather than a substring one. The enumerated list
+  // above covers only snake_case (`access_token`, `refresh_token`, ...), so the
+  // camelCase spellings that arrive from clients - `accessToken`,
+  // `refreshToken`, `authToken` - fell through exactly as `clientSecret` did.
+  // That is not theoretical: `integrations.ts` accepts
+  // `credentials: Record<string, unknown>`, arbitrary client-named keys that
+  // reach this function on their way into audit_logs.
+  //
+  // A plain substring match would also swallow `tokenCount`, `maxTokens` and
+  // `tokenLimit`, which are legitimate audit detail. Ending with `token` is the
+  // discriminating rule: credentials are named `<kind>Token`, counters are not.
   function isSensitiveKey(key: string): boolean {
     const lower = key.toLowerCase();
     return (
       sensitiveFields.includes(lower) ||
-      sensitiveSubstrings.some((fragment) => lower.includes(fragment))
+      sensitiveSubstrings.some((fragment) => lower.includes(fragment)) ||
+      lower.endsWith('token')
     );
   }
 

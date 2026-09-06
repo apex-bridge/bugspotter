@@ -47,12 +47,42 @@ describe('sanitizeData', () => {
     expect(JSON.stringify(result)).not.toContain('in-an-array');
   });
 
-  it('leaves token-count style fields alone', () => {
-    // `token` stays an exact match precisely so these survive - over-redacting
-    // them would gut audit detail to no security benefit.
-    const result = sanitizeData({ tokenCount: 1234, maxTokens: 8000 });
+  it('redacts camelCase credential fields, not just the snake_case spellings', () => {
+    // The enumerated list only ever held snake_case, so these fell through the
+    // same way `clientSecret` did. `integrations.ts` accepts
+    // `credentials: Record<string, unknown>` - arbitrary client-named keys -
+    // so the camelCase spellings genuinely reach the audit log.
+    const result = sanitizeData({
+      accessToken: 'a',
+      refreshToken: 'r',
+      authToken: 'au',
+      sessionToken: 's',
+      resetToken: 're',
+      bearerToken: 'b',
+    });
 
-    expect(result).toEqual({ tokenCount: 1234, maxTokens: 8000 });
+    for (const [key, value] of Object.entries(result ?? {})) {
+      expect(value, `${key} must be redacted`).toBe('[REDACTED]');
+    }
+  });
+
+  it('leaves token-count style fields alone', () => {
+    // The rule is "ends with token", not "contains token", precisely so these
+    // survive - over-redacting them would gut audit detail to no security
+    // benefit. `maxTokens` is plural and so does not match either.
+    const result = sanitizeData({
+      tokenCount: 1234,
+      maxTokens: 8000,
+      tokenLimit: 32,
+      tokensUsed: 7,
+    });
+
+    expect(result).toEqual({
+      tokenCount: 1234,
+      maxTokens: 8000,
+      tokenLimit: 32,
+      tokensUsed: 7,
+    });
   });
 
   it('leaves ordinary SSO config fields readable', () => {
