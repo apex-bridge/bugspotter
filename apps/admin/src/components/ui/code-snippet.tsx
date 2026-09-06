@@ -17,6 +17,16 @@ export interface CodeSnippetProps {
   className?: string;
   /** Test hook for the inner `<pre>`. */
   testId?: string;
+  /**
+   * Wrap long lines instead of scrolling them horizontally.
+   *
+   * Off by default, because code and CLI snippets read better unwrapped. Turn
+   * it on for a single long value the reader has to verify by eye: while
+   * scrolled, content passes underneath the copy button (which is absolutely
+   * positioned and only 90% opaque), so part of the value is unreadable
+   * exactly when it matters most.
+   */
+  wrap?: boolean;
 }
 
 /**
@@ -32,6 +42,7 @@ export function CodeSnippet({
   copiedToast,
   className,
   testId,
+  wrap = false,
 }: CodeSnippetProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -72,9 +83,14 @@ export function CodeSnippet({
       <pre
         data-testid={testId}
         data-language={language}
-        // `pr-16` keeps long lines from scrolling under the
-        // absolutely-positioned copy button in the top-right.
-        className="overflow-x-auto p-4 pr-16 text-xs font-mono leading-relaxed whitespace-pre"
+        // `pr-16` keeps long lines clear of the absolutely-positioned copy
+        // button in the top-right. That is only sufficient while wrapping:
+        // in the scrolling variant, mid-scroll content still passes under the
+        // button, which is why `wrap` exists.
+        className={cn(
+          'p-4 pr-16 text-xs font-mono leading-relaxed',
+          wrap ? 'whitespace-pre-wrap break-all' : 'overflow-x-auto whitespace-pre'
+        )}
       >
         <code>{code}</code>
       </pre>

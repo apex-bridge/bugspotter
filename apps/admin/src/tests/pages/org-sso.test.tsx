@@ -221,4 +221,37 @@ describe('OrgSsoPage', () => {
     // reverting the edit as it's typed.
     expect(issuerInput).toHaveValue('https://changed.example.com');
   });
+
+  it('surfaces the lockout warning at the switch once Require SSO is ticked', async () => {
+    // The full warning lives in the instructions panel, which on wide screens
+    // is a different column and on narrow ones a long scroll away. The
+    // operative half has to be where the switch is.
+    const user = userEvent.setup();
+    vi.mocked(usePermissions).mockReturnValue({
+      isSystemAdmin: false,
+      orgRole: 'admin',
+      isLoading: false,
+    } as ReturnType<typeof usePermissions>);
+    vi.mocked(useSsoConfig).mockReturnValue({
+      config: undefined,
+      isLoading: false,
+      error: null,
+      updateConfig: vi.fn(),
+      isSaving: false,
+    } as ReturnType<typeof useSsoConfig>);
+
+    render(<OrgSsoPage />);
+
+    // Matched on the hint's own opening clause: the panel warning below
+    // shares the "disables password login for everyone" phrasing, so the
+    // obvious regex matches both and never fails.
+    const toggle = screen.getByLabelText(/require sso/i);
+    expect(
+      screen.queryByText(/confirm a real sso login works before saving/i)
+    ).not.toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(screen.getByText(/confirm a real sso login works before saving/i)).toBeInTheDocument();
+  });
 });
