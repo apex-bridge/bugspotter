@@ -2024,7 +2024,7 @@
         "createApp": "In your identity provider, create a new OIDC application (also called a client or app registration) for BugSpotter.",
         "registerRedirect": "Register the redirect URI below with that application. It must match exactly, including the organization id.",
         "copyCredentials": "Copy the provider's issuer URL, client ID and client secret into the form below. The issuer URL is the base the provider publishes its discovery document under, not the discovery URL itself.",
-        "allowedDomains": "Set the allowed domains to the email domains you trust the provider to vouch for. Leaving this empty accepts any domain the provider asserts.",
+        "allowedDomains": "List the email domains the provider may vouch for. At least one is required: the check runs on every login, and a configuration with no domains rejects every sign-in.",
         "verifyLogin": "Save, then sign in through \"Sign in with SSO\" in a private window to confirm the whole round trip works.",
         "enforce": "Only once that succeeds, turn on \"Require SSO\"."
       },

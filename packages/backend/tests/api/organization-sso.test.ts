@@ -223,6 +223,17 @@ describe('PUT /api/v1/organizations/:id/sso', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  it('refuses to persist an empty allowedDomains list', async () => {
+    // ADR-0044 decision 2 makes the domain check fail closed: the callback
+    // rejects every login when the list is empty. Saving one would store a
+    // config that can never authenticate anyone, and turning on enforceSso
+    // alongside it locks the whole org out - the #408 shape.
+    const res = await put({ ...validBody, allowedDomains: [] });
+
+    expect(res.statusCode).toBe(400);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it('rejects a non-https issuer', async () => {
     const res = await put({ ...validBody, issuerUrl: 'http://idp.example.com' });
 

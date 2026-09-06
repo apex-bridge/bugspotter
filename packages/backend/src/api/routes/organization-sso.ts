@@ -50,6 +50,13 @@ const updateSsoBody = {
     allowedDomains: {
       type: 'array',
       items: { type: 'string', minLength: 1, maxLength: 253 },
+      // At least one, because ADR-0044 decision 2 makes this fail closed: the
+      // callback rejects every login when the list is empty, deliberately,
+      // rather than permitting any domain by default. Persisting an empty list
+      // would therefore store a configuration that can never authenticate
+      // anyone - and with enforceSso on, that is an org-wide lockout of exactly
+      // the shape #408 already shipped once.
+      minItems: 1,
       maxItems: 100,
     },
     enforceSso: { type: 'boolean' },
