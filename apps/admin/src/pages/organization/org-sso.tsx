@@ -4,7 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { KeyRound, Save, AlertCircle } from 'lucide-react';
 import { usePermissions } from '../../hooks/use-permissions';
 import { useSsoConfig } from '../../hooks/use-sso-config';
+import { useOrganization } from '../../contexts/organization-context';
 import { canManageSso } from '../../lib/sso-permissions';
+import { SsoSetupInstructions } from '../../components/organization/sso-setup-instructions';
 
 interface SsoFormValues {
   issuerUrl: string;
@@ -50,6 +52,9 @@ export default function OrgSsoPage() {
 function OrgSsoForm() {
   const { t } = useTranslation();
   const { config, isLoading, error, updateConfig } = useSsoConfig();
+  // Only for the callback path shown in the instructions - the form itself is
+  // org-scoped through useSsoConfig().
+  const { currentOrganization } = useOrganization();
 
   const [formValues, setFormValues] = useState<SsoFormValues>(DEFAULT_FORM_VALUES);
   const [clientSecretInput, setClientSecretInput] = useState('');
@@ -115,6 +120,11 @@ function OrgSsoForm() {
         </h1>
         <p className="mt-1 text-sm text-gray-500">{t('sso.description')}</p>
       </div>
+
+      {/* Outside the isLoading branch on purpose: the guidance is static, and
+          someone landing on a page whose config query is still loading - or
+          failing - still needs to know what the fields mean. */}
+      <SsoSetupInstructions organizationId={currentOrganization?.id} />
 
       {isLoading ? (
         <div className="text-center py-12 text-gray-500">{t('common.loading')}</div>
