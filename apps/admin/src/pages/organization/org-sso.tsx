@@ -121,136 +121,156 @@ function OrgSsoForm() {
         <p className="mt-1 text-sm text-gray-500">{t('sso.description')}</p>
       </div>
 
-      {/* Outside the isLoading branch on purpose: the guidance is static, and
-          someone landing on a page whose config query is still loading - or
-          failing - still needs to know what the fields mean. */}
-      <SsoSetupInstructions
-        organizationId={currentOrganization?.id}
-        redirectUri={config?.redirectUri}
-      />
+      {/* Side by side once there is room: the form is the task and the
+          guidance is reference, so stacking them put the first input roughly a
+          screen down. Below `lg` they stack in the original order. */}
+      <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+        {/* Rendered outside the isLoading branch on purpose: the guidance is
+            static, and someone landing on a page whose config query is still
+            loading - or failing - still needs to know what the fields mean.
+            Second in source order so the form comes first for keyboard and
+            screen-reader users, but placed left on wide screens. */}
+        {isLoading ? (
+          <div className="text-center py-12 text-gray-500 lg:order-2">{t('common.loading')}</div>
+        ) : (
+          <form className="space-y-4 lg:order-2" onSubmit={handleSubmit}>
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-red-600" role="alert">
+                <AlertCircle className="h-4 w-4" aria-hidden="true" />
+                {error.message}
+              </div>
+            )}
 
-      {isLoading ? (
-        <div className="text-center py-12 text-gray-500">{t('common.loading')}</div>
-      ) : (
-        <form className="space-y-4 max-w-xl" onSubmit={handleSubmit}>
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-red-600" role="alert">
-              <AlertCircle className="h-4 w-4" aria-hidden="true" />
-              {error.message}
+            <div>
+              <label
+                htmlFor="sso-issuer-url"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                {t('sso.settings.issuerUrl')}
+              </label>
+              <input
+                id="sso-issuer-url"
+                type="text"
+                value={formValues.issuerUrl}
+                onChange={(event) =>
+                  setFormValues((prev) => ({ ...prev, issuerUrl: event.target.value }))
+                }
+                className={INPUT_CLASSES}
+              />
             </div>
-          )}
 
-          <div>
-            <label
-              htmlFor="sso-issuer-url"
-              className="block text-sm font-medium text-gray-700 mb-1"
-            >
-              {t('sso.settings.issuerUrl')}
-            </label>
-            <input
-              id="sso-issuer-url"
-              type="text"
-              value={formValues.issuerUrl}
-              onChange={(event) =>
-                setFormValues((prev) => ({ ...prev, issuerUrl: event.target.value }))
-              }
-              className={INPUT_CLASSES}
-            />
-          </div>
+            <div>
+              <label
+                htmlFor="sso-client-id"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                {t('sso.settings.clientId')}
+              </label>
+              <input
+                id="sso-client-id"
+                type="text"
+                value={formValues.clientId}
+                onChange={(event) =>
+                  setFormValues((prev) => ({ ...prev, clientId: event.target.value }))
+                }
+                className={INPUT_CLASSES}
+              />
+            </div>
 
-          <div>
-            <label htmlFor="sso-client-id" className="block text-sm font-medium text-gray-700 mb-1">
-              {t('sso.settings.clientId')}
-            </label>
-            <input
-              id="sso-client-id"
-              type="text"
-              value={formValues.clientId}
-              onChange={(event) =>
-                setFormValues((prev) => ({ ...prev, clientId: event.target.value }))
-              }
-              className={INPUT_CLASSES}
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="sso-client-secret"
-              className="block text-sm font-medium text-gray-700 mb-1"
-            >
-              {t('sso.settings.clientSecret')}
-              {config?.hasClientSecret && (
-                <span className="ml-2 text-xs font-normal text-gray-500">
-                  ({t('sso.settings.clientSecretConfigured')})
-                </span>
-              )}
-            </label>
-            {/* Never populate value/defaultValue with a real secret - only the
+            <div>
+              <label
+                htmlFor="sso-client-secret"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                {t('sso.settings.clientSecret')}
+                {config?.hasClientSecret && (
+                  <span className="ml-2 text-xs font-normal text-gray-500">
+                    ({t('sso.settings.clientSecretConfigured')})
+                  </span>
+                )}
+              </label>
+              {/* Never populate value/defaultValue with a real secret - only the
                 boolean hasClientSecret drives the "currently set" indicator. */}
-            <input
-              id="sso-client-secret"
-              type="password"
-              value={clientSecretInput}
-              placeholder={config?.hasClientSecret ? '••••••••' : ''}
-              onChange={(event) => setClientSecretInput(event.target.value)}
-              className={INPUT_CLASSES}
-            />
-            <p className="mt-1 text-xs text-gray-400">
-              {t('sso.settings.clientSecretPlaceholder')}
-            </p>
-          </div>
-
-          <div>
-            <label
-              htmlFor="sso-allowed-domains"
-              className="block text-sm font-medium text-gray-700 mb-1"
-            >
-              {t('sso.settings.allowedDomains')}
-            </label>
-            <input
-              id="sso-allowed-domains"
-              type="text"
-              value={formValues.allowedDomains}
-              onChange={(event) =>
-                setFormValues((prev) => ({ ...prev, allowedDomains: event.target.value }))
-              }
-              className={INPUT_CLASSES}
-            />
-          </div>
-
-          <div className="flex items-start gap-2">
-            <input
-              id="sso-enforce"
-              type="checkbox"
-              checked={formValues.enforceSso}
-              onChange={(event) =>
-                setFormValues((prev) => ({ ...prev, enforceSso: event.target.checked }))
-              }
-              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            <label htmlFor="sso-enforce" className="text-sm text-gray-700">
-              <span className="font-medium">{t('sso.settings.enforceSso')}</span>
-              <p className="text-xs text-gray-500">{t('sso.settings.enforceSsoDescription')}</p>
-            </label>
-          </div>
-
-          {submitError && (
-            <div className="flex items-center gap-2 text-sm text-red-600" role="alert">
-              <AlertCircle className="h-4 w-4" aria-hidden="true" />
-              {submitError}
+              <input
+                id="sso-client-secret"
+                type="password"
+                value={clientSecretInput}
+                placeholder={config?.hasClientSecret ? '••••••••' : ''}
+                onChange={(event) => setClientSecretInput(event.target.value)}
+                className={INPUT_CLASSES}
+              />
+              <p className="mt-1 text-xs text-gray-400">
+                {t('sso.settings.clientSecretPlaceholder')}
+              </p>
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            <Save className="h-4 w-4" aria-hidden="true" />
-            {t('common.save')}
-          </button>
-        </form>
-      )}
+            <div>
+              <label
+                htmlFor="sso-allowed-domains"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                {t('sso.settings.allowedDomains')}
+              </label>
+              <input
+                id="sso-allowed-domains"
+                type="text"
+                value={formValues.allowedDomains}
+                onChange={(event) =>
+                  setFormValues((prev) => ({ ...prev, allowedDomains: event.target.value }))
+                }
+                className={INPUT_CLASSES}
+              />
+            </div>
+
+            <div className="flex items-start gap-2">
+              <input
+                id="sso-enforce"
+                type="checkbox"
+                checked={formValues.enforceSso}
+                onChange={(event) =>
+                  setFormValues((prev) => ({ ...prev, enforceSso: event.target.checked }))
+                }
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <label htmlFor="sso-enforce" className="text-sm text-gray-700">
+                <span className="font-medium">{t('sso.settings.enforceSso')}</span>
+                <p className="text-xs text-gray-500">{t('sso.settings.enforceSsoDescription')}</p>
+                {/* The full lockout warning lives in the instructions panel, but
+                  that can be a long scroll away - and on wide screens it is in
+                  a different column entirely. Repeat the operative half where
+                  the switch actually is. */}
+                {formValues.enforceSso && (
+                  <p className="mt-1 text-xs font-medium text-amber-700" role="note">
+                    {t('sso.settings.enforceSsoLockoutHint')}
+                  </p>
+                )}
+              </label>
+            </div>
+
+            {submitError && (
+              <div className="flex items-center gap-2 text-sm text-red-600" role="alert">
+                <AlertCircle className="h-4 w-4" aria-hidden="true" />
+                {submitError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              <Save className="h-4 w-4" aria-hidden="true" />
+              {t('common.save')}
+            </button>
+          </form>
+        )}
+
+        <SsoSetupInstructions
+          organizationId={currentOrganization?.id}
+          redirectUri={config?.redirectUri}
+          isConfigured={Boolean(config?.issuerUrl)}
+        />
+      </div>
     </div>
   );
 }
