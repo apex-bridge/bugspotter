@@ -9,6 +9,7 @@ set -e
 
 # Validate all environment variables
 validate_git_commit
+validate_commit_date
 validate_api_domain
 validate_api_url
 validate_storage_domain
@@ -18,10 +19,11 @@ echo "Injecting runtime configuration..."
 cat > /usr/share/nginx/html/config.js << EOF
 window.__RUNTIME_CONFIG__ = {
   gitCommit: '${GIT_COMMIT:-unknown}',
+  commitDate: '${COMMIT_DATE:-unknown}',
   apiUrl: '${API_URL:-}'
 };
 EOF
-echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}, API_URL=${API_URL:-}"
+echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}, COMMIT_DATE=${COMMIT_DATE:-unknown}, API_URL=${API_URL:-}"
 
 # STORAGE_CSP is built and validated by validate_storage_domain above
 # (operator's object-storage host, e.g. "*.storage.yandexcloud.kz";

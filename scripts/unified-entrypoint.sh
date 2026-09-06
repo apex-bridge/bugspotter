@@ -7,17 +7,19 @@ set -e
 # Source shared validation logic
 . /app/scripts/shared/validate-api-domain.sh
 
-# Validate GIT_COMMIT before injecting into JavaScript
+# Validate GIT_COMMIT and COMMIT_DATE before injecting into JavaScript
 validate_git_commit
+validate_commit_date
 
-# Inject runtime configuration (git commit hash from environment)
+# Inject runtime configuration (git commit hash + commit date from environment)
 echo "Injecting runtime configuration..."
 cat > /usr/share/nginx/html/config.js << EOF
 window.__RUNTIME_CONFIG__ = {
-  gitCommit: '${GIT_COMMIT:-unknown}'
+  gitCommit: '${GIT_COMMIT:-unknown}',
+  commitDate: '${COMMIT_DATE:-unknown}'
 };
 EOF
-echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}"
+echo "Runtime config created with GIT_COMMIT=${GIT_COMMIT:-unknown}, COMMIT_DATE=${COMMIT_DATE:-unknown}"
 
 # Set CSP domain defaults if not provided
 export CDN_DOMAIN="${CDN_DOMAIN:-https://cdn.bugspotter.io}"

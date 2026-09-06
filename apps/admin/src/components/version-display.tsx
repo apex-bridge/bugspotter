@@ -1,9 +1,12 @@
-import { APP_VERSION, getVersionString } from '@/lib/version';
+import { APP_VERSION, getVersionString, formatCommitDate } from '@/lib/version';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 export function VersionDisplay() {
   const shortCommit = APP_VERSION.commit.substring(0, 7);
   const buildDate = new Date(APP_VERSION.buildDate).toLocaleDateString('en-CA');
+  // Kept distinct from "Built": a build that changes no frontend source reuses
+  // the cached bundle, so these two legitimately differ.
+  const commitDate = APP_VERSION.commitDate;
 
   return (
     <TooltipProvider>
@@ -21,6 +24,11 @@ export function VersionDisplay() {
             <p>
               <strong>Commit:</strong> {shortCommit}
             </p>
+            {commitDate && (
+              <p>
+                <strong>Committed:</strong> {formatCommitDate(commitDate)}
+              </p>
+            )}
             <p>
               <strong>Built:</strong> {buildDate}
             </p>

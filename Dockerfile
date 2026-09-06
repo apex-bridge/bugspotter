@@ -382,6 +382,13 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 ARG IMAGE_GIT_COMMIT=unknown
 ENV IMAGE_GIT_COMMIT=${IMAGE_GIT_COMMIT}
 
+# The date of that commit (YYYYMMDD, UTC). Pass it alongside the revision:
+#   docker build \
+#     --build-arg IMAGE_GIT_COMMIT=$(git rev-parse HEAD) \
+#     --build-arg IMAGE_COMMIT_DATE=$(git show -s --format=%cd --date=format-local:%Y%m%d) .
+ARG IMAGE_COMMIT_DATE=unknown
+ENV IMAGE_COMMIT_DATE=${IMAGE_COMMIT_DATE}
+
 # Use dumb-init for proper signal handling
 ENTRYPOINT ["dumb-init", "--"]
 

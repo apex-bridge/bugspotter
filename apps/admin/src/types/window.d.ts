@@ -5,5 +5,7 @@ interface Window {
   __RUNTIME_CONFIG__?: {
     apiUrl?: string;
     gitCommit?: string;
+    /** Date of `gitCommit` as YYYYMMDD (UTC), or "unknown". */
+    commitDate?: string;
   };
 }
