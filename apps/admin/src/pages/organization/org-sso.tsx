@@ -124,7 +124,10 @@ function OrgSsoForm() {
       {/* Outside the isLoading branch on purpose: the guidance is static, and
           someone landing on a page whose config query is still loading - or
           failing - still needs to know what the fields mean. */}
-      <SsoSetupInstructions organizationId={currentOrganization?.id} />
+      <SsoSetupInstructions
+        organizationId={currentOrganization?.id}
+        redirectUri={config?.redirectUri}
+      />
 
       {isLoading ? (
         <div className="text-center py-12 text-gray-500">{t('common.loading')}</div>

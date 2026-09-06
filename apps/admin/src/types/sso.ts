@@ -22,6 +22,17 @@ export interface SsoConfig {
   hasClientSecret: boolean;
   allowedDomains: string[];
   enforceSso: boolean;
+  /**
+   * The exact callback the server sends as `redirect_uri`, for the tenant to
+   * register with their IdP. Computed backend-side from
+   * `OIDC_REDIRECT_BASE_URL` (#438) because the admin origin is not
+   * necessarily the API origin, so the browser cannot derive it.
+   *
+   * `null` when the operator has not set that variable - in which case OIDC
+   * login cannot work at all yet, and the UI says so rather than printing a
+   * URI that would never match.
+   */
+  redirectUri: string | null;
 }
 
 /**

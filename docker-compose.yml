@@ -101,6 +101,11 @@ x-common-env: &common-env
   REQUIRE_INVITATION_TO_REGISTER: ${REQUIRE_INVITATION_TO_REGISTER:-true}
   SELF_SERVICE_SIGNUP_ENABLED: ${SELF_SERVICE_SIGNUP_ENABLED:-}
   COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+  # Base URL the OIDC redirect_uri is built from, e.g. https://api.example.com.
+  # Deliberately operator-set rather than derived from request headers, which a
+  # proxy can spoof. Leave empty when no tenant uses SSO; the login route refuses
+  # to serve OIDC without it rather than guessing.
+  OIDC_REDIRECT_BASE_URL: ${OIDC_REDIRECT_BASE_URL:-}
   DATA_RESIDENCY_REGION: ${DATA_RESIDENCY_REGION:-kz}
 
   # Rate Limiting (increased for E2E tests)
