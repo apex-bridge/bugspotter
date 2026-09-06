@@ -5,8 +5,9 @@ import { CodeSnippet } from '../ui/code-snippet';
 interface SsoSetupInstructionsProps {
   /**
    * The organization whose callback path is shown. Rendered verbatim into the
-   * snippet, so the reader copies their own tenant's URI rather than a
-   * placeholder they have to remember to substitute.
+   * snippet, so the reader copies their own tenant's path rather than a
+   * placeholder they have to remember to substitute. A path, never a
+   * fully-qualified redirect URI - see the note on `callbackPath` below.
    */
   organizationId: string | undefined;
 }
