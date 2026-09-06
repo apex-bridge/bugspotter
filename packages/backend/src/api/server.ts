@@ -52,6 +52,7 @@ import { organizationRequestRoutes } from './routes/organization-requests.js';
 import { adminOrganizationRequestRoutes } from './routes/admin-organization-requests.js';
 import { OrgRequestEmailService } from '../saas/services/org-request-email.service.js';
 import { intelligenceSettingsRoutes } from './routes/intelligence-settings.js';
+import { organizationSsoRoutes } from './routes/organization-sso.js';
 import { intelligenceFeedbackRoutes } from './routes/intelligence-feedback.js';
 import { intelligenceEnrichmentRoutes } from './routes/intelligence-enrichment.js';
 import { intelligenceMitigationRoutes } from './routes/intelligence-mitigation.js';
@@ -523,6 +524,7 @@ export async function createServer(options: ServerOptions): Promise<FastifyInsta
   billingRegistry.register(new KzBillingPlugin());
   invoiceBillingRoutes(fastify, db, billingRegistry);
 
+  organizationSsoRoutes(fastify, db);
   intelligenceSettingsRoutes(fastify, db);
   intelligenceFeedbackRoutes(fastify, db);
   intelligenceEnrichmentRoutes(fastify, db, options.queueManager);

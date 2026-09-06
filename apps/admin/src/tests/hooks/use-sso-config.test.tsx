@@ -38,6 +38,7 @@ describe('useSsoConfig', () => {
       issuerUrl: 'https://idp.example.com',
       clientId: 'abc',
       hasClientSecret: true,
+      redirectUri: null,
       allowedDomains: [],
       enforceSso: false,
       clientSecret: 'leaked-secret',
@@ -54,6 +55,7 @@ describe('useSsoConfig', () => {
       issuerUrl: 'https://idp.example.com',
       clientId: 'abc',
       hasClientSecret: false,
+      redirectUri: null,
       allowedDomains: [],
       enforceSso: false,
     });
@@ -61,6 +63,7 @@ describe('useSsoConfig', () => {
       issuerUrl: 'https://idp.example.com',
       clientId: 'abc',
       hasClientSecret: false,
+      redirectUri: null,
       allowedDomains: [],
       enforceSso: false,
     });
@@ -82,6 +85,7 @@ describe('useSsoConfig', () => {
       issuerUrl: 'https://idp.example.com',
       clientId: 'abc',
       hasClientSecret: true,
+      redirectUri: null,
       allowedDomains: [],
       enforceSso: false,
     });
@@ -89,6 +93,7 @@ describe('useSsoConfig', () => {
       issuerUrl: 'https://idp.example.com',
       clientId: 'abc',
       hasClientSecret: true,
+      redirectUri: null,
       allowedDomains: [],
       enforceSso: false,
     });

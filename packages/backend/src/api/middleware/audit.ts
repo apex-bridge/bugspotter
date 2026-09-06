@@ -107,8 +107,12 @@ function extractResourceId(request: FastifyRequest): string | null {
 /**
  * Sanitize request data for audit logging
  * Recursively remove sensitive fields like passwords, tokens, and keys
+ *
+ * Exported for tests: this is the only thing standing between a credential in
+ * a request body and a durable row in `audit_logs`, so it is worth asserting
+ * on directly rather than through the middleware's DB path.
  */
-function sanitizeData(data: unknown): Record<string, unknown> | null {
+export function sanitizeData(data: unknown): Record<string, unknown> | null {
   if (!data || typeof data !== 'object') {
     return null;
   }
@@ -129,6 +133,27 @@ function sanitizeData(data: unknown): Record<string, unknown> | null {
     'bearer',
   ];
 
+  // Exact-name matching above is fragile: it already needed both `api_key` and
+  // `apikey` spelled out, and a field named `clientSecret` (the OIDC IdP
+  // credential, PUT /organizations/:id/sso) lowercases to `clientsecret`, which
+  // matches none of them - so the plaintext secret would land in
+  // `audit_logs.details.body`, readable through /api/v1/audit-logs.
+  //
+  // These two substrings are matched instead of enumerated because no field
+  // whose name contains them should ever be written to an audit record,
+  // whatever the casing or word order. Deliberately not extended to `token`:
+  // legitimate non-secret fields (token counts, limits) contain it, and
+  // over-redacting those would silently gut audit detail.
+  const sensitiveSubstrings = ['secret', 'password'];
+
+  function isSensitiveKey(key: string): boolean {
+    const lower = key.toLowerCase();
+    return (
+      sensitiveFields.includes(lower) ||
+      sensitiveSubstrings.some((fragment) => lower.includes(fragment))
+    );
+  }
+
   /**
    * Recursively sanitize an object or array
    */
@@ -146,7 +171,7 @@ function sanitizeData(data: unknown): Record<string, unknown> | null {
     const sanitized: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
       // Check if field name is sensitive
-      if (sensitiveFields.includes(key.toLowerCase())) {
+      if (isSensitiveKey(key)) {
         sanitized[key] = '[REDACTED]';
       } else if (value && typeof value === 'object') {
         // Recursively sanitize nested objects/arrays

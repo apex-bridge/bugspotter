@@ -5,11 +5,21 @@ import { CodeSnippet } from '../ui/code-snippet';
 interface SsoSetupInstructionsProps {
   /**
    * The organization whose callback path is shown. Rendered verbatim into the
-   * snippet, so the reader copies their own tenant's path rather than a
-   * placeholder they have to remember to substitute. A path, never a
-   * fully-qualified redirect URI - see the note on `callbackPath` below.
+   * snippet, so the reader copies their own tenant's value rather than a
+   * placeholder they have to remember to substitute.
    */
   organizationId: string | undefined;
+  /**
+   * The fully-qualified callback the server actually sends as `redirect_uri`,
+   * from the config response (#438). Preferred over the locally-built path
+   * whenever present, because it is the string that must match at the IdP
+   * byte for byte.
+   *
+   * `null`/undefined means the operator has not set `OIDC_REDIRECT_BASE_URL`
+   * (or the config has not loaded): fall back to showing the path alone rather
+   * than inventing a host.
+   */
+  redirectUri?: string | null;
 }
 
 /**
@@ -19,17 +29,21 @@ interface SsoSetupInstructionsProps {
  * loading, and while it is failing. Someone arriving at a page that cannot
  * reach its backend still needs to know what the fields mean.
  */
-export function SsoSetupInstructions({ organizationId }: SsoSetupInstructionsProps) {
+export function SsoSetupInstructions({ organizationId, redirectUri }: SsoSetupInstructionsProps) {
   const { t } = useTranslation();
 
-  // Path only, never a fully-qualified URI. OIDC_REDIRECT_BASE_URL lives on the
-  // server and the admin origin is not necessarily the API origin, so anything
-  // more complete would be a guess - and a wrong redirect URI is the single
-  // most tedious OIDC failure to diagnose. #438 adds a server-computed
-  // `redirectUri` to the config response; switch to it once that lands.
-  const callbackPath = organizationId
-    ? `/api/v1/auth/oidc/${organizationId}/callback`
-    : `/api/v1/auth/oidc/<organization-id>/callback`;
+  // Prefer the server's own value: it is built from OIDC_REDIRECT_BASE_URL by
+  // the same expression the login route uses, so what is shown here and what
+  // the IdP is sent cannot drift. Without it, show the path alone - the admin
+  // origin is not necessarily the API origin, so a locally-assembled host
+  // would be a guess, and a wrong redirect URI is the single most tedious OIDC
+  // failure to diagnose.
+  const callbackPath =
+    redirectUri ??
+    (organizationId
+      ? `/api/v1/auth/oidc/${organizationId}/callback`
+      : `/api/v1/auth/oidc/<organization-id>/callback`);
+  const isFullUri = Boolean(redirectUri);
 
   const steps = [
     'sso.setup.steps.createApp',
@@ -59,7 +73,12 @@ export function SsoSetupInstructions({ organizationId }: SsoSetupInstructionsPro
 
       <div className="mt-4">
         <p className="text-sm font-medium text-gray-700">{t('sso.setup.redirectUriLabel')}</p>
-        <p className="mt-0.5 mb-2 text-xs text-gray-500">{t('sso.setup.redirectUriHint')}</p>
+        {/* Only tell the reader to prepend a host when we are showing a bare
+            path. With the server's own URI there is nothing to prepend, and
+            repeating the hint would invite them to double it up. */}
+        <p className="mt-0.5 mb-2 text-xs text-gray-500">
+          {isFullUri ? t('sso.setup.redirectUriExact') : t('sso.setup.redirectUriHint')}
+        </p>
         <CodeSnippet code={callbackPath} testId="sso-callback-path" />
       </div>
 

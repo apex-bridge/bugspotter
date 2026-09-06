@@ -50,6 +50,36 @@ describe('SsoSetupInstructions', () => {
     expect(snippet).not.toHaveTextContent('http');
   });
 
+  it("prefers the server's redirect URI over the locally-built path", () => {
+    // #438 returns the exact string the login route sends as `redirect_uri`.
+    // Showing anything else risks a mismatch the tenant cannot diagnose.
+    render(
+      <SsoSetupInstructions
+        organizationId="org_abc123"
+        redirectUri="https://api.example.com/api/v1/auth/oidc/org_abc123/callback"
+      />
+    );
+
+    expect(screen.getByTestId('sso-callback-path')).toHaveTextContent(
+      'https://api.example.com/api/v1/auth/oidc/org_abc123/callback'
+    );
+    // The "append this to your API base URL" hint must not survive alongside a
+    // value that already has the host, or the reader doubles it up.
+    expect(screen.getByText('sso.setup.redirectUriExact')).toBeInTheDocument();
+    expect(screen.queryByText('sso.setup.redirectUriHint')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the path when the server reports no redirect URI', () => {
+    // OIDC_REDIRECT_BASE_URL unset: SSO login cannot work yet, and inventing a
+    // host here would be a guess.
+    render(<SsoSetupInstructions organizationId="org_abc123" redirectUri={null} />);
+
+    expect(screen.getByTestId('sso-callback-path')).toHaveTextContent(
+      '/api/v1/auth/oidc/org_abc123/callback'
+    );
+    expect(screen.getByText('sso.setup.redirectUriHint')).toBeInTheDocument();
+  });
+
   it('warns about the password-login lockout before the switch is reachable', () => {
     render(<SsoSetupInstructions organizationId="org_abc123" />);
 

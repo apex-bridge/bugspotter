@@ -2030,6 +2030,7 @@
       },
       "redirectUriLabel": "Redirect URI to register",
       "redirectUriHint": "Append this path to your BugSpotter API base URL, for example https://api.example.com",
+      "redirectUriExact": "Register this exact value with your identity provider. It must match character for character.",
       "lockoutWarning": "\"Require SSO\" disables password login for everyone in this organization. If the provider is misconfigured when you enable it, no member can sign in - including you. Always confirm a real SSO login works first.",
       "providers": "Works with any OpenID Connect provider, including Keycloak, Microsoft Entra ID, Okta and Google Workspace."
     }
