@@ -125,20 +125,35 @@ describe('SsoSetupInstructions', () => {
     expect(screen.getByRole('region', { name: /sso\.setup\.title/i })).toBeInTheDocument();
   });
 
-  it('does not collapse under the user when the config query resolves', () => {
-    // isConfigured is false while loading and can flip to true when data lands.
-    // Re-applying `open` at that point would shut a panel the user had just
-    // opened; only the load-resolved transition may reset it.
+  it("keeps the user's collapse when the query resolves with no config", () => {
+    // The panel is open while loading (nothing configured yet). If the user
+    // closes it and the query then resolves - still unconfigured - nothing
+    // about their situation changed, so the panel must stay closed. Keying the
+    // element on "has the query resolved" instead of on `isConfigured` remounts
+    // here and springs it back open.
     const { rerender } = render(
-      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} isConfigResolved />
+      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} />
     );
 
     const details = screen.getByRole('group') as HTMLDetailsElement;
     details.open = false; // stand in for the user collapsing it
 
-    rerender(
-      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} isConfigResolved />
+    // Same props: the query resolved, still no config.
+    rerender(<SsoSetupInstructions organizationId="org_abc123" isConfigured={false} />);
+
+    expect(screen.getByRole('group')).not.toHaveAttribute('open');
+  });
+
+  it('collapses once a real config arrives', () => {
+    // The one transition that should re-apply the initial state: an org that
+    // turns out to be configured gets the collapsed default, exactly as if the
+    // data had been there from the first render.
+    const { rerender } = render(
+      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} />
     );
+    expect(screen.getByRole('group')).toHaveAttribute('open');
+
+    rerender(<SsoSetupInstructions organizationId="org_abc123" isConfigured />);
 
     expect(screen.getByRole('group')).not.toHaveAttribute('open');
   });

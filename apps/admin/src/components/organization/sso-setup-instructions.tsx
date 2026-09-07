@@ -29,16 +29,6 @@ interface SsoSetupInstructionsProps {
    * URI stays visible either way - it is the one thing people come back for.
    */
   isConfigured?: boolean;
-  /**
-   * Whether the config query has settled.
-   *
-   * `isConfigured` is false while loading and may flip to true when the data
-   * lands. That flip is the only moment the panel's initial open state should
-   * be (re)applied - see the `key` on `<details>` below. Without it, a user who
-   * expanded the panel during loading would have it collapse under them the
-   * instant the query resolved.
-   */
-  isConfigResolved?: boolean;
 }
 
 /**
@@ -52,7 +42,6 @@ export function SsoSetupInstructions({
   organizationId,
   redirectUri,
   isConfigured = false,
-  isConfigResolved = true,
 }: SsoSetupInstructionsProps) {
   const { t } = useTranslation();
 
@@ -86,14 +75,15 @@ export function SsoSetupInstructions({
       {/* <details> rather than React state: it keeps the steps in the DOM for
           find-in-page and for screen readers, and the browser handles the
           toggle semantics. Open by default only until a config exists.
-          `open` here is the *initial* state, not a controlled value - React
-          leaves an unchanged prop alone, so a user's own toggle sticks. The
-          `key` exists for the one moment that is not true: `isConfigured` is
-          false while the query loads and may flip when it resolves, which would
-          otherwise re-apply `open` and collapse the panel under someone who had
-          just expanded it. Keying on the resolved flag remounts once, at the
-          point the real answer arrives, and never again. */}
-      <details key={`resolved-${isConfigResolved}`} open={!isConfigured} className="group">
+          `open` is the *initial* state, not a controlled value - React leaves
+          an unchanged prop alone, so a user's own toggle sticks. The `key` is
+          keyed to `isConfigured` and nothing else, so the only remount is the
+          one that matters: an unconfigured org whose query resolves still
+          unconfigured keeps whatever state the user chose, while the arrival of
+          a real config applies the collapsed initial state once. Keying it on
+          "has the query resolved" instead would reopen a panel the user had
+          closed while it was still loading. */}
+      <details key={String(isConfigured)} open={!isConfigured} className="group">
         <summary
           id="sso-setup-heading"
           className="flex cursor-pointer items-center text-sm font-semibold text-gray-900 marker:content-['']"

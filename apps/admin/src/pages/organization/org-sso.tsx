@@ -289,7 +289,6 @@ function OrgSsoForm() {
           organizationId={currentOrganization?.id}
           redirectUri={config?.redirectUri}
           isConfigured={Boolean(config?.issuerUrl)}
-          isConfigResolved={!isLoading}
         />
       </div>
     </div>
