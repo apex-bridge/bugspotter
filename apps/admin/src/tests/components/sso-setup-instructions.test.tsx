@@ -117,6 +117,32 @@ describe('SsoSetupInstructions', () => {
     expect(screen.getByRole('note')).toBeInTheDocument();
   });
 
+  it('gives the panel an accessible name', () => {
+    // The section is a labelled region; without this it is an anonymous
+    // landmark and harder to navigate by screen reader.
+    render(<SsoSetupInstructions organizationId="org_abc123" />);
+
+    expect(screen.getByRole('region', { name: /sso\.setup\.title/i })).toBeInTheDocument();
+  });
+
+  it('does not collapse under the user when the config query resolves', () => {
+    // isConfigured is false while loading and can flip to true when data lands.
+    // Re-applying `open` at that point would shut a panel the user had just
+    // opened; only the load-resolved transition may reset it.
+    const { rerender } = render(
+      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} isConfigResolved />
+    );
+
+    const details = screen.getByRole('group') as HTMLDetailsElement;
+    details.open = false; // stand in for the user collapsing it
+
+    rerender(
+      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} isConfigResolved />
+    );
+
+    expect(screen.getByRole('group')).not.toHaveAttribute('open');
+  });
+
   it('renders every setup step', () => {
     render(<SsoSetupInstructions organizationId="org_abc123" />);
 

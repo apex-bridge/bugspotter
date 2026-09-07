@@ -125,11 +125,10 @@ function OrgSsoForm() {
           guidance is reference, so stacking them put the first input roughly a
           screen down. Below `lg` they stack in the original order. */}
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
-        {/* Rendered outside the isLoading branch on purpose: the guidance is
-            static, and someone landing on a page whose config query is still
-            loading - or failing - still needs to know what the fields mean.
-            Second in source order so the form comes first for keyboard and
-            screen-reader users, but placed left on wide screens. */}
+        {/* The form comes first in source order, so keyboard and screen-reader
+            users reach the task before the reference material. `lg:order-2`
+            moves it to the right column visually; the instructions below take
+            the default order and so render on the left. */}
         {isLoading ? (
           <div className="text-center py-12 text-gray-500 lg:order-2">{t('common.loading')}</div>
         ) : (
@@ -231,20 +230,38 @@ function OrgSsoForm() {
                   setFormValues((prev) => ({ ...prev, enforceSso: event.target.checked }))
                 }
                 className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                // Referenced rather than nested: anything inside a <label>
+                // becomes part of the control's accessible name, so a
+                // conditional hint there would make that name change as the box
+                // is ticked. This keeps the name stable ("Require SSO") while
+                // still announcing both descriptions.
+                aria-describedby={
+                  formValues.enforceSso
+                    ? 'sso-enforce-description sso-enforce-lockout'
+                    : 'sso-enforce-description'
+                }
               />
-              <label htmlFor="sso-enforce" className="text-sm text-gray-700">
-                <span className="font-medium">{t('sso.settings.enforceSso')}</span>
-                <p className="text-xs text-gray-500">{t('sso.settings.enforceSsoDescription')}</p>
+              <div className="text-sm text-gray-700">
+                <label htmlFor="sso-enforce" className="font-medium">
+                  {t('sso.settings.enforceSso')}
+                </label>
+                <p id="sso-enforce-description" className="text-xs text-gray-500">
+                  {t('sso.settings.enforceSsoDescription')}
+                </p>
                 {/* The full lockout warning lives in the instructions panel, but
                   that can be a long scroll away - and on wide screens it is in
                   a different column entirely. Repeat the operative half where
                   the switch actually is. */}
                 {formValues.enforceSso && (
-                  <p className="mt-1 text-xs font-medium text-amber-700" role="note">
+                  <p
+                    id="sso-enforce-lockout"
+                    className="mt-1 text-xs font-medium text-amber-700"
+                    role="note"
+                  >
                     {t('sso.settings.enforceSsoLockoutHint')}
                   </p>
                 )}
-              </label>
+              </div>
             </div>
 
             {submitError && (
@@ -265,10 +282,14 @@ function OrgSsoForm() {
           </form>
         )}
 
+        {/* Rendered outside the isLoading branch on purpose: the guidance is
+            static, and someone landing on a page whose config query is still
+            loading - or failing - still needs to know what the fields mean. */}
         <SsoSetupInstructions
           organizationId={currentOrganization?.id}
           redirectUri={config?.redirectUri}
           isConfigured={Boolean(config?.issuerUrl)}
+          isConfigResolved={!isLoading}
         />
       </div>
     </div>
