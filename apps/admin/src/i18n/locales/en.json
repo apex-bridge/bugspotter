@@ -2015,7 +2015,8 @@
       "clientSecretPlaceholder": "Leave blank to keep the existing secret",
       "allowedDomains": "Allowed Domains",
       "enforceSso": "Require SSO",
-      "enforceSsoDescription": "Members must sign in with SSO; password login is disabled"
+      "enforceSsoDescription": "Members must sign in with SSO; password login is disabled",
+      "enforceSsoLockoutHint": "Confirm a real SSO login works before saving this - it disables password login for everyone in this organization."
     },
     "setup": {
       "title": "Setting up SSO",

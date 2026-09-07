@@ -16,10 +16,14 @@ vi.mock('react-i18next', () => ({
 }));
 
 // CodeSnippet pulls in sonner + clipboard; the contract under test is the
-// string handed to it, so render it as a plain node exposing that.
+// string handed to it, so render it as a plain node exposing that. `wrap` is
+// surfaced as an attribute because whether this particular value wraps is a
+// deliberate decision, not styling incidental to the test.
 vi.mock('../../components/ui/code-snippet', () => ({
-  CodeSnippet: ({ code, testId }: { code: string; testId?: string }) => (
-    <pre data-testid={testId}>{code}</pre>
+  CodeSnippet: ({ code, testId, wrap }: { code: string; testId?: string; wrap?: boolean }) => (
+    <pre data-testid={testId} data-wrap={String(Boolean(wrap))}>
+      {code}
+    </pre>
   ),
 }));
 
@@ -84,6 +88,74 @@ describe('SsoSetupInstructions', () => {
     render(<SsoSetupInstructions organizationId="org_abc123" />);
 
     expect(screen.getByRole('note')).toHaveTextContent('sso.setup.lockoutWarning');
+  });
+
+  it('wraps the redirect URI rather than letting it scroll under the copy button', () => {
+    // The scrolling variant slides content beneath the absolutely-positioned,
+    // 90%-opaque copy button, hiding part of a value that has to be checked
+    // character for character against the IdP.
+    render(<SsoSetupInstructions organizationId="org_abc123" />);
+
+    expect(screen.getByTestId('sso-callback-path')).toHaveAttribute('data-wrap', 'true');
+  });
+
+  it('starts expanded when the org has no SSO config yet', () => {
+    render(<SsoSetupInstructions organizationId="org_abc123" isConfigured={false} />);
+
+    // jsdom reflects <details open> on the element itself.
+    expect(screen.getByRole('group')).toHaveAttribute('open');
+  });
+
+  it('starts collapsed once a config exists, but still shows the redirect URI', () => {
+    // Returning to change one field should not mean scrolling past six steps;
+    // the URI is the thing people come back for, so it stays outside the
+    // collapsible region.
+    render(<SsoSetupInstructions organizationId="org_abc123" isConfigured />);
+
+    expect(screen.getByRole('group')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('sso-callback-path')).toBeInTheDocument();
+    expect(screen.getByRole('note')).toBeInTheDocument();
+  });
+
+  it('gives the panel an accessible name', () => {
+    // The section is a labelled region; without this it is an anonymous
+    // landmark and harder to navigate by screen reader.
+    render(<SsoSetupInstructions organizationId="org_abc123" />);
+
+    expect(screen.getByRole('region', { name: /sso\.setup\.title/i })).toBeInTheDocument();
+  });
+
+  it("keeps the user's collapse when the query resolves with no config", () => {
+    // The panel is open while loading (nothing configured yet). If the user
+    // closes it and the query then resolves - still unconfigured - nothing
+    // about their situation changed, so the panel must stay closed. Keying the
+    // element on "has the query resolved" instead of on `isConfigured` remounts
+    // here and springs it back open.
+    const { rerender } = render(
+      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} />
+    );
+
+    const details = screen.getByRole('group') as HTMLDetailsElement;
+    details.open = false; // stand in for the user collapsing it
+
+    // Same props: the query resolved, still no config.
+    rerender(<SsoSetupInstructions organizationId="org_abc123" isConfigured={false} />);
+
+    expect(screen.getByRole('group')).not.toHaveAttribute('open');
+  });
+
+  it('collapses once a real config arrives', () => {
+    // The one transition that should re-apply the initial state: an org that
+    // turns out to be configured gets the collapsed default, exactly as if the
+    // data had been there from the first render.
+    const { rerender } = render(
+      <SsoSetupInstructions organizationId="org_abc123" isConfigured={false} />
+    );
+    expect(screen.getByRole('group')).toHaveAttribute('open');
+
+    rerender(<SsoSetupInstructions organizationId="org_abc123" isConfigured />);
+
+    expect(screen.getByRole('group')).not.toHaveAttribute('open');
   });
 
   it('renders every setup step', () => {
