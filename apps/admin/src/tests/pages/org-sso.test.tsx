@@ -254,4 +254,51 @@ describe('OrgSsoPage', () => {
 
     expect(screen.getByText(/confirm a real sso login works before saving/i)).toBeInTheDocument();
   });
+
+  it('keeps a collapsed setup panel closed when the config query resolves with no config', () => {
+    // The loading-to-resolved transition, through the real prop wiring. The
+    // component-level test cannot reach this: it passes `isConfigured` directly
+    // and an implementation keyed on "has the query resolved" would still pass
+    // there. Here `isLoading` genuinely flips while the org stays unconfigured,
+    // which is the case that used to remount <details> and reopen it.
+    vi.mocked(usePermissions).mockReturnValue({
+      isSystemAdmin: false,
+      orgRole: 'admin',
+      isLoading: false,
+    } as ReturnType<typeof usePermissions>);
+    vi.mocked(useSsoConfig).mockReturnValue({
+      config: undefined,
+      isLoading: true,
+      error: null,
+      updateConfig: vi.fn(),
+      isSaving: false,
+    } as ReturnType<typeof useSsoConfig>);
+
+    const { rerender } = render(<OrgSsoPage />);
+
+    const details = screen.getByRole('group') as HTMLDetailsElement;
+    expect(details).toHaveAttribute('open');
+    details.open = false; // the user collapses it while the query is in flight
+
+    // Query resolves: the endpoint returns an empty form for an unconfigured
+    // org, so `config` becomes defined but `issuerUrl` stays blank.
+    vi.mocked(useSsoConfig).mockReturnValue({
+      config: {
+        issuerUrl: '',
+        clientId: '',
+        hasClientSecret: false,
+        allowedDomains: [],
+        enforceSso: false,
+        redirectUri: null,
+      },
+      isLoading: false,
+      error: null,
+      updateConfig: vi.fn(),
+      isSaving: false,
+    } as ReturnType<typeof useSsoConfig>);
+
+    rerender(<OrgSsoPage />);
+
+    expect(screen.getByRole('group')).not.toHaveAttribute('open');
+  });
 });
