@@ -123,7 +123,15 @@ function OrgSsoForm() {
 
       {/* Side by side once there is room: the form is the task and the
           guidance is reference, so stacking them put the first input roughly a
-          screen down. Below `lg` they stack in the original order. */}
+          screen down.
+
+          Below `lg` the columns collapse and they stack in source order - form
+          first, guidance second. That is deliberately the opposite of how this
+          page used to stack, where the panel sat above the form: on a narrow
+          screen the task now leads and the reference follows it, which is the
+          same priority the two-column arrangement expresses. The panel still
+          opens by default for an unconfigured org, so first-time setup finds it
+          immediately below rather than in front. */}
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
         {/* The form comes first in source order, so keyboard and screen-reader
             users reach the task before the reference material. `lg:order-2`
