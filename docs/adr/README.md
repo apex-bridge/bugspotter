@@ -94,7 +94,7 @@ ADRs are numbered in **logical build order** — foundations first, then the bac
 
 | #                                                            | Decision                                                                             | Source repo(s) |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------ | -------------- |
-| [0041](0041-ai-factory-adaptation.md)                        | AI Factory framework adaptation (mapping, not implementation)                        | public         |
+| 0041                                                         | _Withdrawn_                                                                          | -              |
 | [0042](0042-agent-identity-scoped-app.md)                    | Agent identity - scoped GitHub App, not a user account                               | public         |
 | [0043](0043-intelligence-show-match-score-threshold.md)      | Intelligence: surface current match score and threshold in duplicate bug detail view | public         |
 | [0044](0044-sso-oidc-account-linking-and-tenant-boundary.md) | SSO/OIDC auth extension - provider model, tenant-scoped account-linking              | public         |
