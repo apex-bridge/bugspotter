@@ -3,7 +3,7 @@
 - Status: Accepted
 - Area: AI-SDLC / security
 - Date: 2026-07-09
-- Refs: AI-SDLC Phase 0 (#199-#208); ADR-0041 (AI-factory adaptation)
+- Refs: AI-SDLC Phase 0 (#199-#208)
 
 ## Context
 
