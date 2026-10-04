@@ -40,7 +40,9 @@ const SENSITIVE_PATTERNS = [
   /\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b/g, // Private IP ranges
 
   // Email addresses (PII)
-  /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/gi, // Email addresses
+  // Lookbehind start + dot-separated labels keep this linear (the \b form
+  // backtracked quadratically on runs like "a.a.a.").
+  /(?<![a-zA-Z0-9._%+-])[a-zA-Z0-9._%+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b/gi, // Email addresses
 ] as const;
 
 /**

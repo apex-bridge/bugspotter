@@ -19,7 +19,10 @@ export interface RedactionPattern {
  */
 export const PII_PATTERNS: RedactionPattern[] = [
   {
-    pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/gi,
+    // Lookbehind instead of a leading \b, and dot-separated domain labels,
+    // keep this linear; the old form backtracked quadratically on runs like
+    // "a.a.a." (same fix as @bugspotter/common 1.1.2).
+    pattern: /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b/gi,
     replacement: '[REDACTED-EMAIL]',
     category: 'pii',
     description: 'Email addresses',

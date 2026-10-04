@@ -333,4 +333,46 @@ MIIEpAIBAAKCAQEAw7Zdfmece8iaB0kiTY8pCtiBtzbptJmP28nSWwtdjxR5ggD0
       });
     });
   });
+
+  // Redaction runs on report content that the submitter controls, so a
+  // pattern with super-linear backtracking lets one large log line stall
+  // the event loop.
+  describe('Linear-time matching', () => {
+    it('should match common email shapes', () => {
+      const cases: Array<[string, string]> = [
+        ['user+tag@mail.co.uk', '[REDACTED-EMAIL]'],
+        ['a.b@c.d.e.fr,', '[REDACTED-EMAIL],'],
+        ['<x_y-z@sub.domain.org>', '<[REDACTED-EMAIL]>'],
+        ['USER@EXAMPLE.COM', '[REDACTED-EMAIL]'],
+      ];
+      for (const [input, expected] of cases) {
+        expect(redactString(input, PII_PATTERNS)).toBe(expected);
+      }
+      expect(redactString('foo@bar', PII_PATTERNS)).toBe('foo@bar');
+    });
+
+    const ADVERSARIAL: Record<string, (n: number) => string> = {
+      'a.': (n) => 'a.'.repeat(n / 2),
+      'a@a.': (n) => 'a@' + 'a.'.repeat(n / 2),
+      '1.2.': (n) => '1.2.'.repeat(n / 4),
+      'aB3-': (n) => 'aB3-'.repeat(n / 4),
+      digits: (n) => '1'.repeat(n),
+      'digits-': (n) => '1-'.repeat(n / 2),
+      'a@': (n) => 'a@'.repeat(n / 2),
+      'a-': (n) => 'a-'.repeat(n / 2),
+    };
+
+    it.each(ALL_REDACTION_PATTERNS.map((p) => [p.description, p.pattern] as const))(
+      '%s stays fast on adversarial input',
+      (_description, pattern) => {
+        for (const [label, make] of Object.entries(ADVERSARIAL)) {
+          const input = make(50_000);
+          const start = performance.now();
+          input.replace(pattern, '');
+          const ms = performance.now() - start;
+          expect(ms, `${label} x50000: ${ms.toFixed(0)}ms`).toBeLessThan(200);
+        }
+      }
+    );
+  });
 });
