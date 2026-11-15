@@ -369,7 +369,11 @@ jobs:
 
   playwright-admin:
     name: Admin E2E Tests
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, where the locked Playwright
+    # (1.56.0) refuses `playwright install --with-deps chromium`
+    # ("does not support chromium on ubuntu26.04-x64"). 24.04 is the image of
+    # the last green run; unpin when Playwright is bumped.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30 # Prevent indefinite hangs (Docker + E2E tests)
     needs: [test-backend-db, test-backend-api, test-backend-services, test-backend-other]
     env:
