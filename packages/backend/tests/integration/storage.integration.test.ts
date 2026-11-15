@@ -7,7 +7,7 @@
  * - For local tests: Filesystem write permissions
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   createStorage,
   generateThumbnail,
@@ -18,7 +18,6 @@ import {
 } from '../../src/storage/index.js';
 import type { IStorageService, StorageConfig } from '../../src/storage/types.js';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 
 // Test configuration
 const TEST_PROJECT_ID = 'test-proj-' + Date.now();
@@ -122,17 +121,6 @@ function createTestImage(): Buffer {
     0x60,
     0x82, // IEND chunk
   ]);
-}
-
-// Helper to create a test JSON buffer
-function createTestJson(): Buffer {
-  return Buffer.from(
-    JSON.stringify({
-      test: true,
-      timestamp: Date.now(),
-      data: 'test data',
-    })
-  );
 }
 
 // Test suite for local storage
@@ -424,14 +412,16 @@ describe('E2E: MinIO Storage', () => {
     } catch (error) {
       console.error('❌ MinIO initialization failed:', error);
       console.log(
-        '💡 Start MinIO with: docker run -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r2 server /data'
+        '💡 Start MinIO with: docker run -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r3 server /data'
       );
       throw error;
     }
   });
 
   afterAll(async () => {
-    if (skipMinIO) return;
+    if (skipMinIO) {
+      return;
+    }
 
     // Cleanup test files
     try {
@@ -444,14 +434,18 @@ describe('E2E: MinIO Storage', () => {
   });
 
   it('should connect to MinIO', async () => {
-    if (skipMinIO) return;
+    if (skipMinIO) {
+      return;
+    }
 
     const isHealthy = await storage.healthCheck();
     expect(isHealthy).toBe(true);
   });
 
   it('should upload and retrieve screenshot', async () => {
-    if (skipMinIO) return;
+    if (skipMinIO) {
+      return;
+    }
 
     const imageBuffer = createTestImage();
 
@@ -476,7 +470,9 @@ describe('E2E: MinIO Storage', () => {
   });
 
   it('should generate signed URL', async () => {
-    if (skipMinIO) return;
+    if (skipMinIO) {
+      return;
+    }
 
     const imageBuffer = createTestImage();
     const result = await storage.uploadScreenshot(
@@ -492,7 +488,9 @@ describe('E2E: MinIO Storage', () => {
   });
 
   it('should handle concurrent uploads', async () => {
-    if (skipMinIO) return;
+    if (skipMinIO) {
+      return;
+    }
 
     const imageBuffer = createTestImage();
     const numUploads = 10;
@@ -508,7 +506,9 @@ describe('E2E: MinIO Storage', () => {
   });
 
   it('should list objects in MinIO', async () => {
-    if (skipMinIO) return;
+    if (skipMinIO) {
+      return;
+    }
 
     // Upload test files
     await storage.uploadScreenshot(TEST_PROJECT_ID, `${TEST_BUG_ID}-list-1`, createTestImage());
@@ -522,7 +522,9 @@ describe('E2E: MinIO Storage', () => {
   });
 
   it('should delete from MinIO', async () => {
-    if (skipMinIO) return;
+    if (skipMinIO) {
+      return;
+    }
 
     const imageBuffer = createTestImage();
     const result = await storage.uploadScreenshot(

@@ -156,7 +156,10 @@ jobs:
   # ==========================================================================
   test:
     name: Unit & E2E Tests
-    runs-on: ubuntu-latest
+    # Pinned for the same reason as the Admin E2E job in ci.yml: the locked
+    # Playwright (1.56.0) refuses `playwright install --with-deps chromium` on
+    # ubuntu-latest (26.04). Unpin both when Playwright is bumped.
+    runs-on: ubuntu-24.04
     needs: [lint]
     if: ${{ github.event.inputs.skip_tests != 'true' }}
     # The E2E suite runs ~289 Playwright tests on a single worker (Postgres +

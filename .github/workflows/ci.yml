@@ -79,6 +79,14 @@ jobs:
       - name: Run AI-SDLC script tests
         run: node --test scripts/ai-sdlc/*.test.mjs
 
+      # The self-built MinIO image tag (docker/minio/Dockerfile) is repeated in
+      # ci.yml, compose, testcontainers call sites and docs; a missed copy
+      # silently keeps an old image or pulls a tag that was never published.
+      - name: Check MinIO image tag references
+        run: |
+          node --test scripts/check-minio-image-tag.test.mjs
+          node scripts/check-minio-image-tag.mjs
+
       # Covers the container entrypoints' env validation, including the
       # STORAGE_DOMAIN vs S3_ENDPOINT CSP cross-check. Pure POSIX shell with no
       # dependencies, and nothing else exercises it - the code only runs inside
@@ -486,7 +494,7 @@ jobs:
           pull_image "redis:7-alpine" || exit 1
           # MinIO server + mc in one image, built from source by minio-image.yml
           # (upstream images are no longer pullable).
-          pull_image "ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r2" || exit 1
+          pull_image "ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r3" || exit 1
           pull_image "node:22-alpine" || exit 1
 
           echo "✅ All Docker images pre-pulled successfully"

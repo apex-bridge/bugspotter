@@ -5,17 +5,29 @@
 # Why this exists: upstream no longer publishes these images publicly.
 # Docker Hub minio/minio and minio/mc are gone, quay.io/minio/minio requires
 # login, and the signed binaries the upstream release Dockerfile downloads from
-# dl.min.io return 410 Gone. CI, the Admin E2E/integration tests and the
-# docker-compose dev profile pull this image instead:
+# dl.min.io return 410 Gone. Everything that used minio/minio or minio/mc pulls
+# this image instead:
 #
 #   ghcr.io/apex-bridge/bugspotter/minio:<MINIO_RELEASE>-r<IMAGE_REVISION>
 #
-# Published by .github/workflows/minio-image.yml. Dev/test use only.
+# Consumers: CI, the backend integration and Admin E2E testcontainers, the
+# `minio` / `minio-init` services of the compose dev profile, and
+# docker-compose.storage.yml, which serves the same `minio` service as the
+# public HTTPS storage endpoint for self-hosted "MinIO-on-the-box". The last one
+# is production use: this is the same MinIO release that was pinned before
+# (2024-10, Go 1.22 toolchain) and receives no upstream fixes; moving to a newer
+# release is a separate decision.
+#
+# Published by .github/workflows/minio-image.yml; smoke-test.sh next to this
+# file is run against the local build and against the published tag on both
+# platforms.
 #
 # Mirrors upstream Dockerfile.release at MINIO_RELEASE: same entrypoint script
 # (`server /data` becomes `minio server /data`), same env defaults, both
 # binaries in /usr/bin, plus curl for the compose healthcheck. The runtime
-# base is Alpine instead of UBI micro.
+# base is Alpine instead of UBI micro; coreutils is added because the
+# entrypoint's MINIO_USERNAME/MINIO_GROUPNAME path uses `chroot --userspec`,
+# which busybox chroot does not support.
 #
 # MinIO and mc are AGPL-3.0. The binaries are unmodified upstream source at the
 # commits below; LICENSE/CREDITS are copied to /licenses and the source
@@ -23,11 +35,18 @@
 
 # The published tag is <MINIO_RELEASE>-r<IMAGE_REVISION>. Bump the four
 # versions together and reset IMAGE_REVISION to 1; bump only IMAGE_REVISION
-# when the image changes without a version change (published tags are never
-# overwritten). Then update the tag in ci.yml, docker-compose*.yml, DOCKER.md,
-# the two testcontainers call sites and storage.integration.test.ts.
-# r1 was the bare <MINIO_RELEASE> tag, whose --version strings were wrong.
-ARG IMAGE_REVISION=2
+# when anything in docker/minio/ changes without a version change. Published
+# tags are never overwritten: minio-image.yml fails if the tag exists but was
+# built from different docker/minio/ contents.
+#
+# Every reference to the tag must match; `node scripts/check-minio-image-tag.mjs`
+# (run in CI) lists the ones that do not. The first CI run on a bump fails at
+# the pull until minio-image.yml has published the new tag - re-run the failed
+# jobs once it has.
+#
+# History: r1 was the bare <MINIO_RELEASE> tag (doubled --version strings);
+# r2 fixed those; r3 adds coreutils and the context-hash label.
+ARG IMAGE_REVISION=3
 ARG MINIO_RELEASE=RELEASE.2024-10-13T13-34-11Z
 ARG MINIO_COMMIT=d10bb7e1b667c2df72c394ef1fa52ab4a6802d0f
 ARG MC_RELEASE=RELEASE.2024-10-08T09-37-26Z
@@ -73,8 +92,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:3.20
 ARG MINIO_RELEASE MINIO_COMMIT MC_RELEASE MC_COMMIT
+# sha256 of the docker/minio/ build context, passed by minio-image.yml; lets the
+# workflow tell whether a published tag was built from the current sources.
+ARG CONTEXT_SHA256=unset
 
-RUN apk add --no-cache ca-certificates curl
+RUN apk add --no-cache ca-certificates curl coreutils
 
 COPY --from=build /out/minio /out/mc /usr/bin/
 COPY --from=build --chmod=0755 /src/minio/dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
@@ -91,12 +113,13 @@ ENV MINIO_ACCESS_KEY_FILE=access_key \
     MC_CONFIG_DIR=/tmp/.mc
 
 LABEL org.opencontainers.image.source="https://github.com/apex-bridge/bugspotter" \
-      org.opencontainers.image.description="MinIO ${MINIO_RELEASE} + mc ${MC_RELEASE}, built from upstream source for BugSpotter dev/test" \
+      org.opencontainers.image.description="MinIO ${MINIO_RELEASE} + mc ${MC_RELEASE}, built from upstream source for BugSpotter" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.version="${MINIO_RELEASE}" \
       io.bugspotter.minio.source="https://github.com/minio/minio/tree/${MINIO_COMMIT}" \
       io.bugspotter.mc.source="https://github.com/minio/mc/tree/${MC_COMMIT}" \
-      io.bugspotter.mc.version="${MC_RELEASE}"
+      io.bugspotter.mc.version="${MC_RELEASE}" \
+      io.bugspotter.context.sha256="${CONTEXT_SHA256}"
 
 EXPOSE 9000
 VOLUME ["/data"]
