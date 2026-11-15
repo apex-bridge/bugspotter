@@ -3,15 +3,20 @@
 # explains why: upstream no longer publishes pullable images.
 #
 # Tags are immutable. The tag is <MINIO_RELEASE>-r<IMAGE_REVISION> from the
-# Dockerfile. If ghcr.io already has it, nothing is pushed, and the job fails
-# unless the published image was built from the same docker/minio/ contents
-# (io.bugspotter.context.sha256 label) - a change without a revision bump, or
-# two branches claiming the same revision, is caught instead of passing.
+# Dockerfile, and the image records io.bugspotter.context.sha256: a hash of the
+# Dockerfile with comment and blank lines removed (the build context has no
+# other inputs; smoke-test.sh is not part of the image). If the tag already
+# exists, nothing is pushed, and the job fails unless that hash matches - a
+# Dockerfile change without a revision bump is caught instead of passing.
+# Runs for the same tag are serialized (concurrency keyed on the tag), so two
+# branches claiming one revision cannot both see "missing" and both push; the
+# second one fails the hash check.
 #
 # Runs on push to any branch that touches the image, so a revision bump can be
-# published and exercised by CI before merge. Only repo writers can push
-# branches here (fork PRs do not trigger `push`), the same trust boundary as
-# pushing to main.
+# published and exercised by CI before merge. That means any repo writer can
+# publish a tag from a branch: the same trust as pushing to main, which has no
+# branch protection today. If main gets protected, restrict publishing to main
+# (and stage PR images under a separate tag) to keep that guarantee.
 #
 # CI and testcontainers pull this image without logging in, so the package
 # must be public; the job checks an anonymous pull at the end.
@@ -29,40 +34,56 @@ permissions:
   contents: read
   packages: write
 
-# Per ref: a shared group would let GitHub drop one branch's queued publish
-# when another branch's run arrives.
-concurrency:
-  group: minio-image-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   IMAGE: ghcr.io/${{ github.repository }}/minio
 
 jobs:
-  build:
-    name: Build, smoke-test and publish
+  versions:
+    name: Resolve tag
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      context_sha256: ${{ steps.v.outputs.context_sha256 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Read versions and hash the build context
+      - name: Read versions and hash the Dockerfile
         id: v
         run: |
-          arg() { sed -n "s/^ARG $1=//p" docker/minio/Dockerfile; }
+          f=docker/minio/Dockerfile
+          arg() { sed -n "s/^ARG $1=//p" "$f"; }
           minio=$(arg MINIO_RELEASE)
           rev=$(arg IMAGE_REVISION)
           if [ -z "$minio" ] || [ -z "$rev" ]; then
-            echo "::error::MINIO_RELEASE / IMAGE_REVISION missing in docker/minio/Dockerfile"
+            echo "::error::MINIO_RELEASE / IMAGE_REVISION missing in $f"
             exit 1
           fi
-          ctx=$(cd docker/minio && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+          # Keep the `# syntax=` parser directive; drop other comments and blank
+          # lines so documentation edits do not force a new tag.
+          ctx=$({ grep -E '^# syntax=' "$f"; grep -vE '^[[:space:]]*(#|$)' "$f"; } | sha256sum | cut -d' ' -f1)
           {
             echo "tag=$IMAGE:$minio-r$rev"
             echo "context_sha256=$ctx"
           } >> "$GITHUB_OUTPUT"
-          echo "tag $IMAGE:$minio-r$rev, context sha256 $ctx"
+          echo "tag $IMAGE:$minio-r$rev, Dockerfile sha256 $ctx"
+
+  build:
+    name: Build, smoke-test and publish
+    needs: versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Keyed on the tag, not the ref: serializes every run that could publish
+    # this tag, whichever branch it comes from.
+    concurrency:
+      group: minio-image-${{ needs.versions.outputs.tag }}
+      cancel-in-progress: false
+    env:
+      TAG: ${{ needs.versions.outputs.tag }}
+      CTX: ${{ needs.versions.outputs.context_sha256 }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -79,9 +100,6 @@ jobs:
 
       - name: Check whether the tag is already published
         id: exists
-        env:
-          TAG: ${{ steps.v.outputs.tag }}
-          CTX: ${{ steps.v.outputs.context_sha256 }}
         run: |
           # Only a confirmed not-found allows a push; any other error is retried
           # and then fails the job, so a registry hiccup can never let us push
@@ -103,11 +121,11 @@ jobs:
               docker pull -q --platform linux/amd64 "$TAG" >/dev/null
               got=$(docker image inspect -f '{{ index .Config.Labels "io.bugspotter.context.sha256" }}' "$TAG")
               if [ "$got" != "$CTX" ]; then
-                echo "::error::$TAG is already published from different docker/minio/ contents (label '$got', checkout '$CTX'). Bump IMAGE_REVISION in docker/minio/Dockerfile and update the references (node scripts/check-minio-image-tag.mjs lists them)."
+                echo "::error::$TAG is already published from a different Dockerfile (label '$got', checkout '$CTX'). Bump IMAGE_REVISION in docker/minio/Dockerfile and update the references (node scripts/check-minio-image-tag.mjs lists them)."
                 exit 1
               fi
               echo "exists=true" >> "$GITHUB_OUTPUT"
-              echo "::notice::$TAG is already published from these sources; not pushing"
+              echo "::notice::$TAG is already published from this Dockerfile; not rebuilding"
               ;;
             *)
               echo "::error::Could not determine whether $TAG exists; not publishing"
@@ -123,7 +141,7 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: minio-smoke:local
-          build-args: CONTEXT_SHA256=${{ steps.v.outputs.context_sha256 }}
+          build-args: CONTEXT_SHA256=${{ env.CTX }}
           cache-from: type=gha,scope=minio-image
           cache-to: type=gha,scope=minio-image,mode=max
 
@@ -138,22 +156,26 @@ jobs:
           context: docker/minio
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.v.outputs.tag }}
-          build-args: CONTEXT_SHA256=${{ steps.v.outputs.context_sha256 }}
+          tags: ${{ env.TAG }}
+          build-args: CONTEXT_SHA256=${{ env.CTX }}
           cache-from: type=gha,scope=minio-image
           cache-to: type=gha,scope=minio-image,mode=max
 
-      - name: Smoke test the published image (amd64 + arm64)
-        env:
-          TAG: ${{ steps.v.outputs.tag }}
+      - name: Smoke test the published image (amd64 + arm64, anonymous pull)
+        if: steps.exists.outputs.exists == 'false'
         run: |
           docker logout ghcr.io
-          # Anonymous pull first: CI and testcontainers pull without credentials.
-          for p in linux/amd64 linux/arm64; do
-            if ! docker pull -q --platform "$p" "$TAG" >/dev/null; then
-              echo "::error::$TAG ($p) is not publicly pullable. An org admin must set the package visibility to Public: https://github.com/orgs/apex-bridge/packages/container/package/bugspotter%2Fminio (Package settings > Change visibility)."
-              exit 1
-            fi
-          done
+          # smoke-test.sh pulls each platform itself, now without credentials.
           sh docker/minio/smoke-test.sh "$TAG" linux/amd64
           sh docker/minio/smoke-test.sh "$TAG" linux/arm64
+
+      - name: Check the image is publicly pullable
+        if: always() && steps.exists.outcome == 'success'
+        run: |
+          docker logout ghcr.io
+          if docker manifest inspect "$TAG" >/dev/null 2>&1; then
+            echo "Anonymous pull of $TAG works"
+          else
+            echo "::error::$TAG is not publicly pullable. An org admin must set the package visibility to Public: https://github.com/orgs/apex-bridge/packages/container/package/bugspotter%2Fminio (Package settings > Change visibility)."
+            exit 1
+          fi

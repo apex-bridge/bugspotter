@@ -327,8 +327,25 @@ jobs:
       - name: Run other tests
         run: pnpm --filter @bugspotter/backend test -- tests/storage tests/config tests/security tests/integration tests/utils tests/*.test.ts
 
+  # Gate for the jobs that pull the self-built MinIO image. A push that bumps
+  # docker/minio/ publishes it in minio-image.yml at the same time; waiting here,
+  # in a job with its own budget, keeps the wait out of the test jobs' timeouts.
+  # Returns after one check when the tag already exists. If it fails, the
+  # dependent jobs are skipped and the CI job reports them as not successful.
+  minio-image-ready:
+    name: MinIO image available
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for the MinIO image tag
+        run: node scripts/wait-for-minio-image.mjs --timeout-min 35
+
   test-backend-integration:
     name: Backend Integration Tests (Node ${{ matrix.node-version }})
+    needs: [minio-image-ready]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Required. Was previously non-blocking with `continue-on-error: true`
@@ -370,12 +387,6 @@ jobs:
       - name: Build billing package
         run: pnpm --filter @bugspotter/billing run build
 
-      # A push that bumps docker/minio/ publishes the image in minio-image.yml
-      # at the same time; wait for the tag instead of failing on "not found".
-      # Returns after one check when the tag already exists.
-      - name: Wait for the MinIO image
-        run: node scripts/wait-for-minio-image.mjs
-
       - name: Run integration tests
         # Testcontainers spins up Postgres/Redis automatically — Docker is
         # available on the GitHub-hosted runner.
@@ -389,7 +400,14 @@ jobs:
     # the last green run; unpin when Playwright is bumped.
     runs-on: ubuntu-24.04
     timeout-minutes: 30 # Prevent indefinite hangs (Docker + E2E tests)
-    needs: [test-backend-db, test-backend-api, test-backend-services, test-backend-other]
+    needs:
+      [
+        minio-image-ready,
+        test-backend-db,
+        test-backend-api,
+        test-backend-services,
+        test-backend-other,
+      ]
     env:
       CI: true
 
@@ -466,12 +484,6 @@ jobs:
             echo "COMPOSE_PROFILES=dev"
           } > .env
 
-      # A push that bumps docker/minio/ publishes the image in minio-image.yml
-      # at the same time; wait for the tag instead of failing on "not found".
-      # Returns after one check when the tag already exists.
-      - name: Wait for the MinIO image
-        run: node scripts/wait-for-minio-image.mjs
-
       - name: Pre-pull Docker images with retry
         run: |
           # Pre-pull images with retry logic to handle Docker Hub timeouts
@@ -506,7 +518,7 @@ jobs:
           pull_image "redis:7-alpine" || exit 1
           # MinIO server + mc in one image, built from source by minio-image.yml
           # (upstream images are no longer pullable).
-          pull_image "ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r3" || exit 1
+          pull_image "ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r4" || exit 1
           pull_image "node:22-alpine" || exit 1
 
           echo "✅ All Docker images pre-pulled successfully"

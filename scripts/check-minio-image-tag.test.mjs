@@ -109,3 +109,17 @@ test('does not flag prose or source URLs that mention upstream names', () => {
   const r = check(root);
   assert.equal(r.ok, true, r.problems.join('\n'));
 });
+
+test('flags registry-prefixed, multi-line quoted and untagged references', () => {
+  const root = repo({
+    'docker/minio/Dockerfile': dockerfile(),
+    'a.yml': `    image: quay.io/${UPSTREAM}:${REL}\n    image: ${IMG}\n`,
+    'b.test.ts': `new GenericContainer(\n  '${UPSTREAM}'\n)\n`,
+    'ok.yml': `${IMG}:${REL}-r3\n`,
+  });
+  const r = check(root);
+  assert.equal(r.problems.length, 3, r.problems.join('\n'));
+  assert.match(r.problems.join('\n'), /a\.yml:1: quay\.io\/.* no longer pullable/);
+  assert.match(r.problems.join('\n'), /a\.yml:2: .* has no tag/);
+  assert.match(r.problems.join('\n'), /b\.test\.ts:2: .* no longer pullable/);
+});

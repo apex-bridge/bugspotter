@@ -35,18 +35,21 @@
 
 # The published tag is <MINIO_RELEASE>-r<IMAGE_REVISION>. Bump the four
 # versions together and reset IMAGE_REVISION to 1; bump only IMAGE_REVISION
-# when anything in docker/minio/ changes without a version change. Published
-# tags are never overwritten: minio-image.yml fails if the tag exists but was
-# built from different docker/minio/ contents.
+# when a non-comment line of this Dockerfile changes without a version change.
+# Published tags are never overwritten: minio-image.yml fails if the tag exists
+# but was built from a different Dockerfile (comment and blank lines are not
+# hashed, and smoke-test.sh is not part of the image, so editing either needs
+# no bump).
 #
 # Every reference to the tag must match; `node scripts/check-minio-image-tag.mjs`
-# (run in CI) lists the ones that do not. The first CI run on a bump fails at
-# the pull until minio-image.yml has published the new tag - re-run the failed
-# jobs once it has.
+# (run in CI) lists the ones that do not. On a bump, ci.yml's
+# `minio-image-ready` job waits until minio-image.yml has published the new tag
+# before the integration and Admin E2E jobs start.
 #
 # History: r1 was the bare <MINIO_RELEASE> tag (doubled --version strings);
-# r2 fixed those; r3 adds coreutils and the context-hash label.
-ARG IMAGE_REVISION=3
+# r2 fixed those; r3 added coreutils and a context-hash label over all of
+# docker/minio/; r4 hashes only the Dockerfile's non-comment lines.
+ARG IMAGE_REVISION=4
 ARG MINIO_RELEASE=RELEASE.2024-10-13T13-34-11Z
 ARG MINIO_COMMIT=d10bb7e1b667c2df72c394ef1fa52ab4a6802d0f
 ARG MC_RELEASE=RELEASE.2024-10-08T09-37-26Z
@@ -92,8 +95,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:3.20
 ARG MINIO_RELEASE MINIO_COMMIT MC_RELEASE MC_COMMIT
-# sha256 of the docker/minio/ build context, passed by minio-image.yml; lets the
-# workflow tell whether a published tag was built from the current sources.
+# sha256 of this Dockerfile without comment/blank lines, passed by
+# minio-image.yml; lets the workflow tell whether a published tag was built
+# from the current Dockerfile.
 ARG CONTEXT_SHA256=unset
 
 RUN apk add --no-cache ca-certificates curl coreutils

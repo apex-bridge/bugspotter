@@ -14,7 +14,8 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const IMAGE = 'ghcr.io/apex-bridge/bugspotter/minio';
+// Assembled from parts so this file is not itself an untagged reference.
+const IMAGE = ['ghcr.io', 'apex-bridge', 'bugspotter', 'minio'].join('/');
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.turbo', '.next']);
 const EXTENSIONS = /\.(ya?ml|[cm]?[jt]sx?|md|json|sh|env\.example)$/i;
 
@@ -63,12 +64,22 @@ export function check(root) {
     };
   }
 
-  const ref = new RegExp(`${IMAGE.replaceAll('.', '\\.')}:[A-Za-z0-9._-]+`, 'g');
-  // Upstream images used as an image reference: tagged anywhere, or untagged on
-  // a line that pulls/runs an image. Prose ("minio/minio and minio/mc are gone")
-  // and github.com/minio/... URLs are not references.
-  const upstreamTagged = /(?<![\w./-])(?:docker\.io\/)?minio\/(?:minio|mc):[\w.-]+/g;
-  const upstreamBare = /(?<![\w./-])(?:docker\.io\/)?minio\/(?:minio|mc)(?=["'\s`]|$)/g;
+  const escaped = IMAGE.replaceAll('.', '\\.');
+  const ref = new RegExp(`${escaped}:[A-Za-z0-9._-]+`, 'g');
+  // Our image without a tag would pull :latest, which is never published.
+  const ownUntagged = new RegExp(`${escaped}(?![:\\w/-])`, 'g');
+  // Upstream images used as an image reference: tagged anywhere (optionally
+  // registry-prefixed, e.g. quay.io/), quoted on their own (a GenericContainer
+  // call whose image string sits on its own line), or untagged on a line that
+  // pulls/runs an image. Prose ("minio/minio and minio/mc are gone") and
+  // github.com/minio/... URLs are not references.
+  const registry = '(?:(?:docker\\.io|quay\\.io|ghcr\\.io|public\\.ecr\\.aws)\\/)?';
+  const upstreamTagged = new RegExp(`(?<![\\w./-])${registry}minio\\/(?:minio|mc):[\\w.-]+`, 'g');
+  const upstreamQuoted = new RegExp(`(?<=["'\`])${registry}minio\\/(?:minio|mc)(?=["'\`])`, 'g');
+  const upstreamBare = new RegExp(
+    `(?<![\\w./-])${registry}minio\\/(?:minio|mc)(?=["'\\s\`]|$)`,
+    'g'
+  );
   const pullsImage = /\bimage:|\bdocker\s+(?:run|pull)\b|GenericContainer\(|\bFROM\s/;
   const problems = [];
   let refs = 0;
@@ -82,12 +93,19 @@ export function check(root) {
           problems.push(`${where}: ${m[0]} (expected ${want})`);
         }
       }
-      const upstream = [...line.matchAll(upstreamTagged)];
+      for (const m of line.matchAll(ownUntagged)) {
+        problems.push(`${where}: ${m[0]} has no tag (would pull :latest); use ${want}`);
+      }
+      const upstream = new Set(
+        [...line.matchAll(upstreamTagged), ...line.matchAll(upstreamQuoted)].map((m) => m[0])
+      );
       if (pullsImage.test(line)) {
-        upstream.push(...line.matchAll(upstreamBare));
+        for (const m of line.matchAll(upstreamBare)) {
+          upstream.add(m[0]);
+        }
       }
       for (const m of upstream) {
-        problems.push(`${where}: ${m[0]} is no longer pullable; use ${want}`);
+        problems.push(`${where}: ${m} is no longer pullable; use ${want}`);
       }
     });
   }

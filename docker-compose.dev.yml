@@ -72,7 +72,7 @@ services:
   # MinIO S3-Compatible Storage
   # ==========================================================================
   minio:
-    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r3
+    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r4
     container_name: bugspotter-minio-dev
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -103,7 +103,7 @@ services:
   # MinIO Client - Create Bucket and Service Account on Startup
   # ==========================================================================
   minio-init:
-    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r3 # same image, ships mc RELEASE.2024-10-08T09-37-26Z
+    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r4 # same image, ships mc RELEASE.2024-10-08T09-37-26Z
     container_name: bugspotter-minio-init-dev
     depends_on:
       minio:
