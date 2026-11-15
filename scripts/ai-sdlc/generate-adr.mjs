@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Calls Claude to draft an ADR for a GitHub issue.
-// Run from the repo root. Reads existing ADRs for numbering + style.
+// Run from the repo root. Reads docs/adr/TEMPLATE.md for the format, existing
+// ADRs for numbering, and (for database-related issues) the migrations for a
+// computed table inventory.
 // Outputs adr_file, adr_number, adr_slug, and model to GITHUB_OUTPUT.
 //
 // Required env vars: ISSUE_NUMBER, ISSUE_TITLE, plus either
@@ -18,6 +20,7 @@ import {
   existsSync,
 } from 'node:fs';
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
+import { tableInventory, inventoryMarkdown, DEFAULT_MIGRATIONS_DIR } from './table-inventory.mjs';
 import { detectNarratedToolCall } from './detect-narration.mjs';
 import {
   parsePositiveMs,
@@ -51,11 +54,16 @@ const maxNum = existing.reduce((m, f) => Math.max(m, parseInt(f.slice(0, 4), 10)
 const nextNum = maxNum + 1;
 const padded = String(nextNum).padStart(4, '0');
 
-// Read one recent ADR as style example
-const exampleFile = existing.sort().slice(-1)[0];
-const exampleAdr = exampleFile
-  ? readFileSync(`docs/adr/${exampleFile}`, 'utf8').slice(0, 1200)
-  : '';
+// The format comes from docs/adr/TEMPLATE.md, not from "the newest ADR": each
+// ADR used to be the style example for the next, so length compounded (0042:
+// 75 lines, 0043: 108, 0044: 287, 0045's first draft: 336) and the template
+// in this prompt drifted from docs/adr/README.md's section order.
+const TEMPLATE_PATH = 'docs/adr/TEMPLATE.md';
+if (!existsSync(TEMPLATE_PATH)) {
+  console.error(`Missing ${TEMPLATE_PATH} - the ADR format is defined there.`);
+  process.exit(1);
+}
+const template = readFileSync(TEMPLATE_PATH, 'utf8');
 
 // generate-spec.mjs and verify-spec.mjs both inject docs/adr/README.md (the
 // cross-repo architecture index) into their prompts; this script did not,
@@ -77,84 +85,88 @@ function safeRead(path) {
 }
 const adrIndex = safeRead('docs/adr/README.md');
 
-const slug = ISSUE_TITLE.toLowerCase()
+// The whole spec, not its first 1,500 characters: ADR-0045's first draft
+// (PR #457) contradicted every constraint past that cut-off. The cap only
+// guards against a runaway input; real specs are well under it.
+const MAX_SPEC_CHARS = 60_000;
+const specText = SPEC_CONTENT?.trim() ?? '';
+const specForPrompt =
+  specText.length > MAX_SPEC_CHARS
+    ? `${specText.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
+    : specText;
+
+// File name: the spec's own "ADR: docs/adr/NNNN-slug.md" field when it names
+// the next free number, so the ADR lands where the spec (and its checks)
+// expect it; otherwise the next number plus a slug from the issue title.
+const titleSlug = ISSUE_TITLE.toLowerCase()
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '')
   .slice(0, 40);
+const specAdr = specText.match(/^ADR:\s*docs\/adr\/(\d{4})-([a-z0-9][a-z0-9-]*)\.md\s*$/m);
+const specSlugUsable = Boolean(specAdr) && parseInt(specAdr[1], 10) === nextNum;
+const slug = specSlugUsable ? specAdr[2] : titleSlug;
+if (specAdr && !specSlugUsable) {
+  console.warn(
+    `Spec names docs/adr/${specAdr[1]}-${specAdr[2]}.md but the next free ADR number is ${padded}; using the issue title for the slug.`
+  );
+}
 
 const adrFile = `docs/adr/${padded}-${slug}.md`;
+
+// Database-related issues get the real table list: the agent has no tools, and
+// without it ADR-0045's first draft wrote that it "does not have access to run
+// that grep" instead of an inventory.
+const dbRelated = /\b(tables?|migrations?|row[- ]level security|RLS|schema)\b/i.test(
+  `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
+);
+let inventory = '';
+if (dbRelated && existsSync(DEFAULT_MIGRATIONS_DIR)) {
+  const rows = tableInventory(DEFAULT_MIGRATIONS_DIR);
+  if (rows.length) {
+    inventory = `${inventoryMarkdown(rows)}\n(${rows.length} tables, computed from ${DEFAULT_MIGRATIONS_DIR}/*.sql)`;
+  }
+}
 
 const prompt = `\
 You are an architecture decision writer for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
 
-Draft ADR-${padded} for GitHub issue #${ISSUE_NUMBER}. Match the style of the example below exactly.
+Draft ADR-${padded} for GitHub issue #${ISSUE_NUMBER}, following the TEMPLATE below: its structure, its section order, and the rules in its comment block. Remove the template's HTML comments from your output.
 
-EXAMPLE ADR (for style reference only — do not copy its content):
-${exampleAdr}
+TEMPLATE (docs/adr/TEMPLATE.md):
+${template}
 ${
   adrIndex
     ? `\nPROJECT ARCHITECTURE INDEX (docs/adr/README.md — canonical record of which repo owns which component, language, and service boundary; do not state or assume any architecture fact that contradicts it):\n${adrIndex}\n`
     : ''
 }
-Required sections (use this exact structure):
-# ADR-${padded}: <title>
-
-- Status: Proposed
-- Area: <area>
-- Date: ${new Date().toISOString().slice(0, 10)}
-- Refs: #${ISSUE_NUMBER}${SPEC_CONTENT ? '; linked spec' : ''}
-
-## Context
-
-<why this decision is needed; what problem it solves>
-
-## Options considered
-
-1. **Option A** — description; tradeoffs
-2. **Option B** — description; tradeoffs
-(add more if genuinely distinct)
-
-## Decision
-
-<which option is chosen and why; constraints it satisfies>
-
-## Consequences
-
-**Positive:** ...
-**Negative / accepted:** ...
-**Neutral:** ...
+Use these values in the header: title line "# ADR-${padded}: <title>", "- Status: Proposed", "- Date: ${new Date().toISOString().slice(0, 10)}", and Refs starting with #${ISSUE_NUMBER}.
 
 ISSUE #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
 ${ISSUE_BODY?.trim() || '(no description)'}
-${SPEC_CONTENT ? `\nLINKED SPEC:\n${SPEC_CONTENT.slice(0, 1500)}` : ''}
-
+${specForPrompt ? `\nLINKED SPEC (full text; the ADR must not contradict any of its constraints or acceptance criteria):\n${specForPrompt}\n` : ''}${inventory ? `\nTABLE INVENTORY (computed from the migrations; authoritative - classify from this list, do not invent tables):\n${inventory}\n` : ''}
 Rules:
-- You have NO tools available — no Read, no Grep, no Bash. Everything you need is already in this prompt: the example ADR, the architecture index (if present), the issue body, and the linked spec (if any). Do not attempt a tool call and do not narrate one; if something you need is genuinely absent from them, make the smallest reasonable assumption and note it as a residual risk under Consequences rather than stopping to explore or narrating an exploration you cannot actually perform.
+- You have NO tools available — no Read, no Grep, no Bash. Everything you need is already in this prompt: the template, the architecture index (if present), the issue body, the linked spec (if any) and the table inventory (if any). Do not attempt a tool call and do not narrate one; if something you need is genuinely absent from them, make the smallest reasonable assumption and list it under "Risks and follow-ups" rather than stopping to explore or narrating an exploration you cannot actually perform.
 - Status must be "Proposed" (human ratifies and changes it to "Accepted")
-- Be concrete about consequences; call out residual risks explicitly
+- Where the spec requires specific content in the ADR (headings, lists, a table inventory, test categories), include it exactly as required, in an appendix if it is long
 - Do not state or imply that a component lives in this repo, in a particular language, or behind a particular service boundary if the architecture index above attributes it to a different repo — if the issue concerns such a component, say so explicitly rather than inventing an in-repo shape for it
-- Return ONLY the ADR document — no preamble, no explanation, no markdown fences`;
+- Return ONLY the ADR document — no preamble, no explanation, no markdown fences around the whole document`;
 
-const GENERATE_TIMEOUT_MS = 300_000;
+const GENERATE_TIMEOUT_MS = 420_000;
 let adrContent, stopReason;
 try {
-  // 300s. The previous 120s rested on a premise that is no longer true: it
-  // argued this prompt is "much smaller than generate-spec.mjs's (no
-  // TEMPLATE.md, no source-file tree)" and so needs less than that script's
-  // 180s. Both halves broke:
-  //   1. PR #273 added the same ~10KB ADR index here, so the input is no
-  //      longer in a different size class.
-  //   2. generate-spec's 180s was itself below its own measured runtime and
-  //      failed in practice (run 30752527569); it is now 420s, so "less
-  //      than generate-spec" is no longer a small number either.
-  // max_tokens here is still half of generate-spec's (2048 vs 4096), and
-  // output tokens dominate wall time, so ~300s is the proportionate budget
-  // rather than a flat copy of 420s. adr-agent.yml caps this step at 6m,
-  // above this 300s, inside a 15m job cap that holds only this one LLM call.
+  // 420s, the same as generate-spec.mjs. History: 120s assumed this prompt
+  // was much smaller than generate-spec's; PR #273 added the ~10KB ADR index,
+  // and generate-spec's own 180s failed in practice (run 30752527569), so it
+  // went to 300s. The prompt now also carries the full linked spec and, for
+  // database issues, the table inventory: a local end-to-end run on #451
+  // (22KB spec, 49-table inventory) took 270s, too close to 300s.
+  // max_tokens matches generate-spec's 4096 now that the prompt asks for
+  // spec-required appendices (on LLM_BACKEND=cli it is advisory only).
+  // adr-agent.yml caps this step at 10m, above this 420s, inside a 19m job.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
-    maxTokens: 2048,
+    maxTokens: 4096,
     timeoutMs: GENERATE_TIMEOUT_MS,
   }));
 } catch (err) {
@@ -163,7 +175,7 @@ try {
 }
 
 // Fail fast if truncated — matches the check in generate-impl.mjs. Without
-// it, a response cut short by the 2048 maxTokens cap would silently write a
+// it, a response cut short by the 4096 maxTokens cap would silently write a
 // truncated ADR to disk instead of erroring.
 if (stopReason === 'max_tokens') {
   console.error(
@@ -215,7 +227,7 @@ if (narrationFinding) {
       `attempt a tool call and do not narrate one. Return ONLY the ADR document, starting with ` +
       `"# ADR-${padded}: <title>", exactly as instructed above.`,
     callFn: (retryPrompt, timeoutMs) =>
-      callClaude({ prompt: retryPrompt, maxTokens: 2048, timeoutMs }),
+      callClaude({ prompt: retryPrompt, maxTokens: 4096, timeoutMs }),
     onNoBudget: (remaining) => {
       console.error(
         `::error::generate-adr.mjs: response looks like a narrated tool-call transcript, and only ` +

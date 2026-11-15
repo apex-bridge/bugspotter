@@ -9,7 +9,15 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -107,10 +115,30 @@ audit-login.tsx
 \`\`\`
 `;
 
+// A fixture template with a unique marker, so tests can tell whether the
+// prompt was built from TEMPLATE.md.
+const TEMPLATE_TEXT = [
+  '# ADR-NNNN: <short decision title>',
+  '',
+  '<!-- TEMPLATE_MARKER_7f3a: fixture rules -->',
+  '',
+  '## Context',
+  '## Decision',
+  '## Consequences',
+  '## Alternatives',
+  '',
+].join('\n');
+
+function writeRepoFile(path, body) {
+  const full = join(REPO, path);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, body);
+}
+
 let runSeq = 0;
 /**
  * Runs the real generate-adr.mjs against the temp repo.
- * @param {{text?: string, retryText?: string, env?: object}} [fakeResponses]
+ * @param {{text?: string, retryText?: string, env?: object, files?: object, noTemplate?: boolean}} [fakeResponses]
  */
 function runGenerateAdr(fakeResponses = {}) {
   const promptDump = join(BIN_DIR, `prompt-${runSeq++}.txt`);
@@ -119,6 +147,13 @@ function runGenerateAdr(fakeResponses = {}) {
   // ADR a prior run in this file wrote so a stale file can't make a "must
   // not be written" assertion pass for the wrong reason.
   rmSync(join(REPO, 'docs', 'adr'), { recursive: true, force: true });
+  rmSync(join(REPO, 'packages'), { recursive: true, force: true });
+  if (!fakeResponses.noTemplate) {
+    writeRepoFile('docs/adr/TEMPLATE.md', TEMPLATE_TEXT);
+  }
+  for (const [path, body] of Object.entries(fakeResponses.files ?? {})) {
+    writeRepoFile(path, body);
+  }
   const env = { ...process.env };
   delete env.GITHUB_OUTPUT;
   const result = spawnSync(process.execPath, [SCRIPT], {
@@ -232,5 +267,105 @@ describe('generate-adr.mjs narration detection', () => {
     );
     assert.match(r.stderr, /not enough for a safe corrective retry/);
     assert.equal(existsSync(adrPath()), false);
+  });
+});
+
+// --- TEMPLATE.md, full spec, file name, table inventory (PR for ADR format) ---
+
+const DB_MIGRATION = [
+  'CREATE TABLE IF NOT EXISTS fixture_projects (id UUID PRIMARY KEY DEFAULT gen_random_uuid());',
+  'CREATE TABLE fixture_users (id UUID, email TEXT);',
+  'ALTER TABLE fixture_projects ADD COLUMN organization_id UUID;',
+  '',
+].join('\n');
+const MIGRATION_FILES = {
+  'packages/backend/src/db/migrations/001_fixture.sql': DB_MIGRATION,
+};
+
+describe('generate-adr.mjs uses docs/adr/TEMPLATE.md', () => {
+  test('T1: the prompt carries the template and not the newest existing ADR', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: {
+        'docs/adr/0001-older-decision.md':
+          '# ADR-0001: Older\n\nNEWEST_ADR_MARKER_91c2 long prose\n',
+      },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /TEMPLATE_MARKER_7f3a/);
+    assert.doesNotMatch(r.firstPrompt, /NEWEST_ADR_MARKER_91c2/);
+    assert.doesNotMatch(r.firstPrompt, /## Options considered/, 'old inline template is gone');
+    assert.match(r.firstPrompt, /# ADR-0002: <title>/, 'numbering still skips existing ADRs');
+  });
+
+  test('T2: a missing template fails before any model call and writes nothing', () => {
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, noTemplate: true });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Missing docs\/adr\/TEMPLATE\.md/);
+    assert.equal(r.modelCallCount, 0);
+    assert.equal(existsSync(adrPath()), false);
+  });
+});
+
+describe('generate-adr.mjs passes the whole spec', () => {
+  test('T3a: text far past the old 1,500-character cut reaches the prompt', () => {
+    const spec = `# Spec: fixture\n\nADR: pending\n\n${'x'.repeat(20_000)}\nSPEC_TAIL_MARKER_5d0e\n`;
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /SPEC_TAIL_MARKER_5d0e/);
+  });
+
+  test('T3b: a runaway spec is cut at 60,000 characters with a visible note', () => {
+    const spec = `# Spec: fixture\n${'y'.repeat(70_000)}\nBEYOND_CAP_MARKER_aa11\n`;
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.firstPrompt, /BEYOND_CAP_MARKER_aa11/);
+    assert.match(r.firstPrompt, /\[spec truncated at 60000 characters\]/);
+  });
+});
+
+describe('generate-adr.mjs file name', () => {
+  test("T4a: the spec's ADR field sets the file name when its number is the next free one", () => {
+    const spec = '# Spec: fixture\n\nADR: docs/adr/0001-postgres-row-level-security.md\n';
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    const expected = join(REPO, 'docs', 'adr', '0001-postgres-row-level-security.md');
+    assert.ok(existsSync(expected), 'ADR written under the spec-declared name');
+    assert.equal(existsSync(adrPath()), false, 'not under the title slug');
+    assert.match(r.stdout, /adr_slug=postgres-row-level-security/);
+  });
+
+  test('T4b: a spec naming a taken number falls back to the title slug with a warning', () => {
+    const spec = '# Spec: fixture\n\nADR: docs/adr/0007-something-else.md\n';
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(adrPath()), 'falls back to 0001-fixture-issue.md');
+    assert.match(r.stderr, /next free ADR number is 0001/);
+  });
+});
+
+describe('generate-adr.mjs table inventory', () => {
+  test('T5a: a database-related issue gets the computed inventory', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Row-level security for tenant tables' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /TABLE INVENTORY/);
+    assert.match(r.firstPrompt, /\| fixture_projects \| organization_id \| 001_fixture\.sql \|/);
+    assert.match(r.firstPrompt, /\| fixture_users \| none \| 001_fixture\.sql \|/);
+    assert.match(r.firstPrompt, /\(2 tables, computed from/);
+  });
+
+  test('T5b: an unrelated issue gets no inventory even when migrations exist', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Admin sidebar icon colours', ISSUE_BODY: 'Make icons match the brand.' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);
+    assert.doesNotMatch(r.firstPrompt, /fixture_projects/);
   });
 });

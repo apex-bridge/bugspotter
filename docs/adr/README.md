@@ -6,7 +6,7 @@ This directory is the **cross-repo** ADR catalog for the BugSpotter platform. It
 
 ## Format
 
-Each record follows a light [MADR](https://adr.github.io/madr/) shape: **Context → Decision → Consequences → Alternatives**. One decision per file, numbered. Records are immutable once `Accepted`; a reversal is a _new_ ADR that marks the old one `Superseded`.
+Each record follows a light [MADR](https://adr.github.io/madr/) shape: **Context → Decision → Consequences → Alternatives**. Start from [TEMPLATE.md](TEMPLATE.md): it holds the section skeleton and the format rules (length, tables, diagrams), and the ADR agent (`scripts/ai-sdlc/generate-adr.mjs`) and the `write-adr` skill both use it. One decision per file, numbered. Records are immutable once `Accepted`; a reversal is a _new_ ADR that marks the old one `Superseded`.
 
 Where the source docs do not record a rationale or the alternatives that were weighed, the ADR says so ("Not recorded in docs") rather than inventing one.
 
