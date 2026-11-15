@@ -1,13 +1,12 @@
 ---
 name: write-adr
-description: Write or revise an Architecture Decision Record in docs/adr/ in this repo's concise format (decision summary, tables over prose, one rendered Mermaid diagram where a flow exists, appendices for required inventories). TRIGGER when asked to draft, rewrite, shorten or review an ADR, to "make the ADR more concise/readable/visual", or when an issue moves to the needs-adr stage and the ADR is written by hand instead of by adr-agent.
+description: Write, rewrite or review an ADR in docs/adr/ in the repo format (docs/adr/TEMPLATE.md). TRIGGER when asked to draft, shorten or review an ADR, or to write one by hand at the needs-adr stage.
 ---
 
 # write-adr
 
-The format lives in one place: `docs/adr/TEMPLATE.md`. `scripts/ai-sdlc/generate-adr.mjs`
-(the CI `adr-agent`) puts that file in its prompt; this skill points interactive sessions
-at the same file, so hand-written and agent-written ADRs look the same.
+The format is defined in `docs/adr/TEMPLATE.md`, the same file the CI `adr-agent`
+(`scripts/ai-sdlc/generate-adr.mjs`) uses.
 
 ## Steps
 

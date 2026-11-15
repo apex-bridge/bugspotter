@@ -8,7 +8,12 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tableInventory, inventoryMarkdown, DEFAULT_MIGRATIONS_DIR } from './table-inventory.mjs';
+import {
+  tableInventory,
+  inventoryMarkdown,
+  suggestedScope,
+  DEFAULT_MIGRATIONS_DIR,
+} from './table-inventory.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'table-inventory.mjs');
@@ -91,9 +96,9 @@ test('markdown lists every table, "none" for unscoped ones', () => {
     { table: 'a', columns: ['organization_id'], file: '001.sql' },
     { table: 'b', columns: [], file: '002.sql' },
   ]);
-  assert.match(md, /^\| Table \| Scoping columns \| Created in \|$/m);
-  assert.match(md, /^\| a \| organization_id \| 001\.sql \|$/m);
-  assert.match(md, /^\| b \| none \| 002\.sql \|$/m);
+  assert.match(md, /^\| Table \| Suggested scope \| Scoping columns \| Created in \|$/m);
+  assert.match(md, /^\| a \| org-scoped \| organization_id \| 001\.sql \|$/m);
+  assert.match(md, /^\| b \| global \| none \| 002\.sql \|$/m);
 });
 
 test('real migrations: one row per CREATE TABLE, known scoping facts hold', () => {
@@ -122,6 +127,41 @@ test('real migrations: one row per CREATE TABLE, known scoping facts hold', () =
 test('CLI prints the table and a count', () => {
   const dir = migrations({ '001.sql': 'CREATE TABLE t1 (organization_id UUID);' });
   const out = execFileSync('node', [SCRIPT, dir], { encoding: 'utf8' });
-  assert.match(out, /\| t1 \| organization_id \| 001\.sql \|/);
+  assert.match(out, /\| t1 \| org-scoped \| organization_id \| 001\.sql \|/);
   assert.match(out, /1 tables/);
+});
+
+test('suggested scope: organization first, then project paths, else global', () => {
+  assert.equal(suggestedScope(['organization_id', 'project_id']), 'org-scoped');
+  assert.equal(suggestedScope(['project_id']), 'project-scoped (via projects)');
+  assert.equal(suggestedScope(['bug_report_id']), 'project-scoped (via bug_reports)');
+  assert.equal(suggestedScope(['allowed_projects']), 'project-scoped (via allowed_projects)');
+  assert.equal(suggestedScope([]), 'global');
+});
+
+test('tenant_id counts as an organization scope (oidc_idp_config)', () => {
+  const dir = migrations({
+    '027.sql':
+      'CREATE TABLE oidc_idp_config (id UUID, tenant_id UUID NOT NULL REFERENCES organizations(id));',
+  });
+  const [row] = tableInventory(dir);
+  assert.deepEqual(row.columns, ['tenant_id']);
+  assert.equal(suggestedScope(row.columns), 'org-scoped (via tenant_id)');
+  const real = byName(tableInventory(join(REPO_ROOT, DEFAULT_MIGRATIONS_DIR)));
+  assert.deepEqual(real.oidc_idp_config.columns, ['tenant_id'], 'real 027 migration');
+});
+
+test('schema and table quoted separately are parsed, in CREATE and ALTER', () => {
+  const dir = migrations({
+    '001.sql': [
+      'CREATE TABLE "application"."projects" (id UUID);',
+      'CREATE TABLE IF NOT EXISTS application . "api_keys" (id UUID);',
+      'ALTER TABLE "application"."api_keys" ADD COLUMN organization_id UUID;',
+      'ALTER TABLE ONLY "application".projects ADD COLUMN IF NOT EXISTS project_id UUID;',
+    ].join('\n'),
+  });
+  const t = byName(tableInventory(dir));
+  assert.deepEqual(Object.keys(t).sort(), ['api_keys', 'projects']);
+  assert.deepEqual(t.api_keys.columns, ['organization_id']);
+  assert.deepEqual(t.projects.columns, ['project_id']);
 });

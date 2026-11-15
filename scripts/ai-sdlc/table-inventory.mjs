@@ -16,17 +16,22 @@ import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_MIGRATIONS_DIR = 'packages/backend/src/db/migrations';
 
-// Columns that tie a row to a tenant directly (organization_id) or through a
-// parent row (project_id, bug_report_id) or a list of projects (api_keys).
+// Columns that tie a row to a tenant directly (organization_id; tenant_id in
+// oidc_idp_config, 027_oidc_idp_config.sql:21) or through a parent row
+// (project_id, bug_report_id) or a list of projects (api_keys).
 export const SCOPING_COLUMNS = [
   'organization_id',
+  'tenant_id',
   'project_id',
   'bug_report_id',
   'allowed_projects',
 ];
 
 const stripComments = (sql) => sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '');
-const bareName = (name) => name.replaceAll('"', '').split('.').pop().toLowerCase();
+const bareName = (name) => name.replaceAll('"', '').split('.').pop().trim().toLowerCase();
+// A table name, optionally schema-qualified, with either part optionally quoted:
+// projects, application.projects, "api_keys", "application"."projects".
+const IDENT = '(?:"[^"]+"|\\w+)(?:\\s*\\.\\s*(?:"[^"]+"|\\w+))?';
 const columnRe = new RegExp(`\\b(${SCOPING_COLUMNS.join('|')})\\b`, 'gi');
 
 // Text of the parenthesised column list that starts at `open` (an index of "(").
@@ -54,8 +59,14 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
   const files = readdirSync(migrationsDir)
     .filter((f) => f.endsWith('.sql'))
     .sort();
-  const create = /\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?("?[\w.]+"?)\s*\(/gi;
-  const alter = /\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?("?[\w.]+"?)\s+([^;]*)/gi;
+  const create = new RegExp(
+    `\\bCREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(${IDENT})\\s*\\(`,
+    'gi'
+  );
+  const alter = new RegExp(
+    `\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?(${IDENT})\\s+([^;]*)`,
+    'gi'
+  );
   const addColumn = new RegExp(
     `\\bADD\\s+(?:COLUMN\\s+)?(?:IF\\s+NOT\\s+EXISTS\\s+)?(${SCOPING_COLUMNS.join('|')})\\b`,
     'gi'
@@ -87,11 +98,35 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
     .sort((a, b) => a.table.localeCompare(b.table));
 }
 
+// Mechanical first guess from the columns, so the ADR author confirms a scope
+// instead of deriving every one (and only argues the global ones).
+export function suggestedScope(columns) {
+  if (columns.includes('organization_id')) {
+    return 'org-scoped';
+  }
+  if (columns.includes('tenant_id')) {
+    return 'org-scoped (via tenant_id)';
+  }
+  if (columns.includes('project_id')) {
+    return 'project-scoped (via projects)';
+  }
+  if (columns.includes('bug_report_id')) {
+    return 'project-scoped (via bug_reports)';
+  }
+  if (columns.includes('allowed_projects')) {
+    return 'project-scoped (via allowed_projects)';
+  }
+  return 'global';
+}
+
 export function inventoryMarkdown(rows) {
   return [
-    '| Table | Scoping columns | Created in |',
-    '| ----- | --------------- | ---------- |',
-    ...rows.map((r) => `| ${r.table} | ${r.columns.join(', ') || 'none'} | ${r.file} |`),
+    '| Table | Suggested scope | Scoping columns | Created in |',
+    '| ----- | --------------- | --------------- | ---------- |',
+    ...rows.map(
+      (r) =>
+        `| ${r.table} | ${suggestedScope(r.columns)} | ${r.columns.join(', ') || 'none'} | ${r.file} |`
+    ),
   ].join('\n');
 }
 

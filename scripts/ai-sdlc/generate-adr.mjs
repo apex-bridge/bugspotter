@@ -21,6 +21,7 @@ import {
 } from 'node:fs';
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
 import { tableInventory, inventoryMarkdown, DEFAULT_MIGRATIONS_DIR } from './table-inventory.mjs';
+import { specForAdr } from './spec-sections.mjs';
 import { detectNarratedToolCall } from './detect-narration.mjs';
 import {
   parsePositiveMs,
@@ -54,10 +55,7 @@ const maxNum = existing.reduce((m, f) => Math.max(m, parseInt(f.slice(0, 4), 10)
 const nextNum = maxNum + 1;
 const padded = String(nextNum).padStart(4, '0');
 
-// The format comes from docs/adr/TEMPLATE.md, not from "the newest ADR": each
-// ADR used to be the style example for the next, so length compounded (0042:
-// 75 lines, 0043: 108, 0044: 287, 0045's first draft: 336) and the template
-// in this prompt drifted from docs/adr/README.md's section order.
+// Format from the template, not the newest ADR (copying it made each ADR longer; #458).
 const TEMPLATE_PATH = 'docs/adr/TEMPLATE.md';
 if (!existsSync(TEMPLATE_PATH)) {
   console.error(`Missing ${TEMPLATE_PATH} - the ADR format is defined there.`);
@@ -85,19 +83,9 @@ function safeRead(path) {
 }
 const adrIndex = safeRead('docs/adr/README.md');
 
-// The whole spec, not its first 1,500 characters: ADR-0045's first draft
-// (PR #457) contradicted every constraint past that cut-off. The cap only
-// guards against a runaway input; real specs are well under it.
-const MAX_SPEC_CHARS = 60_000;
 const specText = SPEC_CONTENT?.trim() ?? '';
-const specForPrompt =
-  specText.length > MAX_SPEC_CHARS
-    ? `${specText.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
-    : specText;
 
-// File name: the spec's own "ADR: docs/adr/NNNN-slug.md" field when it names
-// the next free number, so the ADR lands where the spec (and its checks)
-// expect it; otherwise the next number plus a slug from the issue title.
+// File name from the spec's "ADR:" field if it names the next free number, else the issue title.
 const titleSlug = ISSUE_TITLE.toLowerCase()
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '')
@@ -113,9 +101,16 @@ if (specAdr && !specSlugUsable) {
 
 const adrFile = `docs/adr/${padded}-${slug}.md`;
 
-// Database-related issues get the real table list: the agent has no tools, and
-// without it ADR-0045's first draft wrote that it "does not have access to run
-// that grep" instead of an inventory.
+// The spec's decision sections, not the first 1,500 chars (that cut made ADR-0045's
+// draft contradict it) and not the whole spec (2 of 3 runs then timed out). #458.
+const MAX_SPEC_CHARS = 60_000;
+const specInput = specText ? (specForAdr(specText, adrFile) ?? specText) : '';
+const specForPrompt =
+  specInput.length > MAX_SPEC_CHARS
+    ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
+    : specInput;
+
+// The agent has no tools, so database issues get the table list computed here (#458).
 const dbRelated = /\b(tables?|migrations?|row[- ]level security|RLS|schema)\b/i.test(
   `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
 );
@@ -127,30 +122,32 @@ if (dbRelated && existsSync(DEFAULT_MIGRATIONS_DIR)) {
   }
 }
 
-const prompt = `\
-You are an architecture decision writer for BugSpotter, a SaaS bug-reporting platform (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs).
+// Each rule is listed only when its input is in the prompt.
+const rules = [
+  'Follow the TEMPLATE: its structure, its section order and the rules in its comment block. Leave out its HTML comments.',
+  `Header: "# ADR-${padded}: <title>", "- Status: Proposed", "- Date: ${new Date().toISOString().slice(0, 10)}", Refs starting with #${ISSUE_NUMBER}. A human sets Accepted.`,
+  specForPrompt &&
+    'Do not contradict the LINKED SPEC. Content it requires inside the ADR goes in exactly as required; long material goes in an appendix.',
+  inventory &&
+    'Classify tables only from the TABLE INVENTORY. Keep its suggested scope unless the spec says otherwise, and give a one-line reason for every global table.',
+  adrIndex &&
+    'Architecture facts must match the ARCHITECTURE INDEX. If a component lives in another repo, say so instead of inventing an in-repo shape.',
+  'You have NO tools available. Do not attempt a tool call and do not narrate one. If something is missing, make the smallest reasonable assumption and list it under "Risks and follow-ups".',
+  'Output only the ADR document, without a code fence around it.',
+].filter(Boolean);
 
-Draft ADR-${padded} for GitHub issue #${ISSUE_NUMBER}, following the TEMPLATE below: its structure, its section order, and the rules in its comment block. Remove the template's HTML comments from your output.
+const prompt = `\
+You are writing ADR-${padded} for BugSpotter (Fastify + TypeScript + Postgres + Redis; pnpm monorepo; Docker Compose on VMs), from GitHub issue #${ISSUE_NUMBER}. The inputs come first; the rules are at the end.
 
 TEMPLATE (docs/adr/TEMPLATE.md):
 ${template}
-${
-  adrIndex
-    ? `\nPROJECT ARCHITECTURE INDEX (docs/adr/README.md — canonical record of which repo owns which component, language, and service boundary; do not state or assume any architecture fact that contradicts it):\n${adrIndex}\n`
-    : ''
-}
-Use these values in the header: title line "# ADR-${padded}: <title>", "- Status: Proposed", "- Date: ${new Date().toISOString().slice(0, 10)}", and Refs starting with #${ISSUE_NUMBER}.
-
+${adrIndex ? `\nARCHITECTURE INDEX (docs/adr/README.md):\n${adrIndex}\n` : ''}
 ISSUE #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
 ${ISSUE_BODY?.trim() || '(no description)'}
-${specForPrompt ? `\nLINKED SPEC (full text; the ADR must not contradict any of its constraints or acceptance criteria):\n${specForPrompt}\n` : ''}${inventory ? `\nTABLE INVENTORY (computed from the migrations; authoritative - classify from this list, do not invent tables):\n${inventory}\n` : ''}
+${specForPrompt ? `\nLINKED SPEC (sections relevant to the ADR; its tests, verification and other files' changes are left out):\n${specForPrompt}\n` : ''}${inventory ? `\nTABLE INVENTORY (computed from the migrations):\n${inventory}\n` : ''}
 Rules:
-- You have NO tools available — no Read, no Grep, no Bash. Everything you need is already in this prompt: the template, the architecture index (if present), the issue body, the linked spec (if any) and the table inventory (if any). Do not attempt a tool call and do not narrate one; if something you need is genuinely absent from them, make the smallest reasonable assumption and list it under "Risks and follow-ups" rather than stopping to explore or narrating an exploration you cannot actually perform.
-- Status must be "Proposed" (human ratifies and changes it to "Accepted")
-- Where the spec requires specific content in the ADR (headings, lists, a table inventory, test categories), include it exactly as required, in an appendix if it is long
-- Do not state or imply that a component lives in this repo, in a particular language, or behind a particular service boundary if the architecture index above attributes it to a different repo — if the issue concerns such a component, say so explicitly rather than inventing an in-repo shape for it
-- Return ONLY the ADR document — no preamble, no explanation, no markdown fences around the whole document`;
+${rules.map((r) => `- ${r}`).join('\n')}`;
 
 const GENERATE_TIMEOUT_MS = 420_000;
 let adrContent, stopReason;

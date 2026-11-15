@@ -1,23 +1,19 @@
 # ADR-NNNN: <short decision title>
 
-<!-- Template for every ADR: scripts/ai-sdlc/generate-adr.mjs puts this file in
-     its prompt, and .claude/skills/write-adr points interactive sessions here.
-     Delete all HTML comments when filling it in.
+<!-- ADR template. Used by scripts/ai-sdlc/generate-adr.mjs and the write-adr
+     skill. Delete these comments when filling it in.
 
-     Rules:
-     - Main body (title through Alternatives) fits on one or two screens:
-       aim for <= 120 lines. Long material that an issue explicitly requires
-       inside the ADR (a table inventory, a test matrix) goes to an appendix.
-     - Tables over paragraphs. A paragraph is for reasoning, not for listing.
-     - One Mermaid diagram when the decision has a real flow, boundary or
-       before/after; none for a one-line policy. Quote node labels that contain
-       punctuation: A["withBypass(reason, fn)"]. Keep it under ~15 nodes and
-       render it before merge (docs/adr/README.md).
-     - Facts about this repo carry a file:line, or are marked "unverified".
-       Do not write about what the author could or could not run or read.
-     - The ADR records what is decided and why. File lists, migrations and
-       per-slice steps belong in the spec; link to it instead of repeating it.
-     - Status stays Proposed; a human reviewer sets Accepted. -->
+     - Main body (title to Alternatives): one or two screens, about 120 lines.
+       Long material a spec requires inside the ADR goes in an appendix.
+     - Tables for lists and comparisons; paragraphs only for reasoning.
+     - One Mermaid diagram if there is a real flow, boundary or before/after.
+       Quote labels with punctuation: A["withBypass(reason, fn)"]. Under ~15
+       nodes. Render it before merge (docs/adr/README.md).
+     - Repo facts carry file:line, or are marked "unverified". No notes about
+       what the author could or could not run.
+     - Decide what and why here; file lists and per-slice steps belong in the
+       spec. Link to it.
+     - Status stays Proposed; a human sets Accepted. -->
 
 - Status: Proposed
 - Area: <area>

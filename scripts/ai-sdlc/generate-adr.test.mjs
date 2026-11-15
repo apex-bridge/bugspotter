@@ -296,6 +296,7 @@ describe('generate-adr.mjs uses docs/adr/TEMPLATE.md', () => {
     assert.doesNotMatch(r.firstPrompt, /NEWEST_ADR_MARKER_91c2/);
     assert.doesNotMatch(r.firstPrompt, /## Options considered/, 'old inline template is gone');
     assert.match(r.firstPrompt, /# ADR-0002: <title>/, 'numbering still skips existing ADRs');
+    assert.doesNotMatch(r.firstPrompt, /LINKED SPEC/, 'no spec, so no spec rule');
   });
 
   test('T2: a missing template fails before any model call and writes nothing', () => {
@@ -313,6 +314,11 @@ describe('generate-adr.mjs passes the whole spec', () => {
     const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.firstPrompt, /SPEC_TAIL_MARKER_5d0e/);
+    assert.match(
+      r.firstPrompt,
+      /- Do not contradict the LINKED SPEC\./,
+      'spec rule appears with a spec'
+    );
   });
 
   test('T3b: a runaway spec is cut at 60,000 characters with a visible note', () => {
@@ -353,8 +359,11 @@ describe('generate-adr.mjs table inventory', () => {
     });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.firstPrompt, /TABLE INVENTORY/);
-    assert.match(r.firstPrompt, /\| fixture_projects \| organization_id \| 001_fixture\.sql \|/);
-    assert.match(r.firstPrompt, /\| fixture_users \| none \| 001_fixture\.sql \|/);
+    assert.match(
+      r.firstPrompt,
+      /\| fixture_projects \| org-scoped \| organization_id \| 001_fixture\.sql \|/
+    );
+    assert.match(r.firstPrompt, /\| fixture_users \| global \| none \| 001_fixture\.sql \|/);
     assert.match(r.firstPrompt, /\(2 tables, computed from/);
   });
 
@@ -367,5 +376,33 @@ describe('generate-adr.mjs table inventory', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);
     assert.doesNotMatch(r.firstPrompt, /fixture_projects/);
+  });
+});
+
+describe('generate-adr.mjs sends the decision sections of a templated spec', () => {
+  test('T3c: constraints reach the prompt; the spec tests and verification do not', () => {
+    const spec = [
+      '# Spec: fixture',
+      '',
+      'ADR: docs/adr/0001-fixture-issue.md',
+      '',
+      '## Problem',
+      'PROBLEM_MARKER_e1',
+      '## Constraints',
+      '1. CONSTRAINT_MARKER_e2',
+      '## Acceptance criteria',
+      '- [ ] AC_MARKER_e3',
+      '## Tests',
+      'TESTS_MARKER_e4',
+      '## Verification',
+      'VERIFY_MARKER_e5',
+      '',
+    ].join('\n');
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    for (const m of ['PROBLEM_MARKER_e1', 'CONSTRAINT_MARKER_e2', 'AC_MARKER_e3']) {
+      assert.ok(r.firstPrompt.includes(m), `missing ${m}`);
+    }
+    assert.doesNotMatch(r.firstPrompt, /TESTS_MARKER_e4|VERIFY_MARKER_e5/);
   });
 });
