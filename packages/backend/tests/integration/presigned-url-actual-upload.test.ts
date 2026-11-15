@@ -32,7 +32,9 @@ describe('Presigned URL - Actual HTTP Upload', () => {
     process.env.REDIS_URL = redisUrl;
 
     // Start MinIO container for realistic S3-compatible testing
-    minioContainer = await new GenericContainer('minio/minio:RELEASE.2024-10-13T13-34-11Z')
+    minioContainer = await new GenericContainer(
+      'ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r4'
+    )
       .withExposedPorts(9000, 9001)
       .withEnvironment({
         MINIO_ROOT_USER: 'bugspotter-test-admin',
