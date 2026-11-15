@@ -37,6 +37,7 @@ Tenant isolation today is enforced entirely in application code — every reposi
 - [ ] The ADR's Testing Strategy section contains all 11 test category names from #450 verbatim — verified by Test case C.
 - [ ] `docs/adr/README.md` has a new Era 7 row for ADR-0045 (consistent with the existing table format) — verified by Test case D.
 - [ ] `docs/specs/0451-rls-rollout-slices-2-7.md` exists and, for each of slices 2-7, lists: the files touched (with an explicit count ≤6), the migration file(s) it adds, and which named test categories from #450 it must add tests for — verified by Test case E.
+- [ ] The ADR's `### Table inventory` subsection classifies every table created in the migrations matched by the Constraint 6 grep as `org-scoped`, `project-scoped`, or `global`, and every `global` row has a non-empty reason — verified by Test case F.
 - [ ] Each of the 6 follow-up GitHub issues for slices 2-7 is filed with a non-empty `Blocking prerequisites` field — this is a manual filing step tracked outside this repo's test suite, called out explicitly in Verification below since it cannot be grep-checked from a local clone.
 
 ## Changes
@@ -68,10 +69,21 @@ Status: Accepted
    with BYPASSRLS, gated behind an audit-log write on every use.
 4. Policy shape: USING + WITH CHECK on every policy, FORCE ROW LEVEL SECURITY, fail-closed
    on NULL/empty app.current_org_id.
-5. Table inventory: <table classification, produced from the grep in Constraint 6>
+5. Table inventory: see the `### Table inventory` subsection below.
 6. Self-hosted mode: <single-tenant decision — RLS enabled with a fixed/default org_id,
    or RLS skipped entirely; must state which and why>
 7. Rollout order: slice-by-slice plan referencing docs/specs/0451-rls-rollout-slices-2-7.md
+
+### Table inventory
+
+<!-- one row per table created in the migrations matched by the Constraint 6 grep;
+     Scope is exactly one of org-scoped / project-scoped / global; Reason is required for global -->
+
+| Table   | Scope          | Reason            |
+| ------- | -------------- | ----------------- |
+| <table> | org-scoped     |                   |
+| <table> | project-scoped |                   |
+| <table> | global         | <one-line reason> |
 
 ## Testing Strategy
 
@@ -147,12 +159,34 @@ grep -q 'BYPASSRLS\|bypass' docs/adr/0045-postgres-row-level-security.md
 
 **Test case C — Testing Strategy section names all 11 categories verbatim (AC #3):**
 
+Only the text between `## Testing Strategy` and the next `## ` heading is searched, so a category named elsewhere in the ADR does not satisfy the check.
+
 ```bash
+ADR=docs/adr/0045-postgres-row-level-security.md
+ts=$(awk '/^## Testing Strategy/{f=1;next} /^## /{f=0} f' "$ADR")
+[ -n "$ts" ] || echo "MISSING: ## Testing Strategy section"
 for cat in "bypass-proof" "per-table CRUD matrix" "fail-closed" "pooled-connection leak" \
            "concurrency" "role assertions" "bypass paths" "full-suite regression" \
            "self-hosted mode" "performance budget" "migration up/down"; do
-  grep -qi "$cat" docs/adr/0045-postgres-row-level-security.md || echo "MISSING: $cat"
+  printf '%s\n' "$ts" | grep -qiF "$cat" || echo "MISSING: $cat"
 done
+```
+
+**Test case F — Table inventory classifies every table from the Constraint 6 grep (AC #6):**
+
+Table names are taken from `CREATE TABLE` statements in the migrations the Constraint 6 grep matches; each must have a row in the `### Table inventory` subsection with scope `org-scoped`, `project-scoped`, or `global`, and no `global` row may have an empty reason.
+
+```bash
+ADR=docs/adr/0045-postgres-row-level-security.md
+inv=$(awk '/^### Table inventory/{f=1;next} /^##/{f=0} f' "$ADR")
+[ -n "$inv" ] || echo "MISSING: ### Table inventory subsection"
+for t in $(grep -liE "organization_id|project_id" packages/backend/src/db/migrations/*.sql \
+           | xargs grep -hoiE '^[[:space:]]*create table( if not exists)? [a-z_.]+' \
+           | awk '{print tolower($NF)}' | sort -u); do
+  printf '%s\n' "$inv" | grep -qiE "^\| *\`?$t\`? *\| *(org-scoped|project-scoped|global) *\|" \
+    || echo "UNCLASSIFIED: $t"
+done
+printf '%s\n' "$inv" | grep -iE '^\| *[^|]+\| *global *\| *\|? *$' | sed 's/^/GLOBAL WITHOUT REASON: /'
 ```
 
 ### Validation of `docs/adr/README.md`
@@ -175,8 +209,9 @@ done
 
 ## Verification
 
+Run from the repository root on the branch under review (or on `main` after merge); Test cases A-F above are the full check.
+
 ````bash
-git checkout main && git pull
 grep -liE "organization_id|project_id" packages/backend/src/db/migrations/*.sql
 grep -q '^Status: Accepted' docs/adr/0045-postgres-row-level-security.md
 grep -q '0045-postgres-row-level-security.md' docs/adr/README.md
