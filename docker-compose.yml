@@ -250,7 +250,7 @@ services:
   minio:
     <<: *default-logging
     profiles: [dev]
-    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z
+    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r2
     container_name: bugspotter-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -282,7 +282,7 @@ services:
   minio-init:
     <<: *default-logging
     profiles: [dev]
-    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z # same image, ships mc RELEASE.2024-10-08T09-37-26Z
+    image: ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r2 # same image, ships mc RELEASE.2024-10-08T09-37-26Z
     container_name: bugspotter-minio-init
     restart: on-failure
     depends_on:

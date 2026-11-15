@@ -141,7 +141,7 @@ curl -X POST http://localhost:3000/api/v1/auth/register \
 
 ### MinIO (`minio`)
 
-- **Image**: `ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z`
+- **Image**: `ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r2`
 - **Ports**:
   - 9000: S3 API
   - 9001: Web Console

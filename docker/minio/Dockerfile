@@ -8,7 +8,7 @@
 # dl.min.io return 410 Gone. CI, the Admin E2E/integration tests and the
 # docker-compose dev profile pull this image instead:
 #
-#   ghcr.io/apex-bridge/bugspotter/minio:<MINIO_RELEASE>
+#   ghcr.io/apex-bridge/bugspotter/minio:<MINIO_RELEASE>-r<IMAGE_REVISION>
 #
 # Published by .github/workflows/minio-image.yml. Dev/test use only.
 #
@@ -21,8 +21,13 @@
 # commits below; LICENSE/CREDITS are copied to /licenses and the source
 # location is recorded in the image labels.
 
-# Bump all four together, then update the image tag in ci.yml,
-# docker-compose*.yml, DOCKER.md and the two testcontainers call sites.
+# The published tag is <MINIO_RELEASE>-r<IMAGE_REVISION>. Bump the four
+# versions together and reset IMAGE_REVISION to 1; bump only IMAGE_REVISION
+# when the image changes without a version change (published tags are never
+# overwritten). Then update the tag in ci.yml, docker-compose*.yml, DOCKER.md,
+# the two testcontainers call sites and storage.integration.test.ts.
+# r1 was the bare <MINIO_RELEASE> tag, whose --version strings were wrong.
+ARG IMAGE_REVISION=2
 ARG MINIO_RELEASE=RELEASE.2024-10-13T13-34-11Z
 ARG MINIO_COMMIT=d10bb7e1b667c2df72c394ef1fa52ab4a6802d0f
 ARG MC_RELEASE=RELEASE.2024-10-08T09-37-26Z
@@ -49,8 +54,10 @@ RUN set -eu; \
     fetch mc "$MC_RELEASE" "$MC_COMMIT"
 
 # Same flags as upstream `make build`. gen-ldflags.go turns an RFC3339 time
-# into the RELEASE.* tag, so pass the tag's own time to get the exact
-# `minio --version` / `mc --version` string of the official binaries.
+# into "<prefix>.<time>", taking the prefix from $MINIO_RELEASE / $MC_RELEASE
+# (upstream's release builds set them to "RELEASE"). Those names collide with
+# our build args, which RUN sees as env vars, so override them to "RELEASE" for
+# `go run` only - otherwise the version reads RELEASE.<time>.<time>.
 # `go run` runs on the build platform; only `go build` cross-compiles.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -58,10 +65,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     rfc3339() { echo "$1" | sed -E 's/^RELEASE\.([0-9-]+)T([0-9]+)-([0-9]+)-([0-9]+)Z$/\1T\2:\3:\4Z/'; }; \
     mkdir -p /out; \
     cd /src/minio; \
-    ld=$(go run buildscripts/gen-ldflags.go "$(rfc3339 "$MINIO_RELEASE")"); \
+    ld=$(MINIO_RELEASE=RELEASE go run buildscripts/gen-ldflags.go "$(rfc3339 "$MINIO_RELEASE")"); \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags kqueue -trimpath -ldflags "$ld" -o /out/minio; \
     cd /src/mc; \
-    ld=$(go run buildscripts/gen-ldflags.go "$(rfc3339 "$MC_RELEASE")"); \
+    ld=$(MC_RELEASE=RELEASE go run buildscripts/gen-ldflags.go "$(rfc3339 "$MC_RELEASE")"); \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags kqueue -trimpath -ldflags "$ld" -o /out/mc
 
 FROM alpine:3.20

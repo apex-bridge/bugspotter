@@ -33,7 +33,7 @@ describe('Presigned URL - Actual HTTP Upload', () => {
 
     // Start MinIO container for realistic S3-compatible testing
     minioContainer = await new GenericContainer(
-      'ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z'
+      'ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r2'
     )
       .withExposedPorts(9000, 9001)
       .withEnvironment({

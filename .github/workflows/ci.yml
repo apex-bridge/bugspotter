@@ -486,7 +486,7 @@ jobs:
           pull_image "redis:7-alpine" || exit 1
           # MinIO server + mc in one image, built from source by minio-image.yml
           # (upstream images are no longer pullable).
-          pull_image "ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z" || exit 1
+          pull_image "ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r2" || exit 1
           pull_image "node:22-alpine" || exit 1
 
           echo "✅ All Docker images pre-pulled successfully"

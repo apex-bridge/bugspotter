@@ -2,9 +2,9 @@
 # (docker/minio/Dockerfile) and publishes it to ghcr.io. The Dockerfile header
 # explains why: upstream no longer publishes pullable images.
 #
-# Tags are immutable. The tag is the MINIO_RELEASE in the Dockerfile; if
-# ghcr.io already has it, the job still builds and smoke-tests but does not
-# push. Bumping the versions in the Dockerfile produces a new tag.
+# Tags are immutable. The tag is <MINIO_RELEASE>-r<IMAGE_REVISION> from the
+# Dockerfile; if ghcr.io already has it, the job still builds and smoke-tests
+# but does not push. A version or revision bump produces a new tag.
 #
 # Runs on push to any branch that touches the image, so a version bump can be
 # published and exercised by CI before merge. Only repo writers can push
@@ -46,16 +46,22 @@ jobs:
       - name: Read versions from Dockerfile
         id: v
         run: |
-          minio=$(sed -n 's/^ARG MINIO_RELEASE=//p' docker/minio/Dockerfile)
-          mc=$(sed -n 's/^ARG MC_RELEASE=//p' docker/minio/Dockerfile)
-          if [ -z "$minio" ] || [ -z "$mc" ]; then
-            echo "::error::MINIO_RELEASE / MC_RELEASE not found in docker/minio/Dockerfile"
-            exit 1
-          fi
+          arg() { sed -n "s/^ARG $1=//p" docker/minio/Dockerfile; }
+          minio=$(arg MINIO_RELEASE); minio_commit=$(arg MINIO_COMMIT)
+          mc=$(arg MC_RELEASE); mc_commit=$(arg MC_COMMIT)
+          rev=$(arg IMAGE_REVISION)
+          for v in "$minio" "$minio_commit" "$mc" "$mc_commit" "$rev"; do
+            if [ -z "$v" ]; then
+              echo "::error::A version ARG is missing in docker/minio/Dockerfile"
+              exit 1
+            fi
+          done
           {
             echo "minio=$minio"
+            echo "minio_commit=$minio_commit"
             echo "mc=$mc"
-            echo "tag=$IMAGE:$minio"
+            echo "mc_commit=$mc_commit"
+            echo "tag=$IMAGE:$minio-r$rev"
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
@@ -76,12 +82,26 @@ jobs:
         env:
           TAG: ${{ steps.v.outputs.tag }}
         run: |
-          if docker buildx imagetools inspect "$TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::$TAG is already published; it will be smoke-tested but not pushed"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          # Only a confirmed not-found allows a push; any other error is retried
+          # and then fails the job, so a registry hiccup can never let us push
+          # over an existing tag.
+          for attempt in 1 2 3; do
+            if out=$(docker buildx imagetools inspect "$TAG" 2>&1); then
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::$TAG is already published; it will be smoke-tested but not pushed"
+              exit 0
+            fi
+            if printf '%s\n' "$out" | grep -qiE 'not found|manifest unknown'; then
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              echo "$TAG is not published yet"
+              exit 0
+            fi
+            echo "Inspect attempt $attempt failed:"
+            printf '%s\n' "$out"
+            sleep 10
+          done
+          echo "::error::Could not determine whether $TAG exists; not publishing"
+          exit 1
 
       - name: Build linux/amd64 for the smoke test
         uses: docker/build-push-action@v6
@@ -96,14 +116,24 @@ jobs:
       - name: Smoke test
         env:
           MINIO_RELEASE: ${{ steps.v.outputs.minio }}
+          MINIO_COMMIT: ${{ steps.v.outputs.minio_commit }}
           MC_RELEASE: ${{ steps.v.outputs.mc }}
+          MC_COMMIT: ${{ steps.v.outputs.mc_commit }}
         run: |
           set -eu
-          # Version strings match the official binaries.
-          docker run --rm --entrypoint minio minio-smoke:local --version | tee version.txt
-          grep -qF "$MINIO_RELEASE" version.txt
-          docker run --rm --entrypoint mc minio-smoke:local --version | tee version.txt
-          grep -qF "$MC_RELEASE" version.txt
+          # First line must equal the official binaries' exactly, e.g.
+          # "minio version RELEASE.2024-10-13T13-34-11Z (commit-id=d10bb7e...)".
+          check_version() {
+            got=$(docker run --rm --entrypoint "$1" minio-smoke:local --version | head -n1)
+            want="$1 version $2 (commit-id=$3)"
+            echo "$got"
+            if [ "$got" != "$want" ]; then
+              echo "::error::$1 --version is '$got', expected '$want'"
+              exit 1
+            fi
+          }
+          check_version minio "$MINIO_RELEASE" "$MINIO_COMMIT"
+          check_version mc "$MC_RELEASE" "$MC_COMMIT"
 
           # Started the way the tests and compose start it: the command has no
           # leading `minio`, the entrypoint adds it.
