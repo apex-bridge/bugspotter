@@ -4,9 +4,8 @@
 // a table that is scoped (e.g. integration_sync_log.bug_id -> bug_reports).
 //
 // generate-adr.mjs passes this into its prompt for RLS / tenant-isolation
-// issues: the ADR agent has no tools, and without the list it either invents
-// tables or writes that it "cannot run the grep" (ADR-0045's first draft,
-// PR #457). Interactive sessions can run it directly:
+// issues, since the ADR agent has no tools to look tables up (#458).
+// Interactive sessions can run it directly:
 //
 //   node scripts/ai-sdlc/table-inventory.mjs [migrationsDir]
 //

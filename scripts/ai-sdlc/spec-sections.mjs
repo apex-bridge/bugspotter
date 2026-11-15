@@ -1,8 +1,8 @@
 // Picks the parts of a spec (docs/specs/TEMPLATE.md shape) that an ADR needs:
 // the header lines, Problem, Out of scope, Constraints, Acceptance criteria and,
 // from Changes, only the subsection for the ADR file itself. Tests, Verification
-// and other files' changes are dropped: with the whole spec, generate-adr's
-// model thought past its 420s timeout in 2 of 3 runs on #451 (#458).
+// and other files' changes are dropped to keep the model's thinking, and so
+// its run time, down (#458).
 //
 // Headings inside ``` fences (e.g. an ADR outline in the spec) are content, not
 // sections. Returns null when the spec has none of the expected sections, so

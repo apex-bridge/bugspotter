@@ -61,7 +61,7 @@ const maxNum = existing.reduce((m, f) => Math.max(m, parseInt(f.slice(0, 4), 10)
 const nextNum = maxNum + 1;
 const padded = String(nextNum).padStart(4, '0');
 
-// Format from the template, not the newest ADR (copying it made each ADR longer; #458).
+// Format from the template, not the newest ADR (copying one compounds its length; #458).
 const TEMPLATE_PATH = 'docs/adr/TEMPLATE.md';
 if (!existsSync(TEMPLATE_PATH)) {
   console.error(`Missing ${TEMPLATE_PATH} - the ADR format is defined there.`);
@@ -107,8 +107,8 @@ if (specAdr && !specSlugUsable) {
 
 const adrFile = `docs/adr/${padded}-${slug}.md`;
 
-// The spec's decision sections, not the first 1,500 chars (that cut made ADR-0045's
-// draft contradict it) and not the whole spec (2 of 3 runs then timed out). #458.
+// The spec's decision sections: enough to not contradict it, small enough to stay
+// inside the timeout. The cap only guards against a runaway input.
 const MAX_SPEC_CHARS = 60_000;
 // Select the ADR's Changes subsection by the path the spec declares, even when
 // the output is renumbered because that number is taken.
@@ -119,9 +119,8 @@ const specForPrompt =
     ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
     : specInput;
 
-// The agent has no tools, so tenant-isolation issues get the table list computed
-// here (#458). Explicit signals only: plain words like "table" or "schema"
-// appear in 16 of 19 specs, which would attach a 49-row inventory to most ADRs.
+// The agent has no tools, so tenant-isolation issues get the computed table list.
+// Explicit signals only: words like "table" or "schema" appear in most specs.
 const dbRelated = /\b(table inventory|row[- ]level security|RLS|tenant isolation)\b/i.test(
   `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
 );
@@ -164,12 +163,9 @@ ${rules.map((r) => `- ${r}`).join('\n')}`;
 const GENERATE_TIMEOUT_MS = 540_000;
 let adrContent, stopReason;
 try {
-  // 540s. Real runs on #451 (one request each, ~100 output tokens/s) took
-  // 258-312s with spikes past 420s in thinking alone; see PR #459. History:
-  // 120s -> 300s (ADR index added, PR #273) -> 540s (spec + inventory, PR #459).
-  // adr-agent.yml caps this step at 12m and ADR_STEP_BUDGET_MS defaults to
-  // the same, so a corrective retry only runs if real headroom is left.
-  // max_tokens is advisory on LLM_BACKEND=cli.
+  // One call's time is mostly extended thinking, which varies a lot between
+  // runs (#458). adr-agent.yml caps the step at 12m and ADR_STEP_BUDGET_MS
+  // matches it. max_tokens is advisory on LLM_BACKEND=cli.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
     maxTokens: 16_000,
@@ -206,8 +202,8 @@ if (stopReason === 'max_tokens') {
 // room - see that file's comment).
 const STEP_BUDGET_MS = parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000);
 const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
-// A retry needs about as long as a real run (194-312s measured, PR #459); with
-// less left it would only time out, so fail fast instead.
+// A retry needs about as long as a first run; with less left it would only
+// time out, so fail fast instead.
 const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 300_000);
 
 let narrationFinding = detectNarratedToolCall(adrContent);

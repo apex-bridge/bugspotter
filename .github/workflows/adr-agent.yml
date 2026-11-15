@@ -75,8 +75,7 @@ jobs:
 
       - name: Generate ADR
         id: gen
-        # 12m: generate-adr.mjs's LLM call is capped at 540s (measured runs
-        # 258-312s with spikes past 420s, PR #459), plus room for its
+        # 12m: generate-adr.mjs's LLM call is capped at 540s, plus room for its
         # ADR_STEP_BUDGET_MS-gated corrective retry. That default (12m) must
         # match this step's timeout-minutes, or the script will think it has
         # headroom this step doesn't actually have.
