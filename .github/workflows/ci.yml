@@ -370,6 +370,12 @@ jobs:
       - name: Build billing package
         run: pnpm --filter @bugspotter/billing run build
 
+      # A push that bumps docker/minio/ publishes the image in minio-image.yml
+      # at the same time; wait for the tag instead of failing on "not found".
+      # Returns after one check when the tag already exists.
+      - name: Wait for the MinIO image
+        run: node scripts/wait-for-minio-image.mjs
+
       - name: Run integration tests
         # Testcontainers spins up Postgres/Redis automatically — Docker is
         # available on the GitHub-hosted runner.
@@ -459,6 +465,12 @@ jobs:
             echo "# Docker Compose profiles – start local infra (postgres, redis, minio)"
             echo "COMPOSE_PROFILES=dev"
           } > .env
+
+      # A push that bumps docker/minio/ publishes the image in minio-image.yml
+      # at the same time; wait for the tag instead of failing on "not found".
+      # Returns after one check when the tag already exists.
+      - name: Wait for the MinIO image
+        run: node scripts/wait-for-minio-image.mjs
 
       - name: Pre-pull Docker images with retry
         run: |
