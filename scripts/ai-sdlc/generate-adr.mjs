@@ -20,7 +20,13 @@ import {
   existsSync,
 } from 'node:fs';
 import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
-import { tableInventory, inventoryMarkdown, DEFAULT_MIGRATIONS_DIR } from './table-inventory.mjs';
+import {
+  tableInventory,
+  inventoryMarkdown,
+  extractGlobalReasons,
+  inventoryAppendix,
+  DEFAULT_MIGRATIONS_DIR,
+} from './table-inventory.mjs';
 import { specForAdr } from './spec-sections.mjs';
 import { detectNarratedToolCall } from './detect-narration.mjs';
 import {
@@ -104,21 +110,26 @@ const adrFile = `docs/adr/${padded}-${slug}.md`;
 // The spec's decision sections, not the first 1,500 chars (that cut made ADR-0045's
 // draft contradict it) and not the whole spec (2 of 3 runs then timed out). #458.
 const MAX_SPEC_CHARS = 60_000;
-const specInput = specText ? (specForAdr(specText, adrFile) ?? specText) : '';
+// Select the ADR's Changes subsection by the path the spec declares, even when
+// the output is renumbered because that number is taken.
+const specAdrPath = specAdr ? `docs/adr/${specAdr[1]}-${specAdr[2]}.md` : adrFile;
+const specInput = specText ? (specForAdr(specText, specAdrPath) ?? specText) : '';
 const specForPrompt =
   specInput.length > MAX_SPEC_CHARS
     ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
     : specInput;
 
 // The agent has no tools, so database issues get the table list computed here (#458).
-const dbRelated = /\b(tables?|migrations?|row[- ]level security|RLS|schema)\b/i.test(
-  `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
-);
+const dbRelated =
+  /\b(tables?|migrations?|row[- ]level security|RLS|schema|databases?|postgres(?:ql)?)\b/i.test(
+    `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
+  );
 let inventory = '';
+let inventoryRows = [];
 if (dbRelated && existsSync(DEFAULT_MIGRATIONS_DIR)) {
-  const rows = tableInventory(DEFAULT_MIGRATIONS_DIR);
-  if (rows.length) {
-    inventory = `${inventoryMarkdown(rows)}\n(${rows.length} tables, computed from ${DEFAULT_MIGRATIONS_DIR}/*.sql)`;
+  inventoryRows = tableInventory(DEFAULT_MIGRATIONS_DIR);
+  if (inventoryRows.length) {
+    inventory = `${inventoryMarkdown(inventoryRows)}\n(${inventoryRows.length} tables, computed from ${DEFAULT_MIGRATIONS_DIR}/*.sql)`;
   }
 }
 
@@ -129,7 +140,7 @@ const rules = [
   specForPrompt &&
     'Do not contradict the LINKED SPEC. Content it requires inside the ADR goes in exactly as required; long material goes in an appendix.',
   inventory &&
-    'Classify tables only from the TABLE INVENTORY. Keep its suggested scope unless the spec says otherwise, and give a one-line reason for every global table.',
+    'Do not write a table inventory: it is generated from the TABLE INVENTORY and appended to your document. Instead, end your document with a section "## Global tables" listing every table whose suggested scope is global, one per line as "- <table>: <one-line reason>".',
   adrIndex &&
     'Architecture facts must match the ARCHITECTURE INDEX. If a component lives in another repo, say so instead of inventing an in-repo shape.',
   'You have NO tools available. Do not attempt a tool call and do not narrate one. If something is missing, make the smallest reasonable assumption and list it under "Risks and follow-ups".',
@@ -149,18 +160,15 @@ ${specForPrompt ? `\nLINKED SPEC (sections relevant to the ADR; its tests, verif
 Rules:
 ${rules.map((r) => `- ${r}`).join('\n')}`;
 
-const GENERATE_TIMEOUT_MS = 420_000;
+const GENERATE_TIMEOUT_MS = 540_000;
 let adrContent, stopReason;
 try {
-  // 420s, the same as generate-spec.mjs. History: 120s assumed this prompt
-  // was much smaller than generate-spec's; PR #273 added the ~10KB ADR index,
-  // and generate-spec's own 180s failed in practice (run 30752527569), so it
-  // went to 300s. The prompt now also carries the full linked spec and, for
-  // database issues, the table inventory: a local end-to-end run on #451
-  // (22KB spec, 49-table inventory) took 270s, too close to 300s.
-  // max_tokens matches generate-spec's 4096 now that the prompt asks for
-  // spec-required appendices (on LLM_BACKEND=cli it is advisory only).
-  // adr-agent.yml caps this step at 10m, above this 420s, inside a 19m job.
+  // 540s. Real runs on #451 (one request each, ~100 output tokens/s) took
+  // 258-312s with spikes past 420s in thinking alone; see PR #459. History:
+  // 120s -> 300s (ADR index added, PR #273) -> 420s (full spec) -> 540s.
+  // adr-agent.yml caps this step at 12m and ADR_STEP_BUDGET_MS defaults to
+  // the same, so a corrective retry only runs if real headroom is left.
+  // max_tokens is advisory on LLM_BACKEND=cli.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
     maxTokens: 4096,
@@ -195,7 +203,7 @@ if (stopReason === 'max_tokens') {
 // way (see generation-retry.mjs). Defaults match adr-agent.yml's "Generate
 // ADR" step cap (raised alongside this change specifically to give a retry
 // room - see that file's comment).
-const STEP_BUDGET_MS = parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 10 * 60_000);
+const STEP_BUDGET_MS = parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000);
 const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
 const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 45_000);
 
@@ -261,6 +269,17 @@ if (narrationFinding) {
       console.log('Corrective retry produced real content — proceeding.');
     },
   });
+}
+
+if (inventoryRows.length) {
+  const { text, reasons } = extractGlobalReasons(adrContent);
+  const { markdown, missing } = inventoryAppendix(inventoryRows, reasons);
+  adrContent = `${text}\n\n${markdown}\n`;
+  if (missing.length) {
+    console.warn(
+      `::warning::No reason given for global table(s): ${missing.join(', ')} - marked for the reviewer.`
+    );
+  }
 }
 
 writeFileSync(adrFile, adrContent, 'utf8');

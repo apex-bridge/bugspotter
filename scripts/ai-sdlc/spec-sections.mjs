@@ -15,11 +15,12 @@ function blocks(spec) {
   const out = [{ level: 0, title: '', lines: [] }];
   let fence = null;
   for (const line of spec.split(/\r?\n/)) {
-    const f = line.match(/^\s*(`{3,}|~{3,})/);
+    const f = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
     if (f) {
       if (!fence) {
         fence = f[1];
-      } else if (f[1][0] === fence[0] && f[1].length >= fence.length) {
+      } else if (f[1][0] === fence[0] && f[1].length >= fence.length && /^[ \t]*$/.test(f[2])) {
+        // CommonMark: a closing fence has only spaces or tabs after its marker.
         fence = null;
       }
     }

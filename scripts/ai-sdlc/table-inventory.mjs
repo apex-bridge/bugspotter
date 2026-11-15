@@ -32,22 +32,66 @@ const bareName = (name) => name.replaceAll('"', '').split('.').pop().trim().toLo
 // A table name, optionally schema-qualified, with either part optionally quoted:
 // projects, application.projects, "api_keys", "application"."projects".
 const IDENT = '(?:"[^"]+"|\\w+)(?:\\s*\\.\\s*(?:"[^"]+"|\\w+))?';
-const columnRe = new RegExp(`\\b(${SCOPING_COLUMNS.join('|')})\\b`, 'gi');
-
-// Text of the parenthesised column list that starts at `open` (an index of "(").
-function parenBlock(sql, open) {
+// Index of the ")" closing the "(" at `open`, ignoring parentheses inside
+// '...' and "..." literals (e.g. a JSON default).
+function closingParen(sql, open) {
   let depth = 0;
+  let quote = null;
   for (let i = open; i < sql.length; i++) {
-    if (sql[i] === '(') {
+    const ch = sql[i];
+    if (quote) {
+      quote = ch === quote ? null : quote;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === '(') {
       depth++;
-    } else if (sql[i] === ')') {
-      depth--;
-      if (depth === 0) {
-        return sql.slice(open, i + 1);
-      }
+    } else if (ch === ')' && --depth === 0) {
+      return i;
     }
   }
-  return sql.slice(open);
+  return sql.length - 1;
+}
+
+// Splits a column list at commas outside parentheses and literals.
+function splitTopLevel(text) {
+  const parts = [];
+  let depth = 0;
+  let quote = null;
+  let from = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      quote = ch === quote ? null : quote;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+    } else if (ch === ',' && depth === 0) {
+      parts.push(text.slice(from, i));
+      from = i + 1;
+    }
+  }
+  parts.push(text.slice(from));
+  return parts;
+}
+
+// Names declared in a CREATE TABLE column list: the first identifier of each
+// top-level item, skipping table constraints. Defaults, CHECK bodies and
+// REFERENCES targets are not column declarations.
+const TABLE_CONSTRAINT = /^(constraint|primary|foreign|unique|check|exclude|like)\b/i;
+export function declaredColumns(columnList) {
+  return splitTopLevel(columnList)
+    .map((part) => part.trim())
+    .filter((part) => part && !TABLE_CONSTRAINT.test(part))
+    .map((part) =>
+      part
+        .match(/^("[^"]+"|\w+)/)?.[1]
+        .replaceAll('"', '')
+        .toLowerCase()
+    )
+    .filter(Boolean);
 }
 
 /**
@@ -76,10 +120,13 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
     const sql = stripComments(readFileSync(join(migrationsDir, file), 'utf8'));
     for (const m of sql.matchAll(create)) {
       const name = bareName(m[1]);
-      const cols = parenBlock(sql, m.index + m[0].length - 1);
+      const open = m.index + m[0].length - 1;
+      const columnList = sql.slice(open + 1, closingParen(sql, open));
       const row = tables.get(name) ?? { table: name, columns: new Set(), file };
-      for (const c of cols.matchAll(columnRe)) {
-        row.columns.add(c[1].toLowerCase());
+      for (const c of declaredColumns(columnList)) {
+        if (SCOPING_COLUMNS.includes(c)) {
+          row.columns.add(c);
+        }
       }
       tables.set(name, row);
     }
@@ -128,6 +175,76 @@ export function inventoryMarkdown(rows) {
         `| ${r.table} | ${suggestedScope(r.columns)} | ${r.columns.join(', ') || 'none'} | ${r.file} |`
     ),
   ].join('\n');
+}
+
+// --- ADR appendix: written by code, so the model only argues the global tables ---
+
+// Scope cell exactly as the spec checks expect (org-scoped / project-scoped /
+// global); the "via ..." part becomes the reason.
+export function scopeAndReason(columns) {
+  const [, scope, via] = suggestedScope(columns).match(/^(\S+)(?: \((.+)\))?$/);
+  const reason = via ?? (scope === 'org-scoped' ? 'has organization_id' : '');
+  return { scope, reason };
+}
+
+// Pulls the model's "## Global tables" list ("- table: reason") out of the ADR,
+// and drops any table inventory the model wrote anyway (the appendix replaces it).
+export function extractGlobalReasons(adr) {
+  const reasons = new Map();
+  const kept = [];
+  let skipping = false;
+  for (const line of adr.split(/\r?\n/)) {
+    const heading = line.match(/^(#{2,3})\s+(.*)$/);
+    if (heading) {
+      const title = heading[2].trim().toLowerCase();
+      if (title === 'global tables' || /table inventory/.test(title)) {
+        skipping = title === 'global tables' ? 'reasons' : 'drop';
+        continue;
+      }
+      if (heading[1] === '##') {
+        skipping = false;
+      }
+    }
+    if (skipping === 'reasons') {
+      const m = line.match(/^\s*[-*]\s*`?([A-Za-z_]\w*)`?\s*(?::|—|–|-)\s*(.+?)\s*$/);
+      if (m) {
+        reasons.set(m[1].toLowerCase(), m[2]);
+      }
+      continue;
+    }
+    if (!skipping) {
+      kept.push(line);
+    }
+  }
+  return { text: kept.join('\n').trimEnd(), reasons };
+}
+
+export function inventoryAppendix(rows, reasons) {
+  const missing = [];
+  const body = rows.map((r) => {
+    const { scope, reason } = scopeAndReason(r.columns);
+    let why = reason;
+    if (scope === 'global') {
+      why = reasons.get(r.table);
+      if (!why) {
+        missing.push(r.table);
+        why = 'REASON MISSING - reviewer must add one';
+      }
+    }
+    return `| ${r.table} | ${scope} | ${why} |`;
+  });
+  const markdown = [
+    '## Appendix: Table inventory',
+    '',
+    `Generated from the migrations by \`scripts/ai-sdlc/table-inventory.mjs\` (${rows.length} tables); reasons for global tables from the ADR author.`,
+    '',
+    '### Table inventory',
+    '',
+    '| Table | Scope | Reason |',
+    '| ----- | ----- | ------ |',
+    ...body,
+  ].join('\n');
+  return { markdown, missing };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

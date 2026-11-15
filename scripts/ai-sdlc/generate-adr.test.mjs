@@ -406,3 +406,84 @@ describe('generate-adr.mjs sends the decision sections of a templated spec', () 
     assert.doesNotMatch(r.firstPrompt, /TESTS_MARKER_e4|VERIFY_MARKER_e5/);
   });
 });
+
+const rlsAdrPath = () => join(REPO, 'docs', 'adr', '0001-row-level-security-for-tenant-tables.md');
+
+describe('generate-adr.mjs appends the table inventory itself', () => {
+  test('T5c: appendix built from the migrations plus the model global-table reasons', () => {
+    const modelText = [
+      REAL_ADR_TEXT.trimEnd(),
+      '',
+      '### Table inventory',
+      '| fixture_users | org-scoped | wrong model row |',
+      '',
+      '## Global tables',
+      '- fixture_users: users belong to several organizations',
+      '',
+    ].join('\n');
+    const r = runGenerateAdr({
+      text: modelText,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Row-level security for tenant tables' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /end your document with a section "## Global tables"/);
+    const out = readFileSync(rlsAdrPath(), 'utf8');
+    assert.match(out, /^## Appendix: Table inventory$/m);
+    assert.match(out, /^\| fixture_projects \| org-scoped \| has organization_id \|$/m);
+    assert.match(out, /^\| fixture_users \| global \| users belong to several organizations \|$/m);
+    assert.doesNotMatch(out, /wrong model row/);
+    assert.doesNotMatch(out, /^## Global tables$/m);
+    assert.equal((out.match(/^### Table inventory$/gm) || []).length, 1);
+  });
+
+  test('T5d: a global table without a reason is marked and warned about', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Row-level security for tenant tables' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(
+      readFileSync(rlsAdrPath(), 'utf8'),
+      /\| fixture_users \| global \| REASON MISSING/
+    );
+    assert.match(r.stderr, /No reason given for global table\(s\): fixture_users/);
+  });
+});
+
+describe('generate-adr.mjs review fixes', () => {
+  test('T4c: when the spec number is taken, its ADR outline is still selected by the spec path', () => {
+    const spec = [
+      '# Spec: fixture',
+      '',
+      'ADR: docs/adr/0007-security.md',
+      '',
+      '## Problem',
+      'P',
+      '## Changes',
+      '### `docs/adr/0007-security.md`',
+      'OUTLINE_FOR_SPEC_PATH_c4',
+      '## Tests',
+      'T',
+      '',
+    ].join('\n');
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(adrPath()), 'output renumbered to 0001 with the title slug');
+    assert.match(r.firstPrompt, /OUTLINE_FOR_SPEC_PATH_c4/);
+  });
+
+  test('T5e: "PostgreSQL" / "database" issues get the inventory', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: {
+        ISSUE_TITLE: 'PostgreSQL tenant isolation',
+        ISSUE_BODY: 'Restrict database access by organization.',
+      },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /TABLE INVENTORY/);
+  });
+});

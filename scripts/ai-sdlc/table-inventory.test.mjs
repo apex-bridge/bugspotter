@@ -12,6 +12,9 @@ import {
   tableInventory,
   inventoryMarkdown,
   suggestedScope,
+  scopeAndReason,
+  extractGlobalReasons,
+  inventoryAppendix,
   DEFAULT_MIGRATIONS_DIR,
 } from './table-inventory.mjs';
 
@@ -164,4 +167,65 @@ test('schema and table quoted separately are parsed, in CREATE and ALTER', () =>
   assert.deepEqual(Object.keys(t).sort(), ['api_keys', 'projects']);
   assert.deepEqual(t.api_keys.columns, ['organization_id']);
   assert.deepEqual(t.projects.columns, ['project_id']);
+});
+
+test('scope cell is plain for the spec check, the via-part becomes the reason', () => {
+  assert.deepEqual(scopeAndReason(['allowed_projects']), {
+    scope: 'project-scoped',
+    reason: 'via allowed_projects',
+  });
+  assert.deepEqual(scopeAndReason(['organization_id']), {
+    scope: 'org-scoped',
+    reason: 'has organization_id',
+  });
+  assert.deepEqual(scopeAndReason([]), { scope: 'global', reason: '' });
+});
+
+test('global reasons are read from the ADR and a model-written inventory is dropped', () => {
+  const adr = [
+    '# ADR-0001: x',
+    '## Decision',
+    'body',
+    '## Appendix A: Table inventory',
+    '### Table inventory',
+    '| users | global | model row |',
+    '## Global tables',
+    '- users: identities span organizations',
+    '- `legal_entities` — platform-wide seller records',
+    '',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr);
+  assert.equal(text, '# ADR-0001: x\n## Decision\nbody');
+  assert.equal(reasons.get('users'), 'identities span organizations');
+  assert.equal(reasons.get('legal_entities'), 'platform-wide seller records');
+});
+
+test('appendix: every table once, spec-check format, missing global reasons flagged', () => {
+  const rows = [
+    { table: 'projects', columns: ['organization_id'], file: '001.sql' },
+    { table: 'users', columns: [], file: '001.sql' },
+    { table: 'permissions', columns: [], file: '001.sql' },
+  ];
+  const { markdown, missing } = inventoryAppendix(rows, new Map([['users', 'cross-org']]));
+  assert.match(markdown, /^### Table inventory$/m);
+  assert.match(markdown, /^\| projects \| org-scoped \| has organization_id \|$/m);
+  assert.match(markdown, /^\| users \| global \| cross-org \|$/m);
+  assert.match(markdown, /^\| permissions \| global \| REASON MISSING/m);
+  assert.deepEqual(missing, ['permissions']);
+});
+
+test('only declared columns count: not JSON defaults, CHECK bodies or REFERENCES targets', () => {
+  const dir = migrations({
+    '001.sql': [
+      `CREATE TABLE audit_events (id UUID, metadata JSONB DEFAULT '{"organization_id": null}'::jsonb);`,
+      'CREATE TABLE links (id UUID, parent UUID REFERENCES bug_reports(project_id), CHECK (id <> parent));',
+      'CREATE TABLE members (id UUID, org UUID, CONSTRAINT fk FOREIGN KEY (organization_id) REFERENCES x(id));',
+      'CREATE TABLE real_scoped (id UUID, "project_id" UUID NOT NULL);',
+    ].join('\n'),
+  });
+  const t = byName(tableInventory(dir));
+  assert.deepEqual(t.audit_events.columns, [], 'JSON default is not a column');
+  assert.deepEqual(t.links.columns, [], 'REFERENCES target is not a column');
+  assert.deepEqual(t.members.columns, [], 'table constraint is not a column');
+  assert.deepEqual(t.real_scoped.columns, ['project_id'], 'quoted column name');
 });

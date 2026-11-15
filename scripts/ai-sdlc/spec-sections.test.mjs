@@ -91,3 +91,22 @@ test('real spec for #451: keeps every constraint and AC, drops the test scripts'
   assert.ok(out.includes('### Table inventory'), 'ADR outline kept');
   assert.ok(!out.includes('**Test case A'), 'Tests section dropped');
 });
+
+test('a fence line with text after the marker does not close the fence', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Changes',
+    `### \`${ADR}\``,
+    '```md',
+    '```example',
+    '## Decision',
+    'INSIDE_OUTLINE_MARKER',
+    '```',
+    '## Tests',
+    'T',
+  ].join('\n');
+  const out = specForAdr(spec, ADR);
+  assert.ok(out.includes('INSIDE_OUTLINE_MARKER'), 'outline content after ```example is kept');
+  assert.ok(!out.includes('\nT'), 'Tests still dropped');
+});

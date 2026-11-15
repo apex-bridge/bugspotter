@@ -29,3 +29,7 @@ The format is defined in `docs/adr/TEMPLATE.md`, the same file the CI `adr-agent
    lists it.
 
 Status stays `Proposed`; the repository owner sets `Accepted` when ratifying.
+
+An `Accepted` ADR is immutable (`docs/adr/README.md`): a review of one is read-only, and a
+changed decision goes into a new ADR that marks the old one `Superseded`. Only a `Proposed`
+ADR is rewritten in place.
