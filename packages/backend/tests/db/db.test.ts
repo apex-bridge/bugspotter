@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { DatabaseClient } from '../../src/db/client.js';
 import type { ProjectInsert, BugReportInsert } from '../../src/db/types.js';
@@ -241,7 +242,7 @@ describe('DatabaseClient', () => {
 
   describe('Users', () => {
     it('should create a user', async () => {
-      const email = `test-${Date.now()}@example.com`;
+      const email = `test-${randomUUID()}@example.com`;
       const user = await db.users.create({
         email,
         password_hash: 'hashed_password',
@@ -255,7 +256,7 @@ describe('DatabaseClient', () => {
     });
 
     it('should get user by email', async () => {
-      const email = `test-${Date.now()}@example.com`;
+      const email = `test-${randomUUID()}@example.com`;
       await db.users.create({
         email,
         password_hash: 'hashed_password',
@@ -268,7 +269,7 @@ describe('DatabaseClient', () => {
     });
 
     it('should create OAuth user', async () => {
-      const email = `oauth-${Date.now()}@example.com`;
+      const email = `oauth-${randomUUID()}@example.com`;
       const user = await db.users.create({
         email,
         oauth_provider: 'google',
@@ -282,7 +283,7 @@ describe('DatabaseClient', () => {
     });
 
     it('should get user by OAuth credentials', async () => {
-      const email = `oauth-${Date.now()}@example.com`;
+      const email = `oauth-${randomUUID()}@example.com`;
       await db.users.create({
         email,
         oauth_provider: 'github',
@@ -296,7 +297,7 @@ describe('DatabaseClient', () => {
     });
 
     it('should enforce unique email addresses', async () => {
-      const email = `duplicate-${Date.now()}@example.com`;
+      const email = `duplicate-${randomUUID()}@example.com`;
 
       await db.users.create({
         email,
@@ -314,8 +315,8 @@ describe('DatabaseClient', () => {
     });
 
     it('should enforce unique OAuth credentials', async () => {
-      const email1 = `oauth1-${Date.now()}@example.com`;
-      const email2 = `oauth2-${Date.now()}@example.com`;
+      const email1 = `oauth1-${randomUUID()}@example.com`;
+      const email2 = `oauth2-${randomUUID()}@example.com`;
 
       await db.users.create({
         email: email1,
@@ -334,7 +335,7 @@ describe('DatabaseClient', () => {
     });
 
     it('should reject users with both password and OAuth', async () => {
-      const email = `invalid-${Date.now()}@example.com`;
+      const email = `invalid-${randomUUID()}@example.com`;
 
       // This violates the check_auth_method constraint
       await expect(
@@ -348,7 +349,7 @@ describe('DatabaseClient', () => {
     });
 
     it('should reject users with neither password nor OAuth', async () => {
-      const email = `invalid2-${Date.now()}@example.com`;
+      const email = `invalid2-${randomUUID()}@example.com`;
 
       // This violates the check_auth_method constraint
       await expect(
