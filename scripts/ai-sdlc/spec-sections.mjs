@@ -56,8 +56,12 @@ export function specForAdr(spec, adrPath) {
       }
       continue;
     }
-    // level 3: under Changes, keep only the ADR file's own subsection
-    if (section === 'changes' && adrPath && b.title.includes(adrPath)) {
+    // The ADR's own subsection: named by the spec's path, or any numbered docs/adr/NNNN- heading
+    // (a spec may write "ADR: pending" and name the eventual file only here).
+    if (
+      section === 'changes' &&
+      ((adrPath && b.title.includes(adrPath)) || /docs\/adr\/\d{4}-/.test(b.title))
+    ) {
       kept.push(`## Changes (ADR file only)\n${b.lines.join('\n')}`);
     } else if (KEEP.has(section)) {
       kept.push(b.lines.join('\n'));

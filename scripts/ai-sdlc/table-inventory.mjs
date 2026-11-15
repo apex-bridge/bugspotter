@@ -1,12 +1,19 @@
-// Lists every table the backend migrations create, with the tenant-scoping
-// columns each one has (from its CREATE TABLE, or added later by ALTER TABLE).
+// Lists every table the backend migrations create, with its tenant scope:
+// a scoping column of its own (organization_id, tenant_id, project_id,
+// bug_report_id, allowed_projects), or a foreign key, followed transitively, to
+// a table that is scoped (e.g. integration_sync_log.bug_id -> bug_reports).
 //
-// generate-adr.mjs passes this into its prompt for database-related issues:
-// the ADR agent has no tools, and without the list it either invents tables or
-// writes that it "cannot run the grep" (ADR-0045's first draft, PR #457).
-// Interactive sessions can run it directly:
+// generate-adr.mjs passes this into its prompt for RLS / tenant-isolation
+// issues: the ADR agent has no tools, and without the list it either invents
+// tables or writes that it "cannot run the grep" (ADR-0045's first draft,
+// PR #457). Interactive sessions can run it directly:
 //
 //   node scripts/ai-sdlc/table-inventory.mjs [migrationsDir]
+//
+// Limits: a textual parser, not SQL. It reads CREATE TABLE and ALTER TABLE ...
+// ADD; it does not track DROP TABLE, RENAME, DROP COLUMN, or "--" / "/*" inside
+// string literals. The current migrations use none of these in a way that
+// changes the result; a reviewer checks the generated appendix either way.
 //
 // Zero-dependency. Prints a Markdown table.
 
@@ -32,71 +39,105 @@ const bareName = (name) => name.replaceAll('"', '').split('.').pop().trim().toLo
 // A table name, optionally schema-qualified, with either part optionally quoted:
 // projects, application.projects, "api_keys", "application"."projects".
 const IDENT = '(?:"[^"]+"|\\w+)(?:\\s*\\.\\s*(?:"[^"]+"|\\w+))?';
-// Index of the ")" closing the "(" at `open`, ignoring parentheses inside
-// '...' and "..." literals (e.g. a JSON default).
-function closingParen(sql, open) {
-  let depth = 0;
-  let quote = null;
-  for (let i = open; i < sql.length; i++) {
-    const ch = sql[i];
-    if (quote) {
-      quote = ch === quote ? null : quote;
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-    } else if (ch === '(') {
-      depth++;
-    } else if (ch === ')' && --depth === 0) {
-      return i;
-    }
-  }
-  return sql.length - 1;
-}
+const REFERENCES = new RegExp(`\\bREFERENCES\\s+(${IDENT})`, 'i');
+const TABLE_FK = new RegExp(
+  `\\bFOREIGN\\s+KEY\\s*\\(\\s*("?\\w+"?)\\s*\\)\\s*REFERENCES\\s+(${IDENT})`,
+  'i'
+);
+const TABLE_CONSTRAINT = /^(constraint|primary|foreign|unique|check|exclude|like)\b/i;
 
-// Splits a column list at commas outside parentheses and literals.
-function splitTopLevel(text) {
-  const parts = [];
+// Scans text outside '...' and "..." literals; onChar(ch, depth, i) may return true to stop.
+function scan(text, start, onChar) {
   let depth = 0;
   let quote = null;
-  let from = 0;
-  for (let i = 0; i < text.length; i++) {
+  for (let i = start; i < text.length; i++) {
     const ch = text[i];
     if (quote) {
       quote = ch === quote ? null : quote;
-    } else if (ch === "'" || ch === '"') {
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
       quote = ch;
-    } else if (ch === '(') {
+      continue;
+    }
+    if (ch === '(') {
       depth++;
     } else if (ch === ')') {
       depth--;
-    } else if (ch === ',' && depth === 0) {
+    }
+    if (onChar(ch, depth, i)) {
+      return i;
+    }
+  }
+  return text.length - 1;
+}
+
+// Index of the ")" closing the "(" at `open`.
+const closingParen = (sql, open) => scan(sql, open, (ch, depth) => ch === ')' && depth === 0);
+
+// Splits at commas outside parentheses and literals.
+function splitTopLevel(text) {
+  const parts = [];
+  let from = 0;
+  scan(text, 0, (ch, depth, i) => {
+    if (ch === ',' && depth === 0) {
       parts.push(text.slice(from, i));
       from = i + 1;
     }
-  }
+    return false;
+  });
   parts.push(text.slice(from));
   return parts;
+}
+
+// One item of a column list or ALTER ... ADD: { column, references } or a table FK.
+function parseItem(item) {
+  const part = item.trim();
+  const fk = part.match(TABLE_FK);
+  if (TABLE_CONSTRAINT.test(part)) {
+    return fk ? { fk: { column: bareName(fk[1]), table: bareName(fk[2]) } } : null;
+  }
+  const name = part.match(/^("[^"]+"|\w+)/)?.[1];
+  if (!name) {
+    return null;
+  }
+  const ref = part.match(REFERENCES);
+  return { column: bareName(name), references: ref ? bareName(ref[1]) : null };
 }
 
 // Names declared in a CREATE TABLE column list: the first identifier of each
 // top-level item, skipping table constraints. Defaults, CHECK bodies and
 // REFERENCES targets are not column declarations.
-const TABLE_CONSTRAINT = /^(constraint|primary|foreign|unique|check|exclude|like)\b/i;
 export function declaredColumns(columnList) {
   return splitTopLevel(columnList)
-    .map((part) => part.trim())
-    .filter((part) => part && !TABLE_CONSTRAINT.test(part))
-    .map((part) =>
-      part
-        .match(/^("[^"]+"|\w+)/)?.[1]
-        .replaceAll('"', '')
-        .toLowerCase()
-    )
-    .filter(Boolean);
+    .map(parseItem)
+    .filter((p) => p?.column)
+    .map((p) => p.column);
+}
+
+function directScope(columns) {
+  if (columns.includes('organization_id')) {
+    return { kind: 'org-scoped', via: '' };
+  }
+  if (columns.includes('tenant_id')) {
+    return { kind: 'org-scoped', via: 'tenant_id' };
+  }
+  if (columns.includes('project_id')) {
+    return { kind: 'project-scoped', via: 'projects' };
+  }
+  if (columns.includes('bug_report_id')) {
+    return { kind: 'project-scoped', via: 'bug_reports' };
+  }
+  if (columns.includes('allowed_projects')) {
+    return { kind: 'project-scoped', via: 'allowed_projects' };
+  }
+  return null;
 }
 
 /**
  * @param {string} migrationsDir
- * @returns {{table: string, columns: string[], file: string}[]}
+ * @returns {{table: string, columns: string[], refs: {column: string, table: string}[],
+ *            scope: {kind: string, via: string}, file: string}[]}
  */
 export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
   const tables = new Map();
@@ -111,22 +152,30 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
     `\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?(${IDENT})\\s+([^;]*)`,
     'gi'
   );
-  const addColumn = new RegExp(
-    `\\bADD\\s+(?:COLUMN\\s+)?(?:IF\\s+NOT\\s+EXISTS\\s+)?(${SCOPING_COLUMNS.join('|')})\\b`,
-    'gi'
-  );
+  const record = (row, item) => {
+    if (!item) {
+      return;
+    }
+    if (item.fk) {
+      row.refs.push(item.fk);
+      return;
+    }
+    if (SCOPING_COLUMNS.includes(item.column)) {
+      row.columns.add(item.column);
+    }
+    if (item.references) {
+      row.refs.push({ column: item.column, table: item.references });
+    }
+  };
 
   for (const file of files) {
     const sql = stripComments(readFileSync(join(migrationsDir, file), 'utf8'));
     for (const m of sql.matchAll(create)) {
       const name = bareName(m[1]);
       const open = m.index + m[0].length - 1;
-      const columnList = sql.slice(open + 1, closingParen(sql, open));
-      const row = tables.get(name) ?? { table: name, columns: new Set(), file };
-      for (const c of declaredColumns(columnList)) {
-        if (SCOPING_COLUMNS.includes(c)) {
-          row.columns.add(c);
-        }
+      const row = tables.get(name) ?? { table: name, columns: new Set(), refs: [], file };
+      for (const item of splitTopLevel(sql.slice(open + 1, closingParen(sql, open)))) {
+        record(row, parseItem(item));
       }
       tables.set(name, row);
     }
@@ -135,36 +184,51 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
       if (!row) {
         continue;
       }
-      for (const c of m[2].matchAll(addColumn)) {
-        row.columns.add(c[1].toLowerCase());
+      for (const item of splitTopLevel(m[2])) {
+        const add = item.trim().match(/^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?([\s\S]*)$/i);
+        if (add) {
+          record(row, parseItem(add[1]));
+        }
       }
     }
   }
-  return [...tables.values()]
-    .map((r) => ({ ...r, columns: SCOPING_COLUMNS.filter((c) => r.columns.has(c)) }))
+
+  const rows = [...tables.values()].map((r) => ({
+    ...r,
+    columns: SCOPING_COLUMNS.filter((c) => r.columns.has(c)),
+    scope: directScope(SCOPING_COLUMNS.filter((c) => r.columns.has(c))),
+  }));
+  // Inherit scope through foreign keys until nothing changes (organizations and
+  // projects are the tenant roots).
+  const byName = new Map(rows.map((r) => [r.table, r]));
+  const rootScope = { organizations: 'org-scoped', projects: 'project-scoped' };
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const r of rows) {
+      if (r.scope) {
+        continue;
+      }
+      for (const ref of r.refs) {
+        const kind =
+          rootScope[ref.table] ?? (ref.table !== r.table && byName.get(ref.table)?.scope?.kind);
+        if (kind) {
+          r.scope = { kind, via: `${ref.column} → ${ref.table}` };
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return rows
+    .map((r) => ({ ...r, scope: r.scope ?? { kind: 'global', via: '' } }))
     .sort((a, b) => a.table.localeCompare(b.table));
 }
 
-// Mechanical first guess from the columns, so the ADR author confirms a scope
-// instead of deriving every one (and only argues the global ones).
-export function suggestedScope(columns) {
-  if (columns.includes('organization_id')) {
-    return 'org-scoped';
-  }
-  if (columns.includes('tenant_id')) {
-    return 'org-scoped (via tenant_id)';
-  }
-  if (columns.includes('project_id')) {
-    return 'project-scoped (via projects)';
-  }
-  if (columns.includes('bug_report_id')) {
-    return 'project-scoped (via bug_reports)';
-  }
-  if (columns.includes('allowed_projects')) {
-    return 'project-scoped (via allowed_projects)';
-  }
-  return 'global';
-}
+export const scopeLabel = ({ kind, via }) => (via ? `${kind} (via ${via})` : kind);
+
+// Label from a table's own columns only (no foreign keys).
+export const suggestedScope = (columns) =>
+  scopeLabel(directScope(columns) ?? { kind: 'global', via: '' });
 
 export function inventoryMarkdown(rows) {
   return [
@@ -172,66 +236,91 @@ export function inventoryMarkdown(rows) {
     '| ----- | --------------- | --------------- | ---------- |',
     ...rows.map(
       (r) =>
-        `| ${r.table} | ${suggestedScope(r.columns)} | ${r.columns.join(', ') || 'none'} | ${r.file} |`
+        `| ${r.table} | ${scopeLabel(r.scope)} | ${r.columns.join(', ') || 'none'} | ${r.file} |`
     ),
   ].join('\n');
 }
 
 // --- ADR appendix: written by code, so the model only argues the global tables ---
 
-// Scope cell exactly as the spec checks expect (org-scoped / project-scoped /
-// global); the "via ..." part becomes the reason.
-export function scopeAndReason(columns) {
-  const [, scope, via] = suggestedScope(columns).match(/^(\S+)(?: \((.+)\))?$/);
-  const reason = via ?? (scope === 'org-scoped' ? 'has organization_id' : '');
-  return { scope, reason };
-}
-
 // Pulls the model's "## Global tables" list ("- table: reason") out of the ADR,
-// and drops any table inventory the model wrote anyway (the appendix replaces it).
+// and drops a table-inventory section the model wrote anyway (the appendix
+// replaces it): only up to the next heading of the same or a higher level.
+// Headings inside code fences are content.
 export function extractGlobalReasons(adr) {
   const reasons = new Map();
   const kept = [];
-  let skipping = false;
+  let mode = null;
+  let dropLevel = 0;
+  let fence = null;
   for (const line of adr.split(/\r?\n/)) {
-    const heading = line.match(/^(#{2,3})\s+(.*)$/);
-    if (heading) {
-      const title = heading[2].trim().toLowerCase();
-      if (title === 'global tables' || /table inventory/.test(title)) {
-        skipping = title === 'global tables' ? 'reasons' : 'drop';
-        continue;
-      }
-      if (heading[1] === '##') {
-        skipping = false;
+    const f = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (f) {
+      if (!fence) {
+        fence = f[1];
+      } else if (f[1][0] === fence[0] && f[1].length >= fence.length && /^[ \t]*$/.test(f[2])) {
+        fence = null;
       }
     }
-    if (skipping === 'reasons') {
+    const heading = !fence && !f && line.match(/^(#{2,6})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const title = heading[2].trim().toLowerCase();
+      if (title === 'global tables') {
+        mode = 'reasons';
+        dropLevel = level;
+        continue;
+      }
+      if (/table inventory/.test(title)) {
+        mode = 'drop';
+        dropLevel = level;
+        continue;
+      }
+      if (mode && level <= dropLevel) {
+        mode = null;
+      }
+    }
+    if (mode === 'reasons') {
       const m = line.match(/^\s*[-*]\s*`?([A-Za-z_]\w*)`?\s*(?::|—|–|-)\s*(.+?)\s*$/);
       if (m) {
-        reasons.set(m[1].toLowerCase(), m[2]);
+        // "- table: org-scoped: reason" overrides the computed global scope.
+        const o = m[2].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);
+        reasons.set(
+          m[1].toLowerCase(),
+          o ? { kind: o[1].toLowerCase(), reason: o[2] } : { kind: 'global', reason: m[2] }
+        );
       }
       continue;
     }
-    if (!skipping) {
+    if (mode !== 'drop') {
       kept.push(line);
     }
   }
   return { text: kept.join('\n').trimEnd(), reasons };
 }
 
+// A global table without a reason gets an EMPTY reason cell, so the spec's
+// "no global row with an empty reason" check fails visibly; the caller warns.
+// The author may override a computed global scope ("- t: org-scoped: why").
 export function inventoryAppendix(rows, reasons) {
   const missing = [];
+  const overridden = [];
   const body = rows.map((r) => {
-    const { scope, reason } = scopeAndReason(r.columns);
-    let why = reason;
-    if (scope === 'global') {
-      why = reasons.get(r.table);
+    let kind = r.scope.kind;
+    let why = r.scope.via ? `via ${r.scope.via}` : 'has organization_id';
+    if (kind === 'global') {
+      const given = reasons.get(r.table);
+      kind = given?.kind ?? 'global';
+      why = given?.reason ?? '';
       if (!why) {
         missing.push(r.table);
-        why = 'REASON MISSING - reviewer must add one';
+      }
+      if (kind !== 'global') {
+        overridden.push(r.table);
+        why = `author: ${why}`;
       }
     }
-    return `| ${r.table} | ${scope} | ${why} |`;
+    return `| ${r.table} | ${kind} | ${why} |`;
   });
   const markdown = [
     '## Appendix: Table inventory',
@@ -244,7 +333,7 @@ export function inventoryAppendix(rows, reasons) {
     '| ----- | ----- | ------ |',
     ...body,
   ].join('\n');
-  return { markdown, missing };
+  return { markdown, missing, overridden };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

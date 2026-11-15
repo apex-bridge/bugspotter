@@ -12,7 +12,7 @@ import {
   tableInventory,
   inventoryMarkdown,
   suggestedScope,
-  scopeAndReason,
+  scopeLabel,
   extractGlobalReasons,
   inventoryAppendix,
   DEFAULT_MIGRATIONS_DIR,
@@ -96,8 +96,13 @@ CREATE TABLE real_table (
 
 test('markdown lists every table, "none" for unscoped ones', () => {
   const md = inventoryMarkdown([
-    { table: 'a', columns: ['organization_id'], file: '001.sql' },
-    { table: 'b', columns: [], file: '002.sql' },
+    {
+      table: 'a',
+      columns: ['organization_id'],
+      scope: { kind: 'org-scoped', via: '' },
+      file: '001.sql',
+    },
+    { table: 'b', columns: [], scope: { kind: 'global', via: '' }, file: '002.sql' },
   ]);
   assert.match(md, /^\| Table \| Suggested scope \| Scoping columns \| Created in \|$/m);
   assert.match(md, /^\| a \| org-scoped \| organization_id \| 001\.sql \|$/m);
@@ -169,16 +174,12 @@ test('schema and table quoted separately are parsed, in CREATE and ALTER', () =>
   assert.deepEqual(t.projects.columns, ['project_id']);
 });
 
-test('scope cell is plain for the spec check, the via-part becomes the reason', () => {
-  assert.deepEqual(scopeAndReason(['allowed_projects']), {
-    scope: 'project-scoped',
-    reason: 'via allowed_projects',
-  });
-  assert.deepEqual(scopeAndReason(['organization_id']), {
-    scope: 'org-scoped',
-    reason: 'has organization_id',
-  });
-  assert.deepEqual(scopeAndReason([]), { scope: 'global', reason: '' });
+test('scope label shows the via-path only when there is one', () => {
+  assert.equal(scopeLabel({ kind: 'org-scoped', via: '' }), 'org-scoped');
+  assert.equal(
+    scopeLabel({ kind: 'project-scoped', via: 'bug_id → bug_reports' }),
+    'project-scoped (via bug_id → bug_reports)'
+  );
 });
 
 test('global reasons are read from the ADR and a model-written inventory is dropped', () => {
@@ -196,22 +197,116 @@ test('global reasons are read from the ADR and a model-written inventory is drop
   ].join('\n');
   const { text, reasons } = extractGlobalReasons(adr);
   assert.equal(text, '# ADR-0001: x\n## Decision\nbody');
-  assert.equal(reasons.get('users'), 'identities span organizations');
-  assert.equal(reasons.get('legal_entities'), 'platform-wide seller records');
+  assert.deepEqual(reasons.get('users'), {
+    kind: 'global',
+    reason: 'identities span organizations',
+  });
+  assert.deepEqual(reasons.get('legal_entities'), {
+    kind: 'global',
+    reason: 'platform-wide seller records',
+  });
 });
 
-test('appendix: every table once, spec-check format, missing global reasons flagged', () => {
+test('appendix: every table once, spec-check format, missing reason left empty, override applied', () => {
+  const org = { kind: 'org-scoped', via: '' };
+  const glob = { kind: 'global', via: '' };
   const rows = [
-    { table: 'projects', columns: ['organization_id'], file: '001.sql' },
-    { table: 'users', columns: [], file: '001.sql' },
-    { table: 'permissions', columns: [], file: '001.sql' },
+    { table: 'projects', columns: ['organization_id'], scope: org, file: '001.sql' },
+    {
+      table: 'sync_log',
+      columns: [],
+      scope: { kind: 'org-scoped', via: 'bug_id → bug_reports' },
+      file: '001.sql',
+    },
+    { table: 'users', columns: [], scope: glob, file: '001.sql' },
+    { table: 'permissions', columns: [], scope: glob, file: '001.sql' },
+    { table: 'oauth_tokens', columns: [], scope: glob, file: '001.sql' },
   ];
-  const { markdown, missing } = inventoryAppendix(rows, new Map([['users', 'cross-org']]));
+  const reasons = new Map([
+    ['users', { kind: 'global', reason: 'cross-org' }],
+    ['oauth_tokens', { kind: 'project-scoped', reason: 'tokens belong to a project integration' }],
+  ]);
+  const { markdown, missing, overridden } = inventoryAppendix(rows, reasons);
   assert.match(markdown, /^### Table inventory$/m);
   assert.match(markdown, /^\| projects \| org-scoped \| has organization_id \|$/m);
+  assert.match(markdown, /^\| sync_log \| org-scoped \| via bug_id → bug_reports \|$/m);
   assert.match(markdown, /^\| users \| global \| cross-org \|$/m);
-  assert.match(markdown, /^\| permissions \| global \| REASON MISSING/m);
+  assert.match(
+    markdown,
+    /^\| permissions \| global \| {2}\|$/m,
+    'empty, so the spec check fails visibly'
+  );
+  assert.match(
+    markdown,
+    /^\| oauth_tokens \| project-scoped \| author: tokens belong to a project integration \|$/m
+  );
   assert.deepEqual(missing, ['permissions']);
+  assert.deepEqual(overridden, ['oauth_tokens']);
+});
+
+test('scope is inherited through foreign keys, transitively, ignoring self-references', () => {
+  const dir = migrations({
+    '001.sql': [
+      'CREATE TABLE organizations (id UUID);',
+      'CREATE TABLE bug_reports (id UUID, organization_id UUID);',
+      'CREATE TABLE sync_log (id UUID, bug_id UUID REFERENCES bug_reports(id));',
+      'CREATE TABLE sync_detail (id UUID, log UUID, CONSTRAINT fk FOREIGN KEY (log) REFERENCES sync_log(id));',
+      'CREATE TABLE tree (id UUID, parent UUID REFERENCES tree(id));',
+      'CREATE TABLE seats (id UUID, owner UUID REFERENCES organizations(id));',
+      'CREATE TABLE late (id UUID);',
+      'ALTER TABLE late ADD CONSTRAINT late_fk FOREIGN KEY (sid) REFERENCES sync_detail(id);',
+    ].join('\n'),
+  });
+  const t = byName(tableInventory(dir));
+  assert.deepEqual(t.sync_log.scope, { kind: 'org-scoped', via: 'bug_id → bug_reports' });
+  assert.deepEqual(t.sync_detail.scope, { kind: 'org-scoped', via: 'log → sync_log' });
+  assert.deepEqual(
+    t.late.scope,
+    { kind: 'org-scoped', via: 'sid → sync_detail' },
+    'via ALTER, two hops'
+  );
+  assert.deepEqual(t.seats.scope, { kind: 'org-scoped', via: 'owner → organizations' });
+  assert.deepEqual(t.tree.scope, { kind: 'global', via: '' }, 'a self-reference confers nothing');
+  assert.deepEqual(t.organizations.scope, { kind: 'global', via: '' });
+});
+
+test('real migrations: FK-linked child tables are no longer global', () => {
+  const t = byName(tableInventory(join(REPO_ROOT, DEFAULT_MIGRATIONS_DIR)));
+  for (const name of [
+    'integration_sync_log',
+    'notification_history',
+    'invoice_lines',
+    'api_key_audit_log',
+    'api_key_usage',
+    'api_key_rate_limits',
+    'notification_rule_channels',
+  ]) {
+    assert.notEqual(t[name].scope.kind, 'global', name);
+    assert.match(t[name].scope.via, / → /, `${name} scope comes from a foreign key`);
+  }
+  assert.equal(t.users.scope.kind, 'global');
+});
+
+test('dropping a model-written inventory stops at the next heading of the same level; fences are content', () => {
+  const adr = [
+    '## Decision',
+    '### Table inventory',
+    '| x | global | y |',
+    '### Self-hosted mode',
+    'KEEP_SELF_HOSTED',
+    '```md',
+    '## Global tables',
+    '- not_a_reason: inside a fence',
+    '```',
+    '## Global tables',
+    '- users: shared',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr);
+  assert.ok(text.includes('### Self-hosted mode\nKEEP_SELF_HOSTED'));
+  assert.ok(!text.includes('| x | global | y |'));
+  assert.ok(text.includes('- not_a_reason: inside a fence'), 'fenced lines stay as content');
+  assert.equal(reasons.has('not_a_reason'), false);
+  assert.deepEqual(reasons.get('users'), { kind: 'global', reason: 'shared' });
 });
 
 test('only declared columns count: not JSON defaults, CHECK bodies or REFERENCES targets', () => {

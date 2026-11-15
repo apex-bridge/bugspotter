@@ -35,7 +35,7 @@ import {
   runWithCorrectiveRetry,
 } from './generation-retry.mjs';
 
-// Captured before any file reads (ADR numbering, example ADR, ADR index)
+// Captured before any file reads (ADR numbering, template, ADR index)
 // below so the retry budget math (see scriptStartedAt's use further down)
 // measures real elapsed step time, not elapsed-time-minus-setup-work.
 const scriptStartedAt = Date.now();
@@ -119,11 +119,12 @@ const specForPrompt =
     ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
     : specInput;
 
-// The agent has no tools, so database issues get the table list computed here (#458).
-const dbRelated =
-  /\b(tables?|migrations?|row[- ]level security|RLS|schema|databases?|postgres(?:ql)?)\b/i.test(
-    `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
-  );
+// The agent has no tools, so tenant-isolation issues get the table list computed
+// here (#458). Explicit signals only: plain words like "table" or "schema"
+// appear in 16 of 19 specs, which would attach a 49-row inventory to most ADRs.
+const dbRelated = /\b(table inventory|row[- ]level security|RLS|tenant isolation)\b/i.test(
+  `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
+);
 let inventory = '';
 let inventoryRows = [];
 if (dbRelated && existsSync(DEFAULT_MIGRATIONS_DIR)) {
@@ -140,7 +141,7 @@ const rules = [
   specForPrompt &&
     'Do not contradict the LINKED SPEC. Content it requires inside the ADR goes in exactly as required; long material goes in an appendix.',
   inventory &&
-    'Do not write a table inventory: it is generated from the TABLE INVENTORY and appended to your document. Instead, end your document with a section "## Global tables" listing every table whose suggested scope is global, one per line as "- <table>: <one-line reason>".',
+    'Do not write a table inventory: it is generated from the TABLE INVENTORY and appended to your document. Instead, end your document with a section "## Global tables" listing every table whose suggested scope is global, one per line as "- <table>: <one-line reason>". If such a table actually holds tenant data, write "- <table>: org-scoped: <reason>" or "- <table>: project-scoped: <reason>" instead.',
   adrIndex &&
     'Architecture facts must match the ARCHITECTURE INDEX. If a component lives in another repo, say so instead of inventing an in-repo shape.',
   'You have NO tools available. Do not attempt a tool call and do not narrate one. If something is missing, make the smallest reasonable assumption and list it under "Risks and follow-ups".',
@@ -165,13 +166,13 @@ let adrContent, stopReason;
 try {
   // 540s. Real runs on #451 (one request each, ~100 output tokens/s) took
   // 258-312s with spikes past 420s in thinking alone; see PR #459. History:
-  // 120s -> 300s (ADR index added, PR #273) -> 420s (full spec) -> 540s.
+  // 120s -> 300s (ADR index added, PR #273) -> 540s (spec + inventory, PR #459).
   // adr-agent.yml caps this step at 12m and ADR_STEP_BUDGET_MS defaults to
   // the same, so a corrective retry only runs if real headroom is left.
   // max_tokens is advisory on LLM_BACKEND=cli.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
-    maxTokens: 4096,
+    maxTokens: 16_000,
     timeoutMs: GENERATE_TIMEOUT_MS,
   }));
 } catch (err) {
@@ -180,7 +181,7 @@ try {
 }
 
 // Fail fast if truncated — matches the check in generate-impl.mjs. Without
-// it, a response cut short by the 4096 maxTokens cap would silently write a
+// it, a response cut short by the maxTokens cap would silently write a
 // truncated ADR to disk instead of erroring.
 if (stopReason === 'max_tokens') {
   console.error(
@@ -205,7 +206,9 @@ if (stopReason === 'max_tokens') {
 // room - see that file's comment).
 const STEP_BUDGET_MS = parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000);
 const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
-const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 45_000);
+// A retry needs about as long as a real run (194-312s measured, PR #459); with
+// less left it would only time out, so fail fast instead.
+const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 300_000);
 
 let narrationFinding = detectNarratedToolCall(adrContent);
 if (narrationFinding) {
@@ -232,7 +235,7 @@ if (narrationFinding) {
       `attempt a tool call and do not narrate one. Return ONLY the ADR document, starting with ` +
       `"# ADR-${padded}: <title>", exactly as instructed above.`,
     callFn: (retryPrompt, timeoutMs) =>
-      callClaude({ prompt: retryPrompt, maxTokens: 4096, timeoutMs }),
+      callClaude({ prompt: retryPrompt, maxTokens: 16_000, timeoutMs }),
     onNoBudget: (remaining) => {
       console.error(
         `::error::generate-adr.mjs: response looks like a narrated tool-call transcript, and only ` +
@@ -273,11 +276,14 @@ if (narrationFinding) {
 
 if (inventoryRows.length) {
   const { text, reasons } = extractGlobalReasons(adrContent);
-  const { markdown, missing } = inventoryAppendix(inventoryRows, reasons);
+  const { markdown, missing, overridden } = inventoryAppendix(inventoryRows, reasons);
+  if (overridden.length) {
+    console.log(`Scope overridden by the ADR author: ${overridden.join(', ')}`);
+  }
   adrContent = `${text}\n\n${markdown}\n`;
   if (missing.length) {
     console.warn(
-      `::warning::No reason given for global table(s): ${missing.join(', ')} - marked for the reviewer.`
+      `::warning::No reason given for global table(s): ${missing.join(', ')} - reason cells left empty for the reviewer.`
     );
   }
 }

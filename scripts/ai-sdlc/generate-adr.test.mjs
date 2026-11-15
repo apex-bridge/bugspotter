@@ -444,10 +444,7 @@ describe('generate-adr.mjs appends the table inventory itself', () => {
       env: { ISSUE_TITLE: 'Row-level security for tenant tables' },
     });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(
-      readFileSync(rlsAdrPath(), 'utf8'),
-      /\| fixture_users \| global \| REASON MISSING/
-    );
+    assert.match(readFileSync(rlsAdrPath(), 'utf8'), /^\| fixture_users \| global \| {2}\|$/m);
     assert.match(r.stderr, /No reason given for global table\(s\): fixture_users/);
   });
 });
@@ -485,5 +482,21 @@ describe('generate-adr.mjs review fixes', () => {
     });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.firstPrompt, /TABLE INVENTORY/);
+  });
+});
+
+describe('generate-adr.mjs inventory trigger', () => {
+  test('T5f: a spec that merely mentions tables or a schema gets no inventory', () => {
+    const spec =
+      '# Spec: fixture\n\n## Problem\nThe retry table in the worker schema is slow.\n## Constraints\n1. Keep the database migration additive.\n';
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Worker retry policy', SPEC_CONTENT: spec },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);
+    const out = readFileSync(join(REPO, 'docs', 'adr', '0001-worker-retry-policy.md'), 'utf8');
+    assert.doesNotMatch(out, /Table inventory/);
   });
 });
