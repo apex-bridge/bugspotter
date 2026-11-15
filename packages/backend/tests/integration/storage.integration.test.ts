@@ -424,7 +424,7 @@ describe('E2E: MinIO Storage', () => {
     } catch (error) {
       console.error('❌ MinIO initialization failed:', error);
       console.log(
-        '💡 Start MinIO with: docker run -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data'
+        '💡 Start MinIO with: docker run -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z server /data'
       );
       throw error;
     }
