@@ -79,6 +79,14 @@ jobs:
       - name: Run AI-SDLC script tests
         run: node --test scripts/ai-sdlc/*.test.mjs
 
+      # The self-built MinIO image tag (docker/minio/Dockerfile) is repeated in
+      # ci.yml, compose, testcontainers call sites and docs; a missed copy
+      # silently keeps an old image or pulls a tag that was never published.
+      - name: Check MinIO image tag references
+        run: |
+          node --test scripts/check-minio-image-tag.test.mjs
+          node scripts/check-minio-image-tag.mjs
+
       # Covers the container entrypoints' env validation, including the
       # STORAGE_DOMAIN vs S3_ENDPOINT CSP cross-check. Pure POSIX shell with no
       # dependencies, and nothing else exercises it - the code only runs inside
@@ -319,8 +327,25 @@ jobs:
       - name: Run other tests
         run: pnpm --filter @bugspotter/backend test -- tests/storage tests/config tests/security tests/integration tests/utils tests/*.test.ts
 
+  # Gate for the jobs that pull the self-built MinIO image. A push that bumps
+  # docker/minio/ publishes it in minio-image.yml at the same time; waiting here,
+  # in a job with its own budget, keeps the wait out of the test jobs' timeouts.
+  # Returns after one check when the tag already exists. If it fails, the
+  # dependent jobs are skipped and the CI job reports them as not successful.
+  minio-image-ready:
+    name: MinIO image available
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for the MinIO image tag
+        run: node scripts/wait-for-minio-image.mjs --timeout-min 35
+
   test-backend-integration:
     name: Backend Integration Tests (Node ${{ matrix.node-version }})
+    needs: [minio-image-ready]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Required. Was previously non-blocking with `continue-on-error: true`
@@ -369,9 +394,20 @@ jobs:
 
   playwright-admin:
     name: Admin E2E Tests
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, where the locked Playwright
+    # (1.56.0) refuses `playwright install --with-deps chromium`
+    # ("does not support chromium on ubuntu26.04-x64"). 24.04 is the image of
+    # the last green run; unpin when Playwright is bumped.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30 # Prevent indefinite hangs (Docker + E2E tests)
-    needs: [test-backend-db, test-backend-api, test-backend-services, test-backend-other]
+    needs:
+      [
+        minio-image-ready,
+        test-backend-db,
+        test-backend-api,
+        test-backend-services,
+        test-backend-other,
+      ]
     env:
       CI: true
 
@@ -480,8 +516,9 @@ jobs:
           # Pull all required images (use exact versions from docker-compose.yml)
           pull_image "postgres:16-alpine" || exit 1
           pull_image "redis:7-alpine" || exit 1
-          pull_image "minio/minio:RELEASE.2024-10-13T13-34-11Z" || exit 1
-          pull_image "minio/mc:RELEASE.2024-10-08T09-37-26Z" || exit 1
+          # MinIO server + mc in one image, built from source by minio-image.yml
+          # (upstream images are no longer pullable).
+          pull_image "ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r4" || exit 1
           pull_image "node:22-alpine" || exit 1
 
           echo "✅ All Docker images pre-pulled successfully"

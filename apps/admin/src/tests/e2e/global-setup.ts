@@ -160,7 +160,7 @@ export default async function globalSetup() {
       // adjacent runs). Dropping the unused port halves the wait surface
       // — MinIO still binds the console internally, we just don't wait
       // for it from the host.
-      new GenericContainer('minio/minio:RELEASE.2024-10-13T13-34-11Z')
+      new GenericContainer('ghcr.io/apex-bridge/bugspotter/minio:RELEASE.2024-10-13T13-34-11Z-r4')
         .withExposedPorts(9000)
         .withEnvironment({
           MINIO_ROOT_USER: 'bugspotter-e2e-admin',
