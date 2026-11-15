@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Pool, PoolClient } from 'pg';
 import { getLogger } from '../../logger.js';
 
@@ -90,10 +91,15 @@ export class TicketCreationOutboxRepository extends BaseRepository {
 
   /**
    * Create new outbox entry (within transaction)
-   * Idempotency key format: {bug_report_id}:{rule_id}:{timestamp}
+   * Idempotency key format: {bug_report_id}:{rule_id}:{timestamp}:{random}
+   *
+   * The random part keeps two creates for the same bug report and rule in the
+   * same millisecond from colliding on the UNIQUE constraint (#446). Nothing
+   * reads the key; whether it should instead deduplicate retries (one entry per
+   * bug report + rule) is a separate product decision tracked in #446.
    */
   async create(data: CreateOutboxEntryData): Promise<TicketCreationOutboxEntry> {
-    const idempotencyKey = `${data.bug_report_id}:${data.rule_id}:${Date.now()}`;
+    const idempotencyKey = `${data.bug_report_id}:${data.rule_id}:${Date.now()}:${randomUUID()}`;
 
     const query = `
       INSERT INTO ticket_creation_outbox (

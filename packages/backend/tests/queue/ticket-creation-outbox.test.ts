@@ -130,7 +130,7 @@ describe('Ticket Creation Outbox System', () => {
 
       expect(outboxEntry.status).toBe('pending');
       expect(outboxEntry.retry_count).toBe(0);
-      expect(outboxEntry.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+$/);
+      expect(outboxEntry.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+:[a-f0-9-]{36}$/);
       expect(outboxEntry.project_id).toBe(testProjectId);
       expect(outboxEntry.bug_report_id).toBe(testBugReportId);
       expect(outboxEntry.integration_id).toBe(testIntegrationId);
@@ -462,6 +462,36 @@ describe('Ticket Creation Outbox System', () => {
   });
 
   describe('Idempotency', () => {
+    it('does not collide when two entries for the same bug and rule share a millisecond (#446)', async () => {
+      // Freeze the clock so both creates see the same Date.now(); with the old
+      // {bug}:{rule}:{timestamp} key the second insert hit the UNIQUE constraint.
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+      try {
+        const base = {
+          project_id: testProjectId,
+          bug_report_id: testBugReportId,
+          integration_id: testIntegrationId,
+          platform: 'jira',
+          rule_id: testRuleId,
+          payload: {
+            title: 'Same millisecond',
+            description: 'Test',
+            url: 'https://test.example.com/same-ms',
+            user_agent: 'TestAgent/1.0',
+            timestamp: new Date().toISOString(),
+            severity: 'medium',
+          },
+        };
+        const first = await db.ticketOutbox.create(base);
+        const second = await db.ticketOutbox.create(base);
+        expect(first.idempotency_key).not.toBe(second.idempotency_key);
+        expect(first.idempotency_key.split(':')[2]).toBe('1800000000000');
+        expect(second.idempotency_key.split(':')[2]).toBe('1800000000000');
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
     it('should generate unique idempotency key for each entry', async () => {
       const entry1 = await db.ticketOutbox.create({
         project_id: testProjectId,
@@ -496,8 +526,8 @@ describe('Ticket Creation Outbox System', () => {
       });
 
       expect(entry1.idempotency_key).not.toBe(entry2.idempotency_key);
-      expect(entry1.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+$/);
-      expect(entry2.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+$/);
+      expect(entry1.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+:[a-f0-9-]{36}$/);
+      expect(entry2.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+:[a-f0-9-]{36}$/);
     });
 
     it('should not create duplicate tickets for the same outbox entry', async () => {
