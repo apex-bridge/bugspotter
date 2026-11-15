@@ -141,6 +141,7 @@ New file. One `## Slice N` section per slice 2-7, scoped as in #450. The skeleto
 # Spec: RLS rollout, slices 2-7
 
 ## Slice 2 — Runtime role split
+
 - Files (N ≤ 6): migration creating `bugspotter_app` + grants + default privileges; config for
   `DATABASE_URL` / `MIGRATION_DATABASE_URL`; ...
 - Migration: 1 new
@@ -149,6 +150,7 @@ New file. One `## Slice N` section per slice 2-7, scoped as in #450. The skeleto
 - Rollback: point `DATABASE_URL` back to the owner role, restart `api`/`worker`; no data change.
 
 ## Slice 3 — Tenant context plumbing
+
 - Files (N ≤ 6): client.ts (context-bound transaction/query), worker-host.ts (payload context),
   retention + named admin routes (audited bypass), self-hosted single-org backfill migration, ...
 - Migration: self-hosted org resolution + NULL organization_id backfill
@@ -159,8 +161,8 @@ New file. One `## Slice N` section per slice 2-7, scoped as in #450. The skeleto
 - Rollback: revert only after slices 4-6 are disabled.
 
 ## Slice 4 — Policies, batch A (core)
-- Tables: bug_reports, projects, project_members, sessions, share_tokens, api_keys, tickets,
-  archived_bug_reports
+
+- Tables: `bug_reports`, `projects`, `project_members`, `sessions`, `share_tokens`, `api_keys`, `tickets`, `archived_bug_reports`
 - Files (N ≤ 6): ...
 - Migration: 1+ new
 - Blocking prerequisites: slices 2, 3
@@ -169,17 +171,17 @@ New file. One `## Slice N` section per slice 2-7, scoped as in #450. The skeleto
 - Rollback: `ALTER TABLE ... DISABLE ROW LEVEL SECURITY` migration; policies stay defined.
 
 ## Slice 5 — Policies, batch B (integrations + notifications)
-- Tables: integrations, project_integrations, integration_*, notification_*, oauth_tokens,
-  ticket_creation_outbox
+
+- Tables: `integrations`, `project_integrations`, `integration_*`, `notification_*`, `oauth_tokens`, `ticket_creation_outbox`
 - (same fields as slice 4)
 
 ## Slice 6 — Policies, batch C (org/billing/intelligence/audit)
-- Tables: organization_*, invoices, invoice_lines, subscriptions, usage_records, audit_logs,
-  api_key_*, bug_enrichments, bug_mitigations, intelligence_*, dedup_rules, oidc_idp_config,
-  data_residency_*
+
+- Tables: `organization_*`, `invoices`, `invoice_lines`, `subscriptions`, `usage_records`, `audit_logs`, `api_key_*`, `bug_enrichments`, `bug_mitigations`, `intelligence_*`, `dedup_rules`, `oidc_idp_config`, `data_residency_*`
 - (same fields as slice 4)
 
 ## Slice 7 — Coverage guard in CI
+
 - Files (N ≤ 6): CI workflow step + catalog-query script + its test
 - Migration: none
 - Blocking prerequisites: slices 4, 5, 6
