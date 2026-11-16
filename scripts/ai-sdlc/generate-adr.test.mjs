@@ -598,16 +598,16 @@ describe('generate-adr.mjs settings validation (review of ac4ef99)', () => {
     }
   });
 
-  test('S8: a truncated response points at the ADR_MAX_TOKENS repo variable', () => {
+  test('S8: a truncated CLI response does not point at ADR_MAX_TOKENS, which the CLI ignores', () => {
     const r = runGenerateAdr({
       text: REAL_ADR_TEXT,
       env: { FAKE_CLAUDE_STOP_REASON: 'max_tokens' },
     });
     assert.equal(r.status, 1);
-    assert.match(
-      r.stderr,
-      /stop_reason=max_tokens at 64000\). Raise the ADR_MAX_TOKENS repo variable/
-    );
+    // These tests run LLM_BACKEND=cli, where ADR_MAX_TOKENS is ignored.
+    assert.match(r.stderr, /model's own output limit was reached/);
+    assert.match(r.stderr, /ADR_MAX_TOKENS does not apply on LLM_BACKEND=cli/);
+    assert.doesNotMatch(r.stderr, /Raise the ADR_MAX_TOKENS/);
     assert.doesNotMatch(r.stderr, /in generate-adr\.mjs/);
   });
 });

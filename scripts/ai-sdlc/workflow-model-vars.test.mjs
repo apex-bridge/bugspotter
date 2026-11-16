@@ -129,7 +129,16 @@ test('adr-agent.yml: the step timeout accepts whole minutes 1-20 and uses 12 oth
   const script = resolveStepTimeoutScript();
   const dir = mkdtempSync(join(tmpdir(), 'adr-budget-'));
   try {
-    const cases = { '': '12', 20: '20', 1: '1', 0: '12', 25: '12', '12m': '12', 0.5: '12' };
+    const cases = {
+      '': '12',
+      20: '20',
+      1: '1',
+      '08': '8',
+      0: '12',
+      25: '12',
+      '12m': '12',
+      0.5: '12',
+    };
     for (const [raw, want] of Object.entries(cases)) {
       const out = join(dir, `out-${want}-${raw || 'unset'}`);
       writeFileSync(out, '');

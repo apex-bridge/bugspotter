@@ -463,3 +463,15 @@ CREATE TABLE tickets (id UUID, bug_report_id UUID REFERENCES bug_reports(id));
   assert.equal(t.outbox.scope.kind, 'project-scoped');
   assert.equal(t.tickets.scope.kind, 'org-scoped');
 });
+
+test('a self-referencing organizations table stays the global tenant root', () => {
+  const dir = migrations({
+    '001_init.sql': `
+CREATE TABLE organizations (id UUID PRIMARY KEY, parent_id UUID REFERENCES organizations(id));
+CREATE TABLE projects (id UUID PRIMARY KEY, organization_id UUID REFERENCES organizations(id));
+`,
+  });
+  const t = byName(tableInventory(dir));
+  assert.equal(t.organizations.scope.kind, 'global');
+  assert.equal(t.projects.scope.kind, 'org-scoped');
+});

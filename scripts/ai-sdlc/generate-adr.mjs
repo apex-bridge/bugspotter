@@ -240,7 +240,9 @@ try {
 // truncated ADR to disk instead of erroring.
 if (stopReason === 'max_tokens') {
   console.error(
-    `Claude response truncated (stop_reason=max_tokens at ${SETTINGS.maxTokens}). Raise the ADR_MAX_TOKENS repo variable.`
+    (process.env.LLM_BACKEND || 'api') === 'cli'
+      ? "Claude response truncated (stop_reason=max_tokens): the model's own output limit was reached. ADR_MAX_TOKENS does not apply on LLM_BACKEND=cli; a lower ADR_EFFORT means less thinking."
+      : `Claude response truncated (stop_reason=max_tokens at ${SETTINGS.maxTokens}). Raise the ADR_MAX_TOKENS repo variable.`
   );
   process.exit(1);
 }

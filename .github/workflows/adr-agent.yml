@@ -82,7 +82,7 @@ jobs:
           MINUTES=12
           if [ -n "$RAW" ]; then
             if [[ "$RAW" =~ ^[0-9]+$ ]] && [ "$RAW" -ge 1 ] && [ "$RAW" -le 20 ]; then
-              MINUTES=$RAW
+              MINUTES=$((10#$RAW)) # "08" -> 8; fromJSON rejects a leading zero
             else
               echo "::warning::Ignoring ADR_STEP_TIMEOUT_MINUTES=$RAW: must be a whole number of minutes from 1 to 20; using 12."
             fi

@@ -210,8 +210,10 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
         continue;
       }
       for (const ref of r.refs) {
-        const kind =
-          rootScope[ref.table] ?? (ref.table !== r.table && byName.get(ref.table)?.scope?.kind);
+        if (ref.table === r.table) {
+          continue;
+        }
+        const kind = rootScope[ref.table] ?? byName.get(ref.table)?.scope?.kind;
         if (kind) {
           r.scope = { kind, via: `${ref.column} → ${ref.table}` };
           changed = true;

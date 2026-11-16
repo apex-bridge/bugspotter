@@ -163,3 +163,10 @@ test('two subsections for the same ADR file share one Changes heading', () => {
   assert.equal(out.match(/^## Changes \(ADR file only\)$/gm).length, 1);
   assert.ok(out.includes('OUTLINE') && out.includes('ROW'));
 });
+
+test('a prose line starting with ```code``` does not open a fence', () => {
+  const spec = ['## Problem', '```fetch()``` returns stale data', '## Tests', 'TEST_DETAILS'].join(
+    '\n'
+  );
+  assert.ok(!specForAdr(spec, 'docs/adr/0001-x.md').includes('TEST_DETAILS'));
+});
