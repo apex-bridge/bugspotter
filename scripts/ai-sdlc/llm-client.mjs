@@ -126,10 +126,15 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
   }
 
   const data = await res.json();
-  if (data?.content?.[0]?.type !== 'text') {
+  // Models that think return thinking block(s) before the text, so take the
+  // text blocks rather than assuming content[0] is text.
+  const texts = Array.isArray(data?.content)
+    ? data.content.filter((b) => b?.type === 'text').map((b) => b.text)
+    : [];
+  if (!texts.length) {
     throw new Error(`Unexpected API response shape: ${JSON.stringify(data, null, 2)}`);
   }
-  return { text: data.content[0].text, stopReason: data.stop_reason };
+  return { text: texts.join(''), stopReason: data.stop_reason };
 }
 
 // The CLI's terminal `result` event (now under `--output-format stream-json`,

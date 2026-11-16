@@ -49,14 +49,25 @@ const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = p
 //                             time budget (default 12)
 //   ADR_MAX_TOKENS            output cap, enforced on the API backend (16000)
 //   ADR_MAX_SPEC_CHARS        runaway guard for the spec input (60000)
-//   ADR_EFFORT                low | medium | high | xhigh | max (model default)
+//   ADR_EFFORT                low | medium | high | xhigh | max (model default);
+//                             not every model supports every level - an
+//                             unsupported one fails the API call (400)
+// Counts must be positive integers; anything else falls back with a warning.
+const positiveInt = (name, fallback) => {
+  const n = parsePositiveMs(process.env[name], fallback);
+  if (Number.isInteger(n) && n > 0) {
+    return n;
+  }
+  console.warn(`Ignoring ${name}=${process.env[name]}: not a positive integer; using ${fallback}.`);
+  return fallback;
+};
 const SETTINGS = {
   timeoutMs: parsePositiveMs(process.env.ADR_LLM_TIMEOUT_MS, 540_000),
   stepBudgetMs:
     parsePositiveMs(process.env.ADR_STEP_TIMEOUT_MINUTES, 0) * 60_000 ||
     parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000),
-  maxTokens: parsePositiveMs(process.env.ADR_MAX_TOKENS, 16_000),
-  maxSpecChars: parsePositiveMs(process.env.ADR_MAX_SPEC_CHARS, 60_000),
+  maxTokens: positiveInt('ADR_MAX_TOKENS', 16_000),
+  maxSpecChars: positiveInt('ADR_MAX_SPEC_CHARS', 60_000),
   effort: process.env.ADR_EFFORT || undefined,
 };
 
@@ -131,7 +142,9 @@ const MAX_SPEC_CHARS = SETTINGS.maxSpecChars;
 // Select the ADR's Changes subsection by the path the spec declares, even when
 // the output is renumbered because that number is taken.
 const specAdrPath = specAdr ? `docs/adr/${specAdr[1]}-${specAdr[2]}.md` : adrFile;
-const specInput = specText ? (specForAdr(specText, specAdrPath) ?? specText) : '';
+const specInput = specText
+  ? (specForAdr(specText, specAdrPath, { existingAdrs: existing }) ?? specText)
+  : '';
 const specForPrompt =
   specInput.length > MAX_SPEC_CHARS
     ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
@@ -178,12 +191,26 @@ ${specForPrompt ? `\nLINKED SPEC (sections relevant to the ADR; its tests, verif
 Rules:
 ${rules.map((r) => `- ${r}`).join('\n')}`;
 
-const GENERATE_TIMEOUT_MS = SETTINGS.timeoutMs;
+const STEP_BUDGET_MS = SETTINGS.stepBudgetMs;
+const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
+// One call's time is mostly extended thinking, which varies a lot between runs
+// (#458). The call is capped at what is left of the step budget
+// (ADR_STEP_TIMEOUT_MINUTES, the step's own timeout-minutes), so a long
+// ADR_LLM_TIMEOUT_MS ends in a handled timeout, not a GitHub kill.
+const GENERATE_TIMEOUT_MS = Math.max(
+  1_000,
+  Math.min(
+    SETTINGS.timeoutMs,
+    computeRemainingBudgetMs({
+      stepBudgetMs: STEP_BUDGET_MS,
+      safetyBufferMs: SAFETY_BUFFER_MS,
+      scriptStartedAt,
+    })
+  )
+);
 let adrContent, stopReason;
 try {
-  // One call's time is mostly extended thinking, which varies a lot between
-  // runs (#458). adr-agent.yml caps the step at 12m and ADR_STEP_BUDGET_MS
-  // matches it. max_tokens is advisory on LLM_BACKEND=cli.
+  // max_tokens is advisory on LLM_BACKEND=cli.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
     maxTokens: SETTINGS.maxTokens,
@@ -219,8 +246,6 @@ if (stopReason === 'max_tokens') {
 // way (see generation-retry.mjs). Defaults match adr-agent.yml's "Generate
 // ADR" step cap (raised alongside this change specifically to give a retry
 // room - see that file's comment).
-const STEP_BUDGET_MS = SETTINGS.stepBudgetMs;
-const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
 // A retry needs about as long as a first run; with less left it would only
 // time out, so fail fast instead.
 const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 300_000);

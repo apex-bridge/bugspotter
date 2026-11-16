@@ -341,3 +341,65 @@ test('a fenced example inside "## Global tables" does not overwrite a real reaso
     reason: 'identities span organizations',
   });
 });
+
+test('children of bug_reports take its scope however they are linked', () => {
+  const dir = migrations({
+    '001_init.sql': `
+CREATE TABLE organizations (id UUID PRIMARY KEY);
+CREATE TABLE bug_reports (id UUID PRIMARY KEY, organization_id UUID REFERENCES organizations(id));
+CREATE TABLE sessions (id UUID, bug_report_id UUID REFERENCES bug_reports(id));
+CREATE TABLE notes (id UUID, bug_report_id UUID);
+CREATE TABLE sync_log (id UUID, bug_id UUID REFERENCES bug_reports(id));
+`,
+  });
+  const t = byName(tableInventory(dir));
+  for (const name of ['sessions', 'notes', 'sync_log']) {
+    assert.equal(t[name].scope.kind, 'org-scoped', name);
+  }
+  assert.equal(scopeLabel(t.notes.scope), 'org-scoped (via bug_report_id → bug_reports)');
+});
+
+test('only an inventory heading is dropped, not a section that mentions one', () => {
+  const adr = [
+    '## Decision: table inventory and policy shape',
+    'KEEP_DECISION',
+    '### Why the table inventory is generated',
+    'KEEP_WHY',
+    '## Appendix B: Table inventory',
+    'DROP_ROWS',
+    '## Consequences',
+    'KEEP_CONSEQUENCES',
+  ].join('\n');
+  const { text } = extractGlobalReasons(adr);
+  for (const k of ['KEEP_DECISION', 'KEEP_WHY', 'KEEP_CONSEQUENCES']) {
+    assert.ok(text.includes(k), k);
+  }
+  assert.ok(!text.includes('DROP_ROWS'));
+});
+
+test('Global tables bullets: bold names and a note before the colon are read', () => {
+  const adr = [
+    '## Global tables',
+    '- **users**: identities span organizations',
+    '- `permissions` (catalog): fixed list shared by all tenants',
+    '- system_config (platform): org-scoped: per-tenant overrides',
+  ].join('\n');
+  const { reasons } = extractGlobalReasons(adr);
+  assert.equal(reasons.get('users').reason, 'identities span organizations');
+  assert.equal(reasons.get('permissions').reason, 'fixed list shared by all tenants');
+  assert.deepEqual(reasons.get('system_config'), {
+    kind: 'org-scoped',
+    reason: 'per-tenant overrides',
+  });
+});
+
+test('a "|" in a reason is escaped so the appendix row keeps three cells', () => {
+  const rows = [{ table: 'system_config', scope: { kind: 'global', via: '' } }];
+  const reasons = new Map([
+    ['system_config', { kind: 'global', reason: 'platform settings | no tenant data' }],
+  ]);
+  const row = inventoryAppendix(rows, reasons)
+    .markdown.split('\n')
+    .find((l) => l.startsWith('| system_config'));
+  assert.equal(row.split(/(?<!\\)\|/).length - 2, 3);
+});

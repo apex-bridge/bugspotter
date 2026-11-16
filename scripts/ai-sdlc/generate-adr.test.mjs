@@ -43,6 +43,7 @@ writeFileSync(
     "process.stdin.on('data', (d) => { input += d; });",
     "process.stdin.on('end', () => {",
     '  const dump = process.env.FAKE_CLAUDE_PROMPT_DUMP;',
+    '  if (process.env.FAKE_CLAUDE_SLEEP_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_CLAUDE_SLEEP_MS));',
     '  if (process.env.FAKE_CLAUDE_ARGV_DUMP) fs.writeFileSync(process.env.FAKE_CLAUDE_ARGV_DUMP, JSON.stringify(process.argv.slice(2)));',
     "  if (dump) fs.appendFileSync(dump, input + '\\n===FAKE_CLAUDE_CALL_BOUNDARY===\\n');",
     "  const isRetry = input.includes('--- CORRECTIVE REMINDER ---');",
@@ -539,5 +540,36 @@ describe('generate-adr.mjs settings', () => {
     assert.equal(r.status, 1);
     assert.equal(r.modelCallCount, 1, 'a 0.6s budget leaves no room for a retry');
     assert.match(r.stderr, /not enough for a safe corrective retry/);
+  });
+});
+
+describe('generate-adr.mjs settings validation', () => {
+  test('S4: a zero or fractional count falls back to the default with a warning', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      env: { ADR_MAX_TOKENS: '0', ADR_MAX_SPEC_CHARS: '1.5' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /Ignoring ADR_MAX_TOKENS=0: not a positive integer; using 16000/);
+    assert.match(r.stderr, /Ignoring ADR_MAX_SPEC_CHARS=1.5/);
+  });
+
+  test('S5: the first call is capped by the step budget, not only ADR_LLM_TIMEOUT_MS', () => {
+    const started = Date.now();
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      env: {
+        ADR_LLM_TIMEOUT_MS: '600000',
+        ADR_STEP_TIMEOUT_MINUTES: '0.05',
+        ADR_SAFETY_BUFFER_MS: '1000',
+        FAKE_CLAUDE_SLEEP_MS: '8000',
+      },
+    });
+    const elapsed = Date.now() - started;
+    // On Windows the fake CLI can outlive the killed shim; let it exit so the
+    // temp repo can be removed.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, 9000 - elapsed));
+    assert.equal(r.status, 1, 'the call times out inside the 3s budget');
+    assert.ok(elapsed < 7000, `did not wait for the fake's 8s reply (${elapsed}ms)`);
   });
 });

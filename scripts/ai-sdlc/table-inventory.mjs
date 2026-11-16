@@ -16,6 +16,7 @@
 //
 // Zero-dependency. Prints a Markdown table.
 
+import { fenceTracker } from './markdown-fence.mjs';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,16 +105,6 @@ function parseItem(item) {
   return { column: bareName(name), references: ref ? bareName(ref[1]) : null };
 }
 
-// Names declared in a CREATE TABLE column list: the first identifier of each
-// top-level item, skipping table constraints. Defaults, CHECK bodies and
-// REFERENCES targets are not column declarations.
-export function declaredColumns(columnList) {
-  return splitTopLevel(columnList)
-    .map(parseItem)
-    .filter((p) => p?.column)
-    .map((p) => p.column);
-}
-
 function directScope(columns) {
   if (columns.includes('organization_id')) {
     return { kind: 'org-scoped', via: '' };
@@ -192,11 +183,21 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
     }
   }
 
-  const rows = [...tables.values()].map((r) => ({
-    ...r,
-    columns: SCOPING_COLUMNS.filter((c) => r.columns.has(c)),
-    scope: directScope(SCOPING_COLUMNS.filter((c) => r.columns.has(c))),
-  }));
+  const rows = [...tables.values()].map((r) => {
+    const columns = SCOPING_COLUMNS.filter((c) => r.columns.has(c));
+    // bug_report_id takes bug_reports' own scope through the foreign key, so
+    // children of bug_reports agree however they are linked.
+    const refs =
+      columns.includes('bug_report_id') && !r.refs.some((x) => x.column === 'bug_report_id')
+        ? [...r.refs, { column: 'bug_report_id', table: 'bug_reports' }]
+        : r.refs;
+    return {
+      ...r,
+      columns,
+      refs,
+      scope: directScope(columns.filter((c) => c !== 'bug_report_id')),
+    };
+  });
   // Inherit scope through foreign keys until nothing changes (organizations and
   // projects are the tenant roots).
   const byName = new Map(rows.map((r) => [r.table, r]));
@@ -225,7 +226,8 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
 
 export const scopeLabel = ({ kind, via }) => (via ? `${kind} (via ${via})` : kind);
 
-// Label from a table's own columns only (no foreign keys).
+// Label from a table's own columns only (no foreign keys). The inventory itself
+// resolves bug_report_id through bug_reports, so it may say org-scoped here.
 export const suggestedScope = (columns) =>
   scopeLabel(directScope(columns) ?? { kind: 'global', via: '' });
 
@@ -251,17 +253,10 @@ export function extractGlobalReasons(adr) {
   const kept = [];
   let mode = null;
   let dropLevel = 0;
-  let fence = null;
+  const inCode = fenceTracker();
   for (const line of adr.split(/\r?\n/)) {
-    const f = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
-    if (f) {
-      if (!fence) {
-        fence = f[1];
-      } else if (f[1][0] === fence[0] && f[1].length >= fence.length && /^[ \t]*$/.test(f[2])) {
-        fence = null;
-      }
-    }
-    const heading = !fence && !f && line.match(/^(#{2,6})\s+(.*)$/);
+    const code = inCode(line);
+    const heading = !code && line.match(/^(#{2,6})\s+(.*)$/);
     if (heading) {
       const level = heading[1].length;
       const title = heading[2].trim().toLowerCase();
@@ -270,7 +265,9 @@ export function extractGlobalReasons(adr) {
         dropLevel = level;
         continue;
       }
-      if (/table inventory/.test(title)) {
+      // Only an inventory heading ("Table inventory", "Appendix B: Table
+      // inventory"), not a section that mentions one.
+      if (/^(?:appendix(?:\s+\w+)?\s*[:.\-–—]\s*)?table inventory(?:\s*\(.*\))?$/.test(title)) {
         mode = 'drop';
         dropLevel = level;
         continue;
@@ -281,8 +278,12 @@ export function extractGlobalReasons(adr) {
     }
     if (mode === 'reasons') {
       // Bullets inside a code fence are examples, not reasons.
+      // Accepts "- t:", "- `t`:", "- **t**:" and "- t (note):".
       const m =
-        !fence && !f && line.match(/^\s*[-*]\s*`?([A-Za-z_]\w*)`?\s*(?::|—|–|-)\s*(.+?)\s*$/);
+        !code &&
+        line.match(
+          /^\s*[-*]\s*(?:\*\*|__)?`?([A-Za-z_]\w*)`?(?:\*\*|__)?\s*(?:\([^)]*\)\s*)?(?::|—|–|-)\s*(.+?)\s*$/
+        );
       if (m) {
         // "- table: org-scoped: reason" overrides the computed global scope.
         const o = m[2].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);
@@ -321,7 +322,8 @@ export function inventoryAppendix(rows, reasons) {
         why = `author: ${why}`;
       }
     }
-    return `| ${r.table} | ${kind} | ${why} |`;
+    // A "|" in the model's reason would split the table cell.
+    return `| ${r.table} | ${kind} | ${why.replace(/\|/g, '\\|')} |`;
   });
   const markdown = [
     '## Appendix: Table inventory',

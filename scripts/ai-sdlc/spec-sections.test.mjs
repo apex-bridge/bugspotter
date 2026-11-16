@@ -111,7 +111,7 @@ test('a fence line with text after the marker does not close the fence', () => {
   assert.ok(!out.includes('\nT'), 'Tests still dropped');
 });
 
-test('two ADR subsections under Changes: the exact path wins; no exact match falls back to numbered ADRs', () => {
+test('two ADR subsections under Changes: the exact path wins; without one the choice is ambiguous', () => {
   const spec = [
     '## Problem',
     'P',
@@ -126,7 +126,25 @@ test('two ADR subsections under Changes: the exact path wins; no exact match fal
   const exact = specForAdr(spec, 'docs/adr/0001-security.md');
   assert.ok(exact.includes('OUTLINE_SECURITY'));
   assert.ok(!exact.includes('OUTLINE_STORAGE'), 'the other ADR outline is not sent');
-  const fallback = specForAdr(spec, 'docs/adr/0009-other.md');
-  assert.ok(fallback.includes('OUTLINE_SECURITY') && fallback.includes('OUTLINE_STORAGE'));
-  assert.ok(!fallback.includes('INDEX_ROW'), 'README.md is not a numbered ADR');
+  assert.equal(
+    specForAdr(spec, 'docs/adr/0009-other.md'),
+    null,
+    'ambiguous: caller sends the full spec'
+  );
+  const one = specForAdr(spec, 'docs/adr/0009-other.md', { existingAdrs: ['0001-security.md'] });
+  assert.ok(one.includes('OUTLINE_STORAGE'), 'the one new numbered ADR is used');
+  assert.ok(!one.includes('OUTLINE_SECURITY'), 'an existing ADR is not the new one');
+  assert.ok(!one.includes('INDEX_ROW'), 'README.md is not a numbered ADR');
+});
+
+test('"ADR: pending" with an edit to an existing ADR: that ADR is not taken as the new one', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Changes',
+    '### `docs/adr/0012-old.md` (mark Superseded)',
+    'SUPERSEDE_NOTE',
+  ].join('\n');
+  const out = specForAdr(spec, 'docs/adr/0046-new.md', { existingAdrs: ['0012-old.md'] });
+  assert.ok(!out.includes('SUPERSEDE_NOTE'));
 });

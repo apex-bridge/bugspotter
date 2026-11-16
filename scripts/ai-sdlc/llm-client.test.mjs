@@ -981,3 +981,24 @@ test('callViaApi sends output_config.effort only when an effort is given', async
     globalThis.fetch = originalFetch;
   }
 });
+
+test('callViaApi takes the text after a thinking block instead of throwing', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        content: [
+          { type: 'thinking', thinking: 'plan', signature: 'sig' },
+          { type: 'text', text: 'ADR body' },
+        ],
+        stop_reason: 'end_turn',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(r.text, 'ADR body');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
