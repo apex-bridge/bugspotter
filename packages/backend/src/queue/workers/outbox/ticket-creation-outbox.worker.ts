@@ -16,7 +16,8 @@
  * - Guarantees no orphaned tickets (external API call AFTER db transaction commits)
  * - Automatic retries with exponential backoff (1min, 5min, 30min, 2h, 12h)
  * - Dead letter queue for exhausted retries
- * - Idempotency prevents duplicate tickets
+ * - Each outbox row is filed at most once by the state machine; repeated triggers
+ *   for the same bug report and rule are not deduplicated (see #446)
  */
 
 import { Queue } from 'bullmq';
@@ -283,8 +284,8 @@ export class TicketCreationOutboxProcessor {
     // Extract description template from outbox payload (if present)
     const descriptionTemplate = entry.payload?.description_template as string | null | undefined;
 
-    // Create ticket with idempotency key (prevents duplicate tickets on retries)
-    // The idempotency key is stored in the outbox entry
+    // Create the ticket for this outbox row. The row's idempotency_key is only a
+    // unique id; it does not deduplicate repeated triggers (see #446).
     // Pass metadata (rule_id, created_automatically, field_mappings, description_template) down the call chain
     const result = await service.createFromBugReport(bugReport, project_id, integration_id, {
       ruleId: rule_id,

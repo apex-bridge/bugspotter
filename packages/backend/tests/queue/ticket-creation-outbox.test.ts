@@ -130,7 +130,9 @@ describe('Ticket Creation Outbox System', () => {
 
       expect(outboxEntry.status).toBe('pending');
       expect(outboxEntry.retry_count).toBe(0);
-      expect(outboxEntry.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+:[a-f0-9-]{36}$/);
+      expect(outboxEntry.idempotency_key).toMatch(
+        /^[a-f0-9-]+:[a-f0-9-]+:\d+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      );
       expect(outboxEntry.project_id).toBe(testProjectId);
       expect(outboxEntry.bug_report_id).toBe(testBugReportId);
       expect(outboxEntry.integration_id).toBe(testIntegrationId);
@@ -463,33 +465,64 @@ describe('Ticket Creation Outbox System', () => {
 
   describe('Idempotency', () => {
     it('does not collide when two entries for the same bug and rule share a millisecond (#446)', async () => {
-      // Freeze the clock so both creates see the same Date.now(); with the old
-      // {bug}:{rule}:{timestamp} key the second insert hit the UNIQUE constraint.
-      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+      // create() builds the key from Date.now() first thing, so mockReturnValueOnce
+      // pins only that call; the pg driver and logger keep a live clock. With the
+      // old {bug}:{rule}:{timestamp} key the second insert hit the UNIQUE constraint.
+      const base = {
+        project_id: testProjectId,
+        bug_report_id: testBugReportId,
+        integration_id: testIntegrationId,
+        platform: 'jira',
+        rule_id: testRuleId,
+        payload: {
+          title: 'Same millisecond',
+          description: 'Test',
+          url: 'https://test.example.com/same-ms',
+          user_agent: 'TestAgent/1.0',
+          timestamp: new Date().toISOString(),
+          severity: 'medium',
+        },
+      };
+      const T = 1_800_000_000_000;
+      const nowSpy = vi.spyOn(Date, 'now');
       try {
-        const base = {
-          project_id: testProjectId,
-          bug_report_id: testBugReportId,
-          integration_id: testIntegrationId,
-          platform: 'jira',
-          rule_id: testRuleId,
-          payload: {
-            title: 'Same millisecond',
-            description: 'Test',
-            url: 'https://test.example.com/same-ms',
-            user_agent: 'TestAgent/1.0',
-            timestamp: new Date().toISOString(),
-            severity: 'medium',
-          },
-        };
+        nowSpy.mockReturnValueOnce(T);
         const first = await db.ticketOutbox.create(base);
+        nowSpy.mockReturnValueOnce(T);
         const second = await db.ticketOutbox.create(base);
+
+        expect(first.idempotency_key.split(':')[2]).toBe(String(T));
+        expect(second.idempotency_key.split(':')[2]).toBe(String(T));
         expect(first.idempotency_key).not.toBe(second.idempotency_key);
-        expect(first.idempotency_key.split(':')[2]).toBe('1800000000000');
-        expect(second.idempotency_key.split(':')[2]).toBe('1800000000000');
+        expect(first.id).not.toBe(second.id);
+        const { rows } = await db.query<{ n: number }>(
+          'SELECT count(*)::int AS n FROM ticket_creation_outbox WHERE id = ANY($1)',
+          [[first.id, second.id]]
+        );
+        expect(rows[0].n).toBe(2);
       } finally {
         nowSpy.mockRestore();
       }
+    });
+
+    it('keeps an explicit max_retries of 0 instead of defaulting it to 3', async () => {
+      const entry = await db.ticketOutbox.create({
+        project_id: testProjectId,
+        bug_report_id: testBugReportId,
+        integration_id: testIntegrationId,
+        platform: 'jira',
+        rule_id: testRuleId,
+        max_retries: 0,
+        payload: {
+          title: 'No retries',
+          description: 'Test',
+          url: 'https://test.example.com/no-retries',
+          user_agent: 'TestAgent/1.0',
+          timestamp: new Date().toISOString(),
+          severity: 'medium',
+        },
+      });
+      expect(entry.max_retries).toBe(0);
     });
 
     it('should generate unique idempotency key for each entry', async () => {
@@ -526,8 +559,12 @@ describe('Ticket Creation Outbox System', () => {
       });
 
       expect(entry1.idempotency_key).not.toBe(entry2.idempotency_key);
-      expect(entry1.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+:[a-f0-9-]{36}$/);
-      expect(entry2.idempotency_key).toMatch(/^[a-f0-9-]+:[a-f0-9-]+:\d+:[a-f0-9-]{36}$/);
+      expect(entry1.idempotency_key).toMatch(
+        /^[a-f0-9-]+:[a-f0-9-]+:\d+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      );
+      expect(entry2.idempotency_key).toMatch(
+        /^[a-f0-9-]+:[a-f0-9-]+:\d+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      );
     });
 
     it('should not create duplicate tickets for the same outbox entry', async () => {

@@ -125,7 +125,7 @@ export class TicketCreationOutboxRepository extends BaseRepository {
       data.rule_id,
       JSON.stringify(data.payload),
       data.scheduled_at || new Date(),
-      data.max_retries || 3,
+      data.max_retries ?? 3,
       idempotencyKey,
       data.dedup_grace_until ?? null,
     ];
