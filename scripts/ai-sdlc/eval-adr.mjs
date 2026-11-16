@@ -12,14 +12,26 @@
 // Zero-dependency.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tableInventory, DEFAULT_MIGRATIONS_DIR } from './table-inventory.mjs';
 
 const DEFAULT_SECTIONS = ['context', 'decision', 'consequences', 'alternatives'];
-const META_NOTE =
-  /\b(do(es)? not have access|cannot run|could not (run|read)|unable to (run|read)|no tools available)\b/i;
+// Notes about the author's own tooling ("I could not read the repo"), not
+// domain prose ("workers do not have access to the request context").
+const META_NOTES = [
+  /\bno tools (?:are )?available\b/i,
+  /\bthis (?:ADR|draft|document)\b[^.\n]{0,40}\b(?:do(?:es)? not|could not|cannot|can't|(?:is|was) unable to)\b[^.\n]{0,30}\b(?:access|run|read|verify|execute)\b/i,
+  /\b(?:I|the (?:author|model|assistant))\b[^.\n]{0,40}\b(?:do(?:es)? not|don't|did not|could not|cannot|can't|(?:am|was|is) unable to)\b/,
+  /\b(?:do(?:es)? not|don't|did not|could not|cannot|can't) (?:have )?access (?:to )?(?:the )?(?:repo(?:sitory)?|codebase|source(?: code)?|files|tools)\b/i,
+  /\b(?:could not|cannot|can't|unable to) (?:run|execute|verify) (?:the )?(?:code|tests|commands|tools)\b/i,
+];
+
+// A match preceded in its sentence by a negation ("we never link accounts by
+// email alone", "we don't skip RLS") states the opposite, so it does not count.
+const NEGATION =
+  /(?:\b(?:not|never|no|nor|neither|without|cannot)\b|n't\b|\brather than\b|\binstead of\b)[^.;:!?\n|]*$/i;
 
 // "## Heading" -> body, lowercased titles; main body = everything before "## Appendix".
 export function splitAdr(text) {
@@ -37,14 +49,45 @@ export function splitAdr(text) {
       sections.get(current).push(line);
     }
   }
+  const firstSection = lines.findIndex((l) => /^## /.test(l));
   return {
     main,
     mainLines: main.split('\n').length,
+    // Title, status and the "> **Decision:**" summary, before the first "## ".
+    preamble: (firstSection < 0 ? lines : lines.slice(0, firstSection)).join('\n'),
     sections: new Map([...sections].map(([k, v]) => [k, v.join('\n')])),
   };
 }
 
 const anyMatch = (text, patterns) => patterns.some((p) => new RegExp(p, 'i').test(text));
+
+// True when some match of a pattern is not negated within its sentence.
+export function anyAffirmed(text, patterns) {
+  return patterns.some((p) =>
+    [...text.matchAll(new RegExp(p, 'gi'))].some((m) => {
+      const before = text.slice(Math.max(0, m.index - 80), m.index);
+      return !NEGATION.test(before);
+    })
+  );
+}
+
+// Body of the first heading (any level) whose title contains `name`, up to the
+// next heading of the same or a higher level.
+function headingBlock(text, name) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((l) => {
+    const h = l.match(/^(#{2,4})\s+(.*)$/);
+    return h && h[2].toLowerCase().includes(name);
+  });
+  if (start < 0) {
+    return '';
+  }
+  const level = lines[start].match(/^#+/)[0].length;
+  const end = lines.findIndex(
+    (l, i) => i > start && /^#+\s/.test(l) && l.match(/^#+/)[0].length <= level
+  );
+  return lines.slice(start + 1, end < 0 ? undefined : end).join('\n');
+}
 
 function listRepoFiles(repoDir) {
   try {
@@ -54,7 +97,12 @@ function listRepoFiles(repoDir) {
   }
 }
 
-// path:line references that resolve (by path suffix) to a tracked file long enough.
+const lineCount = (text) =>
+  text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+
+// path:line references that resolve (by path suffix) to exactly one tracked file
+// that exists and is long enough. A suffix matching several files cannot be
+// verified, so it counts as bad ("ambiguous").
 export function checkFileRefs(text, repoDir, files = listRepoFiles(repoDir)) {
   const refs = [...new Set(text.match(/[\w./-]+\.(?:ts|tsx|sql|ya?ml|mjs|js|json|md):\d+/g) ?? [])];
   const bad = [];
@@ -62,9 +110,26 @@ export function checkFileRefs(text, repoDir, files = listRepoFiles(repoDir)) {
     const i = ref.lastIndexOf(':');
     const path = ref.slice(0, i).replace(/^\.?\//, '');
     const line = Number(ref.slice(i + 1));
-    const hit = files.find((f) => f === path || f.endsWith(`/${path}`));
-    const lines = hit ? readFileSync(join(repoDir, hit), 'utf8').split('\n').length : 0;
-    if (!hit || line < 1 || line > lines) {
+    let hits = files.filter((f) => f && (f === path || f.endsWith(`/${path}`)));
+    // "client.ts:603" after "packages/backend/src/db/client.ts:125": the
+    // short name means the file the ADR cites in full.
+    if (hits.length > 1) {
+      const cited = hits.filter((h) => text.includes(h));
+      if (cited.length === 1) {
+        hits = cited;
+      }
+    }
+    if (hits.length > 1) {
+      bad.push(`${ref} (ambiguous)`);
+      continue;
+    }
+    const file = hits[0] && join(repoDir, hits[0]);
+    // git ls-files still lists a file deleted from the working tree.
+    const lines =
+      file && existsSync(file) && statSync(file).isFile()
+        ? lineCount(readFileSync(file, 'utf8'))
+        : 0;
+    if (!lines || line < 1 || line > lines) {
       bad.push(ref);
     }
   }
@@ -78,7 +143,7 @@ export function checkFileRefs(text, repoDir, files = listRepoFiles(repoDir)) {
  */
 export function evaluateAdr(text, def, opts = {}) {
   const repoDir = opts.repoDir ?? '.';
-  const { main, mainLines, sections } = splitAdr(text);
+  const { main, mainLines, preamble, sections } = splitAdr(text);
   const checks = [];
   const add = (id, kind, pass, detail = '') => checks.push({ id, kind, pass, detail });
 
@@ -99,7 +164,7 @@ export function evaluateAdr(text, def, opts = {}) {
   );
   const maxLines = def.maxMainLines ?? 150;
   add('length', 'structure', mainLines <= maxLines, `${mainLines}/${maxLines} main-body lines`);
-  add('no-meta-notes', 'structure', !META_NOTE.test(main));
+  add('no-meta-notes', 'structure', !META_NOTES.some((re) => re.test(main)));
   if (def.requireDiagram) {
     add('diagram', 'structure', /^```mermaid/m.test(main));
   }
@@ -112,21 +177,26 @@ export function evaluateAdr(text, def, opts = {}) {
     refs.bad.length ? `bad: ${refs.bad.join(', ')}` : `${refs.total} ok`
   );
 
+  // What the ADR decides: the preamble (with the decision summary) and every
+  // section except Alternatives, where rejected options are described, and the
+  // appendices. Required facts must appear here, and forbidden statements
+  // must not (unless negated).
+  const decided = [
+    preamble,
+    ...[...sections]
+      .filter(([title]) => !title.startsWith('alternatives') && !title.startsWith('appendix'))
+      .map(([, body]) => body),
+  ].join('\n');
   for (const r of def.required ?? []) {
-    add(r.id, 'required', anyMatch(main, r.any), r.note ?? '');
+    add(r.id, 'required', anyMatch(decided, r.any), r.note ?? '');
   }
-  // Forbidden statements count outside "Alternatives", where a rejected option
-  // is legitimately described.
-  const notAlternatives = [...sections]
-    .filter(([title]) => !title.startsWith('alternatives') && !title.startsWith('appendix'))
-    .map(([, body]) => body)
-    .join('\n');
   for (const f of def.forbidden ?? []) {
-    add(f.id, 'forbidden', !anyMatch(notAlternatives, f.any), f.note ?? '');
+    add(f.id, 'forbidden', !anyAffirmed(decided, f.any), f.note ?? '');
   }
 
   if (def.testingStrategy) {
-    const ts = sections.get('testing strategy') ?? '';
+    // Any heading naming it: "## Testing strategy", "## Appendix B: Testing strategy".
+    const ts = headingBlock(text, 'testing strategy');
     const missing = def.testingStrategy.filter((c) => !ts.toLowerCase().includes(c.toLowerCase()));
     add(
       'testing-strategy-names',

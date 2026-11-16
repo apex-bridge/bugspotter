@@ -1,10 +1,10 @@
 {
   "id": "451-rls",
   "issue": 451,
-  "repoCommit": "HEAD",
+  "repoCommit": "b1dad69",
   "spec": "docs/specs/0451-rls-slice-1-adr-spec-for-postgres-row-le.md",
   "reference": null,
-  "derivedFrom": "Constraints and acceptance criteria of docs/specs/0451-rls-slice-1-adr-spec-for-postgres-row-le.md (no ratified ADR yet).",
+  "derivedFrom": "Constraints and acceptance criteria of docs/specs/0451-rls-slice-1-adr-spec-for-postgres-row-le.md (no ratified ADR yet). Repo state b1dad69: spec merged (#452), no ADR yet.",
   "requireDiagram": true,
   "maxMainLines": 150,
   "required": [
@@ -82,9 +82,9 @@
     {
       "id": "skip-rls-selfhosted",
       "any": [
-        "(?<!\\b(?:not|never|n't|no)\\s)skip(?:s|ping)? RLS (?:entirely )?(?:in|for) self-?hosted",
+        "skip(?:s|ping)? RLS (?:entirely )?(?:in|for) self-?hosted",
         "self-?hosted(?: mode)? (?:skips|disables|turns off|bypasses) RLS",
-        "(?<!\\bnot\\s)RLS (?:is )?(?:disabled|off|skipped) (?:in|for) self-?hosted"
+        "RLS (?:is )?(?:disabled|off|skipped) (?:in|for) self-?hosted"
       ]
     },
     {

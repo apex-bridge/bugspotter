@@ -64,9 +64,19 @@ function parseArgs(argv) {
 const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
 // "claude CLI: turns=1 wall=231s api=230s ttft=189s in=2 out=22644 thinking=17554 cost=$0.2962"
-function metrics(log) {
-  const m = log.match(/wall=(\d+)s.*?thinking=(\d+).*?cost=\$([\d.]+)/);
-  return m ? { wallS: +m[1], thinking: +m[2], costUsd: +m[3] } : {};
+// One line per model call; a corrective retry adds a second, so sum them.
+export function metrics(log) {
+  const calls = [...log.matchAll(/wall=(\d+)s.*?thinking=(\d+).*?cost=\$([\d.]+)/g)];
+  if (!calls.length) {
+    return {};
+  }
+  const sum = (k) => calls.reduce((t, m) => t + Number(m[k]), 0);
+  return {
+    wallS: sum(1),
+    thinking: sum(2),
+    costUsd: Math.round(sum(3) * 10_000) / 10_000,
+    calls: calls.length,
+  };
 }
 
 function runCase(def, runs, outDir) {
@@ -140,6 +150,18 @@ function runCase(def, runs, outDir) {
         `${tag}: exit=${row.exit} ${row.wallS ?? row.elapsedS}s thinking=${row.thinking ?? '?'} $${row.costUsd ?? '?'} score=${row.score}${row.failed.length ? ` failed=${row.failed.join(',')}` : ''}`
       );
     }
+  } catch (err) {
+    if (!results.length) {
+      throw err;
+    }
+    console.error(`${def.id}: stopped after ${results.length} run(s): ${err.message}`);
+    results.push({
+      case: def.id,
+      run: '-',
+      score: 'case error',
+      failed: ['case-setup'],
+      error: err.message,
+    });
   } finally {
     git(['worktree', 'remove', '--force', work]);
   }
@@ -165,7 +187,18 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     .filter((f) => f.endsWith('.json'))
     .map((f) => JSON.parse(readFileSync(join(CASES_DIR, f), 'utf8')))
     .filter((d) => !args.cases || args.cases.includes(d.id));
-  const rows = defs.flatMap((d) => runCase(d, args.runs, args.out));
+  // A failing case (gh, worktree, copy) is recorded and the others still run,
+  // so already-billed runs always reach results.json.
+  const rows = defs.flatMap((d) => {
+    try {
+      return runCase(d, args.runs, args.out);
+    } catch (err) {
+      console.error(`${d.id}: case failed: ${err.message}`);
+      return [
+        { case: d.id, run: '-', score: 'case error', failed: ['case-setup'], error: err.message },
+      ];
+    }
+  });
   writeFileSync(join(args.out, 'results.json'), JSON.stringify(rows, null, 2));
   writeFileSync(join(args.out, 'results.md'), summary(rows));
   console.log(`\n${summary(rows)}`);
