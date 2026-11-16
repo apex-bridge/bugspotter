@@ -403,3 +403,63 @@ test('a "|" in a reason is escaped so the appendix row keeps three cells', () =>
     .find((l) => l.startsWith('| system_config'));
   assert.equal(row.split(/(?<!\\)\|/).length - 2, 3);
 });
+
+test('Global tables: continuation lines join the reason; prose stays in the ADR', () => {
+  const adr = [
+    '## Decision',
+    'D',
+    '## Global tables',
+    'These tables hold no tenant data.',
+    '- organizations: the tenant root; RLS keys on its id',
+    '  and is never filtered',
+    '- users: identities span organizations',
+    '',
+    'Reviewed against the migrations.',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr);
+  assert.equal(
+    reasons.get('organizations').reason,
+    'the tenant root; RLS keys on its id and is never filtered'
+  );
+  assert.equal(reasons.get('users').reason, 'identities span organizations');
+  assert.ok(text.includes('## Global tables'), 'heading kept for the remaining prose');
+  assert.ok(text.includes('These tables hold no tenant data.'));
+  assert.ok(text.includes('Reviewed against the migrations.'));
+  assert.ok(!text.includes('- users:'), 'reason bullets move to the appendix');
+  assert.ok(!text.includes('never filtered'), 'continuation moves with its bullet');
+});
+
+test('Global tables with only reason bullets leave no empty heading behind', () => {
+  const { text } = extractGlobalReasons(
+    ['## Decision', 'D', '## Global tables', '- users: x'].join('\n')
+  );
+  assert.ok(!text.includes('Global tables'));
+});
+
+test('Global tables bullets: bold with the colon inside, numbered, schema-qualified', () => {
+  const adr = [
+    '## Global tables',
+    '- **users:** cross-org identities',
+    '1. system_config: platform settings',
+    '2) `application.oauth_tokens`: per-user, not per-tenant',
+  ].join('\n');
+  const { reasons } = extractGlobalReasons(adr);
+  assert.equal(reasons.get('users').reason, 'cross-org identities');
+  assert.equal(reasons.get('system_config').reason, 'platform settings');
+  assert.equal(reasons.get('oauth_tokens').reason, 'per-user, not per-tenant');
+});
+
+test('a table with its own project_id keeps it; bug_report_id alone takes bug_reports scope', () => {
+  const dir = migrations({
+    '001_init.sql': `
+CREATE TABLE organizations (id UUID PRIMARY KEY);
+CREATE TABLE projects (id UUID PRIMARY KEY, organization_id UUID REFERENCES organizations(id));
+CREATE TABLE bug_reports (id UUID PRIMARY KEY, organization_id UUID REFERENCES organizations(id));
+CREATE TABLE outbox (id UUID, project_id UUID REFERENCES projects(id), bug_report_id UUID REFERENCES bug_reports(id));
+CREATE TABLE tickets (id UUID, bug_report_id UUID REFERENCES bug_reports(id));
+`,
+  });
+  const t = byName(tableInventory(dir));
+  assert.equal(t.outbox.scope.kind, 'project-scoped');
+  assert.equal(t.tickets.scope.kind, 'org-scoped');
+});

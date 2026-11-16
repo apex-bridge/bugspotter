@@ -185,8 +185,9 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
 
   const rows = [...tables.values()].map((r) => {
     const columns = SCOPING_COLUMNS.filter((c) => r.columns.has(c));
-    // bug_report_id takes bug_reports' own scope through the foreign key, so
-    // children of bug_reports agree however they are linked.
+    // A table whose only scoping column is bug_report_id takes bug_reports'
+    // scope, with or without a declared foreign key. A table that also has its
+    // own project_id or organization_id keeps that, as the more specific scope.
     const refs =
       columns.includes('bug_report_id') && !r.refs.some((x) => x.column === 'bug_report_id')
         ? [...r.refs, { column: 'bug_report_id', table: 'bug_reports' }]
@@ -244,25 +245,46 @@ export function inventoryMarkdown(rows) {
 
 // --- ADR appendix: written by code, so the model only argues the global tables ---
 
+// One reason bullet: "- t: why", "- `t`: why", "- **t**: why", "- **t:** why",
+// "- t (note): why", "1. t: why", "- application.t: why" (schema dropped).
+const REASON_BULLET =
+  /^\s*(?:[-*+]|\d+[.)])\s+(?:\*\*|__)?`?(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)`?(?:\*\*|__)?\s*(?:\([^)]*\)\s*)?(?::|—|–|-)(?:\*\*|__)?\s*(.+?)\s*$/;
+
 // Pulls the model's "## Global tables" list ("- table: reason") out of the ADR,
 // and drops a table-inventory section the model wrote anyway (the appendix
 // replaces it): only up to the next heading of the same or a higher level.
-// Headings inside code fences are content.
+// Headings inside code fences are content. In "Global tables" only the reason
+// bullets (and their indented continuation lines) are taken out; any other
+// line stays, under the heading, so nothing the model wrote is lost.
 export function extractGlobalReasons(adr) {
   const reasons = new Map();
   const kept = [];
   let mode = null;
   let dropLevel = 0;
+  let heading = '';
+  let leftover = [];
+  let lastReason = null;
+  const endReasons = () => {
+    if (leftover.some((l) => l.trim())) {
+      kept.push(heading, ...leftover);
+    }
+    leftover = [];
+    lastReason = null;
+  };
   const inCode = fenceTracker();
   for (const line of adr.split(/\r?\n/)) {
     const code = inCode(line);
-    const heading = !code && line.match(/^(#{2,6})\s+(.*)$/);
-    if (heading) {
-      const level = heading[1].length;
-      const title = heading[2].trim().toLowerCase();
+    const h = !code && line.match(/^(#{2,6})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      const title = h[2].trim().toLowerCase();
+      if (mode === 'reasons' && level <= dropLevel) {
+        endReasons();
+      }
       if (title === 'global tables') {
         mode = 'reasons';
         dropLevel = level;
+        heading = line;
         continue;
       }
       // Only an inventory heading ("Table inventory", "Appendix B: Table
@@ -278,25 +300,34 @@ export function extractGlobalReasons(adr) {
     }
     if (mode === 'reasons') {
       // Bullets inside a code fence are examples, not reasons.
-      // Accepts "- t:", "- `t`:", "- **t**:" and "- t (note):".
-      const m =
-        !code &&
-        line.match(
-          /^\s*[-*]\s*(?:\*\*|__)?`?([A-Za-z_]\w*)`?(?:\*\*|__)?\s*(?:\([^)]*\)\s*)?(?::|—|–|-)\s*(.+?)\s*$/
-        );
+      const m = !code && line.match(REASON_BULLET);
       if (m) {
         // "- table: org-scoped: reason" overrides the computed global scope.
         const o = m[2].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);
-        reasons.set(
-          m[1].toLowerCase(),
-          o ? { kind: o[1].toLowerCase(), reason: o[2] } : { kind: 'global', reason: m[2] }
-        );
+        lastReason = o
+          ? { kind: o[1].toLowerCase(), reason: o[2] }
+          : { kind: 'global', reason: m[2] };
+        reasons.set(m[1].toLowerCase(), lastReason);
+      } else if (
+        lastReason &&
+        !code &&
+        /^\s+\S/.test(line) &&
+        !/^\s*(?:[-*+]|\d+[.)])\s/.test(line)
+      ) {
+        // An indented line under a reason bullet continues it.
+        lastReason.reason += ` ${line.trim()}`;
+      } else {
+        lastReason = null;
+        leftover.push(line);
       }
       continue;
     }
     if (mode !== 'drop') {
       kept.push(line);
     }
+  }
+  if (mode === 'reasons') {
+    endReasons();
   }
   return { text: kept.join('\n').trimEnd(), reasons };
 }

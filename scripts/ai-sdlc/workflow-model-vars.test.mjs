@@ -14,7 +14,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -83,4 +85,58 @@ test('claude-review.yml references CLAUDE_REVIEW_MODEL_AUTO and _HUMAN repo vari
   const yaml = readWorkflow('claude-review.yml');
   assert.match(yaml, /vars\.CLAUDE_REVIEW_MODEL_AUTO/);
   assert.match(yaml, /vars\.CLAUDE_REVIEW_MODEL_HUMAN/);
+});
+
+// adr-agent.yml: the step limit and the script's budget come from one checked
+// value (review of #459: '12m' broke fromJSON, 0 and 25 drifted from the script
+// or the job's 30 minutes).
+function resolveStepTimeoutScript() {
+  const lines = readWorkflow('adr-agent.yml').split('\n');
+  const start = lines.findIndex((l) => /- name: Resolve step timeout/.test(l));
+  assert.notEqual(start, -1, 'no "Resolve step timeout" step');
+  const run = lines.findIndex((l, i) => i > start && /^\s*run: \|\s*$/.test(l));
+  const indent = lines[run + 1].match(/^\s*/)[0];
+  const body = [];
+  for (
+    let i = run + 1;
+    i < lines.length && (lines[i].startsWith(indent) || !lines[i].trim());
+    i++
+  ) {
+    body.push(lines[i].slice(indent.length));
+  }
+  return body.join('\n');
+}
+
+test('adr-agent.yml: Generate ADR takes its limit and budget from the checked value', () => {
+  const block = stepBlockForRun(readWorkflow('adr-agent.yml'), 'generate-adr.mjs');
+  assert.match(
+    block,
+    /timeout-minutes:\s*\$\{\{\s*fromJSON\(steps\.budget\.outputs\.minutes\)\s*\}\}/
+  );
+  assert.match(
+    block,
+    /ADR_STEP_TIMEOUT_MINUTES:\s*\$\{\{\s*steps\.budget\.outputs\.minutes\s*\}\}/
+  );
+  assert.doesNotMatch(block, /vars\.ADR_STEP_TIMEOUT_MINUTES/);
+});
+
+test('adr-agent.yml: the step timeout accepts whole minutes 1-20 and uses 12 otherwise', (t) => {
+  const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : 'bash';
+  if (process.platform === 'win32' && !existsSync(bash)) {
+    t.skip('no Git Bash');
+    return;
+  }
+  const script = resolveStepTimeoutScript();
+  const dir = mkdtempSync(join(tmpdir(), 'adr-budget-'));
+  try {
+    const cases = { '': '12', 20: '20', 1: '1', 0: '12', 25: '12', '12m': '12', 0.5: '12' };
+    for (const [raw, want] of Object.entries(cases)) {
+      const out = join(dir, `out-${want}-${raw || 'unset'}`);
+      writeFileSync(out, '');
+      execFileSync(bash, ['-c', script], { env: { ...process.env, RAW: raw, GITHUB_OUTPUT: out } });
+      assert.equal(readFileSync(out, 'utf8').trim(), `minutes=${want}`, `RAW=${raw}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

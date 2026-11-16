@@ -132,6 +132,13 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
     ? data.content.filter((b) => b?.type === 'text').map((b) => b.text)
     : [];
   if (!texts.length) {
+    // Thinking counts toward max_tokens, so it can use the whole budget
+    // before any text is written.
+    if (data?.stop_reason === 'max_tokens') {
+      throw new Error(
+        `Claude API response has no text: max_tokens=${maxTokens} was used up (by thinking) before any text was written. Raise max_tokens (for adr-agent: the ADR_MAX_TOKENS repo variable).`
+      );
+    }
     throw new Error(`Unexpected API response shape: ${JSON.stringify(data, null, 2)}`);
   }
   return { text: texts.join(''), stopReason: data.stop_reason };

@@ -53,7 +53,7 @@ writeFileSync(
     '  const stop_reason =',
     '    isRetry && process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
     '      ? process.env.FAKE_CLAUDE_RETRY_STOP_REASON',
-    "      : 'end_turn';",
+    "      : (!isRetry && process.env.FAKE_CLAUDE_STOP_REASON) || 'end_turn';",
     "  process.stdout.write(JSON.stringify({ type: 'result', result, stop_reason }) + '\\n');",
     '});',
     '',
@@ -550,7 +550,7 @@ describe('generate-adr.mjs settings validation', () => {
       env: { ADR_MAX_TOKENS: '0', ADR_MAX_SPEC_CHARS: '1.5' },
     });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stderr, /Ignoring ADR_MAX_TOKENS=0: not a positive integer; using 16000/);
+    assert.match(r.stderr, /Ignoring ADR_MAX_TOKENS=0: not a positive integer; using 64000/);
     assert.match(r.stderr, /Ignoring ADR_MAX_SPEC_CHARS=1.5/);
   });
 
@@ -571,5 +571,43 @@ describe('generate-adr.mjs settings validation', () => {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, 9000 - elapsed));
     assert.equal(r.status, 1, 'the call times out inside the 3s budget');
     assert.ok(elapsed < 7000, `did not wait for the fake's 8s reply (${elapsed}ms)`);
+  });
+});
+
+describe('generate-adr.mjs settings validation (review of ac4ef99)', () => {
+  test('S6: non-numeric and negative counts warn too, not only 0 and fractions', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      env: { ADR_MAX_TOKENS: '16k', ADR_MAX_SPEC_CHARS: '-1' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /Ignoring ADR_MAX_TOKENS=16k: not a positive integer; using 64000/);
+    assert.match(r.stderr, /Ignoring ADR_MAX_SPEC_CHARS=-1: not a positive integer; using 60000/);
+  });
+
+  test('S7: an LLM timeout of 0 or in seconds falls back with a warning, not a 1s timeout', () => {
+    for (const value of ['0', '540']) {
+      const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { ADR_LLM_TIMEOUT_MS: value } });
+      assert.equal(r.status, 0, `${value}: ${r.stderr}`);
+      assert.match(
+        r.stderr,
+        new RegExp(
+          `Ignoring ADR_LLM_TIMEOUT_MS=${value}: not a whole number of milliseconds, at least 10000; using 540000`
+        )
+      );
+    }
+  });
+
+  test('S8: a truncated response points at the ADR_MAX_TOKENS repo variable', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      env: { FAKE_CLAUDE_STOP_REASON: 'max_tokens' },
+    });
+    assert.equal(r.status, 1);
+    assert.match(
+      r.stderr,
+      /stop_reason=max_tokens at 64000\). Raise the ADR_MAX_TOKENS repo variable/
+    );
+    assert.doesNotMatch(r.stderr, /in generate-adr\.mjs/);
   });
 });

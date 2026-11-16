@@ -148,3 +148,18 @@ test('"ADR: pending" with an edit to an existing ADR: that ADR is not taken as t
   const out = specForAdr(spec, 'docs/adr/0046-new.md', { existingAdrs: ['0012-old.md'] });
   assert.ok(!out.includes('SUPERSEDE_NOTE'));
 });
+
+test('two subsections for the same ADR file share one Changes heading', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Changes',
+    '### `docs/adr/0045-x.md`',
+    'OUTLINE',
+    '### `docs/adr/0045-x.md` index row',
+    'ROW',
+  ].join('\n');
+  const out = specForAdr(spec, 'docs/adr/0045-x.md');
+  assert.equal(out.match(/^## Changes \(ADR file only\)$/gm).length, 1);
+  assert.ok(out.includes('OUTLINE') && out.includes('ROW'));
+});

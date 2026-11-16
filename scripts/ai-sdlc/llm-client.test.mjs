@@ -1002,3 +1002,28 @@ test('callViaApi takes the text after a thinking block instead of throwing', asy
     globalThis.fetch = originalFetch;
   }
 });
+
+test('callViaApi: thinking that uses all of max_tokens gets a clear error, not a JSON dump', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        content: [{ type: 'thinking', thinking: 'long plan', signature: 'sig' }],
+        stop_reason: 'max_tokens',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      (err) => {
+        assert.match(err.message, /max_tokens=100 was used up/);
+        assert.match(err.message, /ADR_MAX_TOKENS/);
+        assert.doesNotMatch(err.message, /Unexpected API response shape/);
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

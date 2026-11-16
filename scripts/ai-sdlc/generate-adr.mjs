@@ -44,30 +44,43 @@ const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = p
 
 // Settings: repo variables mapped to env in adr-agent.yml; the defaults are the
 // tuned values, so an unset variable changes nothing.
-//   ADR_LLM_TIMEOUT_MS        one LLM call (default 540000)
+//   ADR_LLM_TIMEOUT_MS        one LLM call in ms, at least 10000 (default 540000)
 //   ADR_STEP_TIMEOUT_MINUTES  the workflow step's timeout-minutes; the script's
 //                             time budget (default 12)
-//   ADR_MAX_TOKENS            output cap, enforced on the API backend (16000)
+//   ADR_MAX_TOKENS            output cap, enforced on the API backend only,
+//                             where thinking counts toward it (64000; runs used
+//                             14K-28K thinking tokens plus the ADR, #458)
 //   ADR_MAX_SPEC_CHARS        runaway guard for the spec input (60000)
 //   ADR_EFFORT                low | medium | high | xhigh | max (model default);
 //                             not every model supports every level - an
 //                             unsupported one fails the API call (400)
-// Counts must be positive integers; anything else falls back with a warning.
-const positiveInt = (name, fallback) => {
-  const n = parsePositiveMs(process.env[name], fallback);
-  if (Number.isInteger(n) && n > 0) {
+// An unset or blank value means the default; any other invalid value (0, a
+// negative, "16k", a timeout given in seconds) falls back with a warning.
+const setting = (name, fallback, valid, need) => {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const n = Number(raw);
+  if (Number.isFinite(n) && valid(n)) {
     return n;
   }
-  console.warn(`Ignoring ${name}=${process.env[name]}: not a positive integer; using ${fallback}.`);
+  console.warn(`Ignoring ${name}=${raw}: not ${need}; using ${fallback ?? 'the default'}.`);
   return fallback;
 };
+const positiveInt = (n) => Number.isInteger(n) && n > 0;
 const SETTINGS = {
-  timeoutMs: parsePositiveMs(process.env.ADR_LLM_TIMEOUT_MS, 540_000),
+  timeoutMs: setting(
+    'ADR_LLM_TIMEOUT_MS',
+    540_000,
+    (n) => Number.isInteger(n) && n >= 10_000,
+    'a whole number of milliseconds, at least 10000'
+  ),
   stepBudgetMs:
-    parsePositiveMs(process.env.ADR_STEP_TIMEOUT_MINUTES, 0) * 60_000 ||
-    parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000),
-  maxTokens: positiveInt('ADR_MAX_TOKENS', 16_000),
-  maxSpecChars: positiveInt('ADR_MAX_SPEC_CHARS', 60_000),
+    (setting('ADR_STEP_TIMEOUT_MINUTES', null, (n) => n > 0, 'a positive number of minutes') ?? 0) *
+      60_000 || parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000),
+  maxTokens: setting('ADR_MAX_TOKENS', 64_000, positiveInt, 'a positive integer'),
+  maxSpecChars: setting('ADR_MAX_SPEC_CHARS', 60_000, positiveInt, 'a positive integer'),
   effort: process.env.ADR_EFFORT || undefined,
 };
 
@@ -227,7 +240,7 @@ try {
 // truncated ADR to disk instead of erroring.
 if (stopReason === 'max_tokens') {
   console.error(
-    'Claude response truncated (stop_reason=max_tokens). Raise maxTokens in generate-adr.mjs.'
+    `Claude response truncated (stop_reason=max_tokens at ${SETTINGS.maxTokens}). Raise the ADR_MAX_TOKENS repo variable.`
   );
   process.exit(1);
 }

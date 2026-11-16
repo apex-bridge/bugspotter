@@ -61,6 +61,7 @@ export function specForAdr(spec, adrPath, { existingAdrs = [] } = {}) {
   const kept = [];
   let section = '';
   let found = false;
+  let changesHeading = false;
   for (const b of all) {
     if (b.level === 0) {
       kept.push(b.lines.join('\n'));
@@ -75,7 +76,10 @@ export function specForAdr(spec, adrPath, { existingAdrs = [] } = {}) {
       continue;
     }
     if (section === 'changes' && isAdrSubsection(b.title)) {
-      kept.push(`## Changes (ADR file only)\n${b.lines.join('\n')}`);
+      kept.push(
+        changesHeading ? b.lines.join('\n') : `## Changes (ADR file only)\n${b.lines.join('\n')}`
+      );
+      changesHeading = true;
     } else if (KEEP.has(section)) {
       kept.push(b.lines.join('\n'));
     }
