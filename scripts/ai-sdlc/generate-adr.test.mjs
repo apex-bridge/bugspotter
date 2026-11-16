@@ -43,6 +43,7 @@ writeFileSync(
     "process.stdin.on('data', (d) => { input += d; });",
     "process.stdin.on('end', () => {",
     '  const dump = process.env.FAKE_CLAUDE_PROMPT_DUMP;',
+    '  if (process.env.FAKE_CLAUDE_ARGV_DUMP) fs.writeFileSync(process.env.FAKE_CLAUDE_ARGV_DUMP, JSON.stringify(process.argv.slice(2)));',
     "  if (dump) fs.appendFileSync(dump, input + '\\n===FAKE_CLAUDE_CALL_BOUNDARY===\\n');",
     "  const isRetry = input.includes('--- CORRECTIVE REMINDER ---');",
     '  const result = isRetry',
@@ -498,5 +499,45 @@ describe('generate-adr.mjs inventory trigger', () => {
     assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);
     const out = readFileSync(join(REPO, 'docs', 'adr', '0001-worker-retry-policy.md'), 'utf8');
     assert.doesNotMatch(out, /Table inventory/);
+  });
+});
+
+describe('generate-adr.mjs settings', () => {
+  test('S1: ADR_EFFORT reaches the CLI as --effort; unset adds nothing', () => {
+    const argvDump = join(BIN_DIR, 'argv-settings.json');
+    let r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      env: { ADR_EFFORT: 'medium', FAKE_CLAUDE_ARGV_DUMP: argvDump },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    let argv = JSON.parse(readFileSync(argvDump, 'utf8'));
+    assert.equal(argv[argv.indexOf('--effort') + 1], 'medium');
+
+    r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { FAKE_CLAUDE_ARGV_DUMP: argvDump } });
+    assert.equal(r.status, 0, r.stderr);
+    argv = JSON.parse(readFileSync(argvDump, 'utf8'));
+    assert.equal(argv.includes('--effort'), false);
+  });
+
+  test('S2: ADR_MAX_SPEC_CHARS caps the spec input', () => {
+    const spec = `# Spec: fixture\n${'z'.repeat(500)}\nAFTER_CAP_MARKER_s2\n`;
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      env: { SPEC_CONTENT: spec, ADR_MAX_SPEC_CHARS: '200' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.firstPrompt, /AFTER_CAP_MARKER_s2/);
+    assert.match(r.firstPrompt, /\[spec truncated at 200 characters\]/);
+  });
+
+  test('S3: ADR_STEP_TIMEOUT_MINUTES sets the time budget the retry checks', () => {
+    const r = runGenerateAdr({
+      text: NARRATED_TRANSCRIPT_TEXT,
+      retryText: REAL_ADR_TEXT,
+      env: { ADR_STEP_TIMEOUT_MINUTES: '0.01' },
+    });
+    assert.equal(r.status, 1);
+    assert.equal(r.modelCallCount, 1, 'a 0.6s budget leaves no room for a retry');
+    assert.match(r.stderr, /not enough for a safe corrective retry/);
   });
 });

@@ -42,8 +42,9 @@ jobs:
     # spec-agent.yml's identical change: generate-adr.mjs can now make a
     # second, corrective LLM call when it detects a narrated-tool-call
     # transcript (see detect-narration.mjs), so the job needs room for that
-    # second call too. 12m (gen) + the same ~9m setup headroom.
-    timeout-minutes: 21
+    # second call too. Must exceed ADR_STEP_TIMEOUT_MINUTES (default 12) plus
+    # ~9m of setup; 30 leaves room to raise the step without editing this.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -75,11 +76,9 @@ jobs:
 
       - name: Generate ADR
         id: gen
-        # 12m: generate-adr.mjs's LLM call is capped at 540s, plus room for its
-        # ADR_STEP_BUDGET_MS-gated corrective retry. That default (12m) must
-        # match this step's timeout-minutes, or the script will think it has
-        # headroom this step doesn't actually have.
-        timeout-minutes: 12
+        # Repo variable ADR_STEP_TIMEOUT_MINUTES (default 12) sets this limit and,
+        # via env below, the script's own time budget, so the two cannot drift.
+        timeout-minutes: ${{ fromJSON(vars.ADR_STEP_TIMEOUT_MINUTES || '12') }}
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           # generate-adr.mjs never passes an explicit model to callClaude(),
@@ -88,6 +87,12 @@ jobs:
           # since a GitHub Actions variable only reaches process.env via an
           # explicit env: entry like this one, never automatically.
           LLM_DEFAULT_MODEL: ${{ vars.LLM_DEFAULT_MODEL }}
+          # ADR generator settings (see generate-adr.mjs); unset = defaults.
+          ADR_STEP_TIMEOUT_MINUTES: ${{ vars.ADR_STEP_TIMEOUT_MINUTES || '12' }}
+          ADR_LLM_TIMEOUT_MS: ${{ vars.ADR_LLM_TIMEOUT_MS }}
+          ADR_MAX_TOKENS: ${{ vars.ADR_MAX_TOKENS }}
+          ADR_MAX_SPEC_CHARS: ${{ vars.ADR_MAX_SPEC_CHARS }}
+          ADR_EFFORT: ${{ vars.ADR_EFFORT }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}

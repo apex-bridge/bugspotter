@@ -42,6 +42,24 @@ const scriptStartedAt = Date.now();
 
 const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = process.env;
 
+// Settings: repo variables mapped to env in adr-agent.yml; the defaults are the
+// tuned values, so an unset variable changes nothing.
+//   ADR_LLM_TIMEOUT_MS        one LLM call (default 540000)
+//   ADR_STEP_TIMEOUT_MINUTES  the workflow step's timeout-minutes; the script's
+//                             time budget (default 12)
+//   ADR_MAX_TOKENS            output cap, enforced on the API backend (16000)
+//   ADR_MAX_SPEC_CHARS        runaway guard for the spec input (60000)
+//   ADR_EFFORT                low | medium | high | xhigh | max (model default)
+const SETTINGS = {
+  timeoutMs: parsePositiveMs(process.env.ADR_LLM_TIMEOUT_MS, 540_000),
+  stepBudgetMs:
+    parsePositiveMs(process.env.ADR_STEP_TIMEOUT_MINUTES, 0) * 60_000 ||
+    parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000),
+  maxTokens: parsePositiveMs(process.env.ADR_MAX_TOKENS, 16_000),
+  maxSpecChars: parsePositiveMs(process.env.ADR_MAX_SPEC_CHARS, 60_000),
+  effort: process.env.ADR_EFFORT || undefined,
+};
+
 requireLlmCredentials();
 if (!ISSUE_NUMBER) {
   console.error('Missing ISSUE_NUMBER');
@@ -109,7 +127,7 @@ const adrFile = `docs/adr/${padded}-${slug}.md`;
 
 // The spec's decision sections: enough to not contradict it, small enough to stay
 // inside the timeout. The cap only guards against a runaway input.
-const MAX_SPEC_CHARS = 60_000;
+const MAX_SPEC_CHARS = SETTINGS.maxSpecChars;
 // Select the ADR's Changes subsection by the path the spec declares, even when
 // the output is renumbered because that number is taken.
 const specAdrPath = specAdr ? `docs/adr/${specAdr[1]}-${specAdr[2]}.md` : adrFile;
@@ -160,7 +178,7 @@ ${specForPrompt ? `\nLINKED SPEC (sections relevant to the ADR; its tests, verif
 Rules:
 ${rules.map((r) => `- ${r}`).join('\n')}`;
 
-const GENERATE_TIMEOUT_MS = 540_000;
+const GENERATE_TIMEOUT_MS = SETTINGS.timeoutMs;
 let adrContent, stopReason;
 try {
   // One call's time is mostly extended thinking, which varies a lot between
@@ -168,8 +186,9 @@ try {
   // matches it. max_tokens is advisory on LLM_BACKEND=cli.
   ({ text: adrContent, stopReason } = await callClaude({
     prompt,
-    maxTokens: 16_000,
+    maxTokens: SETTINGS.maxTokens,
     timeoutMs: GENERATE_TIMEOUT_MS,
+    effort: SETTINGS.effort,
   }));
 } catch (err) {
   console.error(err.message);
@@ -200,7 +219,7 @@ if (stopReason === 'max_tokens') {
 // way (see generation-retry.mjs). Defaults match adr-agent.yml's "Generate
 // ADR" step cap (raised alongside this change specifically to give a retry
 // room - see that file's comment).
-const STEP_BUDGET_MS = parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000);
+const STEP_BUDGET_MS = SETTINGS.stepBudgetMs;
 const SAFETY_BUFFER_MS = parsePositiveMs(process.env.ADR_SAFETY_BUFFER_MS, 30_000);
 // A retry needs about as long as a first run; with less left it would only
 // time out, so fail fast instead.
@@ -231,7 +250,12 @@ if (narrationFinding) {
       `attempt a tool call and do not narrate one. Return ONLY the ADR document, starting with ` +
       `"# ADR-${padded}: <title>", exactly as instructed above.`,
     callFn: (retryPrompt, timeoutMs) =>
-      callClaude({ prompt: retryPrompt, maxTokens: 16_000, timeoutMs }),
+      callClaude({
+        prompt: retryPrompt,
+        maxTokens: SETTINGS.maxTokens,
+        timeoutMs,
+        effort: SETTINGS.effort,
+      }),
     onNoBudget: (remaining) => {
       console.error(
         `::error::generate-adr.mjs: response looks like a narrated tool-call transcript, and only ` +
