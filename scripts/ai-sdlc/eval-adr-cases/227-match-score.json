@@ -1,0 +1,49 @@
+{
+  "id": "227-match-score",
+  "issue": 227,
+  "repoCommit": "f724be9",
+  "spec": "docs/specs/0227-intelligence-show-match-score-threshold-.md",
+  "reference": "docs/adr/0043-intelligence-show-match-score-threshold.md",
+  "derivedFrom": "Decision of ADR-0043 (Accepted). Repo state f724be9: spec merged, ADR-0043 not yet written.",
+  "requireDiagram": false,
+  "maxMainLines": 120,
+  "required": [
+    {
+      "id": "admin-widget",
+      "any": ["SimilarBugsWidget", "similar[- ]bugs widget", "duplicate (bug )?detail"]
+    },
+    { "id": "shows-threshold", "any": ["threshold"] },
+    { "id": "shows-score", "any": ["score"] },
+    { "id": "existing-similar-endpoint", "any": ["/similar", "existing endpoint"] },
+    {
+      "id": "no-new-endpoint-or-migration",
+      "any": [
+        "no (new )?(endpoint|migration)",
+        "without (a |any )?(new )?(endpoint|migration)",
+        "no schema change"
+      ]
+    },
+    {
+      "id": "current-not-historical-wording",
+      "any": ["current (match )?score", "similarity today", "recomput"]
+    },
+    {
+      "id": "persistence-deferred",
+      "any": ["defer", "separate issue", "follow-up", "out of scope"]
+    },
+    {
+      "id": "only-for-duplicates",
+      "any": ["duplicate_of", "marked (as )?(a )?duplicate", "auto-closed"]
+    }
+  ],
+  "forbidden": [
+    {
+      "id": "claims-original-score",
+      "any": ["(shows|displays?) the (original|historical) (match )?score"]
+    },
+    {
+      "id": "adds-persistence-migration",
+      "any": ["(add|adds|new|create|creates) (a )?migration (to|that) (store|persist)"]
+    }
+  ]
+}

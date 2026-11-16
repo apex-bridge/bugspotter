@@ -1,0 +1,46 @@
+{
+  "id": "265-sso",
+  "issue": 265,
+  "repoCommit": "bf60667",
+  "spec": null,
+  "reference": "docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md",
+  "derivedFrom": "Decisions 1-6 of ADR-0044 (Accepted). Issue-only case (no spec); repo state bf60667, before ADR-0044.",
+  "requireDiagram": true,
+  "maxMainLines": 150,
+  "required": [
+    {
+      "id": "tenant-scoped-linking",
+      "any": [
+        "same tenant",
+        "tenant-scoped",
+        "member of (the|this|that) tenant",
+        "membership in (the )?(same|this) tenant"
+      ]
+    },
+    {
+      "id": "cross-tenant-rejected",
+      "any": ["cross-tenant", "different tenant", "another tenant", "takeover"]
+    },
+    { "id": "email-verified", "any": ["email_verified", "verified email"] },
+    { "id": "allowed-domains", "any": ["allowed[_ ]domains", "domain allow"] },
+    { "id": "token-nonce", "any": ["nonce"] },
+    { "id": "token-issuer", "any": ["\\biss\\b", "issuer"] },
+    { "id": "token-audience", "any": ["\\baud\\b", "audience"] },
+    {
+      "id": "tenant-idp-mapping",
+      "any": ["per-tenant", "per tenant", "tenant[^.\\n]*IdP", "IdP[^.\\n]*tenant"]
+    },
+    { "id": "selfhosted-mode", "any": ["self-?hosted"] },
+    { "id": "api-keys-vs-sso", "any": ["API key"] },
+    { "id": "client-secret-encrypted", "any": ["encrypt"] }
+  ],
+  "forbidden": [
+    {
+      "id": "links-by-email-alone",
+      "any": [
+        "link(s|ed)? (accounts? )?(by|on) email (address )?alone",
+        "match(es|ed)? (accounts? )?(only )?by email (address )?(alone|only)"
+      ]
+    }
+  ]
+}
