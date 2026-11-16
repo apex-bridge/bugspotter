@@ -280,7 +280,9 @@ export function extractGlobalReasons(adr) {
       }
     }
     if (mode === 'reasons') {
-      const m = line.match(/^\s*[-*]\s*`?([A-Za-z_]\w*)`?\s*(?::|—|–|-)\s*(.+?)\s*$/);
+      // Bullets inside a code fence are examples, not reasons.
+      const m =
+        !fence && !f && line.match(/^\s*[-*]\s*`?([A-Za-z_]\w*)`?\s*(?::|—|–|-)\s*(.+?)\s*$/);
       if (m) {
         // "- table: org-scoped: reason" overrides the computed global scope.
         const o = m[2].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);

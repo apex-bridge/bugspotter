@@ -110,3 +110,23 @@ test('a fence line with text after the marker does not close the fence', () => {
   assert.ok(out.includes('INSIDE_OUTLINE_MARKER'), 'outline content after ```example is kept');
   assert.ok(!out.includes('\nT'), 'Tests still dropped');
 });
+
+test('two ADR subsections under Changes: the exact path wins; no exact match falls back to numbered ADRs', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Changes',
+    '### `docs/adr/0001-security.md`',
+    'OUTLINE_SECURITY',
+    '### `docs/adr/0002-storage.md`',
+    'OUTLINE_STORAGE',
+    '### `docs/adr/README.md`',
+    'INDEX_ROW',
+  ].join('\n');
+  const exact = specForAdr(spec, 'docs/adr/0001-security.md');
+  assert.ok(exact.includes('OUTLINE_SECURITY'));
+  assert.ok(!exact.includes('OUTLINE_STORAGE'), 'the other ADR outline is not sent');
+  const fallback = specForAdr(spec, 'docs/adr/0009-other.md');
+  assert.ok(fallback.includes('OUTLINE_SECURITY') && fallback.includes('OUTLINE_STORAGE'));
+  assert.ok(!fallback.includes('INDEX_ROW'), 'README.md is not a numbered ADR');
+});

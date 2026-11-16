@@ -40,10 +40,28 @@ function blocks(spec) {
  * @returns {string|null}
  */
 export function specForAdr(spec, adrPath) {
+  const all = blocks(spec);
+  // Changes subsections, by the level-2 section they sit under.
+  let current = '';
+  const changesTitles = [];
+  for (const b of all) {
+    if (b.level === 2) {
+      current = b.title.toLowerCase();
+    } else if (b.level === 3 && current === 'changes') {
+      changesTitles.push(b.title);
+    }
+  }
+  // The ADR's own subsection: the one naming the spec's path if there is one;
+  // otherwise any numbered docs/adr/NNNN- heading (a spec may write "ADR:
+  // pending" and name the eventual file only here).
+  const exact = Boolean(adrPath) && changesTitles.some((t) => t.includes(adrPath));
+  const isAdrSubsection = (title) =>
+    exact ? title.includes(adrPath) : /docs\/adr\/\d{4}-/.test(title);
+
   const kept = [];
   let section = '';
   let found = false;
-  for (const b of blocks(spec)) {
+  for (const b of all) {
     if (b.level === 0) {
       kept.push(b.lines.join('\n'));
       continue;
@@ -56,12 +74,7 @@ export function specForAdr(spec, adrPath) {
       }
       continue;
     }
-    // The ADR's own subsection: named by the spec's path, or any numbered docs/adr/NNNN- heading
-    // (a spec may write "ADR: pending" and name the eventual file only here).
-    if (
-      section === 'changes' &&
-      ((adrPath && b.title.includes(adrPath)) || /docs\/adr\/\d{4}-/.test(b.title))
-    ) {
+    if (section === 'changes' && isAdrSubsection(b.title)) {
       kept.push(`## Changes (ADR file only)\n${b.lines.join('\n')}`);
     } else if (KEEP.has(section)) {
       kept.push(b.lines.join('\n'));

@@ -324,3 +324,20 @@ test('only declared columns count: not JSON defaults, CHECK bodies or REFERENCES
   assert.deepEqual(t.members.columns, [], 'table constraint is not a column');
   assert.deepEqual(t.real_scoped.columns, ['project_id'], 'quoted column name');
 });
+
+test('a fenced example inside "## Global tables" does not overwrite a real reason', () => {
+  const adr = [
+    '## Decision',
+    'body',
+    '## Global tables',
+    '- users: identities span organizations',
+    '```md',
+    '- users: org-scoped: example override',
+    '```',
+  ].join('\n');
+  const { reasons } = extractGlobalReasons(adr);
+  assert.deepEqual(reasons.get('users'), {
+    kind: 'global',
+    reason: 'identities span organizations',
+  });
+});
