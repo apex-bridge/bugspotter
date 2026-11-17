@@ -63,7 +63,11 @@
     },
     {
       "id": "adds-persistence-migration",
-      "any": ["(add|adds|new|create|creates) (a )?migration (to|that) (store|persist)"]
+      "any": [
+        "(add|adds|new|create|creates) (a )?migration (to|that) (store|persist)",
+        "\\b(add|adds|adding|create|creates|creating) (a |one )?(new )?(DB |database |schema )?migration\\b"
+      ],
+      "note": "the change is UI-only: any new migration is the opposite decision"
     }
   ]
 }

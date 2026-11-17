@@ -19,8 +19,12 @@
     },
     {
       "id": "cross-tenant-rejected",
-      "any": ["cross-tenant", "different tenant", "another tenant", "takeover"],
-      "prohibition": true
+      "any": [
+        "(reject|rejects|rejected|refuses?|refused|blocks?|blocked|den(y|ies|ied)|prevents?|prevented|avoids?|avoided|closes?|closed|forbids?|forbidden|disallows?|disallowed|never|no|not|cannot|can't)\\b[^.\\n|]{0,60}(cross-tenant|different tenant|another tenant|takeover)",
+        "(cross-tenant|different tenant|another tenant|takeover)[^.\\n|]{0,60}\\b(rejected|refused|blocked|denied|prevented|impossible|not allowed|forbidden|closed|fails?)\\b"
+      ],
+      "prohibition": true,
+      "note": "cross-tenant linking named together with its rejection, not just mentioned"
     },
     {
       "id": "email-verified",
