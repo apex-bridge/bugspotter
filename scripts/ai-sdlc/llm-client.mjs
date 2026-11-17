@@ -22,7 +22,10 @@
 //   CLI subprocess env (see callViaCli) since they outrank the OAuth token
 //   in Claude Code's auth precedence and would otherwise silently shadow it.
 //
-// callClaude({ prompt, maxTokens, timeoutMs, model }) — `model` is optional
+// callClaude({ prompt, maxTokens, timeoutMs, model, effort }) — `effort` is
+//   optional (low | medium | high | xhigh | max; anything else is ignored with a
+//   warning) and goes to `claude -p --effort` or the API's output_config.effort.
+//   `model` is optional
 //   (defaults to CLI_MODEL, DEFAULT_MODEL from model-defaults.mjs unless
 //   overridden, on both backends) and lets a caller like generate-impl.mjs's
 //   label-based model router (complexity:high -> claude-opus-4-8,
@@ -73,7 +76,7 @@ export function requireLlmCredentials() {
 // Effort levels accepted by both `claude -p --effort` and the API's
 // output_config.effort. Anything else is ignored with a warning, so a typo in a
 // repo variable cannot fail a pipeline run.
-export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 export function normalizeEffort(effort, warn = console.warn) {
   if (effort == null || effort === '') {
     return undefined;
@@ -86,7 +89,7 @@ export function normalizeEffort(effort, warn = console.warn) {
   return undefined;
 }
 
-export function buildApiBody({ prompt, maxTokens, model, effort }) {
+function buildApiBody({ prompt, maxTokens, model, effort }) {
   return {
     // CLI_MODEL, not a second hardcoded literal - one source of truth for
     // "the default when no caller-supplied model", overridable the same
@@ -95,20 +98,134 @@ export function buildApiBody({ prompt, maxTokens, model, effort }) {
     max_tokens: maxTokens,
     ...(effort ? { output_config: { effort } } : {}),
     messages: [{ role: 'user', content: prompt }],
+    // Streamed: Node's fetch gives up waiting for response headers after 300s
+    // (undici headersTimeout), and a non-streamed response sends none until
+    // the whole message is generated, so any call longer than 5 minutes
+    // failed as "fetch failed" whatever timeoutMs said (#459 review). The
+    // matching 300s limit between body chunks is lifted by apiDispatcher.
+    stream: true,
   };
 }
 
-async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+// Node's fetch (undici) also drops a response whose body is silent for 300s
+// (bodyTimeout), and AbortSignal.timeout does not lift that limit. A streamed
+// call can be that silent: thinking display defaults to "omitted" on Claude 5
+// models, so a long thinking phase streams no thinking text, and the docs
+// promise pings only as "any number of ping events", with no interval. The
+// call then failed as "terminated (UND_ERR_BODY_TIMEOUT)" at ~300s whatever
+// timeoutMs said. undici takes headersTimeout/bodyTimeout per request, so this
+// dispatcher passes every request to Node's own global dispatcher with both
+// turned off, leaving the caller's AbortSignal.timeout as the only deadline.
+// Node's fetch keeps that dispatcher under the symbol below (undici's
+// cross-version global-dispatcher slot); it is set by the time fetch calls
+// dispatch(). No undici package needed: scripts/ai-sdlc cannot import one.
+const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+export function createApiDispatcher({ headersTimeout = 0, bodyTimeout = 0 } = {}) {
+  return {
+    dispatch(opts, handler) {
+      const target = globalThis[GLOBAL_DISPATCHER];
+      if (typeof target?.dispatch !== 'function') {
+        throw new Error("llm-client: Node's fetch has no global dispatcher to send the request");
+      }
+      return target.dispatch({ ...opts, headersTimeout, bodyTimeout }, handler);
     },
-    signal: AbortSignal.timeout(timeoutMs),
-    body: JSON.stringify(buildApiBody({ prompt, maxTokens, model, effort })),
-  });
+  };
+}
+const apiDispatcher = createApiDispatcher();
+
+// Rebuilds a Messages API response ({ content, stop_reason }) from its SSE
+// stream. Thinking deltas are skipped; only text is needed.
+export async function readMessageStream(body) {
+  const blocks = [];
+  let stopReason = null;
+  let stopDetails = null;
+  let stopped = false;
+  const onEvent = (raw) => {
+    const data = raw
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice(5).trimStart())
+      .join('\n');
+    if (!data) {
+      return;
+    }
+    const ev = JSON.parse(data);
+    if (ev.type === 'content_block_start') {
+      blocks[ev.index] = { ...ev.content_block };
+    } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+      const b = (blocks[ev.index] ??= { type: 'text', text: '' });
+      b.text = (b.text ?? '') + ev.delta.text;
+    } else if (ev.type === 'message_delta' && ev.delta?.stop_reason) {
+      stopReason = ev.delta.stop_reason;
+      stopDetails = ev.delta.stop_details ?? stopDetails;
+    } else if (ev.type === 'message_stop') {
+      stopped = true;
+    } else if (ev.type === 'error') {
+      throw new Error(
+        `Claude API stream error: ${ev.error?.type ?? 'error'}: ${ev.error?.message ?? data}`
+      );
+    }
+  };
+  const decoder = new TextDecoder();
+  let buf = '';
+  for await (const chunk of body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let at;
+    while ((at = buf.search(/\r?\n\r?\n/)) >= 0) {
+      const sep = buf.slice(at).match(/^\r?\n\r?\n/)[0];
+      onEvent(buf.slice(0, at));
+      buf = buf.slice(at + sep.length);
+    }
+  }
+  buf += decoder.decode();
+  if (buf.trim()) {
+    onEvent(buf);
+  }
+  // A connection that closes cleanly mid-message (a proxy, a server restart)
+  // ends the body like a finished one. Without this the partial text came
+  // back as a normal result with stop_reason null, which callers accept.
+  if (!stopped) {
+    throw new Error(
+      `Claude API stream ended before message_stop (stop_reason=${stopReason ?? 'none'})`
+    );
+  }
+  return { content: blocks.filter(Boolean), stop_reason: stopReason, stop_details: stopDetails };
+}
+
+// What to do when a response stopped at max_tokens. On the CLI backend the
+// caller's max_tokens is not sent (see callClaude), so raising it would not
+// help; the model's own output limit was reached instead.
+export function truncationMessage({ maxTokens, tokensVar, effortVar }) {
+  return LLM_BACKEND === 'cli'
+    ? `Claude response truncated (stop_reason=max_tokens): the model's own output limit was reached. ${tokensVar} does not apply on LLM_BACKEND=cli; a lower ${effortVar} means less thinking.`
+    : `Claude response truncated (stop_reason=max_tokens at ${maxTokens}). Raise the ${tokensVar} repo variable.`;
+}
+
+async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
+  const started = Date.now();
+  // "fetch failed" alone hides the cause (a timeout, a reset, DNS).
+  const failed = (err) => {
+    const cause = err?.cause?.code ?? err?.cause?.message;
+    return new Error(
+      `Claude API request failed after ${Math.round((Date.now() - started) / 1000)}s (timeout ${timeoutMs}ms): ${err?.message ?? err}${cause ? ` (${cause})` : ''}`
+    );
+  };
+  let res;
+  try {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+      dispatcher: apiDispatcher,
+      body: JSON.stringify(buildApiBody({ prompt, maxTokens, model, effort })),
+    });
+  } catch (err) {
+    throw failed(err);
+  }
 
   if (!res.ok) {
     let detail = '';
@@ -125,7 +242,35 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
     throw new Error(`Claude API error (${res.status}): ${detail}`);
   }
 
-  const data = await res.json();
+  let data;
+  try {
+    // A proxy or test double may answer with plain JSON instead of a stream,
+    // or relabel the stream: an SSE body is recognised by its first line,
+    // a comment (":") or a field name, neither of which can start JSON.
+    if ((res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+      data = await readMessageStream(res.body);
+    } else {
+      const raw = await res.text();
+      data = /^(:|(event|data|id|retry):)/.test(raw.trimStart())
+        ? await readMessageStream([new TextEncoder().encode(raw)])
+        : JSON.parse(raw);
+    }
+  } catch (err) {
+    if (/^Claude API stream (error|ended)/.test(err?.message)) {
+      throw err;
+    }
+    throw failed(err);
+  }
+  // "A refusal can arrive before any output, or mid-stream after partial
+  // output. In either case, treat any partial output as incomplete and
+  // discard it." (Anthropic, Refusals and fallback.) Callers check only for
+  // max_tokens, so returning it would hand them a cut-off document.
+  if (data?.stop_reason === 'refusal') {
+    const category = data.stop_details?.category;
+    throw new Error(
+      `Claude API declined the request (stop_reason=refusal${category ? `, category=${category}` : ''}); any partial output was discarded.`
+    );
+  }
   // Models that think return thinking block(s) before the text, so take the
   // text blocks rather than assuming content[0] is text.
   const texts = Array.isArray(data?.content)
