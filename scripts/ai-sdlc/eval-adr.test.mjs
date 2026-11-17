@@ -1,6 +1,6 @@
 // Tests for eval-adr.mjs. Zero-dependency: run with `node --test`.
 
-import { test, after } from 'node:test';
+import { test, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -275,4 +275,43 @@ test('runner metrics sum every model call, so a retry is counted', () => {
     'claude CLI: turns=1 wall=100s api=99s in=2 out=50 thinking=500 cost=$0.1000',
   ].join('\n');
   assert.deepEqual(metrics(log), { wallS: 300, thinking: 1500, costUsd: 0.3, calls: 2 });
+});
+
+describe('run-adr-eval.mjs generatorFiles', () => {
+  test('copies every module the generator imports, directly or not, and the template', async () => {
+    const { generatorFiles } = await import('./run-adr-eval.mjs');
+    const files = generatorFiles();
+    for (const f of [
+      'scripts/ai-sdlc/generate-adr.mjs',
+      'scripts/ai-sdlc/table-inventory.mjs',
+      'scripts/ai-sdlc/markdown-fence.mjs', // imported by table-inventory and spec-sections only
+      'scripts/ai-sdlc/llm-client.mjs',
+      'docs/adr/TEMPLATE.md',
+    ]) {
+      assert.ok(files.includes(f), f);
+    }
+    assert.equal(new Set(files).size, files.length, 'no duplicates');
+    assert.ok(!files.some((f) => f.endsWith('.test.mjs')));
+  });
+
+  test('follows imports through a temporary module tree', async () => {
+    const { generatorFiles } = await import('./run-adr-eval.mjs');
+    const root = mkdtempSync(join(tmpdir(), 'gen-files-'));
+    mkdirSync(join(root, 'a', 'lib'), { recursive: true });
+    writeFileSync(
+      join(root, 'a', 'main.mjs'),
+      "import { x } from './lib/x.mjs';\nconst y = await import('../b.mjs');\n"
+    );
+    writeFileSync(join(root, 'a', 'lib', 'x.mjs'), "import './side.mjs';\nexport const x = 1;\n");
+    writeFileSync(join(root, 'a', 'lib', 'side.mjs'), "import { x } from './x.mjs';\n");
+    writeFileSync(join(root, 'b.mjs'), "import fs from 'node:fs';\n");
+    const files = generatorFiles(root, 'a/main.mjs');
+    rmSync(root, { recursive: true, force: true });
+    assert.deepEqual(files.slice(0, -1).sort(), [
+      'a/lib/side.mjs',
+      'a/lib/x.mjs',
+      'a/main.mjs',
+      'b.mjs',
+    ]);
+  });
 });

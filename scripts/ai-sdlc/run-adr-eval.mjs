@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { evaluateAdr } from './eval-adr.mjs';
 
@@ -32,16 +32,30 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
 const CASES_DIR = join(HERE, 'eval-adr-cases');
 const REPO = 'apex-bridge/bugspotter';
-const GENERATOR_FILES = [
-  'scripts/ai-sdlc/generate-adr.mjs',
-  'scripts/ai-sdlc/table-inventory.mjs',
-  'scripts/ai-sdlc/spec-sections.mjs',
-  'scripts/ai-sdlc/llm-client.mjs',
-  'scripts/ai-sdlc/detect-narration.mjs',
-  'scripts/ai-sdlc/generation-retry.mjs',
-  'scripts/ai-sdlc/model-defaults.mjs',
-  'docs/adr/TEMPLATE.md',
-];
+const GENERATOR = 'scripts/ai-sdlc/generate-adr.mjs';
+const GENERATOR_DATA = ['docs/adr/TEMPLATE.md'];
+
+// The generator and every module it imports, directly or not (relative
+// imports only), as repo-relative paths. Computed rather than listed: a
+// hand-kept list missed markdown-fence.mjs once it was added (#459), and every
+// run then failed before the model call.
+export function generatorFiles(root = ROOT, entry = GENERATOR) {
+  const seen = new Set();
+  const queue = [entry];
+  const IMPORT = /(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)['"](\.{1,2}\/[^'"]+)['"]/gm;
+  while (queue.length) {
+    const file = queue.shift();
+    if (seen.has(file)) {
+      continue;
+    }
+    seen.add(file);
+    const src = readFileSync(join(root, file), 'utf8');
+    for (const m of src.matchAll(IMPORT)) {
+      queue.push(posix.join(posix.dirname(file), m[1]));
+    }
+  }
+  return [...seen, ...GENERATOR_DATA];
+}
 
 function parseArgs(argv) {
   const out = { runs: 3, cases: null, out: null };
@@ -86,7 +100,7 @@ function runCase(def, runs, outDir) {
   git(['worktree', 'add', '--detach', work, commit]);
   const results = [];
   try {
-    for (const f of GENERATOR_FILES) {
+    for (const f of generatorFiles()) {
       mkdirSync(dirname(join(work, f)), { recursive: true });
       copyFileSync(join(ROOT, f), join(work, f));
     }
