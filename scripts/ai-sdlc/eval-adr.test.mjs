@@ -685,3 +685,34 @@ test('prohibition facts need their rejection, and a UI-only change adds no migra
     true
   );
 });
+
+test('negation carries across a coordinated list, not into a new clause after a comma', () => {
+  assert.equal(anyAffirmed('We do not validate nonce, issuer, or audience.', ['issuer']), false);
+  assert.equal(anyAffirmed('We do not validate nonce, issuer, or audience.', ['audience']), false);
+  assert.equal(anyAffirmed('We do not validate nonce, issuer and audience.', ['audience']), false);
+  assert.equal(anyAffirmed('We validate nonce, issuer, or audience.', ['audience']), true);
+  const sso265 = caseFile('265-sso');
+  const decided = (s) =>
+    evaluateAdr(
+      `# ADR-0001: X\n- Status: Proposed\n> **Decision:** x\n## Context\nx\n## Decision\n${s}\n## Consequences\n## Alternatives\n`,
+      sso265,
+      { files: [] }
+    ).checks.filter((c) => ['token-nonce', 'token-issuer', 'token-audience'].includes(c.id));
+  assert.deepEqual(
+    decided('We do not validate nonce, issuer, or audience.').map((c) => c.pass),
+    [false, false, false]
+  );
+  const rls = forbiddenOf('451-rls', 'blanket-worker-bypass');
+  assert.equal(
+    anyAffirmed('Instead of per-job context, every worker connects via the bypass.', rls),
+    true
+  );
+  const sso = forbiddenOf('265-sso', 'links-by-email-alone');
+  assert.equal(
+    anyAffirmed(
+      'Since IdPs do not always send email_verified, we link accounts by email alone.',
+      sso
+    ),
+    true
+  );
+});

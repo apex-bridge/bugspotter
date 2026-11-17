@@ -46,15 +46,46 @@ const NEGATOR =
   /^(?:not|never|no|nor|neither|without|cannot|reject(?:s|ed|ing)?|\w+n['’]t|rather_than|instead_of)$/i;
 const NEGATION_WINDOW = 3; // words
 
-function negatedBefore(before) {
+function negatedBefore(before, after = '', match = '') {
   const sentence = before.slice(lastEnd(before, SENTENCE_END));
-  const flat = sentence.replace(/\([^()]*\)/g, ' ').replace(/,[^,]{1,40},/g, ' ');
+  let flat = sentence.replace(/\([^()]*\)/g, ' ').replace(/,[^,]{1,40},/g, ' ');
+  let window = NEGATION_WINDOW;
+  // A short match can be an item of a list the negation governs.
+  const head = (match.match(/[\w'’-]+/g) ?? []).length <= 3 ? listHead(flat, after) : null;
+  if (head !== null) {
+    flat = head;
+    window += 1; // `flat` now ends with the list's first item
+  }
   const words = flat
     .slice(lastEnd(flat, CLAUSE_START))
     .replace(/\brather than\b/gi, 'rather_than')
     .replace(/\binstead of\b/gi, 'instead_of')
     .match(/[\w'’-]+/g);
-  return (words ?? []).slice(-NEGATION_WINDOW).some((w) => NEGATOR.test(w));
+  return (words ?? []).slice(-window).some((w) => NEGATOR.test(w));
+}
+
+// "We do not validate nonce, issuer, or audience": "issuer" and "audience"
+// are items of a list after "not validate". When the match follows a list
+// separator (a comma that more items follow, or "and"/"or"/"nor"), drop the
+// separator and the earlier items of up to two words each, leaving the text
+// up to the first item. A comma before a clause ("Since IdPs do not send it,
+// we link ...") is not a list: the match there is longer than three words.
+const LIST_SEP = /(?:,\s*(?:(?:or|and|nor)\s+)?|\s+(?:or|and|nor)\s+)$/i;
+const LIST_ITEM = /(?:,\s*(?:(?:or|and|nor)\s+)?|\s+(?:or|and|nor)\s+)[\w'’-]+(?:\s+[\w'’-]+)?$/i;
+
+function listHead(flat, after) {
+  const sep = flat.match(LIST_SEP);
+  if (
+    !sep ||
+    !(/\b(?:or|and|nor)\s+$/i.test(sep[0]) || /^\s*(?:,|(?:or|and|nor)\b)/i.test(after))
+  ) {
+    return null;
+  }
+  let rest = flat.slice(0, sep.index);
+  for (let m = rest.match(LIST_ITEM); m; m = rest.match(LIST_ITEM)) {
+    rest = rest.slice(0, m.index);
+  }
+  return rest;
 }
 
 // The other form puts the negation after the match, as its predicate:
@@ -115,7 +146,7 @@ export function anyAffirmed(text, patterns) {
     const re = new RegExp(p, 'gi');
     for (let m = re.exec(text); m; m = re.exec(text)) {
       const after = text.slice(m.index + m[0].length, m.index + m[0].length + 120);
-      if (!negatedBefore(text.slice(0, m.index)) && !NEGATED_PREDICATE.test(after)) {
+      if (!negatedBefore(text.slice(0, m.index), after, m[0]) && !NEGATED_PREDICATE.test(after)) {
         return true;
       }
       re.lastIndex = m.index + 1;
