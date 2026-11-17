@@ -340,7 +340,8 @@ export function extractGlobalReasons(adr, { tables } = {}) {
         resumeLevel = 0;
       }
       if (title === 'global tables') {
-        outerDrop = mode === 'drop' ? dropLevel : 0;
+        // A Global tables nested in another one keeps the outer drop boundary.
+        outerDrop = mode === 'drop' ? dropLevel : mode === 'reasons' ? outerDrop : 0;
         mode = 'reasons';
         reasonsLevel = level;
         baseIndent = null;

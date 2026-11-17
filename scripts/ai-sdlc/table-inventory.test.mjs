@@ -583,6 +583,25 @@ test('Global tables nested in a dropped inventory: reasons read, the rest still 
   assert.ok(text.includes('## Decision') && text.includes('## Consequences'));
 });
 
+test('Global tables nested twice in a dropped inventory: the inventory is still dropped', () => {
+  const adr = [
+    '# ADR',
+    '## Table inventory',
+    '### Global tables',
+    '- users: x',
+    '#### Global tables',
+    '- system_config: y',
+    '### Scoped tables',
+    '| projects | org-scoped | LEAK |',
+    '## Next',
+    'N',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr);
+  assert.equal(reasons.get('users')?.reason, 'x');
+  assert.equal(reasons.get('system_config')?.reason, 'y');
+  assert.equal(text, '# ADR\n## Next\nN');
+});
+
 test('Global tables heading variants are recognised', () => {
   for (const h of [
     '## Global tables ##',
