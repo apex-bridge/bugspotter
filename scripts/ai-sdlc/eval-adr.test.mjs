@@ -545,3 +545,21 @@ test('testing strategy: every matching heading counts; a fenced "# comment" is n
   const after = fenced.replace('- alpha\n- beta\n', '').replace('- unrelated', '- alpha\n- beta');
   assert.equal(ts(after).pass, false, 'the block still ends at the next real heading');
 });
+
+test('splitAdr: a repeated heading appends to the section instead of replacing it', () => {
+  const dup = `# ADR-0001: X\n- Status: Proposed\n> **Decision:** x\n## Context\n## Decision\nWe link accounts by email alone.\n## Consequences\n## Decision\nmore\n## Alternatives\n`;
+  const r = evaluateAdr(
+    dup,
+    { forbidden: [{ id: 'f', any: ['link accounts by email alone'] }] },
+    { files: [] }
+  );
+  assert.equal(r.checks.find((c) => c.id === 'f').pass, false);
+  assert.match(splitAdr(dup).sections.get('decision'), /email alone[\s\S]*more/);
+});
+
+test('splitAdr: main-body length counts lines, not the trailing newline', () => {
+  const body = (n) => `# ADR-0001: X\n${'x\n'.repeat(n - 1)}`;
+  assert.equal(splitAdr(body(150)).mainLines, 150);
+  assert.equal(splitAdr(`${body(150)}## Appendix: A\nfoo\n`).mainLines, 150);
+  assert.equal(splitAdr('# ADR-0001: X').mainLines, 1);
+});

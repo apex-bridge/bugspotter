@@ -84,7 +84,11 @@ export function splitAdr(text) {
     const h = line.match(/^## (.*)$/);
     if (h) {
       current = h[1].trim().toLowerCase();
-      sections.set(current, []);
+      // A repeated heading continues the section: replacing it would hide a
+      // forbidden statement made under the first "## Decision".
+      if (!sections.has(current)) {
+        sections.set(current, []);
+      }
     } else if (current) {
       sections.get(current).push(line);
     }
@@ -92,7 +96,9 @@ export function splitAdr(text) {
   const firstSection = lines.findIndex((l) => /^## /.test(l));
   return {
     main,
-    mainLines: main.split('\n').length,
+    // Lines before the appendix; without one, the file's lines (a trailing
+    // newline does not add one).
+    mainLines: appendixAt < 0 ? lineCount(text) : appendixAt,
     // Title, status and the "> **Decision:**" summary, before the first "## ".
     preamble: (firstSection < 0 ? lines : lines.slice(0, firstSection)).join('\n'),
     sections: new Map([...sections].map(([k, v]) => [k, v.join('\n')])),
