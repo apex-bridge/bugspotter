@@ -315,3 +315,51 @@ describe('run-adr-eval.mjs generatorFiles', () => {
     ]);
   });
 });
+
+// --- independent review fixes (#461) ---
+
+const caseFile = (id) =>
+  JSON.parse(readFileSync(join(HERE, 'eval-adr-cases', `${id}.json`), 'utf8'));
+const forbiddenOf = (id, fid) => caseFile(id).forbidden.find((f) => f.id === fid).any;
+
+test('negation scope ends at a comma or clause conjunction and covers only a few words', () => {
+  const rls = [
+    ...forbiddenOf('451-rls', 'blanket-worker-bypass'),
+    ...forbiddenOf('451-rls', 'skip-rls-selfhosted'),
+  ];
+  const sso = forbiddenOf('265-sso', 'links-by-email-alone');
+  for (const s of [
+    'Rather than passing org context in job payloads, all workers run through the audited bypass.',
+    'Instead of per-job context, every worker connects via the bypass.',
+    'Self-hosted installs have no organizations, so we skip RLS in self-hosted mode.',
+    'Without a tenant context available, the app skips RLS for self-hosted deployments.',
+    'No new tables are needed and all workers run through the bypass.',
+    'Without org context in the job all workers run through the bypass.',
+  ]) {
+    assert.equal(anyAffirmed(s, rls), true, s);
+  }
+  for (const s of [
+    'Since IdPs do not always send email_verified, we link accounts by email alone.',
+    'Not every IdP is trusted, but we link accounts by email alone.',
+  ]) {
+    assert.equal(anyAffirmed(s, sso), true, s);
+  }
+  // A "." inside a file name does not end the sentence; a parenthetical
+  // between the negation and the match does not break it.
+  assert.equal(
+    anyAffirmed('We never (see ADR-0007.md for why) link accounts by email alone.', sso),
+    false
+  );
+  assert.equal(anyAffirmed('We do not, per client.ts, skip RLS in self-hosted mode.', rls), false);
+  assert.equal(
+    anyAffirmed(
+      'We pass context in payloads rather than having all workers run through the bypass.',
+      rls
+    ),
+    false
+  );
+  assert.equal(
+    anyAffirmed('Self-hosted mode does not ever skip RLS for self-hosted installs.', rls),
+    false
+  );
+});

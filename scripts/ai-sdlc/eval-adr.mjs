@@ -28,10 +28,37 @@ const META_NOTES = [
   /\b(?:could not|cannot|can't|unable to) (?:run|execute|verify) (?:the )?(?:code|tests|commands|tools)\b/i,
 ];
 
-// A match preceded in its sentence by a negation ("we never link accounts by
-// email alone", "we don't skip RLS") states the opposite, so it does not count.
-const NEGATION =
-  /(?:\b(?:not|never|no|nor|neither|without|cannot)\b|n't\b|\brather than\b|\binstead of\b)[^.;:!?\n|]*$/i;
+// A match negated in its own clause ("we never link accounts by email alone",
+// "we don't skip RLS") states the opposite, so it does not count. The clause
+// starts after the last sentence end, comma or clause conjunction before the
+// match ("Since IdPs do not send it, we link by email alone" is affirmed), and
+// the negation must be among the last few words before it. Parentheticals are
+// dropped first ("we do not, per client.ts, skip RLS" stays negated), and a
+// "." ends a sentence only before a capital or the end, not in "ADR-0007.md".
+const SENTENCE_END = /[.!?]+(?=\s+[A-Z"'`*_([]|\s*$)|[;:!?\n|]/g;
+const CLAUSE_START =
+  /,|\b(?:and|but|so|because|since|although|though|while|whereas|yet|which|when|if|then)\b/gi;
+const NEGATOR = /^(?:not|never|no|nor|neither|without|cannot|\w+n['’]t|rather_than|instead_of)$/i;
+const NEGATION_WINDOW = 3; // words
+
+function negatedBefore(before) {
+  const sentence = before.slice(lastEnd(before, SENTENCE_END));
+  const flat = sentence.replace(/\([^()]*\)/g, ' ').replace(/,[^,]{1,40},/g, ' ');
+  const words = flat
+    .slice(lastEnd(flat, CLAUSE_START))
+    .replace(/\brather than\b/gi, 'rather_than')
+    .replace(/\binstead of\b/gi, 'instead_of')
+    .match(/[\w'’-]+/g);
+  return (words ?? []).slice(-NEGATION_WINDOW).some((w) => NEGATOR.test(w));
+}
+
+function lastEnd(text, re) {
+  let end = 0;
+  for (const m of text.matchAll(re)) {
+    end = m.index + m[0].length;
+  }
+  return end;
+}
 
 // "## Heading" -> body, lowercased titles; main body = everything before "## Appendix".
 export function splitAdr(text) {
@@ -61,13 +88,10 @@ export function splitAdr(text) {
 
 const anyMatch = (text, patterns) => patterns.some((p) => new RegExp(p, 'i').test(text));
 
-// True when some match of a pattern is not negated within its sentence.
+// True when some match of a pattern is not negated within its clause.
 export function anyAffirmed(text, patterns) {
   return patterns.some((p) =>
-    [...text.matchAll(new RegExp(p, 'gi'))].some((m) => {
-      const before = text.slice(Math.max(0, m.index - 80), m.index);
-      return !NEGATION.test(before);
-    })
+    [...text.matchAll(new RegExp(p, 'gi'))].some((m) => !negatedBefore(text.slice(0, m.index)))
   );
 }
 
