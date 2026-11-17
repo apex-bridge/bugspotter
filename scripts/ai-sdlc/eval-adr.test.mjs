@@ -532,3 +532,16 @@ test('file refs: an exact path wins over suffix hits; "cited" means a whole path
   // "src/a/x.ts" appears only inside "lib/src/a/x.ts", so only that one is cited.
   assert.deepEqual(checkFileRefs('lib/src/a/x.ts:5, then a/x.ts:4.', repo, files).bad, []);
 });
+
+test('testing strategy: every matching heading counts; a fenced "# comment" is not a heading', () => {
+  const ts = (text) =>
+    evaluateAdr(text, { testingStrategy: ['alpha', 'beta'] }, { files: [] }).checks.find(
+      (c) => c.id === 'testing-strategy-names'
+    );
+  const pointer = `# ADR-0001: X\n## Context\n## Decision\n### Testing strategy\nSee Appendix B.\n## Consequences\n## Alternatives\n## Appendix B: Testing strategy\n- alpha\n- beta\n`;
+  assert.equal(ts(pointer).pass, true, ts(pointer).detail);
+  const fenced = `# ADR-0001: X\n## Context\n## Decision\n## Consequences\n## Alternatives\n## Appendix B: Testing strategy\n\`\`\`bash\n# run the suite\nnpm test\n\`\`\`\n- alpha\n- beta\n## Appendix C: Other\n- unrelated\n`;
+  assert.equal(ts(fenced).pass, true, ts(fenced).detail);
+  const after = fenced.replace('- alpha\n- beta\n', '').replace('- unrelated', '- alpha\n- beta');
+  assert.equal(ts(after).pass, false, 'the block still ends at the next real heading');
+});

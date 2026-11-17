@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fenceTracker } from './markdown-fence.mjs';
 import { tableInventory, DEFAULT_MIGRATIONS_DIR } from './table-inventory.mjs';
 
 const DEFAULT_SECTIONS = ['context', 'decision', 'consequences', 'alternatives'];
@@ -117,22 +118,26 @@ export function anyAffirmed(text, patterns) {
   });
 }
 
-// Body of the first heading (any level) whose title contains `name`, up to the
-// next heading of the same or a higher level.
+// Bodies of every heading (levels 2-4) whose title contains `name`, each up to
+// the next heading of the same or a higher level, joined: a "### Testing
+// strategy" that points to "## Appendix B: Testing strategy" counts both.
+// Lines inside fenced code are content ("# run the suite" is not a heading).
 function headingBlock(text, name) {
-  const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((l) => {
-    const h = l.match(/^(#{2,4})\s+(.*)$/);
-    return h && h[2].toLowerCase().includes(name);
+  const inFence = fenceTracker();
+  const heads = text.split(/\r?\n/).map((line) => {
+    const h = !inFence(line) && line.match(/^(#{1,6})\s+(.*)$/);
+    return { line, level: h ? h[1].length : 0, title: h ? h[2].toLowerCase() : '' };
   });
-  if (start < 0) {
-    return '';
+  const out = [];
+  let level = 0; // level of the matching heading whose block is open, 0 = none
+  for (const h of heads) {
+    if (h.level && (level === 0 || h.level <= level)) {
+      level = h.level >= 2 && h.level <= 4 && h.title.includes(name) ? h.level : 0;
+    } else if (level) {
+      out.push(h.line);
+    }
   }
-  const level = lines[start].match(/^#+/)[0].length;
-  const end = lines.findIndex(
-    (l, i) => i > start && /^#+\s/.test(l) && l.match(/^#+/)[0].length <= level
-  );
-  return lines.slice(start + 1, end < 0 ? undefined : end).join('\n');
+  return out.join('\n');
 }
 
 function listRepoFiles(repoDir) {
