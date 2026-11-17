@@ -538,6 +538,24 @@ test('a table inventory nested in Global tables keeps the prose before it', () =
   assert.ok(text.includes('## Consequences'));
 });
 
+test('reasons after an inventory nested in Global tables are still read', () => {
+  const adr = [
+    '## Global tables',
+    'Intro.',
+    '### Table inventory',
+    '| users | global |',
+    '### Platform tables',
+    '- users: identity spans orgs',
+    '- system_config: platform settings',
+    '## Next',
+    'N',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr);
+  assert.equal(reasons.get('users')?.reason, 'identity spans orgs');
+  assert.equal(reasons.get('system_config')?.reason, 'platform settings');
+  assert.equal(text, '## Global tables\nIntro.\n### Platform tables\n## Next\nN');
+});
+
 test('Global tables nested in a dropped inventory: reasons read, the rest still dropped', () => {
   const adr = [
     '## Decision',

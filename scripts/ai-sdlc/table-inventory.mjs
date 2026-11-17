@@ -304,7 +304,8 @@ export function extractGlobalReasons(adr, { tables } = {}) {
   let dropLevel = 0;
   let reasonsLevel = 0;
   let outerDrop = 0; // a "Global tables" nested in a dropped inventory section
-  let heading = '';
+  let resumeLevel = 0; // an inventory nested in "Global tables": its level
+  let heading = null; // the "Global tables" heading, until it is kept
   let leftover = [];
   let lastReason = null;
   // Indent of the section's first reason bullet: the list's own level. A
@@ -313,7 +314,8 @@ export function extractGlobalReasons(adr, { tables } = {}) {
   const endReasons = () => {
     // Inside a dropped inventory section the leftovers go with it.
     if (!outerDrop && leftover.some((l) => l.trim())) {
-      kept.push(heading, ...leftover);
+      kept.push(...(heading === null ? [] : [heading]), ...leftover);
+      heading = null;
     }
     leftover = [];
     lastReason = null;
@@ -331,7 +333,11 @@ export function extractGlobalReasons(adr, { tables } = {}) {
         outerDrop = 0;
       }
       if (mode === 'drop' && level <= dropLevel) {
-        mode = null;
+        // A sibling of an inventory nested in "Global tables" is back in
+        // Global tables: "### Platform tables" after "### Table inventory".
+        mode = resumeLevel && level > resumeLevel ? 'reasons' : null;
+        reasonsLevel = resumeLevel || reasonsLevel;
+        resumeLevel = 0;
       }
       if (title === 'global tables') {
         outerDrop = mode === 'drop' ? dropLevel : 0;
@@ -349,6 +355,9 @@ export function extractGlobalReasons(adr, { tables } = {}) {
         const outer = mode === 'drop' ? dropLevel : mode === 'reasons' ? outerDrop : 0;
         if (mode === 'reasons') {
           endReasons();
+          resumeLevel = outerDrop ? 0 : reasonsLevel;
+        } else if (mode !== 'drop') {
+          resumeLevel = 0;
         }
         mode = 'drop';
         dropLevel = outer || level;
