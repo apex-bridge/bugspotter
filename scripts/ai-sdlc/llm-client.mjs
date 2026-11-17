@@ -101,10 +101,37 @@ function buildApiBody({ prompt, maxTokens, model, effort }) {
     // Streamed: Node's fetch gives up waiting for response headers after 300s
     // (undici headersTimeout), and a non-streamed response sends none until
     // the whole message is generated, so any call longer than 5 minutes
-    // failed as "fetch failed" whatever timeoutMs said (#459 review).
+    // failed as "fetch failed" whatever timeoutMs said (#459 review). The
+    // matching 300s limit between body chunks is lifted by apiDispatcher.
     stream: true,
   };
 }
+
+// Node's fetch (undici) also drops a response whose body is silent for 300s
+// (bodyTimeout), and AbortSignal.timeout does not lift that limit. A streamed
+// call can be that silent: thinking display defaults to "omitted" on Claude 5
+// models, so a long thinking phase streams no thinking text, and the docs
+// promise pings only as "any number of ping events", with no interval. The
+// call then failed as "terminated (UND_ERR_BODY_TIMEOUT)" at ~300s whatever
+// timeoutMs said. undici takes headersTimeout/bodyTimeout per request, so this
+// dispatcher passes every request to Node's own global dispatcher with both
+// turned off, leaving the caller's AbortSignal.timeout as the only deadline.
+// Node's fetch keeps that dispatcher under the symbol below (undici's
+// cross-version global-dispatcher slot); it is set by the time fetch calls
+// dispatch(). No undici package needed: scripts/ai-sdlc cannot import one.
+const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+export function createApiDispatcher({ headersTimeout = 0, bodyTimeout = 0 } = {}) {
+  return {
+    dispatch(opts, handler) {
+      const target = globalThis[GLOBAL_DISPATCHER];
+      if (typeof target?.dispatch !== 'function') {
+        throw new Error("llm-client: Node's fetch has no global dispatcher to send the request");
+      }
+      return target.dispatch({ ...opts, headersTimeout, bodyTimeout }, handler);
+    },
+  };
+}
+const apiDispatcher = createApiDispatcher();
 
 // Rebuilds a Messages API response ({ content, stop_reason }) from its SSE
 // stream. Thinking deltas are skipped; only text is needed.
@@ -180,6 +207,7 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
         'anthropic-version': '2023-06-01',
       },
       signal: AbortSignal.timeout(timeoutMs),
+      dispatcher: apiDispatcher,
       body: JSON.stringify(buildApiBody({ prompt, maxTokens, model, effort })),
     });
   } catch (err) {

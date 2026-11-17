@@ -22,6 +22,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdtempSync, rmSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1176,4 +1177,70 @@ test('truncationMessage: raise the token variable on the API backend, not on the
   assert.match(cli, /ADR_MAX_TOKENS does not apply on LLM_BACKEND=cli/);
   assert.match(cli, /a lower ADR_EFFORT/);
   assert.doesNotMatch(cli, /Raise the ADR_MAX_TOKENS/);
+});
+
+// --- API backend: undici's 300s bodyTimeout (#464 review) ---
+//
+// A streamed call can stay silent for minutes while the model thinks (thinking
+// display defaults to "omitted" on Claude 5 models, and pings are not promised
+// at any interval). Node's fetch dropped such a body after 300s whatever
+// timeoutMs said, so callViaApi sends its own dispatcher that turns undici's
+// headersTimeout and bodyTimeout off per request.
+
+const { createApiDispatcher } = await import('./llm-client.mjs?backend=api');
+const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+
+test('callViaApi sends a dispatcher that turns off undici headersTimeout and bodyTimeout', async () => {
+  const originalFetch = globalThis.fetch;
+  let dispatcher;
+  globalThis.fetch = async (url, init) => {
+    dispatcher = init.dispatcher;
+    return streamResponse(sse(STREAM_EVENTS));
+  };
+  try {
+    await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 540000 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(typeof dispatcher?.dispatch, 'function', 'fetch got no dispatcher');
+
+  // What reaches Node's own dispatcher when fetch calls dispatch().
+  const original = globalThis[GLOBAL_DISPATCHER];
+  const seen = [];
+  globalThis[GLOBAL_DISPATCHER] = { dispatch: (opts, handler) => seen.push({ opts, handler }) };
+  try {
+    const handler = {};
+    dispatcher.dispatch({ path: '/v1/messages', method: 'POST' }, handler);
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0].opts, {
+      path: '/v1/messages',
+      method: 'POST',
+      headersTimeout: 0,
+      bodyTimeout: 0,
+    });
+    assert.equal(seen[0].handler, handler);
+  } finally {
+    globalThis[GLOBAL_DISPATCHER] = original;
+  }
+});
+
+test("createApiDispatcher: Node's fetch applies the per-request bodyTimeout", async () => {
+  // One byte, then a gap longer than the 1s bodyTimeout under test (undici's
+  // default is 300s, so only the dispatcher's own value can fire here).
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.write('a');
+    const t = setTimeout(() => res.end('b'), 3000);
+    res.on('close', () => clearTimeout(t));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/`, {
+      dispatcher: createApiDispatcher({ bodyTimeout: 1000 }),
+    });
+    await assert.rejects(res.text(), (err) => err?.cause?.code === 'UND_ERR_BODY_TIMEOUT');
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
