@@ -1,8 +1,9 @@
-// Tests for generate-adr.mjs's narrated-tool-call detection and corrective
-// retry (see detect-narration.mjs). Mirrors generate-spec.test.mjs's
-// approach: generate-adr.mjs is a top-level script with no exports, so this
-// spawns the real script against a temp dir cwd with a fake `claude` binary
-// on PATH under LLM_BACKEND=cli, network-free.
+// Tests for generate-adr.mjs: the prompt (template, spec sections, table
+// inventory), the narrated-tool-call detection and corrective retry, the file
+// name, the generated inventory appendix and the settings. Mirrors
+// generate-spec.test.mjs's approach: generate-adr.mjs is a top-level script
+// with no exports, so this spawns the real script against a temp dir cwd with
+// a fake `claude` binary on PATH under LLM_BACKEND=cli, network-free.
 //
 // Zero-dependency, run with `node --test`.
 
@@ -45,6 +46,7 @@ writeFileSync(
     '  const dump = process.env.FAKE_CLAUDE_PROMPT_DUMP;',
     '  if (process.env.FAKE_CLAUDE_SLEEP_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_CLAUDE_SLEEP_MS));',
     '  if (process.env.FAKE_CLAUDE_ARGV_DUMP) fs.writeFileSync(process.env.FAKE_CLAUDE_ARGV_DUMP, JSON.stringify(process.argv.slice(2)));',
+    "  if (process.env.FAKE_CLAUDE_ARGV_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');",
     "  if (dump) fs.appendFileSync(dump, input + '\\n===FAKE_CLAUDE_CALL_BOUNDARY===\\n');",
     "  const isRetry = input.includes('--- CORRECTIVE REMINDER ---');",
     '  const result = isRetry',
@@ -268,7 +270,9 @@ describe('generate-adr.mjs narration detection', () => {
     const r = runGenerateAdr({
       text: NARRATED_TRANSCRIPT_TEXT,
       retryText: REAL_ADR_TEXT,
-      env: { ADR_STEP_BUDGET_MS: '1000' },
+      // 1 minute minus the 30s buffer: the first call has ~30s, a retry
+      // would need 300s.
+      env: { ADR_STEP_TIMEOUT_MINUTES: '1' },
     });
     assert.equal(r.status, 1);
     assert.equal(
@@ -319,7 +323,7 @@ describe('generate-adr.mjs uses docs/adr/TEMPLATE.md', () => {
   });
 });
 
-describe('generate-adr.mjs passes the whole spec', () => {
+describe('generate-adr.mjs passes the whole spec when no ADR sections are found', () => {
   test('T3a: text far past the old 1,500-character cut reaches the prompt', () => {
     const spec = `# Spec: fixture\n\nADR: pending\n\n${'x'.repeat(20_000)}\nSPEC_TAIL_MARKER_5d0e\n`;
     const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
@@ -338,6 +342,7 @@ describe('generate-adr.mjs passes the whole spec', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.firstPrompt, /BEYOND_CAP_MARKER_aa11/);
     assert.match(r.firstPrompt, /\[spec truncated at 60000 characters\]/);
+    assert.match(r.firstPrompt, /LINKED SPEC \(the full spec, cut to 60000 characters:/);
   });
 });
 
@@ -415,6 +420,16 @@ describe('generate-adr.mjs sends the decision sections of a templated spec', () 
       assert.ok(r.firstPrompt.includes(m), `missing ${m}`);
     }
     assert.doesNotMatch(r.firstPrompt, /TESTS_MARKER_e4|VERIFY_MARKER_e5/);
+    assert.match(r.firstPrompt, /LINKED SPEC \(sections relevant to the ADR;/);
+  });
+
+  test('T3d: the full-spec fallback is labelled as the full spec', () => {
+    const spec = '# Spec: fixture\n\nADR: pending\n\n## Tests\nTESTS_MARKER_f1\n';
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /TESTS_MARKER_f1/);
+    assert.match(r.firstPrompt, /LINKED SPEC \(the full spec:/);
+    assert.doesNotMatch(r.firstPrompt, /are left out\):/);
   });
 });
 
@@ -458,6 +473,28 @@ describe('generate-adr.mjs appends the table inventory itself', () => {
     assert.match(readFileSync(rlsAdrPath(), 'utf8'), /^\| fixture_users \| global \| {2}\|$/m);
     assert.match(r.stderr, /No reason given for global table\(s\): fixture_users/);
   });
+
+  test('T5g: a Global tables bullet that names no global table stays in the ADR', () => {
+    const modelText = [
+      REAL_ADR_TEXT.trimEnd(),
+      '',
+      '## Global tables',
+      '- fixture_users: users belong to several organizations',
+      '- fixture_projects: org-scoped already, so not a reason',
+      '- Note: the runtime role reads all of these.',
+      '',
+    ].join('\n');
+    const r = runGenerateAdr({
+      text: modelText,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Row-level security for tenant tables' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const out = readFileSync(rlsAdrPath(), 'utf8');
+    assert.match(out, /^- Note: the runtime role reads all of these\.$/m);
+    assert.match(out, /^- fixture_projects: org-scoped already, so not a reason$/m);
+    assert.match(out, /^\| fixture_users \| global \| users belong to several organizations \|$/m);
+  });
 });
 
 describe('generate-adr.mjs review fixes', () => {
@@ -482,7 +519,7 @@ describe('generate-adr.mjs review fixes', () => {
     assert.match(r.firstPrompt, /OUTLINE_FOR_SPEC_PATH_c4/);
   });
 
-  test('T5e: "PostgreSQL" / "database" issues get the inventory', () => {
+  test('T5e: a "tenant isolation" issue gets the inventory', () => {
     const r = runGenerateAdr({
       text: REAL_ADR_TEXT,
       files: MIGRATION_FILES,
@@ -544,10 +581,10 @@ describe('generate-adr.mjs settings', () => {
     const r = runGenerateAdr({
       text: NARRATED_TRANSCRIPT_TEXT,
       retryText: REAL_ADR_TEXT,
-      env: { ADR_STEP_TIMEOUT_MINUTES: '0.01' },
+      env: { ADR_STEP_TIMEOUT_MINUTES: '1' },
     });
     assert.equal(r.status, 1);
-    assert.equal(r.modelCallCount, 1, 'a 0.6s budget leaves no room for a retry');
+    assert.equal(r.modelCallCount, 1, 'a 1-minute budget leaves no room for a retry');
     assert.match(r.stderr, /not enough for a safe corrective retry/);
   });
 });
@@ -618,5 +655,97 @@ describe('generate-adr.mjs settings validation (review of ac4ef99)', () => {
     assert.match(r.stderr, /ADR_MAX_TOKENS does not apply on LLM_BACKEND=cli/);
     assert.doesNotMatch(r.stderr, /Raise the ADR_MAX_TOKENS/);
     assert.doesNotMatch(r.stderr, /in generate-adr\.mjs/);
+  });
+});
+
+describe('generate-adr.mjs review fixes (#459 last round)', () => {
+  test('G1: an existing ADR named in the spec is not taken as the new one (existingAdrs)', () => {
+    const spec = [
+      '# Spec: fixture',
+      '',
+      'ADR: pending',
+      '',
+      '## Problem',
+      'P',
+      '## Constraints',
+      'C',
+      '## Changes',
+      '### `docs/adr/0012-old.md` (mark Superseded)',
+      'SUPERSEDE_NOTE_g1',
+      '### `docs/adr/0013-new.md`',
+      'NEW_OUTLINE_g1',
+      '',
+    ].join('\n');
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: { 'docs/adr/0012-old.md': '# ADR-0012: Old\n\n- Status: Accepted\n' },
+      env: { SPEC_CONTENT: spec },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /NEW_OUTLINE_g1/);
+    assert.doesNotMatch(r.firstPrompt, /SUPERSEDE_NOTE_g1/);
+  });
+
+  test('G2: the corrective retry carries ADR_EFFORT too', () => {
+    const argvLog = join(BIN_DIR, 'argv-retry.log');
+    rmSync(argvLog, { force: true });
+    const r = runGenerateAdr({
+      text: NARRATED_TRANSCRIPT_TEXT,
+      retryText: REAL_ADR_TEXT,
+      env: { ADR_EFFORT: 'low', FAKE_CLAUDE_ARGV_LOG: argvLog },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = readFileSync(argvLog, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(calls.length, 2);
+    for (const argv of calls) {
+      assert.equal(argv[argv.indexOf('--effort') + 1], 'low');
+    }
+  });
+
+  test('G3: a bare "RLS" in the title triggers the inventory', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'RLS slice 2', ISSUE_BODY: 'Second slice.' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /TABLE INVENTORY/);
+  });
+
+  test('G4: a trigger that appears only in the spec still gets the inventory', () => {
+    const spec =
+      '# Spec: fixture\n\n## Problem\nEnable row-level security on tenant tables.\n## Constraints\n1. C\n';
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Slice 2', ISSUE_BODY: 'See spec.', SPEC_CONTENT: spec },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /TABLE INVENTORY/);
+  });
+
+  test('G5: "PostgreSQL" or "database" alone does not trigger the inventory', () => {
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'PostgreSQL upgrade', ISSUE_BODY: 'Move the database to 17.' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);
+  });
+
+  test('G6: with no step timeout the budget is 20 minutes, and ADR_STEP_BUDGET_MS is ignored', () => {
+    const r = runGenerateAdr({
+      text: NARRATED_TRANSCRIPT_TEXT,
+      retryText: REAL_ADR_TEXT,
+      env: {
+        ADR_STEP_TIMEOUT_MINUTES: '',
+        ADR_STEP_BUDGET_MS: '1000',
+        ADR_LLM_TIMEOUT_MS: '3600000',
+      },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    // 20 minutes minus the 30s buffer caps the retry at ~1170s (12 would give 690s).
+    assert.match(r.stderr, /Retrying once .*\(timeout 11[67]\ds\)/);
   });
 });

@@ -22,6 +22,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdtempSync, rmSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1023,6 +1024,331 @@ test('callViaApi: thinking that uses all of max_tokens gets a clear error, not a
         return true;
       }
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// --- API backend streaming (#459 review: fetch's 300s headers timeout) ---
+
+const { truncationMessage: truncationMessageApi, readMessageStream } = await import(
+  './llm-client.mjs?backend=api'
+);
+
+const sse = (events, sep = '\n\n') =>
+  events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}`).join(sep) + sep;
+
+function streamResponse(text, chunkSize = 7) {
+  const bytes = new TextEncoder().encode(text);
+  const body = new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        controller.enqueue(bytes.slice(i, i + chunkSize));
+      }
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+const STREAM_EVENTS = [
+  { type: 'message_start', message: { content: [], stop_reason: null } },
+  { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+  { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'plan' } },
+  { type: 'content_block_stop', index: 0 },
+  { type: 'ping' },
+  { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+  { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '# ADR-0001: ' } },
+  { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Title' } },
+  { type: 'content_block_stop', index: 1 },
+  { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+  { type: 'message_stop' },
+];
+
+test('callViaApi asks for a stream and rebuilds the text from it', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return streamResponse(sse(STREAM_EVENTS));
+  };
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(bodies[0].stream, true);
+    assert.equal(r.text, '# ADR-0001: Title');
+    assert.equal(r.stopReason, 'end_turn');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('readMessageStream: CRLF separators and events split across chunks', async () => {
+  const res = streamResponse(sse(STREAM_EVENTS, '\r\n\r\n'), 3);
+  const msg = await readMessageStream(res.body);
+  assert.deepEqual(
+    msg.content.filter((b) => b.type === 'text').map((b) => b.text),
+    ['# ADR-0001: Title']
+  );
+  assert.equal(msg.stop_reason, 'end_turn');
+});
+
+test('callViaApi: a stream that stops at max_tokens with thinking only gets the clear error', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    streamResponse(
+      sse([
+        STREAM_EVENTS[0],
+        STREAM_EVENTS[1],
+        STREAM_EVENTS[2],
+        { type: 'message_delta', delta: { stop_reason: 'max_tokens' } },
+        { type: 'message_stop' },
+      ])
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /max_tokens=100 was used up/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi: an error event in the stream is reported as such', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    streamResponse(
+      sse([
+        STREAM_EVENTS[0],
+        { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
+      ])
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /Claude API stream error: overloaded_error: Overloaded/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi: a failed request names the cause and the timeout', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new TypeError('fetch failed', { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } });
+  };
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 540000 }),
+      /Claude API request failed after \d+s \(timeout 540000ms\): fetch failed \(UND_ERR_HEADERS_TIMEOUT\)/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi joins several text blocks', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        content: [
+          { type: 'text', text: 'part one, ' },
+          { type: 'thinking', thinking: 'x', signature: 's' },
+          { type: 'text', text: 'part two' },
+        ],
+        stop_reason: 'end_turn',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(r.text, 'part one, part two');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('truncationMessage: raise the token variable on the API backend, not on the CLI', async () => {
+  const opts = { maxTokens: 64000, tokensVar: 'ADR_MAX_TOKENS', effortVar: 'ADR_EFFORT' };
+  assert.match(truncationMessageApi(opts), /at 64000\)\. Raise the ADR_MAX_TOKENS repo variable/);
+  const { truncationMessage: truncationMessageCli } = await import('./llm-client.mjs');
+  const cli = truncationMessageCli(opts);
+  assert.match(cli, /ADR_MAX_TOKENS does not apply on LLM_BACKEND=cli/);
+  assert.match(cli, /a lower ADR_EFFORT/);
+  assert.doesNotMatch(cli, /Raise the ADR_MAX_TOKENS/);
+});
+
+// --- API backend: undici's 300s bodyTimeout (#464 review) ---
+//
+// A streamed call can stay silent for minutes while the model thinks (thinking
+// display defaults to "omitted" on Claude 5 models, and pings are not promised
+// at any interval). Node's fetch dropped such a body after 300s whatever
+// timeoutMs said, so callViaApi sends its own dispatcher that turns undici's
+// headersTimeout and bodyTimeout off per request.
+
+const { createApiDispatcher } = await import('./llm-client.mjs?backend=api');
+const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+
+test('callViaApi sends a dispatcher that turns off undici headersTimeout and bodyTimeout', async () => {
+  const originalFetch = globalThis.fetch;
+  let dispatcher;
+  globalThis.fetch = async (url, init) => {
+    dispatcher = init.dispatcher;
+    return streamResponse(sse(STREAM_EVENTS));
+  };
+  try {
+    await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 540000 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(typeof dispatcher?.dispatch, 'function', 'fetch got no dispatcher');
+
+  // What reaches Node's own dispatcher when fetch calls dispatch().
+  const original = globalThis[GLOBAL_DISPATCHER];
+  const seen = [];
+  globalThis[GLOBAL_DISPATCHER] = { dispatch: (opts, handler) => seen.push({ opts, handler }) };
+  try {
+    const handler = {};
+    dispatcher.dispatch({ path: '/v1/messages', method: 'POST' }, handler);
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0].opts, {
+      path: '/v1/messages',
+      method: 'POST',
+      headersTimeout: 0,
+      bodyTimeout: 0,
+    });
+    assert.equal(seen[0].handler, handler);
+  } finally {
+    globalThis[GLOBAL_DISPATCHER] = original;
+  }
+});
+
+test("createApiDispatcher: Node's fetch applies the per-request bodyTimeout", async () => {
+  // One byte, then a gap longer than the 1s bodyTimeout under test (undici's
+  // default is 300s, so only the dispatcher's own value can fire here).
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.write('a');
+    const t = setTimeout(() => res.end('b'), 3000);
+    res.on('close', () => clearTimeout(t));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/`, {
+      dispatcher: createApiDispatcher({ bodyTimeout: 1000 }),
+    });
+    await assert.rejects(res.text(), (err) => err?.cause?.code === 'UND_ERR_BODY_TIMEOUT');
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// --- API backend: a stream cut off cleanly (#464 review) ---
+
+test('callViaApi: a stream that ends cleanly before message_stop is an error, not a result', async () => {
+  const originalFetch = globalThis.fetch;
+  // Everything up to the middle of the text block, then a clean end of body.
+  globalThis.fetch = async () => streamResponse(sse(STREAM_EVENTS.slice(0, 7)));
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /^Error: Claude API stream ended before message_stop \(stop_reason=none\)$/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('readMessageStream: message_delta without message_stop is still incomplete', async () => {
+  const res = streamResponse(sse(STREAM_EVENTS.slice(0, -1)));
+  await assert.rejects(
+    readMessageStream(res.body),
+    /Claude API stream ended before message_stop \(stop_reason=end_turn\)/
+  );
+});
+
+// --- API backend: refusals (#464 review) ---
+
+test('callViaApi: a mid-stream refusal throws instead of returning the partial text', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    streamResponse(
+      sse([
+        ...STREAM_EVENTS.slice(0, 7),
+        { type: 'content_block_stop', index: 1 },
+        {
+          type: 'message_delta',
+          delta: {
+            stop_reason: 'refusal',
+            stop_details: { type: 'refusal', category: 'cyber', explanation: 'declined' },
+          },
+        },
+        { type: 'message_stop' },
+      ])
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /Claude API declined the request \(stop_reason=refusal, category=cyber\); any partial output was discarded\./
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi: a refusal with a null category is still a refusal', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        content: [],
+        stop_reason: 'refusal',
+        stop_details: { type: 'refusal', category: null, explanation: null },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /Claude API declined the request \(stop_reason=refusal\); any partial output was discarded\./
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// --- API backend: an SSE body under another content type (#464 review) ---
+
+test('callViaApi reads an SSE body served with a non-SSE content type', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(sse(STREAM_EVENTS), {
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(r.text, '# ADR-0001: Title');
+    assert.equal(r.stopReason, 'end_turn');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi reads a relabelled SSE body that starts with a comment line', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(`: keepalive\n\n${sse(STREAM_EVENTS)}`, {
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(r.text, '# ADR-0001: Title');
+    assert.equal(r.stopReason, 'end_turn');
   } finally {
     globalThis.fetch = originalFetch;
   }

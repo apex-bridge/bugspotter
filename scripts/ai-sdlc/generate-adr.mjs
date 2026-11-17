@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Calls Claude to draft an ADR for a GitHub issue.
 // Run from the repo root. Reads docs/adr/TEMPLATE.md for the format, existing
-// ADRs for numbering, and (for database-related issues) the migrations for a
-// computed table inventory.
+// ADRs for numbering, and (for RLS / tenant-isolation issues) the migrations
+// for a computed table inventory.
 // Outputs adr_file, adr_number, adr_slug, and model to GITHUB_OUTPUT.
 //
 // Required env vars: ISSUE_NUMBER, ISSUE_TITLE, plus either
@@ -19,7 +19,7 @@ import {
   mkdirSync,
   existsSync,
 } from 'node:fs';
-import { callClaude, requireLlmCredentials, CLI_MODEL } from './llm-client.mjs';
+import { callClaude, requireLlmCredentials, truncationMessage, CLI_MODEL } from './llm-client.mjs';
 import {
   tableInventory,
   inventoryMarkdown,
@@ -46,7 +46,8 @@ const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = p
 // tuned values, so an unset variable changes nothing.
 //   ADR_LLM_TIMEOUT_MS        one LLM call in ms, at least 10000 (default 540000)
 //   ADR_STEP_TIMEOUT_MINUTES  the workflow step's timeout-minutes; the script's
-//                             time budget (default 12)
+//                             time budget (default 20: a first call and a
+//                             corrective retry of 540s each, plus 30s)
 //   ADR_MAX_TOKENS            output cap, enforced on the API backend only,
 //                             where thinking counts toward it (64000; runs used
 //                             14K-28K thinking tokens plus the ADR, #458)
@@ -78,7 +79,7 @@ const SETTINGS = {
   ),
   stepBudgetMs:
     (setting('ADR_STEP_TIMEOUT_MINUTES', null, (n) => n > 0, 'a positive number of minutes') ?? 0) *
-      60_000 || parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000),
+      60_000 || 20 * 60_000,
   maxTokens: setting('ADR_MAX_TOKENS', 64_000, positiveInt, 'a positive integer'),
   maxSpecChars: setting('ADR_MAX_SPEC_CHARS', 60_000, positiveInt, 'a positive integer'),
   effort: process.env.ADR_EFFORT || undefined,
@@ -155,13 +156,19 @@ const MAX_SPEC_CHARS = SETTINGS.maxSpecChars;
 // Select the ADR's Changes subsection by the path the spec declares, even when
 // the output is renumbered because that number is taken.
 const specAdrPath = specAdr ? `docs/adr/${specAdr[1]}-${specAdr[2]}.md` : adrFile;
-const specInput = specText
-  ? (specForAdr(specText, specAdrPath, { existingAdrs: existing }) ?? specText)
-  : '';
-const specForPrompt =
-  specInput.length > MAX_SPEC_CHARS
-    ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
-    : specInput;
+const specSections = specText
+  ? specForAdr(specText, specAdrPath, { existingAdrs: existing })
+  : null;
+const specInput = specSections ?? specText;
+// The prompt says which one it got, so the model is not told sections are left
+// out when the full spec is sent, nor that it got the full spec when it was cut.
+const specCut = specInput.length > MAX_SPEC_CHARS;
+const specLabel = specSections
+  ? "sections relevant to the ADR; its tests, verification and other files' changes are left out"
+  : `the full spec${specCut ? `, cut to ${MAX_SPEC_CHARS} characters` : ''}: its ADR-relevant sections could not be picked out`;
+const specForPrompt = specCut
+  ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
+  : specInput;
 
 // The agent has no tools, so tenant-isolation issues get the computed table list.
 // Explicit signals only: words like "table" or "schema" appear in most specs.
@@ -201,7 +208,7 @@ ${adrIndex ? `\nARCHITECTURE INDEX (docs/adr/README.md):\n${adrIndex}\n` : ''}
 ISSUE #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
 ${ISSUE_BODY?.trim() || '(no description)'}
-${specForPrompt ? `\nLINKED SPEC (sections relevant to the ADR; its tests, verification and other files' changes are left out):\n${specForPrompt}\n` : ''}${inventory ? `\nTABLE INVENTORY (computed from the migrations):\n${inventory}\n` : ''}
+${specForPrompt ? `\nLINKED SPEC (${specLabel}):\n${specForPrompt}\n` : ''}${inventory ? `\nTABLE INVENTORY (computed from the migrations):\n${inventory}\n` : ''}
 Rules:
 ${rules.map((r) => `- ${r}`).join('\n')}`;
 
@@ -241,9 +248,11 @@ try {
 // truncated ADR to disk instead of erroring.
 if (stopReason === 'max_tokens') {
   console.error(
-    (process.env.LLM_BACKEND || 'api') === 'cli'
-      ? "Claude response truncated (stop_reason=max_tokens): the model's own output limit was reached. ADR_MAX_TOKENS does not apply on LLM_BACKEND=cli; a lower ADR_EFFORT means less thinking."
-      : `Claude response truncated (stop_reason=max_tokens at ${SETTINGS.maxTokens}). Raise the ADR_MAX_TOKENS repo variable.`
+    truncationMessage({
+      maxTokens: SETTINGS.maxTokens,
+      tokensVar: 'ADR_MAX_TOKENS',
+      effortVar: 'ADR_EFFORT',
+    })
   );
   process.exit(1);
 }
@@ -259,9 +268,9 @@ if (stopReason === 'max_tokens') {
 // One corrective retry with a stronger reminder before failing loudly,
 // mirroring generate-impl.mjs's missing-file self-correction (PR #375) and
 // generate-spec.mjs's own copy of this same guard - time-budgeted the same
-// way (see generation-retry.mjs). Defaults match adr-agent.yml's "Generate
-// ADR" step cap (raised alongside this change specifically to give a retry
-// room - see that file's comment).
+// way (see generation-retry.mjs). The default step budget (20 minutes, see
+// SETTINGS and the job comment in adr-agent.yml) leaves a retry as long as a
+// first call.
 // A retry needs about as long as a first run; with less left it would only
 // time out, so fail fast instead.
 const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 300_000);
@@ -336,7 +345,9 @@ if (narrationFinding) {
 }
 
 if (inventoryRows.length) {
-  const { text, reasons } = extractGlobalReasons(adrContent);
+  const { text, reasons } = extractGlobalReasons(adrContent, {
+    tables: inventoryRows.filter((r) => r.scope.kind === 'global').map((r) => r.table),
+  });
   const { markdown, missing, overridden } = inventoryAppendix(inventoryRows, reasons);
   if (overridden.length) {
     console.log(`Scope overridden by the ADR author: ${overridden.join(', ')}`);
