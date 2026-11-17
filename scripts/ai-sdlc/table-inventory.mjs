@@ -267,10 +267,11 @@ export function inventoryMarkdown(rows) {
 
 // --- ADR appendix: written by code, so the model only argues the global tables ---
 
-// One reason bullet: "- t: why", "- `t`: why", "- **t**: why", "- **t:** why",
-// "- t (note): why", "1. t: why", "- application.t: why" (schema dropped).
+// One reason bullet, indented up to 3 spaces: "- t: why", "- `t`: why",
+// "- **t**: why", "- **t:** why", "- t (note): why", "1. t: why",
+// "- application.t: why" (schema dropped).
 const REASON_BULLET =
-  /^(?:[-*+]|\d+[.)])\s+(?:\*\*|__)?`?(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)`?(?:\*\*|__)?\s*(?:\([^)]*\)\s*)?(?::|—|–|-)(?:\*\*|__)?\s*(.+?)\s*$/;
+  /^( {0,3})(?:[-*+]|\d+[.)])\s+(?:\*\*|__)?`?(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)`?(?:\*\*|__)?\s*(?:\([^)]*\)\s*)?(?::|—|–|-)(?:\*\*|__)?\s*(.+?)\s*$/;
 
 // An ATX heading (up to 3 leading spaces, optional closing #s) as
 // [level, normalised title]: "## **Global tables:** ##" -> [2, "global tables"].
@@ -306,6 +307,9 @@ export function extractGlobalReasons(adr, { tables } = {}) {
   let heading = '';
   let leftover = [];
   let lastReason = null;
+  // Indent of the section's first reason bullet: the list's own level. A
+  // bullet indented deeper is a sub-point of the one above it.
+  let baseIndent = null;
   const endReasons = () => {
     // Inside a dropped inventory section the leftovers go with it.
     if (!outerDrop && leftover.some((l) => l.trim())) {
@@ -333,6 +337,7 @@ export function extractGlobalReasons(adr, { tables } = {}) {
         outerDrop = mode === 'drop' ? dropLevel : 0;
         mode = 'reasons';
         reasonsLevel = level;
+        baseIndent = null;
         heading = line;
         continue;
       }
@@ -352,16 +357,21 @@ export function extractGlobalReasons(adr, { tables } = {}) {
       }
     }
     if (mode === 'reasons') {
-      // Bullets inside a code fence are examples, not reasons; an indented
-      // bullet is a sub-point, not a table.
+      // Bullets inside a code fence are examples, not reasons; a bullet
+      // indented deeper than the list's first reason is a sub-point, not a table.
       const m = !code && line.match(REASON_BULLET);
-      if (m && (!known || known.has(m[1].toLowerCase()))) {
+      if (
+        m &&
+        (!known || known.has(m[2].toLowerCase())) &&
+        m[1].length <= (baseIndent ?? m[1].length)
+      ) {
+        baseIndent ??= m[1].length;
         // "- table: org-scoped: reason" overrides the computed global scope.
-        const o = m[2].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);
+        const o = m[3].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);
         lastReason = o
           ? { kind: o[1].toLowerCase(), reason: o[2] }
-          : { kind: 'global', reason: m[2] };
-        reasons.set(m[1].toLowerCase(), lastReason);
+          : { kind: 'global', reason: m[3] };
+        reasons.set(m[2].toLowerCase(), lastReason);
       } else if (
         lastReason &&
         !code &&

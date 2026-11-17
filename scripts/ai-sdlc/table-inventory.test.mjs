@@ -588,6 +588,27 @@ test('an indented sub-bullet under a reason is neither a reason nor part of one'
   assert.ok(text.includes('  - note: applies everywhere'));
 });
 
+test('a reason list indented 1-3 spaces is read; deeper bullets under it are sub-points', () => {
+  const tables = ['users', 'system_config'];
+  const indented = extractGlobalReasons(
+    '# ADR\n## Global tables\n  - users: identity spans orgs\n  - system_config: platform settings\n    - note: x\n## Next',
+    { tables }
+  );
+  assert.equal(indented.reasons.get('users')?.reason, 'identity spans orgs');
+  assert.equal(indented.reasons.get('system_config')?.reason, 'platform settings');
+  assert.ok(!indented.text.includes('- users'), indented.text);
+  assert.ok(indented.text.includes('    - note: x'), indented.text);
+
+  // Under a group bullet that is not a reason itself.
+  const grouped = extractGlobalReasons(
+    '# ADR\n## Global tables\n- Platform:\n  - system_config: x\n- Identity:\n  - users: y\n## Next',
+    { tables }
+  );
+  assert.equal(grouped.reasons.get('system_config')?.reason, 'x');
+  assert.equal(grouped.reasons.get('users')?.reason, 'y');
+  assert.ok(grouped.text.includes('- Platform:') && grouped.text.includes('- Identity:'));
+});
+
 test('a subheading inside Global tables does not end it', () => {
   const { text, reasons } = extractGlobalReasons(
     '# ADR\n## Global tables\n### Platform\n- system_config: platform settings\n## Next\nN'
