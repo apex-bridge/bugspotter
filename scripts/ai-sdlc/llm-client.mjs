@@ -138,6 +138,7 @@ const apiDispatcher = createApiDispatcher();
 export async function readMessageStream(body) {
   const blocks = [];
   let stopReason = null;
+  let stopped = false;
   const onEvent = (raw) => {
     const data = raw
       .split(/\r?\n/)
@@ -155,6 +156,8 @@ export async function readMessageStream(body) {
       b.text = (b.text ?? '') + ev.delta.text;
     } else if (ev.type === 'message_delta' && ev.delta?.stop_reason) {
       stopReason = ev.delta.stop_reason;
+    } else if (ev.type === 'message_stop') {
+      stopped = true;
     } else if (ev.type === 'error') {
       throw new Error(
         `Claude API stream error: ${ev.error?.type ?? 'error'}: ${ev.error?.message ?? data}`
@@ -175,6 +178,14 @@ export async function readMessageStream(body) {
   buf += decoder.decode();
   if (buf.trim()) {
     onEvent(buf);
+  }
+  // A connection that closes cleanly mid-message (a proxy, a server restart)
+  // ends the body like a finished one. Without this the partial text came
+  // back as a normal result with stop_reason null, which callers accept.
+  if (!stopped) {
+    throw new Error(
+      `Claude API stream ended before message_stop (stop_reason=${stopReason ?? 'none'})`
+    );
   }
   return { content: blocks.filter(Boolean), stop_reason: stopReason };
 }
@@ -236,7 +247,7 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
       ? await readMessageStream(res.body)
       : await res.json();
   } catch (err) {
-    if (/^Claude API stream error/.test(err?.message)) {
+    if (/^Claude API stream (error|ended)/.test(err?.message)) {
       throw err;
     }
     throw failed(err);

@@ -1101,6 +1101,7 @@ test('callViaApi: a stream that stops at max_tokens with thinking only gets the 
         STREAM_EVENTS[1],
         STREAM_EVENTS[2],
         { type: 'message_delta', delta: { stop_reason: 'max_tokens' } },
+        { type: 'message_stop' },
       ])
     );
   try {
@@ -1243,4 +1244,28 @@ test("createApiDispatcher: Node's fetch applies the per-request bodyTimeout", as
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+// --- API backend: a stream cut off cleanly (#464 review) ---
+
+test('callViaApi: a stream that ends cleanly before message_stop is an error, not a result', async () => {
+  const originalFetch = globalThis.fetch;
+  // Everything up to the middle of the text block, then a clean end of body.
+  globalThis.fetch = async () => streamResponse(sse(STREAM_EVENTS.slice(0, 7)));
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /^Error: Claude API stream ended before message_stop \(stop_reason=none\)$/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('readMessageStream: message_delta without message_stop is still incomplete', async () => {
+  const res = streamResponse(sse(STREAM_EVENTS.slice(0, -1)));
+  await assert.rejects(
+    readMessageStream(res.body),
+    /Claude API stream ended before message_stop \(stop_reason=end_turn\)/
+  );
 });
