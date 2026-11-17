@@ -160,14 +160,14 @@ const specSections = specText
   : null;
 const specInput = specSections ?? specText;
 // The prompt says which one it got, so the model is not told sections are left
-// out when the full spec is sent.
+// out when the full spec is sent, nor that it got the full spec when it was cut.
+const specCut = specInput.length > MAX_SPEC_CHARS;
 const specLabel = specSections
   ? "sections relevant to the ADR; its tests, verification and other files' changes are left out"
-  : 'the full spec: its ADR-relevant sections could not be picked out';
-const specForPrompt =
-  specInput.length > MAX_SPEC_CHARS
-    ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
-    : specInput;
+  : `the full spec${specCut ? `, cut to ${MAX_SPEC_CHARS} characters` : ''}: its ADR-relevant sections could not be picked out`;
+const specForPrompt = specCut
+  ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
+  : specInput;
 
 // The agent has no tools, so tenant-isolation issues get the computed table list.
 // Explicit signals only: words like "table" or "schema" appear in most specs.

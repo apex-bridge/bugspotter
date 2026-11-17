@@ -329,6 +329,7 @@ describe('generate-adr.mjs passes the whole spec when no ADR sections are found'
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.firstPrompt, /BEYOND_CAP_MARKER_aa11/);
     assert.match(r.firstPrompt, /\[spec truncated at 60000 characters\]/);
+    assert.match(r.firstPrompt, /LINKED SPEC \(the full spec, cut to 60000 characters:/);
   });
 });
 
