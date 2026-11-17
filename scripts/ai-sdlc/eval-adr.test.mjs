@@ -499,3 +499,20 @@ test('no-meta-notes: scope statements and domain "I"/"author" are not notes abou
     assert.equal(flagged(s), true, s);
   }
 });
+
+test('runner metrics: every field is optional per call, and progress lines are not calls', () => {
+  assert.deepEqual(metrics('claude CLI: turns=1 wall=200s api=199s in=2 out=100 cost=$0.2000'), {
+    wallS: 200,
+    thinking: 0,
+    costUsd: 0.2,
+    calls: 1,
+  });
+  const log = [
+    'claude CLI: still running after 60s (no output yet)',
+    'claude CLI: turns=1 wall=200s api=199s in=2 out=100 thinking=10 cost=$0.2000',
+    'retrying...',
+    'claude CLI: turns=1 wall=100s api=99s in=2 out=50 cost=$0.1000',
+  ].join('\n');
+  assert.deepEqual(metrics(log), { wallS: 300, thinking: 10, costUsd: 0.3, calls: 2 });
+  assert.deepEqual(metrics('no model call'), {});
+});

@@ -79,16 +79,26 @@ const git = (args, cwd = ROOT) => execFileSync('git', args, { cwd, encoding: 'ut
 
 // "claude CLI: turns=1 wall=231s api=230s ttft=189s in=2 out=22644 thinking=17554 cost=$0.2962"
 // One line per model call; a corrective retry adds a second, so sum them.
+// llm-client.mjs writes each field only when the response carries it
+// (thinking= is absent with thinking off), so every field is optional; the
+// "still running after Ns" progress line is not a call.
 export function metrics(log) {
-  const calls = [...log.matchAll(/wall=(\d+)s.*?thinking=(\d+).*?cost=\$([\d.]+)/g)];
+  const calls = log
+    .split('\n')
+    .filter((l) => /claude CLI: (?:\w+=|no telemetry)/.test(l))
+    .map((l) => ({
+      wall: Number(l.match(/\bwall=(\d+)s/)?.[1] ?? 0),
+      thinking: Number(l.match(/\bthinking=(\d+)/)?.[1] ?? 0),
+      cost: Number(l.match(/\bcost=\$([\d.]+)/)?.[1] ?? 0),
+    }));
   if (!calls.length) {
     return {};
   }
-  const sum = (k) => calls.reduce((t, m) => t + Number(m[k]), 0);
+  const sum = (k) => calls.reduce((t, c) => t + c[k], 0);
   return {
-    wallS: sum(1),
-    thinking: sum(2),
-    costUsd: Math.round(sum(3) * 10_000) / 10_000,
+    wallS: sum('wall'),
+    thinking: sum('thinking'),
+    costUsd: Math.round(sum('cost') * 10_000) / 10_000,
     calls: calls.length,
   };
 }
