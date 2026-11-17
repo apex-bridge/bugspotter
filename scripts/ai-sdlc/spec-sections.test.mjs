@@ -96,6 +96,8 @@ test('a fence line with text after the marker does not close the fence', () => {
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     `### \`${ADR}\``,
     '```md',
@@ -115,6 +117,8 @@ test('two ADR subsections under Changes: the exact path wins; without one the ch
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     '### `docs/adr/0001-security.md`',
     'OUTLINE_SECURITY',
@@ -141,6 +145,8 @@ test('"ADR: pending" with an edit to an existing ADR: that ADR is not taken as t
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     '### `docs/adr/0012-old.md` (mark Superseded)',
     'SUPERSEDE_NOTE',
@@ -153,6 +159,8 @@ test('two subsections for the same ADR file share one Changes heading', () => {
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     '### `docs/adr/0045-x.md`',
     'OUTLINE',
@@ -165,8 +173,33 @@ test('two subsections for the same ADR file share one Changes heading', () => {
 });
 
 test('a prose line starting with ```code``` does not open a fence', () => {
-  const spec = ['## Problem', '```fetch()``` returns stale data', '## Tests', 'TEST_DETAILS'].join(
-    '\n'
-  );
+  const spec = [
+    '## Problem',
+    '```fetch()``` returns stale data',
+    '## Constraints',
+    'C',
+    '## Tests',
+    'TEST_DETAILS',
+  ].join('\n');
   assert.ok(!specForAdr(spec, 'docs/adr/0001-x.md').includes('TEST_DETAILS'));
+});
+
+test('an older spec with "Problem / motivation" and "Scope and constraints" keeps both (0226)', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const spec = readFileSync(
+    join(here, '..', '..', 'docs', 'specs', '0226-intelligence-wire-per-org-similarity-thr.md'),
+    'utf8'
+  );
+  const out = specForAdr(spec, 'docs/adr/0099-x.md');
+  assert.match(out, /^## Problem \/ motivation$/m);
+  assert.match(out, /^## Scope and constraints$/m);
+  assert.match(out, /^## Acceptance criteria$/m);
+  assert.doesNotMatch(out, /^## How \(runnable steps\)$/m);
+});
+
+test('a spec missing Problem or Constraints gets the full-spec fallback', () => {
+  const noConstraints = ['## Problem', 'P', '## Acceptance criteria', 'AC', '## Tests', 'T'];
+  assert.equal(specForAdr(noConstraints.join('\n'), 'docs/adr/0001-x.md'), null);
+  const noProblem = ['## Constraints', 'C', '## Acceptance criteria', 'AC'];
+  assert.equal(specForAdr(noProblem.join('\n'), 'docs/adr/0001-x.md'), null);
 });

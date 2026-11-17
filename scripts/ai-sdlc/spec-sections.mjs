@@ -5,12 +5,21 @@
 // its run time, down (#458).
 //
 // Headings inside ``` fences (e.g. an ADR outline in the spec) are content, not
-// sections. Returns null when the spec has none of the expected sections, so
-// the caller can fall back to the full text.
+// sections. Returns null unless the spec has both a Problem and a Constraints
+// section, so the caller sends the full text instead of a part that lost them
+// (an older spec says "Problem / motivation" and "Scope and constraints").
 
 import { fenceTracker } from './markdown-fence.mjs';
 
-const KEEP = new Set(['problem', 'out of scope', 'constraints', 'acceptance criteria']);
+// Section kinds kept, matched by keyword so "Problem / motivation" and "Scope
+// and constraints" count.
+const KEEP = [
+  ['problem', (t) => t.startsWith('problem')],
+  ['constraints', (t) => /\bconstraints?\b/.test(t)],
+  ['out of scope', (t) => t.startsWith('out of scope')],
+  ['acceptance criteria', (t) => t.startsWith('acceptance criteria')],
+];
+const keepKind = (title) => KEEP.find(([, match]) => match(title))?.[0] ?? null;
 
 // Split into blocks at "## " (and "### ") headings that are outside code fences.
 function blocks(spec) {
@@ -60,7 +69,7 @@ export function specForAdr(spec, adrPath, { existingAdrs = [] } = {}) {
 
   const kept = [];
   let section = '';
-  let found = false;
+  const found = new Set();
   let changesHeading = false;
   for (const b of all) {
     if (b.level === 0) {
@@ -69,8 +78,9 @@ export function specForAdr(spec, adrPath, { existingAdrs = [] } = {}) {
     }
     if (b.level === 2) {
       section = b.title.toLowerCase();
-      if (KEEP.has(section)) {
-        found = true;
+      const kind = keepKind(section);
+      if (kind) {
+        found.add(kind);
         kept.push(b.lines.join('\n'));
       }
       continue;
@@ -80,9 +90,9 @@ export function specForAdr(spec, adrPath, { existingAdrs = [] } = {}) {
         changesHeading ? b.lines.join('\n') : `## Changes (ADR file only)\n${b.lines.join('\n')}`
       );
       changesHeading = true;
-    } else if (KEEP.has(section)) {
+    } else if (keepKind(section)) {
       kept.push(b.lines.join('\n'));
     }
   }
-  return found ? kept.join('\n').trim() : null;
+  return found.has('problem') && found.has('constraints') ? kept.join('\n').trim() : null;
 }
