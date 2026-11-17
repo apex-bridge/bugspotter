@@ -516,3 +516,19 @@ test('runner metrics: every field is optional per call, and progress lines are n
   assert.deepEqual(metrics(log), { wallS: 300, thinking: 10, costUsd: 0.3, calls: 2 });
   assert.deepEqual(metrics('no model call'), {});
 });
+
+test('file refs: an exact path wins over suffix hits; "cited" means a whole path token', () => {
+  const repo = repoWith({
+    'package.json': '1\n2\n3\n',
+    'a/package.json': '1\n2\n3\n4\n5\n',
+    'src/a/x.ts': '1\n2\n3\n',
+    'lib/src/a/x.ts': '1\n2\n3\n4\n5\n',
+  });
+  const files = ['package.json', 'a/package.json', 'src/a/x.ts', 'lib/src/a/x.ts'];
+  assert.deepEqual(
+    checkFileRefs('Root package.json:2; see also a/package.json:5.', repo, files).bad,
+    []
+  );
+  // "src/a/x.ts" appears only inside "lib/src/a/x.ts", so only that one is cited.
+  assert.deepEqual(checkFileRefs('lib/src/a/x.ts:5, then a/x.ts:4.', repo, files).bad, []);
+});

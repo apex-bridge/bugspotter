@@ -157,10 +157,20 @@ export function checkFileRefs(text, repoDir, files = listRepoFiles(repoDir)) {
     const path = ref.slice(0, i).replace(/^\.?\//, '');
     const line = Number(ref.slice(i + 1));
     let hits = files.filter((f) => f && (f === path || f.endsWith(`/${path}`)));
+    // A full repo-relative path means that file, even if other files end
+    // with it ("package.json:2" is the root one, not "a/package.json").
+    if (hits.includes(path)) {
+      hits = [path];
+    }
     // "client.ts:603" after "packages/backend/src/db/client.ts:125": the
-    // short name means the file the ADR cites in full.
+    // short name means the file the ADR cites in full. Cited as a whole path,
+    // not as the tail of a longer one ("src/a/x.ts" inside "lib/src/a/x.ts").
     if (hits.length > 1) {
-      const cited = hits.filter((h) => text.includes(h));
+      const cited = hits.filter((h) =>
+        new RegExp(
+          `(?<![\\w./-])${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-]|\\.\\w)`
+        ).test(text)
+      );
       if (cited.length === 1) {
         hits = cited;
       }
