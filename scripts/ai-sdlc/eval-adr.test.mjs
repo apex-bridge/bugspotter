@@ -716,3 +716,31 @@ test('negation carries across a coordinated list, not into a new clause after a 
     true
   );
 });
+
+test('splitAdr: a heading inside a fenced example is not a section boundary', () => {
+  const fence = '```';
+  const text = [
+    '# ADR-0001: X',
+    '- Status: Proposed',
+    '> **Decision:** x',
+    '## Context',
+    '## Decision',
+    `${fence}markdown`,
+    '## Alternatives',
+    '| example | row |',
+    fence,
+    'We link accounts by email alone.',
+    '## Consequences',
+    '## Alternatives',
+    '',
+  ].join('\n');
+  const r = evaluateAdr(
+    text,
+    { forbidden: [{ id: 'f', any: ['link accounts by email alone'] }] },
+    { files: [] }
+  );
+  assert.equal(r.checks.find((c) => c.id === 'f').pass, false);
+  assert.equal(r.checks.find((c) => c.id === 'sections-in-order').pass, true);
+  const appendix = `# ADR-0001: X\n## Context\n${fence}\n## Appendix: example\n${fence}\nreal text\n`;
+  assert.equal(splitAdr(appendix).mainLines, 6);
+});

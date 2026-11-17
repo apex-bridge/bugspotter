@@ -107,12 +107,15 @@ function lastEnd(text, re) {
 // "## Heading" -> body, lowercased titles; main body = everything before "## Appendix".
 export function splitAdr(text) {
   const lines = text.split(/\r?\n/);
-  const appendixAt = lines.findIndex((l) => /^## Appendix/i.test(l));
+  // A "## " line inside a fenced example is content, not a boundary.
+  const inFence = fenceTracker();
+  const code = lines.map((l) => inFence(l));
+  const appendixAt = lines.findIndex((l, i) => !code[i] && /^## Appendix/i.test(l));
   const main = (appendixAt < 0 ? lines : lines.slice(0, appendixAt)).join('\n');
   const sections = new Map();
   let current = null;
-  for (const line of lines) {
-    const h = line.match(/^## (.*)$/);
+  for (const [i, line] of lines.entries()) {
+    const h = !code[i] && line.match(/^## (.*)$/);
     if (h) {
       current = h[1].trim().toLowerCase();
       // A repeated heading continues the section: replacing it would hide a
@@ -124,7 +127,7 @@ export function splitAdr(text) {
       sections.get(current).push(line);
     }
   }
-  const firstSection = lines.findIndex((l) => /^## /.test(l));
+  const firstSection = lines.findIndex((l, i) => !code[i] && /^## /.test(l));
   return {
     main,
     // Lines before the appendix; without one, the file's lines (a trailing
