@@ -637,3 +637,18 @@ describe('run-adr-eval.mjs helpers', () => {
     assert.equal(allFailed([error, scored]), false);
   });
 });
+
+test('appendices count: their file refs are checked, their facts and forbidden statements too', () => {
+  const repo = repoWith({ 'src/app.ts': 'a\nb\nc\n' });
+  const run = (appendix, def = CASE) =>
+    failedIds(
+      evaluateAdr(`${GOOD}## Appendix B: Rollout\n${appendix}\n`, def, {
+        repoDir: repo,
+        files: FILES,
+      })
+    );
+  assert.deepEqual(run('See src/does-not-exist.ts:1.'), ['file-refs-exist']);
+  assert.deepEqual(run('We also do the forbidden thing.'), ['forbidden-thing']);
+  const def = { ...CASE, required: [...CASE.required, { id: 'rollback', any: ['ROLLBACK_FACT'] }] };
+  assert.deepEqual(run('Each slice has a ROLLBACK_FACT.', def), []);
+});

@@ -238,8 +238,10 @@ export function evaluateAdr(text, def, opts = {}) {
 
   // No references passes: TEMPLATE.md lets a repo fact be marked
   // "unverified" instead, and an ADR may state none. The detail says so, so
-  // a pass is not read as "references verified".
-  const refs = checkFileRefs(main, repoDir, opts.files);
+  // a pass is not read as "references verified". The whole document is
+  // checked: the length limit stops at the appendices, but a wrong path in a
+  // rollout appendix is still wrong.
+  const refs = checkFileRefs(text, repoDir, opts.files);
   add(
     'file-refs-exist',
     'facts',
@@ -252,8 +254,9 @@ export function evaluateAdr(text, def, opts = {}) {
   );
 
   // What the ADR decides: the preamble (with the decision summary) and every
-  // section except Alternatives, where rejected options are described, and the
-  // appendices. Required facts must appear here, and forbidden statements
+  // section, appendices included (TEMPLATE.md puts spec-required material
+  // there), except Alternatives, where rejected options are described.
+  // Required facts must appear here, and forbidden statements
   // must not (unless negated). The title and the "- Refs:"-style metadata
   // lines are left out: they repeat the issue and spec titles ("show match
   // score + threshold"), so they would satisfy a fact the ADR never states.
@@ -262,9 +265,7 @@ export function evaluateAdr(text, def, opts = {}) {
       .split('\n')
       .filter((l) => !/^# |^- [\w ]+:/.test(l))
       .join('\n'),
-    ...[...sections]
-      .filter(([title]) => !title.startsWith('alternatives') && !title.startsWith('appendix'))
-      .map(([, body]) => body),
+    ...[...sections].filter(([title]) => !title.includes('alternative')).map(([, body]) => body),
   ].join('\n');
   // A required fact must be affirmed ("we do not use a nonce" is not the
   // nonce check). One that is itself a prohibition ("cross-tenant linking is
