@@ -175,6 +175,15 @@ describe('sanitizeErrorMessage', () => {
       const result = sanitizeErrorMessage(input);
       expect(result).toBe('Email from [REDACTED] to [REDACTED] failed');
     });
+
+    // Error text can carry user input; the old email pattern backtracked
+    // quadratically on runs like "a.a.a." (50 KB took seconds).
+    it('should stay fast on adversarial input', () => {
+      const input = 'a.'.repeat(25_000);
+      const start = performance.now();
+      sanitizeErrorMessage(input);
+      expect(performance.now() - start).toBeLessThan(200);
+    });
   });
 
   describe('Complex Cases', () => {
