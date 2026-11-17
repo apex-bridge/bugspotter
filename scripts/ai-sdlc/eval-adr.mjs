@@ -236,12 +236,19 @@ export function evaluateAdr(text, def, opts = {}) {
     add('diagram', 'structure', /^```mermaid/m.test(main));
   }
 
+  // No references passes: TEMPLATE.md lets a repo fact be marked
+  // "unverified" instead, and an ADR may state none. The detail says so, so
+  // a pass is not read as "references verified".
   const refs = checkFileRefs(main, repoDir, opts.files);
   add(
     'file-refs-exist',
     'facts',
     refs.bad.length === 0,
-    refs.bad.length ? `bad: ${refs.bad.join(', ')}` : `${refs.total} ok`
+    refs.bad.length
+      ? `bad: ${refs.bad.join(', ')}`
+      : refs.total
+        ? `${refs.total} ok`
+        : 'no file:line references (nothing verified)'
   );
 
   // What the ADR decides: the preamble (with the decision summary) and every

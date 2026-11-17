@@ -563,3 +563,15 @@ test('splitAdr: main-body length counts lines, not the trailing newline', () => 
   assert.equal(splitAdr(`${body(150)}## Appendix: A\nfoo\n`).mainLines, 150);
   assert.equal(splitAdr('# ADR-0001: X').mainLines, 1);
 });
+
+test('file-refs-exist with no references passes but says so', () => {
+  const text = GOOD.replace(
+    'Refers to src/app.ts:2 and the PAYLOAD_FACT.',
+    'Refers to the PAYLOAD_FACT.'
+  );
+  const c = evaluateAdr(text, CASE, { files: FILES }).checks.find(
+    (x) => x.id === 'file-refs-exist'
+  );
+  assert.equal(c.pass, true);
+  assert.equal(c.detail, 'no file:line references (nothing verified)');
+});
