@@ -19,7 +19,8 @@ The format is defined in `docs/adr/TEMPLATE.md`, the same file the CI `adr-agent
    ```sh
    node scripts/ai-sdlc/table-inventory.mjs
    ```
-4. Check every repo fact you cite against the code and give it a `file:line`.
+4. Check every repo fact you cite against the code and give it a `path:line` from the
+   repository root.
 5. Write the ADR from the template. Main body within about 120 lines; long required
    material in appendices.
 6. Render each Mermaid block before committing, e.g.
