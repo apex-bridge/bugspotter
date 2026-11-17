@@ -22,7 +22,10 @@
 //   CLI subprocess env (see callViaCli) since they outrank the OAuth token
 //   in Claude Code's auth precedence and would otherwise silently shadow it.
 //
-// callClaude({ prompt, maxTokens, timeoutMs, model }) — `model` is optional
+// callClaude({ prompt, maxTokens, timeoutMs, model, effort }) — `effort` is
+//   optional (low | medium | high | xhigh | max; anything else is ignored with a
+//   warning) and goes to `claude -p --effort` or the API's output_config.effort.
+//   `model` is optional
 //   (defaults to CLI_MODEL, DEFAULT_MODEL from model-defaults.mjs unless
 //   overridden, on both backends) and lets a caller like generate-impl.mjs's
 //   label-based model router (complexity:high -> claude-opus-4-8,
@@ -73,7 +76,7 @@ export function requireLlmCredentials() {
 // Effort levels accepted by both `claude -p --effort` and the API's
 // output_config.effort. Anything else is ignored with a warning, so a typo in a
 // repo variable cannot fail a pipeline run.
-export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 export function normalizeEffort(effort, warn = console.warn) {
   if (effort == null || effort === '') {
     return undefined;
@@ -86,7 +89,7 @@ export function normalizeEffort(effort, warn = console.warn) {
   return undefined;
 }
 
-export function buildApiBody({ prompt, maxTokens, model, effort }) {
+function buildApiBody({ prompt, maxTokens, model, effort }) {
   return {
     // CLI_MODEL, not a second hardcoded literal - one source of truth for
     // "the default when no caller-supplied model", overridable the same
@@ -95,20 +98,93 @@ export function buildApiBody({ prompt, maxTokens, model, effort }) {
     max_tokens: maxTokens,
     ...(effort ? { output_config: { effort } } : {}),
     messages: [{ role: 'user', content: prompt }],
+    // Streamed: Node's fetch gives up waiting for response headers after 300s
+    // (undici headersTimeout), and a non-streamed response sends none until
+    // the whole message is generated, so any call longer than 5 minutes
+    // failed as "fetch failed" whatever timeoutMs said (#459 review).
+    stream: true,
   };
 }
 
+// Rebuilds a Messages API response ({ content, stop_reason }) from its SSE
+// stream. Thinking deltas are skipped; only text is needed.
+export async function readMessageStream(body) {
+  const blocks = [];
+  let stopReason = null;
+  const onEvent = (raw) => {
+    const data = raw
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice(5).trimStart())
+      .join('\n');
+    if (!data) {
+      return;
+    }
+    const ev = JSON.parse(data);
+    if (ev.type === 'content_block_start') {
+      blocks[ev.index] = { ...ev.content_block };
+    } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+      const b = (blocks[ev.index] ??= { type: 'text', text: '' });
+      b.text = (b.text ?? '') + ev.delta.text;
+    } else if (ev.type === 'message_delta' && ev.delta?.stop_reason) {
+      stopReason = ev.delta.stop_reason;
+    } else if (ev.type === 'error') {
+      throw new Error(
+        `Claude API stream error: ${ev.error?.type ?? 'error'}: ${ev.error?.message ?? data}`
+      );
+    }
+  };
+  const decoder = new TextDecoder();
+  let buf = '';
+  for await (const chunk of body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let at;
+    while ((at = buf.search(/\r?\n\r?\n/)) >= 0) {
+      const sep = buf.slice(at).match(/^\r?\n\r?\n/)[0];
+      onEvent(buf.slice(0, at));
+      buf = buf.slice(at + sep.length);
+    }
+  }
+  buf += decoder.decode();
+  if (buf.trim()) {
+    onEvent(buf);
+  }
+  return { content: blocks.filter(Boolean), stop_reason: stopReason };
+}
+
+// What to do when a response stopped at max_tokens. On the CLI backend the
+// caller's max_tokens is not sent (see callClaude), so raising it would not
+// help; the model's own output limit was reached instead.
+export function truncationMessage({ maxTokens, tokensVar, effortVar }) {
+  return LLM_BACKEND === 'cli'
+    ? `Claude response truncated (stop_reason=max_tokens): the model's own output limit was reached. ${tokensVar} does not apply on LLM_BACKEND=cli; a lower ${effortVar} means less thinking.`
+    : `Claude response truncated (stop_reason=max_tokens at ${maxTokens}). Raise the ${tokensVar} repo variable.`;
+}
+
 async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    signal: AbortSignal.timeout(timeoutMs),
-    body: JSON.stringify(buildApiBody({ prompt, maxTokens, model, effort })),
-  });
+  const started = Date.now();
+  // "fetch failed" alone hides the cause (a timeout, a reset, DNS).
+  const failed = (err) => {
+    const cause = err?.cause?.code ?? err?.cause?.message;
+    return new Error(
+      `Claude API request failed after ${Math.round((Date.now() - started) / 1000)}s (timeout ${timeoutMs}ms): ${err?.message ?? err}${cause ? ` (${cause})` : ''}`
+    );
+  };
+  let res;
+  try {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(buildApiBody({ prompt, maxTokens, model, effort })),
+    });
+  } catch (err) {
+    throw failed(err);
+  }
 
   if (!res.ok) {
     let detail = '';
@@ -125,7 +201,18 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
     throw new Error(`Claude API error (${res.status}): ${detail}`);
   }
 
-  const data = await res.json();
+  let data;
+  try {
+    // A proxy or test double may answer with plain JSON instead of a stream.
+    data = (res.headers.get('content-type') ?? '').includes('text/event-stream')
+      ? await readMessageStream(res.body)
+      : await res.json();
+  } catch (err) {
+    if (/^Claude API stream error/.test(err?.message)) {
+      throw err;
+    }
+    throw failed(err);
+  }
   // Models that think return thinking block(s) before the text, so take the
   // text blocks rather than assuming content[0] is text.
   const texts = Array.isArray(data?.content)
