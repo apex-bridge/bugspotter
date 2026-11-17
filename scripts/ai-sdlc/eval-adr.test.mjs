@@ -575,3 +575,65 @@ test('file-refs-exist with no references passes but says so', () => {
   assert.equal(c.pass, true);
   assert.equal(c.detail, 'no file:line references (nothing verified)');
 });
+
+describe('run-adr-eval.mjs helpers', () => {
+  test('removeWorktree logs a failed remove, prunes, and does not throw', async () => {
+    const { removeWorktree } = await import('./run-adr-eval.mjs');
+    const calls = [];
+    const run = (args) => {
+      calls.push(args.join(' '));
+      if (args[1] === 'remove') {
+        throw new Error('locked');
+      }
+      return '';
+    };
+    const errors = [];
+    const origError = console.error;
+    console.error = (m) => errors.push(m);
+    try {
+      assert.doesNotThrow(() => removeWorktree('/tmp/wt', run));
+    } finally {
+      console.error = origError;
+    }
+    assert.deepEqual(calls, ['worktree remove --force /tmp/wt', 'worktree prune']);
+    assert.match(errors.join('\n'), /locked/);
+  });
+
+  test('generatorEnv always sets SPEC_CONTENT, so an inherited one never leaks in', async () => {
+    const { generatorEnv } = await import('./run-adr-eval.mjs');
+    const env = generatorEnv({ issue: 265 }, { title: 'T', body: null }, '', {
+      SPEC_CONTENT: 'stale spec',
+      PATH: '/bin',
+    });
+    assert.equal(env.SPEC_CONTENT, '');
+    assert.equal(env.PATH, '/bin');
+    assert.equal(env.ISSUE_NUMBER, '265');
+    assert.equal(env.ISSUE_BODY, '');
+  });
+
+  test('readSpec throws on a missing spec path instead of running without one', async () => {
+    const { readSpec } = await import('./run-adr-eval.mjs');
+    const dir = repoWith({ 'docs/specs/a.md': 'spec text' });
+    assert.equal(readSpec(dir, { spec: 'docs/specs/a.md' }), 'spec text');
+    assert.equal(readSpec(dir, { spec: null }), '');
+    assert.throws(() => readSpec(dir, { id: 'x', spec: 'docs/specs/missing.md' }), /missing\.md/);
+  });
+
+  test('summary leaves Wall empty for case errors; allFailed when nothing was scored', async () => {
+    const { summary, allFailed } = await import('./run-adr-eval.mjs');
+    const error = { case: 'x', run: '-', score: 'case error', failed: ['case-setup'] };
+    assert.ok(!summary([error]).includes('undefined'));
+    const scored = {
+      case: 'y',
+      run: 1,
+      wallS: 10,
+      score: '3/4',
+      passed: 3,
+      total: 4,
+      failed: ['a'],
+    };
+    const noAdr = { case: 'y', run: 2, elapsedS: 5, score: 'no ADR', failed: ['generation'] };
+    assert.equal(allFailed([error, noAdr]), true);
+    assert.equal(allFailed([error, scored]), false);
+  });
+});

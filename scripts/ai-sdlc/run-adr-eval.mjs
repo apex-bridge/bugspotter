@@ -103,6 +103,51 @@ export function metrics(log) {
   };
 }
 
+// The worktree is removed in runCase's finally; a throw there would replace
+// `return results` and drop a case's paid runs, so log it and prune instead.
+export function removeWorktree(work, run = git) {
+  try {
+    run(['worktree', 'remove', '--force', work]);
+  } catch (err) {
+    console.error(`worktree remove failed for ${work}: ${err.message}; pruning`);
+    try {
+      run(['worktree', 'prune']);
+    } catch (pruneErr) {
+      console.error(`worktree prune failed: ${pruneErr.message}`);
+    }
+  }
+}
+
+// A case with a spec path that does not exist at its commit is a broken
+// case, not an issue-only one: running without the spec would score a
+// different task.
+export function readSpec(work, def) {
+  if (!def.spec) {
+    return '';
+  }
+  const path = join(work, def.spec);
+  if (!existsSync(path)) {
+    throw new Error(`${def.id}: spec ${def.spec} not found at ${def.repoCommit}`);
+  }
+  return readFileSync(path, 'utf8');
+}
+
+// SPEC_CONTENT is always set (empty for an issue-only case), so one exported
+// in the caller's shell cannot leak into the #265 case.
+export function generatorEnv(def, issue, spec, base = process.env) {
+  return {
+    ...base,
+    ISSUE_NUMBER: String(def.issue),
+    ISSUE_TITLE: issue.title,
+    ISSUE_BODY: issue.body ?? '',
+    SPEC_CONTENT: spec,
+    GITHUB_OUTPUT: '',
+  };
+}
+
+// True when no run of any case produced a scored ADR.
+export const allFailed = (rows) => rows.every((r) => typeof r.passed !== 'number');
+
 function runCase(def, runs, outDir) {
   const work = mkdtempSync(join(tmpdir(), `adr-eval-${def.id}-`));
   rmSync(work, { recursive: true, force: true });
@@ -123,10 +168,7 @@ function runCase(def, runs, outDir) {
         }
       )
     );
-    const spec =
-      def.spec && existsSync(join(work, def.spec))
-        ? readFileSync(join(work, def.spec), 'utf8')
-        : '';
+    const spec = readSpec(work, def);
     const files = git(['ls-files'], work).split('\n');
     for (let i = 1; i <= runs; i++) {
       const started = Date.now();
@@ -135,14 +177,7 @@ function runCase(def, runs, outDir) {
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
         timeout: 15 * 60_000,
-        env: {
-          ...process.env,
-          ISSUE_NUMBER: String(def.issue),
-          ISSUE_TITLE: issue.title,
-          ISSUE_BODY: issue.body ?? '',
-          ...(spec ? { SPEC_CONTENT: spec } : {}),
-          GITHUB_OUTPUT: '',
-        },
+        env: generatorEnv(def, issue, spec),
       });
       const log = `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
       const tag = `${def.id}-${i}`;
@@ -187,18 +222,18 @@ function runCase(def, runs, outDir) {
       error: err.message,
     });
   } finally {
-    git(['worktree', 'remove', '--force', work]);
+    removeWorktree(work);
   }
   return results;
 }
 
-function summary(rows) {
+export function summary(rows) {
   const lines = [
     '| Case | Run | Wall (s) | Thinking | Cost ($) | Score | Failed checks |',
     '| ---- | --- | -------- | -------- | -------- | ----- | ------------- |',
     ...rows.map(
       (r) =>
-        `| ${r.case} | ${r.run} | ${r.wallS ?? r.elapsedS} | ${r.thinking ?? ''} | ${r.costUsd ?? ''} | ${r.score} | ${r.failed.join(', ')} |`
+        `| ${r.case} | ${r.run} | ${r.wallS ?? r.elapsedS ?? ''} | ${r.thinking ?? ''} | ${r.costUsd ?? ''} | ${r.score} | ${r.failed.join(', ')} |`
     ),
   ];
   return `${lines.join('\n')}\n`;
@@ -225,5 +260,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   });
   writeFileSync(join(args.out, 'results.json'), JSON.stringify(rows, null, 2));
   writeFileSync(join(args.out, 'results.md'), summary(rows));
+  if (allFailed(rows)) {
+    console.error('no run of any case produced a scored ADR');
+    process.exitCode = 1;
+  }
   console.log(`\n${summary(rows)}`);
 }
