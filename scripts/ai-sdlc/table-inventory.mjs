@@ -9,10 +9,14 @@
 //
 //   node scripts/ai-sdlc/table-inventory.mjs [migrationsDir]
 //
-// Limits: a textual parser, not SQL. It reads CREATE TABLE and ALTER TABLE ...
-// ADD; it does not track DROP TABLE, RENAME, DROP COLUMN, or "--" / "/*" inside
-// string literals. The current migrations use none of these in a way that
-// changes the result; a reviewer checks the generated appendix either way.
+// Limits: a textual parser, not SQL. It reads CREATE TABLE, ALTER TABLE ...
+// ADD and ALTER TABLE ... DROP CONSTRAINT (a foreign key, by its explicit name
+// or Postgres's default <table>_<column>_fkey: cut to 63 bytes, with a number
+// after "fkey" when the name is taken). Only foreign key names count as taken,
+// in the order they are written. It does not track DROP TABLE,
+// RENAME, DROP COLUMN, composite foreign keys, or "--" / "/*" inside string
+// literals; the current migrations use none of these in a way that changes the
+// result. A reviewer checks the generated appendix either way.
 //
 // Zero-dependency. Prints a Markdown table.
 
@@ -95,14 +99,65 @@ function parseItem(item) {
   const part = item.trim();
   const fk = part.match(TABLE_FK);
   if (TABLE_CONSTRAINT.test(part)) {
-    return fk ? { fk: { column: bareName(fk[1]), table: bareName(fk[2]) } } : null;
+    const named = part.match(/^CONSTRAINT\s+("[^"]+"|\w+)/i);
+    return fk
+      ? {
+          fk: { column: bareName(fk[1]), table: bareName(fk[2]) },
+          constraint: named ? bareName(named[1]) : null,
+        }
+      : null;
   }
   const name = part.match(/^("[^"]+"|\w+)/)?.[1];
   if (!name) {
     return null;
   }
   const ref = part.match(REFERENCES);
-  return { column: bareName(name), references: ref ? bareName(ref[1]) : null };
+  // "rule_id UUID CONSTRAINT child_rule REFERENCES rules(id)": a named
+  // column-level foreign key, which a later DROP CONSTRAINT child_rule removes.
+  const named = ref && part.match(/\bCONSTRAINT\s+("[^"]+"|\w+)\s+REFERENCES\b/i);
+  return {
+    column: bareName(name),
+    references: ref ? bareName(ref[1]) : null,
+    constraint: named ? bareName(named[1]) : null,
+  };
+}
+
+// Postgres's makeObjectName (src/backend/commands/indexcmds.c):
+// <name1>_<name2>_<label> in NAMEDATALEN - 1 = 63 bytes, trimming the longer
+// name first, cut at a character boundary.
+function makeObjectName(name1, name2, label) {
+  let n1 = Buffer.byteLength(name1);
+  let n2 = Buffer.byteLength(name2);
+  const available = 63 - (label.length + 2);
+  while (n1 + n2 > available) {
+    if (n1 > n2) {
+      n1--;
+    } else {
+      n2--;
+    }
+  }
+  const clip = (name, bytes) => {
+    let out = '';
+    for (const ch of name) {
+      if (Buffer.byteLength(out + ch) > bytes) {
+        break;
+      }
+      out += ch;
+    }
+    return out;
+  };
+  return `${clip(name1, n1)}_${clip(name2, n2)}_${label}`;
+}
+
+// ChooseConstraintName (src/backend/catalog/pg_constraint.c): "fkey", then
+// "fkey1", "fkey2", ... until the name is not taken.
+function defaultFkName(table, column, taken) {
+  for (let pass = 0; ; pass++) {
+    const name = makeObjectName(table, column, pass ? `fkey${pass}` : 'fkey');
+    if (!taken(name)) {
+      return name;
+    }
+  }
 }
 
 function directScope(columns) {
@@ -114,9 +169,6 @@ function directScope(columns) {
   }
   if (columns.includes('project_id')) {
     return { kind: 'project-scoped', via: 'projects' };
-  }
-  if (columns.includes('bug_report_id')) {
-    return { kind: 'project-scoped', via: 'bug_reports' };
   }
   if (columns.includes('allowed_projects')) {
     return { kind: 'project-scoped', via: 'allowed_projects' };
@@ -142,19 +194,30 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
     `\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?(${IDENT})\\s+([^;]*)`,
     'gi'
   );
-  const record = (row, item) => {
+  // `since`: the row's refs from earlier statements do not take a name when a
+  // CREATE TABLE re-reads the table (IF NOT EXISTS, or an untracked DROP TABLE).
+  const record = (row, item, since = 0) => {
     if (!item) {
       return;
     }
+    const taken = (name) =>
+      row.refs.slice(since).some((r) => r.constraint === name) ||
+      [...tables.values()].some((t) => t !== row && t.refs.some((r) => r.constraint === name));
+    // The constraint name lets a later DROP CONSTRAINT remove the reference.
+    const fkName = (column) => item.constraint ?? defaultFkName(row.table, column, taken);
     if (item.fk) {
-      row.refs.push(item.fk);
+      row.refs.push({ ...item.fk, constraint: fkName(item.fk.column) });
       return;
     }
     if (SCOPING_COLUMNS.includes(item.column)) {
       row.columns.add(item.column);
     }
     if (item.references) {
-      row.refs.push({ column: item.column, table: item.references });
+      row.refs.push({
+        column: item.column,
+        table: item.references,
+        constraint: fkName(item.column),
+      });
     }
   };
 
@@ -164,8 +227,9 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
       const name = bareName(m[1]);
       const open = m.index + m[0].length - 1;
       const row = tables.get(name) ?? { table: name, columns: new Set(), refs: [], file };
+      const since = row.refs.length;
       for (const item of splitTopLevel(sql.slice(open + 1, closingParen(sql, open)))) {
-        record(row, parseItem(item));
+        record(row, parseItem(item), since);
       }
       tables.set(name, row);
     }
@@ -175,6 +239,12 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
         continue;
       }
       for (const item of splitTopLevel(m[2])) {
+        const drop = item.trim().match(/^DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?("[^"]+"|\w+)/i);
+        if (drop) {
+          const name = bareName(drop[1]);
+          row.refs = row.refs.filter((r) => r.constraint !== name);
+          continue;
+        }
         const add = item.trim().match(/^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?([\s\S]*)$/i);
         if (add) {
           record(row, parseItem(add[1]));
@@ -196,7 +266,8 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
       ...r,
       columns,
       refs,
-      scope: directScope(columns.filter((c) => c !== 'bug_report_id')),
+      // bug_report_id is resolved through the bug_reports foreign key below.
+      scope: directScope(columns),
     };
   });
   // Inherit scope through foreign keys until nothing changes (organizations and
@@ -229,11 +300,6 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
 
 export const scopeLabel = ({ kind, via }) => (via ? `${kind} (via ${via})` : kind);
 
-// Label from a table's own columns only (no foreign keys). The inventory itself
-// resolves bug_report_id through bug_reports, so it may say org-scoped here.
-export const suggestedScope = (columns) =>
-  scopeLabel(directScope(columns) ?? { kind: 'global', via: '' });
-
 export function inventoryMarkdown(rows) {
   return [
     '| Table | Suggested scope | Scoping columns | Created in |',
@@ -247,28 +313,55 @@ export function inventoryMarkdown(rows) {
 
 // --- ADR appendix: written by code, so the model only argues the global tables ---
 
-// One reason bullet: "- t: why", "- `t`: why", "- **t**: why", "- **t:** why",
-// "- t (note): why", "1. t: why", "- application.t: why" (schema dropped).
+// One reason bullet, indented up to 3 spaces: "- t: why", "- `t`: why",
+// "- **t**: why", "- **t:** why", "- t (note): why", "1. t: why",
+// "- application.t: why" (schema dropped).
 const REASON_BULLET =
-  /^\s*(?:[-*+]|\d+[.)])\s+(?:\*\*|__)?`?(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)`?(?:\*\*|__)?\s*(?:\([^)]*\)\s*)?(?::|—|–|-)(?:\*\*|__)?\s*(.+?)\s*$/;
+  /^( {0,3})(?:[-*+]|\d+[.)])\s+(?:\*\*|__)?`?(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)`?(?:\*\*|__)?\s*(?:\([^)]*\)\s*)?(?::|—|–|-)(?:\*\*|__)?\s*(.+?)\s*$/;
+
+// An ATX heading (up to 3 leading spaces, optional closing #s) as
+// [level, normalised title]: "## **Global tables:** ##" -> [2, "global tables"].
+function atxHeading(line) {
+  const h = line.match(/^ {0,3}(#{2,6})\s+(.*?)(?:\s+#+)?\s*$/);
+  if (!h) {
+    return null;
+  }
+  const title = h[2].replace(/[*_`]/g, '').trim().replace(/:$/, '').trim().toLowerCase();
+  return [h[1].length, title];
+}
+
+// Only an inventory heading ("Table inventory", "Appendix B: Table inventory"),
+// not a section that mentions one.
+const INVENTORY_TITLE = /^(?:appendix(?:\s+\w+)?\s*[:.\-–—]\s*)?table inventory(?:\s*\(.*\))?$/;
 
 // Pulls the model's "## Global tables" list ("- table: reason") out of the ADR,
 // and drops a table-inventory section the model wrote anyway (the appendix
 // replaces it): only up to the next heading of the same or a higher level.
-// Headings inside code fences are content. In "Global tables" only the reason
+// Headings inside code fences are content. In "Global tables" only reason
 // bullets (and their indented continuation lines) are taken out; any other
-// line stays, under the heading, so nothing the model wrote is lost.
-export function extractGlobalReasons(adr) {
+// line stays, under the heading, so nothing the model wrote is lost. With
+// `tables`, a bullet is a reason only when it names one of them, so a
+// "- Note: ..." bullet stays in the ADR.
+export function extractGlobalReasons(adr, { tables } = {}) {
+  const known = tables ? new Set([...tables].map((t) => t.toLowerCase())) : null;
   const reasons = new Map();
   const kept = [];
-  let mode = null;
+  let mode = null; // null | 'reasons' | 'drop'
   let dropLevel = 0;
-  let heading = '';
+  let reasonsLevel = 0;
+  let outerDrop = 0; // a "Global tables" nested in a dropped inventory section
+  let resumeLevel = 0; // an inventory nested in "Global tables": its level
+  let heading = null; // the "Global tables" heading, until it is kept
   let leftover = [];
   let lastReason = null;
+  // Indent of the section's first reason bullet: the list's own level. A
+  // bullet indented deeper is a sub-point of the one above it.
+  let baseIndent = null;
   const endReasons = () => {
-    if (leftover.some((l) => l.trim())) {
-      kept.push(heading, ...leftover);
+    // Inside a dropped inventory section the leftovers go with it.
+    if (!outerDrop && leftover.some((l) => l.trim())) {
+      kept.push(...(heading === null ? [] : [heading]), ...leftover);
+      heading = null;
     }
     leftover = [];
     lastReason = null;
@@ -276,43 +369,69 @@ export function extractGlobalReasons(adr) {
   const inCode = fenceTracker();
   for (const line of adr.split(/\r?\n/)) {
     const code = inCode(line);
-    const h = !code && line.match(/^(#{2,6})\s+(.*)$/);
+    const h = !code && atxHeading(line);
     if (h) {
-      const level = h[1].length;
-      const title = h[2].trim().toLowerCase();
-      if (mode === 'reasons' && level <= dropLevel) {
+      const [level, title] = h;
+      if (mode === 'reasons' && level <= reasonsLevel) {
         endReasons();
+        mode = outerDrop && level > outerDrop ? 'drop' : null;
+        dropLevel = outerDrop;
+        outerDrop = 0;
+      }
+      if (mode === 'drop' && level <= dropLevel) {
+        // A sibling of an inventory nested in "Global tables" is back in
+        // Global tables: "### Platform tables" after "### Table inventory".
+        mode = resumeLevel && level > resumeLevel ? 'reasons' : null;
+        reasonsLevel = resumeLevel || reasonsLevel;
+        resumeLevel = 0;
       }
       if (title === 'global tables') {
+        // A Global tables nested in another one keeps the outer drop boundary.
+        outerDrop = mode === 'drop' ? dropLevel : mode === 'reasons' ? outerDrop : 0;
         mode = 'reasons';
-        dropLevel = level;
+        reasonsLevel = level;
+        baseIndent = null;
         heading = line;
         continue;
       }
-      // Only an inventory heading ("Table inventory", "Appendix B: Table
-      // inventory"), not a section that mentions one.
-      if (/^(?:appendix(?:\s+\w+)?\s*[:.\-–—]\s*)?table inventory(?:\s*\(.*\))?$/.test(title)) {
+      if (INVENTORY_TITLE.test(title)) {
+        // Inside a section being dropped already (an inventory, or a Global
+        // tables nested in one), the outer boundary stays: "### Table
+        // inventory" under "## Appendix: Table inventory" must not let a
+        // sibling "### Scoped tables" end the drop.
+        const outer = mode === 'drop' ? dropLevel : mode === 'reasons' ? outerDrop : 0;
+        if (mode === 'reasons') {
+          endReasons();
+          resumeLevel = outerDrop ? 0 : reasonsLevel;
+        } else if (mode !== 'drop') {
+          resumeLevel = 0;
+        }
         mode = 'drop';
-        dropLevel = level;
+        dropLevel = outer || level;
+        outerDrop = 0;
         continue;
-      }
-      if (mode && level <= dropLevel) {
-        mode = null;
       }
     }
     if (mode === 'reasons') {
-      // Bullets inside a code fence are examples, not reasons.
+      // Bullets inside a code fence are examples, not reasons; a bullet
+      // indented deeper than the list's first reason is a sub-point, not a table.
       const m = !code && line.match(REASON_BULLET);
-      if (m) {
+      if (
+        m &&
+        (!known || known.has(m[2].toLowerCase())) &&
+        m[1].length <= (baseIndent ?? m[1].length)
+      ) {
+        baseIndent ??= m[1].length;
         // "- table: org-scoped: reason" overrides the computed global scope.
-        const o = m[2].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);
+        const o = m[3].match(/^(org-scoped|project-scoped)\s*(?::|—|–|-)\s*(.+)$/i);
         lastReason = o
           ? { kind: o[1].toLowerCase(), reason: o[2] }
-          : { kind: 'global', reason: m[2] };
-        reasons.set(m[1].toLowerCase(), lastReason);
+          : { kind: 'global', reason: m[3] };
+        reasons.set(m[2].toLowerCase(), lastReason);
       } else if (
         lastReason &&
         !code &&
+        !h && // an indented "  ### Platform" is a heading, kept as section content
         /^\s+\S/.test(line) &&
         !/^\s*(?:[-*+]|\d+[.)])\s/.test(line)
       ) {

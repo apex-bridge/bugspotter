@@ -155,13 +155,19 @@ const MAX_SPEC_CHARS = SETTINGS.maxSpecChars;
 // Select the ADR's Changes subsection by the path the spec declares, even when
 // the output is renumbered because that number is taken.
 const specAdrPath = specAdr ? `docs/adr/${specAdr[1]}-${specAdr[2]}.md` : adrFile;
-const specInput = specText
-  ? (specForAdr(specText, specAdrPath, { existingAdrs: existing }) ?? specText)
-  : '';
-const specForPrompt =
-  specInput.length > MAX_SPEC_CHARS
-    ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
-    : specInput;
+const specSections = specText
+  ? specForAdr(specText, specAdrPath, { existingAdrs: existing })
+  : null;
+const specInput = specSections ?? specText;
+// The prompt says which one it got, so the model is not told sections are left
+// out when the full spec is sent, nor that it got the full spec when it was cut.
+const specCut = specInput.length > MAX_SPEC_CHARS;
+const specLabel = specSections
+  ? "sections relevant to the ADR; its tests, verification and other files' changes are left out"
+  : `the full spec${specCut ? `, cut to ${MAX_SPEC_CHARS} characters` : ''}: its ADR-relevant sections could not be picked out`;
+const specForPrompt = specCut
+  ? `${specInput.slice(0, MAX_SPEC_CHARS)}\n\n[spec truncated at ${MAX_SPEC_CHARS} characters]`
+  : specInput;
 
 // The agent has no tools, so tenant-isolation issues get the computed table list.
 // Explicit signals only: words like "table" or "schema" appear in most specs.
@@ -200,7 +206,7 @@ ${adrIndex ? `\nARCHITECTURE INDEX (docs/adr/README.md):\n${adrIndex}\n` : ''}
 ISSUE #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
 ${ISSUE_BODY?.trim() || '(no description)'}
-${specForPrompt ? `\nLINKED SPEC (sections relevant to the ADR; its tests, verification and other files' changes are left out):\n${specForPrompt}\n` : ''}${inventory ? `\nTABLE INVENTORY (computed from the migrations):\n${inventory}\n` : ''}
+${specForPrompt ? `\nLINKED SPEC (${specLabel}):\n${specForPrompt}\n` : ''}${inventory ? `\nTABLE INVENTORY (computed from the migrations):\n${inventory}\n` : ''}
 Rules:
 ${rules.map((r) => `- ${r}`).join('\n')}`;
 
@@ -337,7 +343,9 @@ if (narrationFinding) {
 }
 
 if (inventoryRows.length) {
-  const { text, reasons } = extractGlobalReasons(adrContent);
+  const { text, reasons } = extractGlobalReasons(adrContent, {
+    tables: inventoryRows.filter((r) => r.scope.kind === 'global').map((r) => r.table),
+  });
   const { markdown, missing, overridden } = inventoryAppendix(inventoryRows, reasons);
   if (overridden.length) {
     console.log(`Scope overridden by the ADR author: ${overridden.join(', ')}`);

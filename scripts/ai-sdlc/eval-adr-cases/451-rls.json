@@ -1,0 +1,134 @@
+{
+  "id": "451-rls",
+  "issue": 451,
+  "repoCommit": "b1dad69",
+  "spec": "docs/specs/0451-rls-slice-1-adr-spec-for-postgres-row-le.md",
+  "reference": null,
+  "derivedFrom": "Constraints and acceptance criteria of docs/specs/0451-rls-slice-1-adr-spec-for-postgres-row-le.md (no ratified ADR yet). Repo state b1dad69: spec merged (#452), no ADR yet.",
+  "requireDiagram": true,
+  "maxMainLines": 150,
+  "required": [
+    {
+      "id": "runtime-role-nobypassrls",
+      "any": ["NOBYPASSRLS"]
+    },
+    {
+      "id": "app-role-named",
+      "any": ["bugspotter_app"]
+    },
+    {
+      "id": "transaction-local-context",
+      "any": ["transaction-local", "transaction-scoped", "is_local", "set_config\\([^)]*true\\)"]
+    },
+    {
+      "id": "pgbouncer",
+      "any": ["PgBouncer", "6432"]
+    },
+    {
+      "id": "databaseclient-wrapper",
+      "any": ["DatabaseClient", "client\\.ts"]
+    },
+    {
+      "id": "worker-payload-context",
+      "any": [
+        "\\b(job|worker|BullMQ)('s)?( own)?[- ]payloads?\\b",
+        "\\bfrom (the |its |their )?(own )?payloads?\\b"
+      ]
+    },
+    {
+      "id": "bypass-retention",
+      "any": ["retention"]
+    },
+    {
+      "id": "bypass-platform-admin",
+      "any": ["requirePlatformAdmin", "platform[- ]admin"]
+    },
+    {
+      "id": "bypass-audited",
+      "any": ["\\baudit(s|ed|ing)?\\b"]
+    },
+    {
+      "id": "with-check",
+      "any": ["WITH CHECK"]
+    },
+    {
+      "id": "force-rls",
+      "any": ["FORCE ROW LEVEL SECURITY", "FORCE RLS"]
+    },
+    {
+      "id": "fail-closed-malformed",
+      "any": [
+        "(?<!\\b(?:not|never|don't|doesn't|won't)\\s+)\\b(fail(s|ing)?[- ]closed|den(y|ies|ied)|reject(s|ed)?|zero rows|no rows|errors?)\\b(?:(?!\\b(?:not|never)\\b)[^\\n]){0,80}\\bmalformed\\b",
+        "\\bmalformed\\b(?:(?!\\b(?:not|never)\\b)[^\\n]){0,80}\\b(fail(s|ing)?[- ]closed|den(y|ies|ied)|reject(s|ed)?|zero rows|no rows|errors?)"
+      ],
+      "prohibition": true,
+      "note": "malformed context named together with a fail-closed outcome (deny, reject, zero rows)"
+    },
+    {
+      "id": "selfhosted-backfill",
+      "any": ["backfill"]
+    },
+    {
+      "id": "selfhosted-null-org",
+      "any": [
+        "organization_id IS NULL",
+        "NULL organization_id",
+        "NULL `organization_id`",
+        "null organization"
+      ]
+    },
+    {
+      "id": "coverage-guard-slice-7",
+      "any": ["relforcerowsecurity", "coverage guard"]
+    },
+    {
+      "id": "per-slice-rollback",
+      "any": [
+        "DISABLE ROW LEVEL SECURITY",
+        "\\bper-slice roll ?back\\b",
+        "\\broll(s|ed)?[ -]?back (a|one|each|any|that|the) slice\\b",
+        "\\bslices?\\b[^\\n]{0,60}\\b(roll(ed)?[ -]?back|rollback-able|revert(ed|ible)?|reversible)\\b",
+        "\\b(independently )?(rollback-able|revert(ed|ible)|reversible)\\b[^\\n]{0,30}\\bslice"
+      ],
+      "note": "each slice can be rolled back on its own (not COMMIT/ROLLBACK of a transaction)"
+    }
+  ],
+  "forbidden": [
+    {
+      "id": "skip-rls-selfhosted",
+      "any": [
+        "skip(?:s|ping)? RLS (?:entirely )?(?:in|for) self-?hosted",
+        "self-?hosted(?: mode)? (?:skips|disables|turns off|bypasses) RLS",
+        "RLS (?:is )?(?:disabled|off|skipped) (?:in|for) self-?hosted"
+      ]
+    },
+    {
+      "id": "blanket-worker-bypass",
+      "any": [
+        "(all|every) (BullMQ )?(jobs|workers?) (run|use|connect)s? (as|through|via|with) (the )?(audited )?bypass"
+      ]
+    },
+    {
+      "id": "seeds-one-org",
+      "any": ["seeds? (exactly )?one organi[sz]ation"]
+    },
+    {
+      "id": "migrations-need-no-bypass",
+      "any": ["migrations? (do(es)? not|don't) need (the|a|any) bypass"]
+    }
+  ],
+  "testingStrategy": [
+    "bypass-proof",
+    "per-table CRUD matrix",
+    "fail-closed",
+    "pooled-connection leak",
+    "concurrency",
+    "role assertions",
+    "bypass paths",
+    "full-suite regression",
+    "self-hosted mode",
+    "performance budget",
+    "migration up/down"
+  ],
+  "inventory": true
+}

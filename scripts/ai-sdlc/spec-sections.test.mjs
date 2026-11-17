@@ -96,6 +96,8 @@ test('a fence line with text after the marker does not close the fence', () => {
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     `### \`${ADR}\``,
     '```md',
@@ -115,6 +117,8 @@ test('two ADR subsections under Changes: the exact path wins; without one the ch
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     '### `docs/adr/0001-security.md`',
     'OUTLINE_SECURITY',
@@ -141,6 +145,8 @@ test('"ADR: pending" with an edit to an existing ADR: that ADR is not taken as t
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     '### `docs/adr/0012-old.md` (mark Superseded)',
     'SUPERSEDE_NOTE',
@@ -153,6 +159,8 @@ test('two subsections for the same ADR file share one Changes heading', () => {
   const spec = [
     '## Problem',
     'P',
+    '## Constraints',
+    'C',
     '## Changes',
     '### `docs/adr/0045-x.md`',
     'OUTLINE',
@@ -165,8 +173,110 @@ test('two subsections for the same ADR file share one Changes heading', () => {
 });
 
 test('a prose line starting with ```code``` does not open a fence', () => {
-  const spec = ['## Problem', '```fetch()``` returns stale data', '## Tests', 'TEST_DETAILS'].join(
-    '\n'
-  );
+  const spec = [
+    '## Problem',
+    '```fetch()``` returns stale data',
+    '## Constraints',
+    'C',
+    '## Tests',
+    'TEST_DETAILS',
+  ].join('\n');
   assert.ok(!specForAdr(spec, 'docs/adr/0001-x.md').includes('TEST_DETAILS'));
+});
+
+test('an older spec with "Problem / motivation" and "Scope and constraints" keeps both (0226)', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const spec = readFileSync(
+    join(here, '..', '..', 'docs', 'specs', '0226-intelligence-wire-per-org-similarity-thr.md'),
+    'utf8'
+  );
+  const out = specForAdr(spec, 'docs/adr/0099-x.md');
+  assert.match(out, /^## Problem \/ motivation$/m);
+  assert.match(out, /^## Scope and constraints$/m);
+  assert.match(out, /^## Acceptance criteria$/m);
+  assert.doesNotMatch(out, /^## How \(runnable steps\)$/m);
+});
+
+test('a spec missing Problem or Constraints gets the full-spec fallback', () => {
+  const noConstraints = ['## Problem', 'P', '## Acceptance criteria', 'AC', '## Tests', 'T'];
+  assert.equal(specForAdr(noConstraints.join('\n'), 'docs/adr/0001-x.md'), null);
+  const noProblem = ['## Constraints', 'C', '## Acceptance criteria', 'AC'];
+  assert.equal(specForAdr(noProblem.join('\n'), 'docs/adr/0001-x.md'), null);
+});
+
+test('only Problem and Constraints headings count, not headings that merely mention them', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Constraints',
+    'C',
+    '## Tests (one per constraint)',
+    'TESTS_PER_CONSTRAINT',
+    '### Test case A',
+    'TEST_CASE_A',
+    '## Verification of constraints',
+    'VERIFY_CONSTRAINTS',
+    '## Problems found by the verifier',
+    'VERIFIER_PROBLEMS',
+  ].join('\n');
+  const out = specForAdr(spec, 'docs/adr/0001-x.md');
+  for (const drop of [
+    'TESTS_PER_CONSTRAINT',
+    'TEST_CASE_A',
+    'VERIFY_CONSTRAINTS',
+    'VERIFIER_PROBLEMS',
+  ]) {
+    assert.ok(!out.includes(drop), `should drop ${drop}`);
+  }
+  const nonConstraints = ['## Problem', 'P', '## Non-constraints', 'N', '## Tests', 'T'];
+  assert.equal(
+    specForAdr(nonConstraints.join('\n'), 'docs/adr/0001-x.md'),
+    null,
+    '"Non-constraints" is not a Constraints section'
+  );
+  const problemsOnly = ['## Problems found by the verifier', 'X', '## Constraints', 'C'];
+  assert.equal(
+    specForAdr(problemsOnly.join('\n'), 'docs/adr/0001-x.md'),
+    null,
+    '"Problems found ..." is not a Problem section'
+  );
+});
+
+test('a Changes heading with a suffix still yields the ADR outline', () => {
+  for (const heading of ['## Changes (per file)', '## Changes:']) {
+    const spec = [
+      '## Problem',
+      'P',
+      '## Constraints',
+      'C',
+      heading,
+      `### \`${ADR}\``,
+      'OUTLINE_UNDER_VARIANT',
+      '### `src/a.ts`',
+      'OTHER_FILE',
+      '## Tests',
+      'T',
+    ].join('\n');
+    const out = specForAdr(spec, ADR);
+    assert.ok(out.includes('OUTLINE_UNDER_VARIANT'), `outline kept under "${heading}"`);
+    assert.ok(!out.includes('OTHER_FILE'), `other files dropped under "${heading}"`);
+  }
+});
+
+test('the ADR file named under Changes without its own subsection gets the full-spec fallback', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Constraints',
+    'C',
+    '## Changes',
+    `- \`${ADR}\`: new ADR with sections Context, Decision, Consequences`,
+    '### `src/a.ts`',
+    'A',
+  ].join('\n');
+  assert.equal(specForAdr(spec, ADR), null);
+  // An existing ADR mentioned in a code comment under Changes (0352 cites
+  // docs/adr/0044 that way) has no outline to lose: the selection stands.
+  const existing = spec.replace(`- \`${ADR}\`: new ADR`, `-- see ${ADR} for the`);
+  assert.ok(specForAdr(existing, ADR, { existingAdrs: ['0001-fixture.md'] }).includes('P'));
 });
