@@ -203,3 +203,41 @@ test('a spec missing Problem or Constraints gets the full-spec fallback', () => 
   const noProblem = ['## Constraints', 'C', '## Acceptance criteria', 'AC'];
   assert.equal(specForAdr(noProblem.join('\n'), 'docs/adr/0001-x.md'), null);
 });
+
+test('only Problem and Constraints headings count, not headings that merely mention them', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Constraints',
+    'C',
+    '## Tests (one per constraint)',
+    'TESTS_PER_CONSTRAINT',
+    '### Test case A',
+    'TEST_CASE_A',
+    '## Verification of constraints',
+    'VERIFY_CONSTRAINTS',
+    '## Problems found by the verifier',
+    'VERIFIER_PROBLEMS',
+  ].join('\n');
+  const out = specForAdr(spec, 'docs/adr/0001-x.md');
+  for (const drop of [
+    'TESTS_PER_CONSTRAINT',
+    'TEST_CASE_A',
+    'VERIFY_CONSTRAINTS',
+    'VERIFIER_PROBLEMS',
+  ]) {
+    assert.ok(!out.includes(drop), `should drop ${drop}`);
+  }
+  const nonConstraints = ['## Problem', 'P', '## Non-constraints', 'N', '## Tests', 'T'];
+  assert.equal(
+    specForAdr(nonConstraints.join('\n'), 'docs/adr/0001-x.md'),
+    null,
+    '"Non-constraints" is not a Constraints section'
+  );
+  const problemsOnly = ['## Problems found by the verifier', 'X', '## Constraints', 'C'];
+  assert.equal(
+    specForAdr(problemsOnly.join('\n'), 'docs/adr/0001-x.md'),
+    null,
+    '"Problems found ..." is not a Problem section'
+  );
+});

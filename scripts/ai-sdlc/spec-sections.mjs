@@ -11,11 +11,12 @@
 
 import { fenceTracker } from './markdown-fence.mjs';
 
-// Section kinds kept, matched by keyword so "Problem / motivation" and "Scope
-// and constraints" count.
+// Section kinds kept, matched at the start of the heading so "Problem /
+// motivation" and "Scope and constraints" count but "Tests (one per
+// constraint)", "Non-constraints" and "Problems found ..." do not.
 const KEEP = [
-  ['problem', (t) => t.startsWith('problem')],
-  ['constraints', (t) => /\bconstraints?\b/.test(t)],
+  ['problem', (t) => /^problem\b/.test(t)],
+  ['constraints', (t) => /^(?:scope and )?constraints?\b/.test(t)],
   ['out of scope', (t) => t.startsWith('out of scope')],
   ['acceptance criteria', (t) => t.startsWith('acceptance criteria')],
 ];
