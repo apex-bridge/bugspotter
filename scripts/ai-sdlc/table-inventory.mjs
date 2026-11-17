@@ -110,7 +110,14 @@ function parseItem(item) {
     return null;
   }
   const ref = part.match(REFERENCES);
-  return { column: bareName(name), references: ref ? bareName(ref[1]) : null };
+  // "rule_id UUID CONSTRAINT child_rule REFERENCES rules(id)": a named
+  // column-level foreign key, which a later DROP CONSTRAINT child_rule removes.
+  const named = ref && part.match(/\bCONSTRAINT\s+("[^"]+"|\w+)\s+REFERENCES\b/i);
+  return {
+    column: bareName(name),
+    references: ref ? bareName(ref[1]) : null,
+    constraint: named ? bareName(named[1]) : null,
+  };
 }
 
 function directScope(columns) {
@@ -330,11 +337,16 @@ export function extractGlobalReasons(adr, { tables } = {}) {
         continue;
       }
       if (INVENTORY_TITLE.test(title)) {
+        // Inside a section being dropped already (an inventory, or a Global
+        // tables nested in one), the outer boundary stays: "### Table
+        // inventory" under "## Appendix: Table inventory" must not let a
+        // sibling "### Scoped tables" end the drop.
+        const outer = mode === 'drop' ? dropLevel : mode === 'reasons' ? outerDrop : 0;
         if (mode === 'reasons') {
           endReasons();
         }
         mode = 'drop';
-        dropLevel = level;
+        dropLevel = outer || level;
         outerDrop = 0;
         continue;
       }
@@ -353,6 +365,7 @@ export function extractGlobalReasons(adr, { tables } = {}) {
       } else if (
         lastReason &&
         !code &&
+        !h && // an indented "  ### Platform" is a heading, kept as section content
         /^\s+\S/.test(line) &&
         !/^\s*(?:[-*+]|\d+[.)])\s/.test(line)
       ) {

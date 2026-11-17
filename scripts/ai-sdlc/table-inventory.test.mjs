@@ -603,3 +603,32 @@ test('the table list is matched without regard to case', () => {
   );
   assert.equal(reasons.get('system_config')?.reason, 'platform settings');
 });
+
+test('a named column-level foreign key is removed by its DROP CONSTRAINT', () => {
+  const dir = migrations({
+    '001.sql': `
+CREATE TABLE projects (id UUID PRIMARY KEY, organization_id UUID);
+CREATE TABLE rules (id UUID PRIMARY KEY, project_id UUID REFERENCES projects(id));
+CREATE TABLE child (id UUID, rule_id UUID CONSTRAINT child_rule REFERENCES rules(id));
+`,
+    '002.sql': 'ALTER TABLE child DROP CONSTRAINT child_rule;',
+  });
+  assert.equal(byName(tableInventory(dir)).child.scope.kind, 'global');
+});
+
+test('an inventory heading inside an inventory section keeps the outer boundary', () => {
+  const adr =
+    '# ADR\n## Appendix: Table inventory\n### Table inventory\nX\n### Scoped tables\nLEAK\n## Next\nN';
+  const { text } = extractGlobalReasons(adr);
+  assert.ok(!text.includes('LEAK'), text);
+  assert.ok(text.includes('## Next\nN'), text);
+});
+
+test('an indented heading after a reason is section content, not part of the reason', () => {
+  const { text, reasons } = extractGlobalReasons(
+    '# ADR\n## Global tables\n- users: shared identities\n  ### Platform\n- system_config: x\n## Next'
+  );
+  assert.equal(reasons.get('users')?.reason, 'shared identities');
+  assert.equal(reasons.get('system_config')?.reason, 'x');
+  assert.ok(text.includes('### Platform'), text);
+});
