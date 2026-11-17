@@ -241,3 +241,42 @@ test('only Problem and Constraints headings count, not headings that merely ment
     '"Problems found ..." is not a Problem section'
   );
 });
+
+test('a Changes heading with a suffix still yields the ADR outline', () => {
+  for (const heading of ['## Changes (per file)', '## Changes:']) {
+    const spec = [
+      '## Problem',
+      'P',
+      '## Constraints',
+      'C',
+      heading,
+      `### \`${ADR}\``,
+      'OUTLINE_UNDER_VARIANT',
+      '### `src/a.ts`',
+      'OTHER_FILE',
+      '## Tests',
+      'T',
+    ].join('\n');
+    const out = specForAdr(spec, ADR);
+    assert.ok(out.includes('OUTLINE_UNDER_VARIANT'), `outline kept under "${heading}"`);
+    assert.ok(!out.includes('OTHER_FILE'), `other files dropped under "${heading}"`);
+  }
+});
+
+test('the ADR file named under Changes without its own subsection gets the full-spec fallback', () => {
+  const spec = [
+    '## Problem',
+    'P',
+    '## Constraints',
+    'C',
+    '## Changes',
+    `- \`${ADR}\`: new ADR with sections Context, Decision, Consequences`,
+    '### `src/a.ts`',
+    'A',
+  ].join('\n');
+  assert.equal(specForAdr(spec, ADR), null);
+  // An existing ADR mentioned in a code comment under Changes (0352 cites
+  // docs/adr/0044 that way) has no outline to lose: the selection stands.
+  const existing = spec.replace(`- \`${ADR}\`: new ADR`, `-- see ${ADR} for the`);
+  assert.ok(specForAdr(existing, ADR, { existingAdrs: ['0001-fixture.md'] }).includes('P'));
+});
