@@ -310,7 +310,7 @@ describe('generate-adr.mjs uses docs/adr/TEMPLATE.md', () => {
   });
 });
 
-describe('generate-adr.mjs passes the whole spec', () => {
+describe('generate-adr.mjs passes the whole spec when no ADR sections are found', () => {
   test('T3a: text far past the old 1,500-character cut reaches the prompt', () => {
     const spec = `# Spec: fixture\n\nADR: pending\n\n${'x'.repeat(20_000)}\nSPEC_TAIL_MARKER_5d0e\n`;
     const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
@@ -329,6 +329,7 @@ describe('generate-adr.mjs passes the whole spec', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.firstPrompt, /BEYOND_CAP_MARKER_aa11/);
     assert.match(r.firstPrompt, /\[spec truncated at 60000 characters\]/);
+    assert.match(r.firstPrompt, /LINKED SPEC \(the full spec, cut to 60000 characters:/);
   });
 });
 
@@ -406,6 +407,16 @@ describe('generate-adr.mjs sends the decision sections of a templated spec', () 
       assert.ok(r.firstPrompt.includes(m), `missing ${m}`);
     }
     assert.doesNotMatch(r.firstPrompt, /TESTS_MARKER_e4|VERIFY_MARKER_e5/);
+    assert.match(r.firstPrompt, /LINKED SPEC \(sections relevant to the ADR;/);
+  });
+
+  test('T3d: the full-spec fallback is labelled as the full spec', () => {
+    const spec = '# Spec: fixture\n\nADR: pending\n\n## Tests\nTESTS_MARKER_f1\n';
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT, env: { SPEC_CONTENT: spec } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /TESTS_MARKER_f1/);
+    assert.match(r.firstPrompt, /LINKED SPEC \(the full spec:/);
+    assert.doesNotMatch(r.firstPrompt, /are left out\):/);
   });
 });
 
