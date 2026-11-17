@@ -459,6 +459,28 @@ describe('generate-adr.mjs appends the table inventory itself', () => {
     assert.match(readFileSync(rlsAdrPath(), 'utf8'), /^\| fixture_users \| global \| {2}\|$/m);
     assert.match(r.stderr, /No reason given for global table\(s\): fixture_users/);
   });
+
+  test('T5g: a Global tables bullet that names no global table stays in the ADR', () => {
+    const modelText = [
+      REAL_ADR_TEXT.trimEnd(),
+      '',
+      '## Global tables',
+      '- fixture_users: users belong to several organizations',
+      '- fixture_projects: org-scoped already, so not a reason',
+      '- Note: the runtime role reads all of these.',
+      '',
+    ].join('\n');
+    const r = runGenerateAdr({
+      text: modelText,
+      files: MIGRATION_FILES,
+      env: { ISSUE_TITLE: 'Row-level security for tenant tables' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const out = readFileSync(rlsAdrPath(), 'utf8');
+    assert.match(out, /^- Note: the runtime role reads all of these\.$/m);
+    assert.match(out, /^- fixture_projects: org-scoped already, so not a reason$/m);
+    assert.match(out, /^\| fixture_users \| global \| users belong to several organizations \|$/m);
+  });
 });
 
 describe('generate-adr.mjs review fixes', () => {

@@ -1,0 +1,75 @@
+{
+  "id": "265-sso",
+  "issue": 265,
+  "repoCommit": "bf60667",
+  "spec": null,
+  "reference": "docs/adr/0044-sso-oidc-account-linking-and-tenant-boundary.md",
+  "derivedFrom": "Decisions 1-6 of ADR-0044 (Accepted). Issue-only case (no spec); repo state bf60667, before ADR-0044.",
+  "requireDiagram": true,
+  "maxMainLines": 150,
+  "required": [
+    {
+      "id": "tenant-scoped-linking",
+      "any": [
+        "same tenant",
+        "tenant-scoped",
+        "member of (the|this|that) tenant",
+        "membership in (the )?(same|this) tenant"
+      ]
+    },
+    {
+      "id": "cross-tenant-rejected",
+      "any": [
+        "(?<!\\b(?:not|never|don't|doesn't|won't)\\s+)\\b(reject|rejects|rejected|refuses?|refused|blocks?|blocked|den(y|ies|ied)|prevents?|prevented|avoids?|avoided|closes?|closed|forbids?|forbidden|disallows?|disallowed|no|cannot|can't)\\b(?:(?!\\b(?:not|never)\\b)[^.\\n|]){0,60}(cross-tenant|different tenant|another tenant|takeover)",
+        "(cross-tenant|different tenant|another tenant|takeover)(?:(?!\\b(?:not|never)\\b)[^.\\n|]){0,60}\\b(rejected|refused|blocked|denied|prevented|impossible|not allowed|never allowed|forbidden|closed|fails?)\\b"
+      ],
+      "prohibition": true,
+      "note": "cross-tenant linking named together with its rejection, not just mentioned"
+    },
+    {
+      "id": "email-verified",
+      "any": ["email_verified", "verified email"]
+    },
+    {
+      "id": "allowed-domains",
+      "any": ["allowed[_ ]domains", "domain allow"]
+    },
+    {
+      "id": "token-nonce",
+      "any": ["\\bnonce\\b"]
+    },
+    {
+      "id": "token-issuer",
+      "any": ["\\biss\\b", "\\bissuer\\b"]
+    },
+    {
+      "id": "token-audience",
+      "any": ["\\baud\\b", "\\baudience\\b"]
+    },
+    {
+      "id": "tenant-idp-mapping",
+      "any": ["per-tenant", "per tenant", "tenant[^.\\n]*IdP", "IdP[^.\\n]*tenant"]
+    },
+    {
+      "id": "selfhosted-mode",
+      "any": ["self-?hosted"]
+    },
+    {
+      "id": "api-keys-vs-sso",
+      "any": ["\\bAPI[- ]keys?\\b"]
+    },
+    {
+      "id": "client-secret-encrypted",
+      "any": ["\\bencrypt(s|ed|ion|ing)?\\b"]
+    }
+  ],
+  "forbidden": [
+    {
+      "id": "links-by-email-alone",
+      "any": [
+        "link(s|ed)? (accounts? )?(by|on) email (address )?alone",
+        "match(es|ed)? (accounts? )?(only )?by email (address )?(alone|only)"
+      ]
+    }
+  ]
+}
