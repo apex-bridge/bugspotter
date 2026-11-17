@@ -53,6 +53,14 @@ function negatedBefore(before) {
   return (words ?? []).slice(-NEGATION_WINDOW).some((w) => NEGATOR.test(w));
 }
 
+// The other form puts the negation after the match, as its predicate:
+// "skipping RLS for self-hosted is not an option / is out of scope / was
+// rejected". At most two plain words may sit between ("... mode is not");
+// a conjunction, relative pronoun or punctuation there means the negation
+// belongs to another clause ("skips RLS when the org is not set").
+const NEGATED_PREDICATE =
+  /^\s+(?:(?!(?:and|but|so|because|since|when|if|while|which|that|who|where|unless|until)\b)[\w`'-]+\s+){0,2}(?:is|are|was|were|would be|remains?)\s+(?:(?:explicitly|also|therefore|simply|clearly)\s+)?(?:not\b|never\b|out of scope\b|rejected\b|ruled out\b|forbidden\b|disallowed\b|unacceptable\b|off the table\b)/i;
+
 function lastEnd(text, re) {
   let end = 0;
   for (const m of text.matchAll(re)) {
@@ -96,7 +104,8 @@ export function anyAffirmed(text, patterns) {
   return patterns.some((p) => {
     const re = new RegExp(p, 'gi');
     for (let m = re.exec(text); m; m = re.exec(text)) {
-      if (!negatedBefore(text.slice(0, m.index))) {
+      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 120);
+      if (!negatedBefore(text.slice(0, m.index)) && !NEGATED_PREDICATE.test(after)) {
         return true;
       }
       re.lastIndex = m.index + 1;

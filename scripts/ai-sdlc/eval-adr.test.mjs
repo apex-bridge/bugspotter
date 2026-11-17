@@ -449,3 +449,23 @@ test('"we reject X" negates X; a prohibition fact is matched as written', () => 
   assert.equal(pick('Each tenant configures its own IdP.', 'tenant-idp-mapping'), true);
   assert.equal(pick('We reject cross-tenant linking.', 'cross-tenant-rejected'), true);
 });
+
+test('a negation right after the match ("X is not an option") negates it too', () => {
+  const rls = forbiddenOf('451-rls', 'skip-rls-selfhosted');
+  for (const s of [
+    "Per CLAUDE.md's `selfhosted` mode and #450, skipping RLS for self-hosted is not an option.",
+    'Backfilling NULL `organization_id` rows in self-hosted installs before the first policy slice is an extra migration step; accepted because skipping RLS for self-hosted is out of scope per #450.',
+    'Per #450, skipping RLS in self-hosted is not an option',
+    'Skipping RLS in self-hosted mode was rejected.',
+    'Skipping RLS for self-hosted installs is not acceptable.',
+  ]) {
+    assert.equal(anyAffirmed(s, rls), false, s);
+  }
+  for (const s of [
+    'Self-hosted mode skips RLS when the org is not set.',
+    'Self-hosted mode skips RLS for tables that are not org-scoped.',
+    'We skip RLS in self-hosted mode, which is not ideal.',
+  ]) {
+    assert.equal(anyAffirmed(s, rls), true, s);
+  }
+});
