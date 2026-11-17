@@ -9,8 +9,10 @@
      - One Mermaid diagram if there is a real flow, boundary or before/after.
        Quote labels with punctuation: A["withBypass(reason, fn)"]. Under ~15
        nodes. Render it before merge (docs/adr/README.md).
-     - Repo facts carry file:line, or are marked "unverified". No notes about
-       what the author could or could not run.
+     - Repo facts carry path:line, with the path from the repository root
+       (packages/backend/src/db/client.ts:603, not client.ts:603), or are
+       marked "unverified". No notes about what the author could or could
+       not run.
      - Decide what and why here; file lists and per-slice steps belong in the
        spec. Link to it.
      - Status stays Proposed; a human sets Accepted. -->

@@ -196,6 +196,15 @@ describe('generate-adr.mjs prompt', () => {
     assert.match(r.firstPrompt, /You have NO tools available/);
     assert.match(r.firstPrompt, /do not narrate one/);
   });
+
+  test('asks for file references as paths from the repository root', () => {
+    // #451 eval drafts cited "client.ts:603" and "authorization.ts:39"; the repo
+    // has four client.ts and two authorization.ts files.
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /every file reference as a path from the repository root/);
+    assert.match(r.firstPrompt, /never a bare file name/);
+  });
 });
 
 describe('generate-adr.mjs narration detection', () => {

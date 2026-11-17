@@ -187,6 +187,7 @@ const rules = [
     'Do not write a table inventory: it is generated from the TABLE INVENTORY and appended to your document. Instead, end your document with a section "## Global tables" listing every table whose suggested scope is global, one per line as "- <table>: <one-line reason>". If such a table actually holds tenant data, write "- <table>: org-scoped: <reason>" or "- <table>: project-scoped: <reason>" instead.',
   adrIndex &&
     'Architecture facts must match the ARCHITECTURE INDEX. If a component lives in another repo, say so instead of inventing an in-repo shape.',
+  'Give every file reference as a path from the repository root, such as "packages/backend/src/db/client.ts:603", never a bare file name such as "client.ts:603": several files share a name.',
   'You have NO tools available. Do not attempt a tool call and do not narrate one. If something is missing, make the smallest reasonable assumption and list it under "Risks and follow-ups".',
   'Output only the ADR document, without a code fence around it.',
 ].filter(Boolean);
