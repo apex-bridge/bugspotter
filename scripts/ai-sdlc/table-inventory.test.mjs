@@ -578,3 +578,28 @@ test('Global tables heading variants are recognised', () => {
     assert.ok(!text.includes('- users: x'), h);
   }
 });
+
+test('an indented sub-bullet under a reason is neither a reason nor part of one', () => {
+  const { text, reasons } = extractGlobalReasons(
+    '# ADR\n## Global tables\n- system_config: platform settings\n  - note: applies everywhere\n## Next\nN'
+  );
+  assert.equal(reasons.get('system_config')?.reason, 'platform settings');
+  assert.ok(!reasons.has('note'));
+  assert.ok(text.includes('  - note: applies everywhere'));
+});
+
+test('a subheading inside Global tables does not end it', () => {
+  const { text, reasons } = extractGlobalReasons(
+    '# ADR\n## Global tables\n### Platform\n- system_config: platform settings\n## Next\nN'
+  );
+  assert.equal(reasons.get('system_config')?.reason, 'platform settings');
+  assert.ok(!text.includes('- system_config'));
+});
+
+test('the table list is matched without regard to case', () => {
+  const { reasons } = extractGlobalReasons(
+    '# ADR\n## Global tables\n- system_config: platform settings\n',
+    { tables: ['System_Config'] }
+  );
+  assert.equal(reasons.get('system_config')?.reason, 'platform settings');
+});
