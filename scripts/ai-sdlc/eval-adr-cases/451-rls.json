@@ -58,8 +58,8 @@
     {
       "id": "fail-closed-malformed",
       "any": [
-        "(fail(s|ing)?[- ]closed|den(y|ies|ied)|reject(s|ed)?|zero rows|no rows|errors?)\\b[^\\n]{0,80}\\bmalformed\\b",
-        "\\bmalformed\\b[^\\n]{0,80}\\b(fail(s|ing)?[- ]closed|den(y|ies|ied)|reject(s|ed)?|zero rows|no rows|errors?)"
+        "(?<!\\b(?:not|never|don't|doesn't|won't)\\s+)\\b(fail(s|ing)?[- ]closed|den(y|ies|ied)|reject(s|ed)?|zero rows|no rows|errors?)\\b(?:(?!\\b(?:not|never)\\b)[^\\n]){0,80}\\bmalformed\\b",
+        "\\bmalformed\\b(?:(?!\\b(?:not|never)\\b)[^\\n]){0,80}\\b(fail(s|ing)?[- ]closed|den(y|ies|ied)|reject(s|ed)?|zero rows|no rows|errors?)"
       ],
       "prohibition": true,
       "note": "malformed context named together with a fail-closed outcome (deny, reject, zero rows)"

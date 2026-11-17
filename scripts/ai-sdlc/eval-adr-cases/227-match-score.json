@@ -62,12 +62,13 @@
       "any": ["(shows|displays?) the (original|historical) (match )?score"]
     },
     {
-      "id": "adds-persistence-migration",
+      "id": "adds-migration-or-endpoint",
       "any": [
         "(add|adds|new|create|creates) (a )?migration (to|that) (store|persist)",
-        "\\b(add|adds|adding|create|creates|creating) (a |one )?(new )?(DB |database |schema )?migration\\b"
+        "\\b(add|adds|adding|create|creates|creating) (a |one )?(new )?(DB |database |schema )?migration\\b",
+        "\\b(add|adds|adding|create|creates|creating|expose|exposes|exposing|introduce|introduces|introducing) (a |one )?new (backend |API |REST |HTTP )?(endpoint|route)\\b"
       ],
-      "note": "the change is UI-only: any new migration is the opposite decision"
+      "note": "the change is UI-only and reuses the existing /similar endpoint: any new migration or endpoint is the opposite decision"
     }
   ]
 }

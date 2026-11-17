@@ -679,10 +679,40 @@ test('prohibition facts need their rejection, and a UI-only change adds no migra
     true
   );
   const ui = 'No new endpoint is needed. Add a migration to create the configuration table.';
-  assert.equal(check('227-match-score', ui, 'adds-persistence-migration'), false);
+  assert.equal(check('227-match-score', ui, 'adds-migration-or-endpoint'), false);
   assert.equal(
-    check('227-match-score', 'No new endpoints or migrations.', 'adds-persistence-migration'),
+    check('227-match-score', 'No new endpoints or migrations.', 'adds-migration-or-endpoint'),
     true
+  );
+});
+
+test('a negated rejection is not a rejection', () => {
+  const check = (id, decision, cid) =>
+    evaluateAdr(
+      `# ADR-0001: X\n\n- Status: Proposed\n\n> **Decision:** x\n\n## Context\nx\n## Decision\n${decision}\n## Consequences\nx\n## Alternatives\nx\n`,
+      caseFile(id),
+      { files: [] }
+    ).checks.find((c) => c.id === cid).pass;
+  for (const s of [
+    'We do not reject cross-tenant linking.',
+    'Cross-tenant linking is not rejected.',
+    'We never block cross-tenant linking.',
+  ]) {
+    assert.equal(check('265-sso', s, 'cross-tenant-rejected'), false, s);
+  }
+  assert.equal(
+    check('265-sso', 'Cross-tenant linking is not allowed.', 'cross-tenant-rejected'),
+    true
+  );
+  for (const s of [
+    'Malformed tenant context is not rejected and grants access.',
+    'The policy does not deny malformed context.',
+  ]) {
+    assert.equal(check('451-rls', s, 'fail-closed-malformed'), false, s);
+  }
+  assert.equal(
+    check('227-match-score', 'No migration. Add a new endpoint.', 'adds-migration-or-endpoint'),
+    false
   );
 });
 
