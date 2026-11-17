@@ -120,7 +120,7 @@ test('adr-agent.yml: Generate ADR takes its limit and budget from the checked va
   assert.doesNotMatch(block, /vars\.ADR_STEP_TIMEOUT_MINUTES/);
 });
 
-test('adr-agent.yml: the step timeout accepts whole minutes 1-20 and uses 12 otherwise', (t) => {
+test('adr-agent.yml: the step timeout accepts whole minutes 1-20 and uses 20 otherwise', (t) => {
   const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : 'bash';
   if (process.platform === 'win32' && !existsSync(bash)) {
     t.skip('no Git Bash');
@@ -130,14 +130,14 @@ test('adr-agent.yml: the step timeout accepts whole minutes 1-20 and uses 12 oth
   const dir = mkdtempSync(join(tmpdir(), 'adr-budget-'));
   try {
     const cases = {
-      '': '12',
+      '': '20',
       20: '20',
       1: '1',
       '08': '8',
-      0: '12',
-      25: '12',
-      '12m': '12',
-      0.5: '12',
+      0: '20',
+      25: '20',
+      '12m': '20',
+      0.5: '20',
     };
     for (const [raw, want] of Object.entries(cases)) {
       const out = join(dir, `out-${want}-${raw || 'unset'}`);

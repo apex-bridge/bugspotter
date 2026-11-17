@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Calls Claude to draft an ADR for a GitHub issue.
 // Run from the repo root. Reads docs/adr/TEMPLATE.md for the format, existing
-// ADRs for numbering, and (for database-related issues) the migrations for a
-// computed table inventory.
+// ADRs for numbering, and (for RLS / tenant-isolation issues) the migrations
+// for a computed table inventory.
 // Outputs adr_file, adr_number, adr_slug, and model to GITHUB_OUTPUT.
 //
 // Required env vars: ISSUE_NUMBER, ISSUE_TITLE, plus either
@@ -46,7 +46,8 @@ const { ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, SPEC_CONTENT, GITHUB_OUTPUT } = p
 // tuned values, so an unset variable changes nothing.
 //   ADR_LLM_TIMEOUT_MS        one LLM call in ms, at least 10000 (default 540000)
 //   ADR_STEP_TIMEOUT_MINUTES  the workflow step's timeout-minutes; the script's
-//                             time budget (default 12)
+//                             time budget (default 20: a first call and a
+//                             corrective retry of 540s each, plus 30s)
 //   ADR_MAX_TOKENS            output cap, enforced on the API backend only,
 //                             where thinking counts toward it (64000; runs used
 //                             14K-28K thinking tokens plus the ADR, #458)
@@ -78,7 +79,7 @@ const SETTINGS = {
   ),
   stepBudgetMs:
     (setting('ADR_STEP_TIMEOUT_MINUTES', null, (n) => n > 0, 'a positive number of minutes') ?? 0) *
-      60_000 || parsePositiveMs(process.env.ADR_STEP_BUDGET_MS, 12 * 60_000),
+      60_000 || 20 * 60_000,
   maxTokens: setting('ADR_MAX_TOKENS', 64_000, positiveInt, 'a positive integer'),
   maxSpecChars: setting('ADR_MAX_SPEC_CHARS', 60_000, positiveInt, 'a positive integer'),
   effort: process.env.ADR_EFFORT || undefined,
@@ -258,9 +259,9 @@ if (stopReason === 'max_tokens') {
 // One corrective retry with a stronger reminder before failing loudly,
 // mirroring generate-impl.mjs's missing-file self-correction (PR #375) and
 // generate-spec.mjs's own copy of this same guard - time-budgeted the same
-// way (see generation-retry.mjs). Defaults match adr-agent.yml's "Generate
-// ADR" step cap (raised alongside this change specifically to give a retry
-// room - see that file's comment).
+// way (see generation-retry.mjs). The default step budget (20 minutes, see
+// SETTINGS and the job comment in adr-agent.yml) leaves a retry as long as a
+// first call.
 // A retry needs about as long as a first run; with less left it would only
 // time out, so fail fast instead.
 const RETRY_MIN_BUDGET_MS = parsePositiveMs(process.env.ADR_RETRY_MIN_BUDGET_MS, 300_000);
