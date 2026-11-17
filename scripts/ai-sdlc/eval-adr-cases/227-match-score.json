@@ -12,9 +12,24 @@
       "id": "admin-widget",
       "any": ["SimilarBugsWidget", "similar[- ]bugs widget", "duplicate (bug )?detail"]
     },
-    { "id": "shows-threshold", "any": ["threshold"] },
-    { "id": "shows-score", "any": ["score"] },
-    { "id": "existing-similar-endpoint", "any": ["/similar", "existing endpoint"] },
+    {
+      "id": "shows-threshold",
+      "any": [
+        "\\b(show|shows|showing|display|displays|displaying|render|renders|rendering|surface|surfaces)\\b[^\\n]{0,80}\\bthreshold",
+        "\\bthreshold\\b[^\\n]{0,60}\\b(shown|displayed|rendered|visible)\\b"
+      ]
+    },
+    {
+      "id": "shows-score",
+      "any": [
+        "\\b(show|shows|showing|display|displays|displaying|render|renders|rendering|surface|surfaces)\\b[^\\n]{0,80}\\bscore",
+        "\\bscore\\b[^\\n]{0,60}\\b(shown|displayed|rendered|visible)\\b"
+      ]
+    },
+    {
+      "id": "existing-similar-endpoint",
+      "any": ["/similar", "existing endpoint"]
+    },
     {
       "id": "no-new-endpoint-or-migration",
       "any": [
@@ -25,11 +40,15 @@
     },
     {
       "id": "current-not-historical-wording",
-      "any": ["current (match )?score", "similarity today", "recomput"]
+      "any": ["current (match |similarity )?score", "current match", "similarity today", "recomput"]
     },
     {
       "id": "persistence-deferred",
-      "any": ["defer", "separate issue", "follow-up", "out of scope"]
+      "any": [
+        "\\b(persist|stor(e|ed|ing|age))[^\\n]{0,200}?(\\bdefer|separate (issue|change|slice)|follow-up|out of scope|tracked separately)",
+        "(\\bdefer\\w*|out of scope)[^\\n]{0,80}\\bpersist"
+      ],
+      "note": "persisting the historical score, named as deferred / out of scope (a bare 'follow-up' heading does not count)"
     },
     {
       "id": "only-for-duplicates",

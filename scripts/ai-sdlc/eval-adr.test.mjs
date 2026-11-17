@@ -363,3 +363,42 @@ test('negation scope ends at a comma or clause conjunction and covers only a few
     false
   );
 });
+
+test('227: a template-shaped ADR deciding the opposite does not get score, threshold or deferral', () => {
+  const adr = [
+    '# ADR-0043: Intelligence: show match score + threshold',
+    '',
+    '- Status: Proposed',
+    '- Refs: #227; spec docs/specs/0227-intelligence-show-match-score-threshold-.md',
+    '',
+    '> **Decision:** Store the match result in a new table and serve it from a new endpoint.',
+    '',
+    '## Context',
+    'Duplicates are auto-closed today.',
+    '## Decision',
+    '| Storage | new bug_match table | keep it |',
+    '## Consequences',
+    '**Risks and follow-ups**',
+    '- none',
+    '## Alternatives',
+    '| reuse | no |',
+    '',
+  ].join('\n');
+  const ids = ['shows-threshold', 'shows-score', 'persistence-deferred'];
+  const pick = (text) =>
+    evaluateAdr(text, caseFile('227-match-score'), { files: [] })
+      .checks.filter((c) => ids.includes(c.id))
+      .map((c) => [c.id, c.pass]);
+  assert.deepEqual(
+    pick(adr),
+    ids.map((id) => [id, false])
+  );
+  const decided = adr.replace(
+    'Duplicates are auto-closed today.',
+    'The widget shows the current match score and the threshold. Persisting the original score is deferred to a separate issue.'
+  );
+  assert.deepEqual(
+    pick(decided),
+    ids.map((id) => [id, true])
+  );
+});

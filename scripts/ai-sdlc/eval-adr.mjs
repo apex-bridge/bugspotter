@@ -204,9 +204,14 @@ export function evaluateAdr(text, def, opts = {}) {
   // What the ADR decides: the preamble (with the decision summary) and every
   // section except Alternatives, where rejected options are described, and the
   // appendices. Required facts must appear here, and forbidden statements
-  // must not (unless negated).
+  // must not (unless negated). The title and the "- Refs:"-style metadata
+  // lines are left out: they repeat the issue and spec titles ("show match
+  // score + threshold"), so they would satisfy a fact the ADR never states.
   const decided = [
-    preamble,
+    preamble
+      .split('\n')
+      .filter((l) => !/^# |^- [\w ]+:/.test(l))
+      .join('\n'),
     ...[...sections]
       .filter(([title]) => !title.startsWith('alternatives') && !title.startsWith('appendix'))
       .map(([, body]) => body),
