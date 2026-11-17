@@ -139,9 +139,8 @@ process.env.LLM_BACKEND = 'cli';
 process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token';
 process.env.PATH = `${DIR}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`;
 
-const { callClaude, logCliTelemetry, formatCliTimeout, formatCliProgress } = await import(
-  './llm-client.mjs'
-);
+const { callClaude, logCliTelemetry, formatCliTimeout, formatCliProgress, normalizeEffort } =
+  await import('./llm-client.mjs');
 
 // Collects what logCliTelemetry emits so the assertions below read the real
 // output rather than trusting the function was called.
@@ -927,4 +926,104 @@ test('LLM_DEFAULT_MODEL unset falls back to the hardcoded default, verified via 
   const modelIdx = argv.indexOf('--model');
   assert.notEqual(modelIdx, -1);
   assert.equal(argv[modelIdx + 1], 'claude-sonnet-5');
+});
+
+// --- effort (ADR_EFFORT and friends) ---
+
+test('normalizeEffort accepts the documented levels, case-insensitively, and ignores others', () => {
+  const warnings = [];
+  assert.equal(normalizeEffort(' High '), 'high');
+  assert.equal(normalizeEffort(undefined), undefined);
+  assert.equal(normalizeEffort(''), undefined);
+  assert.equal(
+    normalizeEffort('turbo', (m) => warnings.push(m)),
+    undefined
+  );
+  assert.match(warnings[0], /ignoring unknown effort 'turbo'/);
+});
+
+test('callViaCli passes --effort after --model when an effort is given, and nothing otherwise', async () => {
+  process.env.FAKE_CLAUDE_MODE = 'success';
+  process.env.FAKE_CLAUDE_ENV_DUMP = '';
+  process.env.FAKE_CLAUDE_ARGV_DUMP = ARGV_DUMP;
+  try {
+    await callClaude({ prompt: 'hi', timeoutMs: 10000, effort: 'medium' });
+    let argv = JSON.parse(readFileSync(ARGV_DUMP, 'utf8'));
+    const i = argv.indexOf('--effort');
+    assert.equal(argv[i + 1], 'medium');
+    assert.equal(argv[i - 2], '--model', '--effort follows the model');
+    assert.ok(argv.indexOf('--tools=') > i);
+
+    await callClaude({ prompt: 'hi', timeoutMs: 10000, effort: 'turbo' });
+    argv = JSON.parse(readFileSync(ARGV_DUMP, 'utf8'));
+    assert.equal(argv.includes('--effort'), false, 'an unknown level is dropped, not forwarded');
+  } finally {
+    delete process.env.FAKE_CLAUDE_ARGV_DUMP;
+  }
+});
+
+test('callViaApi sends output_config.effort only when an effort is given', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(
+      JSON.stringify({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  };
+  try {
+    await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000, effort: 'LOW' });
+    await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.deepEqual(bodies[0].output_config, { effort: 'low' });
+    assert.equal('output_config' in bodies[1], false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi takes the text after a thinking block instead of throwing', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        content: [
+          { type: 'thinking', thinking: 'plan', signature: 'sig' },
+          { type: 'text', text: 'ADR body' },
+        ],
+        stop_reason: 'end_turn',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(r.text, 'ADR body');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi: thinking that uses all of max_tokens gets a clear error, not a JSON dump', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        content: [{ type: 'thinking', thinking: 'long plan', signature: 'sig' }],
+        stop_reason: 'max_tokens',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      (err) => {
+        assert.match(err.message, /max_tokens=100 was used up/);
+        assert.match(err.message, /ADR_MAX_TOKENS/);
+        assert.doesNotMatch(err.message, /Unexpected API response shape/);
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

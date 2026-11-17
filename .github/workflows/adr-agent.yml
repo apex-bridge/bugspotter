@@ -35,15 +35,13 @@ jobs:
     name: Draft ADR
     if: github.event.label.name == 'needs-adr'
     runs-on: ubuntu-latest
-    # 19m. Was 15m (6m step cap + ~9m setup headroom - checkout, setup-node,
-    # `npm install -g @anthropic-ai/claude-code`, the linked-spec `gh` lookup,
-    # prettier, git push, two more `gh` calls). Raised alongside the
-    # "Generate ADR" step's own timeout below, same reasoning as
-    # spec-agent.yml's identical change: generate-adr.mjs can now make a
-    # second, corrective LLM call when it detects a narrated-tool-call
-    # transcript (see detect-narration.mjs), so the job needs room for that
-    # second call too. 10m (gen, up from 6m) + the same ~9m setup headroom.
-    timeout-minutes: 19
+    # The "Generate ADR" step (ADR_STEP_TIMEOUT_MINUTES: default 12, at most
+    # 20) plus ~9m for everything else (checkout, setup-node, the CLI install,
+    # the linked-spec `gh` lookup, prettier, git push, two more `gh` calls).
+    # The step needs room for a second, corrective LLM call when
+    # generate-adr.mjs detects a narrated tool-call transcript
+    # (detect-narration.mjs).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -73,17 +71,27 @@ jobs:
             fi
           fi
 
+      # The step limit and the script's time budget come from this one checked
+      # value. Whole minutes from 1 to 20: 20 plus ~9m of setup fits the job's
+      # 30. Anything else (unset, 0, "12m", 25) uses 12, with a warning when set.
+      - name: Resolve step timeout
+        id: budget
+        env:
+          RAW: ${{ vars.ADR_STEP_TIMEOUT_MINUTES }}
+        run: |
+          MINUTES=12
+          if [ -n "$RAW" ]; then
+            if [[ "$RAW" =~ ^[0-9]+$ ]] && [ "$RAW" -ge 1 ] && [ "$RAW" -le 20 ]; then
+              MINUTES=$((10#$RAW)) # "08" -> 8; fromJSON rejects a leading zero
+            else
+              echo "::warning::Ignoring ADR_STEP_TIMEOUT_MINUTES=$RAW: must be a whole number of minutes from 1 to 20; using 12."
+            fi
+          fi
+          echo "minutes=$MINUTES" >> "$GITHUB_OUTPUT"
+
       - name: Generate ADR
         id: gen
-        # 10m. Was 6m (> generate-adr.mjs's own 300s/5m LLM timeout alone).
-        # Raised so the script's own ADR_STEP_BUDGET_MS-gated corrective
-        # retry (see detect-narration.mjs and generate-adr.mjs's own comment
-        # - fires only on a detected narrated-tool-call transcript) has real
-        # room to run a second ~300s call. generate-adr.mjs's own
-        # ADR_STEP_BUDGET_MS default (10m) must match this step's
-        # timeout-minutes, or the script will think it has headroom this step
-        # doesn't actually have.
-        timeout-minutes: 10
+        timeout-minutes: ${{ fromJSON(steps.budget.outputs.minutes) }}
         env:
           LLM_BACKEND: ${{ vars.LLM_BACKEND }}
           # generate-adr.mjs never passes an explicit model to callClaude(),
@@ -92,6 +100,12 @@ jobs:
           # since a GitHub Actions variable only reaches process.env via an
           # explicit env: entry like this one, never automatically.
           LLM_DEFAULT_MODEL: ${{ vars.LLM_DEFAULT_MODEL }}
+          # ADR generator settings (see generate-adr.mjs); unset = defaults.
+          ADR_STEP_TIMEOUT_MINUTES: ${{ steps.budget.outputs.minutes }}
+          ADR_LLM_TIMEOUT_MS: ${{ vars.ADR_LLM_TIMEOUT_MS }}
+          ADR_MAX_TOKENS: ${{ vars.ADR_MAX_TOKENS }}
+          ADR_MAX_SPEC_CHARS: ${{ vars.ADR_MAX_SPEC_CHARS }}
+          ADR_EFFORT: ${{ vars.ADR_EFFORT }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
