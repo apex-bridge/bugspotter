@@ -70,7 +70,35 @@ export function requireLlmCredentials() {
   }
 }
 
-async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
+// Effort levels accepted by both `claude -p --effort` and the API's
+// output_config.effort. Anything else is ignored with a warning, so a typo in a
+// repo variable cannot fail a pipeline run.
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+export function normalizeEffort(effort, warn = console.warn) {
+  if (effort == null || effort === '') {
+    return undefined;
+  }
+  const value = String(effort).trim().toLowerCase();
+  if (EFFORT_LEVELS.includes(value)) {
+    return value;
+  }
+  warn(`llm-client: ignoring unknown effort '${effort}' (expected ${EFFORT_LEVELS.join('/')}).`);
+  return undefined;
+}
+
+export function buildApiBody({ prompt, maxTokens, model, effort }) {
+  return {
+    // CLI_MODEL, not a second hardcoded literal - one source of truth for
+    // "the default when no caller-supplied model", overridable the same
+    // way on both backends via LLM_DEFAULT_MODEL.
+    model: model || CLI_MODEL,
+    max_tokens: maxTokens,
+    ...(effort ? { output_config: { effort } } : {}),
+    messages: [{ role: 'user', content: prompt }],
+  };
+}
+
+async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -79,14 +107,7 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
       'anthropic-version': '2023-06-01',
     },
     signal: AbortSignal.timeout(timeoutMs),
-    body: JSON.stringify({
-      // CLI_MODEL, not a second hardcoded literal - one source of truth for
-      // "the default when no caller-supplied model", overridable the same
-      // way on both backends via LLM_DEFAULT_MODEL.
-      model: model || CLI_MODEL,
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+    body: JSON.stringify(buildApiBody({ prompt, maxTokens, model, effort })),
   });
 
   if (!res.ok) {
@@ -105,10 +126,22 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model }) {
   }
 
   const data = await res.json();
-  if (data?.content?.[0]?.type !== 'text') {
+  // Models that think return thinking block(s) before the text, so take the
+  // text blocks rather than assuming content[0] is text.
+  const texts = Array.isArray(data?.content)
+    ? data.content.filter((b) => b?.type === 'text').map((b) => b.text)
+    : [];
+  if (!texts.length) {
+    // Thinking counts toward max_tokens, so it can use the whole budget
+    // before any text is written.
+    if (data?.stop_reason === 'max_tokens') {
+      throw new Error(
+        `Claude API response has no text: max_tokens=${maxTokens} was used up (by thinking) before any text was written. Raise max_tokens (for adr-agent: the ADR_MAX_TOKENS repo variable).`
+      );
+    }
     throw new Error(`Unexpected API response shape: ${JSON.stringify(data, null, 2)}`);
   }
-  return { text: data.content[0].text, stopReason: data.stop_reason };
+  return { text: texts.join(''), stopReason: data.stop_reason };
 }
 
 // The CLI's terminal `result` event (now under `--output-format stream-json`,
@@ -370,7 +403,7 @@ function dumpCliTranscriptOnFailure(stdout, stderr) {
 
 // No `maxTokens` param here (deliberately) — the CLI has no per-call
 // output-token cap to forward it to. See the module header comment.
-async function callViaCli({ prompt, timeoutMs, model }) {
+async function callViaCli({ prompt, timeoutMs, model, effort }) {
   return new Promise((resolve, reject) => {
     // ANTHROPIC_API_KEY (and ANTHROPIC_AUTH_TOKEN) outrank the OAuth token in
     // Claude Code's own auth precedence, so a stale/low-balance key set
@@ -421,6 +454,7 @@ async function callViaCli({ prompt, timeoutMs, model }) {
         '--verbose',
         '--model',
         model || CLI_MODEL,
+        ...(effort ? ['--effort', effort] : []),
         '--tools=',
         '--strict-mcp-config',
       ],
@@ -633,7 +667,8 @@ async function callViaCli({ prompt, timeoutMs, model }) {
 // used by generate-impl.mjs's label-based model router (complexity:high /
 // pii-sensitive / default). Callers that omit it get the same model as
 // before this option existed.
-export async function callClaude({ prompt, maxTokens, timeoutMs, model }) {
+export async function callClaude({ prompt, maxTokens, timeoutMs, model, effort }) {
+  const level = normalizeEffort(effort);
   if (LLM_BACKEND === 'cli') {
     // Say so rather than dropping it silently. All four generators pass a
     // maxTokens they believe bounds the response, and on this backend none of
@@ -652,7 +687,7 @@ export async function callClaude({ prompt, maxTokens, timeoutMs, model }) {
           `will not stop at ${maxTokens}. Budget and time out accordingly.`
       );
     }
-    return callViaCli({ prompt, timeoutMs, model });
+    return callViaCli({ prompt, timeoutMs, model, effort: level });
   }
-  return callViaApi({ prompt, maxTokens, timeoutMs, model });
+  return callViaApi({ prompt, maxTokens, timeoutMs, model, effort: level });
 }
