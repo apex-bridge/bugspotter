@@ -244,10 +244,16 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
 
   let data;
   try {
-    // A proxy or test double may answer with plain JSON instead of a stream.
-    data = (res.headers.get('content-type') ?? '').includes('text/event-stream')
-      ? await readMessageStream(res.body)
-      : await res.json();
+    // A proxy or test double may answer with plain JSON instead of a stream,
+    // or relabel the stream: an SSE body is recognised by its first field.
+    if ((res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+      data = await readMessageStream(res.body);
+    } else {
+      const raw = await res.text();
+      data = /^(event|data):/.test(raw.trimStart())
+        ? await readMessageStream([new TextEncoder().encode(raw)])
+        : JSON.parse(raw);
+    }
   } catch (err) {
     if (/^Claude API stream (error|ended)/.test(err?.message)) {
       throw err;

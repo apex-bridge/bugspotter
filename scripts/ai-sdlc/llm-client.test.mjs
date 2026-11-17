@@ -1319,3 +1319,21 @@ test('callViaApi: a refusal with a null category is still a refusal', async () =
     globalThis.fetch = originalFetch;
   }
 });
+
+// --- API backend: an SSE body under another content type (#464 review) ---
+
+test('callViaApi reads an SSE body served with a non-SSE content type', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(sse(STREAM_EVENTS), {
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(r.text, '# ADR-0001: Title');
+    assert.equal(r.stopReason, 'end_turn');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
