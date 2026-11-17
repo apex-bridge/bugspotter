@@ -469,3 +469,33 @@ test('a negation right after the match ("X is not an option") negates it too', (
     assert.equal(anyAffirmed(s, rls), true, s);
   }
 });
+
+test('no-meta-notes: scope statements and domain "I"/"author" are not notes about tooling', () => {
+  const repo = repoWith({ 'src/app.ts': 'a\nb\nc\n' });
+  const flagged = (sentence) =>
+    failedIds(
+      evaluateAdr(GOOD.replace('We decide FACT_ONE.', `We decide FACT_ONE. ${sentence}`), CASE, {
+        repoDir: repo,
+        files: FILES,
+      })
+    ).includes('no-meta-notes');
+  for (const s of [
+    'This ADR does not change access control for API keys.',
+    'This ADR does not change who can read bug reports.',
+    'Phase I does not touch workers.',
+    'If the reporter (the author of the bug) cannot see the project, the widget is hidden.',
+  ]) {
+    assert.equal(flagged(s), false, s);
+  }
+  for (const s of [
+    'This ADR does not have access to run the grep.',
+    'This draft could not read the repository.',
+    'Slice 2 runs it. This ADR does not have access to\nrun that grep.',
+    "This ADR does not have access to run the issue's\n  `grep` step.",
+    'I could not run the tests.',
+    "I don't have access to the codebase.",
+    'The model was unable to verify the files.',
+  ]) {
+    assert.equal(flagged(s), true, s);
+  }
+});

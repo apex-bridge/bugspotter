@@ -22,8 +22,11 @@ const DEFAULT_SECTIONS = ['context', 'decision', 'consequences', 'alternatives']
 // domain prose ("workers do not have access to the request context").
 const META_NOTES = [
   /\bno tools (?:are )?available\b/i,
-  /\bthis (?:ADR|draft|document)\b[^.\n]{0,40}\b(?:do(?:es)? not|could not|cannot|can't|(?:is|was) unable to)\b[^.\n]{0,30}\b(?:access|run|read|verify|execute)\b/i,
-  /\b(?:I|the (?:author|model|assistant))\b[^.\n]{0,40}\b(?:do(?:es)? not|don't|did not|could not|cannot|can't|(?:am|was|is) unable to)\b/,
+  // The negation is followed directly by a tooling verb and a repo object:
+  // "this ADR does not change access control" is a scope statement.
+  /\bthis (?:ADR|draft|document)\b[^.\n]{0,40}?\b(?:do(?:es)? not|could not|cannot|can't|(?:is|was) unable to)\s+(?:(?:have\s+)?access(?:\s+to)?|run|read|verify|execute|inspect|open|check)\s+(?:[\w'`]+\s+){0,3}`?(?:repo(?:sitory)?|codebase|code|source(?: code)?|files?|tools?|tests?|commands?|grep)\b/i,
+  // A bare "I" (not "Phase I") or the model, with a tooling verb.
+  /(?<!\b(?:Phase|Stage|Step|Part|Slice|Tier|Level|Option|Type|Class|Appendix) )\b(?:I|[Tt]he (?:model|assistant))\b (?:do not|don't|did not|could not|cannot|can't|(?:am|was|is) unable to) (?:have access|access|run|read|verify|execute|inspect|open|check|browse|see)\b/,
   /\b(?:do(?:es)? not|don't|did not|could not|cannot|can't) (?:have )?access (?:to )?(?:the )?(?:repo(?:sitory)?|codebase|source(?: code)?|files|tools)\b/i,
   /\b(?:could not|cannot|can't|unable to) (?:run|execute|verify) (?:the )?(?:code|tests|commands|tools)\b/i,
 ];
