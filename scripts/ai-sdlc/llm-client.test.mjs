@@ -1269,3 +1269,53 @@ test('readMessageStream: message_delta without message_stop is still incomplete'
     /Claude API stream ended before message_stop \(stop_reason=end_turn\)/
   );
 });
+
+// --- API backend: refusals (#464 review) ---
+
+test('callViaApi: a mid-stream refusal throws instead of returning the partial text', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    streamResponse(
+      sse([
+        ...STREAM_EVENTS.slice(0, 7),
+        { type: 'content_block_stop', index: 1 },
+        {
+          type: 'message_delta',
+          delta: {
+            stop_reason: 'refusal',
+            stop_details: { type: 'refusal', category: 'cyber', explanation: 'declined' },
+          },
+        },
+        { type: 'message_stop' },
+      ])
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /Claude API declined the request \(stop_reason=refusal, category=cyber\); any partial output was discarded\./
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callViaApi: a refusal with a null category is still a refusal', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        content: [],
+        stop_reason: 'refusal',
+        stop_details: { type: 'refusal', category: null, explanation: null },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  try {
+    await assert.rejects(
+      callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 }),
+      /Claude API declined the request \(stop_reason=refusal\); any partial output was discarded\./
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -138,6 +138,7 @@ const apiDispatcher = createApiDispatcher();
 export async function readMessageStream(body) {
   const blocks = [];
   let stopReason = null;
+  let stopDetails = null;
   let stopped = false;
   const onEvent = (raw) => {
     const data = raw
@@ -156,6 +157,7 @@ export async function readMessageStream(body) {
       b.text = (b.text ?? '') + ev.delta.text;
     } else if (ev.type === 'message_delta' && ev.delta?.stop_reason) {
       stopReason = ev.delta.stop_reason;
+      stopDetails = ev.delta.stop_details ?? stopDetails;
     } else if (ev.type === 'message_stop') {
       stopped = true;
     } else if (ev.type === 'error') {
@@ -187,7 +189,7 @@ export async function readMessageStream(body) {
       `Claude API stream ended before message_stop (stop_reason=${stopReason ?? 'none'})`
     );
   }
-  return { content: blocks.filter(Boolean), stop_reason: stopReason };
+  return { content: blocks.filter(Boolean), stop_reason: stopReason, stop_details: stopDetails };
 }
 
 // What to do when a response stopped at max_tokens. On the CLI backend the
@@ -251,6 +253,16 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
       throw err;
     }
     throw failed(err);
+  }
+  // "A refusal can arrive before any output, or mid-stream after partial
+  // output. In either case, treat any partial output as incomplete and
+  // discard it." (Anthropic, Refusals and fallback.) Callers check only for
+  // max_tokens, so returning it would hand them a cut-off document.
+  if (data?.stop_reason === 'refusal') {
+    const category = data.stop_details?.category;
+    throw new Error(
+      `Claude API declined the request (stop_reason=refusal${category ? `, category=${category}` : ''}); any partial output was discarded.`
+    );
   }
   // Models that think return thinking block(s) before the text, so take the
   // text blocks rather than assuming content[0] is text.
