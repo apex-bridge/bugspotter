@@ -691,4 +691,19 @@ describe('generate-adr.mjs review fixes (#459 last round)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);
   });
+
+  test('G6: with no step timeout the budget is 20 minutes, and ADR_STEP_BUDGET_MS is ignored', () => {
+    const r = runGenerateAdr({
+      text: NARRATED_TRANSCRIPT_TEXT,
+      retryText: REAL_ADR_TEXT,
+      env: {
+        ADR_STEP_TIMEOUT_MINUTES: '',
+        ADR_STEP_BUDGET_MS: '1000',
+        ADR_LLM_TIMEOUT_MS: '3600000',
+      },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    // 20 minutes minus the 30s buffer caps the retry at ~1170s (12 would give 690s).
+    assert.match(r.stderr, /Retrying once .*\(timeout 11[67]\ds\)/);
+  });
 });
