@@ -402,3 +402,50 @@ test('227: a template-shaped ADR deciding the opposite does not get score, thres
     ids.map((id) => [id, true])
   );
 });
+
+test('required facts need a whole word and must be affirmed', () => {
+  const adr = (decision) =>
+    `# ADR-0044: SSO\n\n- Status: Proposed\n\n> **Decision:** x\n\n## Context\nx\n## Decision\n${decision}\n## Consequences\nx\n## Alternatives\nx\n`;
+  const ids = ['client-secret-encrypted', 'token-nonce', 'token-issuer', 'token-audience'];
+  const pick = (text, def, which) =>
+    Object.fromEntries(
+      evaluateAdr(text, def, { files: [] })
+        .checks.filter((c) => which.includes(c.id))
+        .map((c) => [c.id, c.pass])
+    );
+  const sso = caseFile('265-sso');
+  const no =
+    'The client secret is stored unencrypted. We do not use a nonce. There is no issuer or audience check.';
+  assert.deepEqual(pick(adr(no), sso, ids), Object.fromEntries(ids.map((id) => [id, false])));
+  const yes =
+    'The client secret is encrypted at rest. The ID token nonce, issuer and audience are validated.';
+  assert.deepEqual(pick(adr(yes), sso, ids), Object.fromEntries(ids.map((id) => [id, true])));
+
+  const rls = caseFile('451-rls');
+  const rlsIds = ['per-slice-rollback', 'bypass-audited', 'worker-payload-context'];
+  const incidental =
+    'set_config is reset on COMMIT/ROLLBACK. Rows go to the audit_logs table. The request payload is validated.';
+  assert.deepEqual(
+    pick(adr(incidental), rls, rlsIds),
+    Object.fromEntries(rlsIds.map((id) => [id, false]))
+  );
+  const stated =
+    'Each slice can be rolled back on its own. Every bypass is audited. Workers read org_id from the job payload.';
+  assert.deepEqual(
+    pick(adr(stated), rls, rlsIds),
+    Object.fromEntries(rlsIds.map((id) => [id, true]))
+  );
+});
+
+test('"we reject X" negates X; a prohibition fact is matched as written', () => {
+  const sso = caseFile('265-sso');
+  const pick = (decision, id) =>
+    evaluateAdr(
+      `# ADR-0044: SSO\n\n- Status: Proposed\n\n> **Decision:** x\n\n## Context\nx\n## Decision\n${decision}\n## Consequences\nx\n## Alternatives\nx\n`,
+      sso,
+      { files: [] }
+    ).checks.find((c) => c.id === id).pass;
+  assert.equal(pick('We reject per-tenant IdP config.', 'tenant-idp-mapping'), false);
+  assert.equal(pick('Each tenant configures its own IdP.', 'tenant-idp-mapping'), true);
+  assert.equal(pick('We reject cross-tenant linking.', 'cross-tenant-rejected'), true);
+});

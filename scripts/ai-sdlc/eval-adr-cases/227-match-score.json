@@ -36,7 +36,8 @@
         "no (new )?(endpoint|migration)",
         "without (a |any )?(new )?(endpoint|migration)",
         "no schema change"
-      ]
+      ],
+      "prohibition": true
     },
     {
       "id": "current-not-historical-wording",

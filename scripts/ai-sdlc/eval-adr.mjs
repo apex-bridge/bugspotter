@@ -38,7 +38,8 @@ const META_NOTES = [
 const SENTENCE_END = /[.!?]+(?=\s+[A-Z"'`*_([]|\s*$)|[;:!?\n|]/g;
 const CLAUSE_START =
   /,|\b(?:and|but|so|because|since|although|though|while|whereas|yet|which|when|if|then)\b/gi;
-const NEGATOR = /^(?:not|never|no|nor|neither|without|cannot|\w+n['’]t|rather_than|instead_of)$/i;
+const NEGATOR =
+  /^(?:not|never|no|nor|neither|without|cannot|reject(?:s|ed|ing)?|\w+n['’]t|rather_than|instead_of)$/i;
 const NEGATION_WINDOW = 3; // words
 
 function negatedBefore(before) {
@@ -88,11 +89,20 @@ export function splitAdr(text) {
 
 const anyMatch = (text, patterns) => patterns.some((p) => new RegExp(p, 'i').test(text));
 
-// True when some match of a pattern is not negated within its clause.
+// True when some match of a pattern is not negated within its clause. Every
+// start position is tried: in "never a persisted value; persisting it is
+// deferred" the negated first match must not swallow the affirmed second one.
 export function anyAffirmed(text, patterns) {
-  return patterns.some((p) =>
-    [...text.matchAll(new RegExp(p, 'gi'))].some((m) => !negatedBefore(text.slice(0, m.index)))
-  );
+  return patterns.some((p) => {
+    const re = new RegExp(p, 'gi');
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      if (!negatedBefore(text.slice(0, m.index))) {
+        return true;
+      }
+      re.lastIndex = m.index + 1;
+    }
+    return false;
+  });
 }
 
 // Body of the first heading (any level) whose title contains `name`, up to the
@@ -216,8 +226,12 @@ export function evaluateAdr(text, def, opts = {}) {
       .filter(([title]) => !title.startsWith('alternatives') && !title.startsWith('appendix'))
       .map(([, body]) => body),
   ].join('\n');
+  // A required fact must be affirmed ("we do not use a nonce" is not the
+  // nonce check). One that is itself a prohibition ("cross-tenant linking is
+  // rejected") carries `prohibition: true` and is matched as written.
   for (const r of def.required ?? []) {
-    add(r.id, 'required', anyMatch(decided, r.any), r.note ?? '');
+    const found = r.prohibition ? anyMatch(decided, r.any) : anyAffirmed(decided, r.any);
+    add(r.id, 'required', found, r.note ?? '');
   }
   for (const f of def.forbidden ?? []) {
     add(f.id, 'forbidden', !anyAffirmed(decided, f.any), f.note ?? '');

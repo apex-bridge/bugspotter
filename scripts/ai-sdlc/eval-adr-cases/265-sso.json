@@ -19,20 +19,45 @@
     },
     {
       "id": "cross-tenant-rejected",
-      "any": ["cross-tenant", "different tenant", "another tenant", "takeover"]
+      "any": ["cross-tenant", "different tenant", "another tenant", "takeover"],
+      "prohibition": true
     },
-    { "id": "email-verified", "any": ["email_verified", "verified email"] },
-    { "id": "allowed-domains", "any": ["allowed[_ ]domains", "domain allow"] },
-    { "id": "token-nonce", "any": ["nonce"] },
-    { "id": "token-issuer", "any": ["\\biss\\b", "issuer"] },
-    { "id": "token-audience", "any": ["\\baud\\b", "audience"] },
+    {
+      "id": "email-verified",
+      "any": ["email_verified", "verified email"]
+    },
+    {
+      "id": "allowed-domains",
+      "any": ["allowed[_ ]domains", "domain allow"]
+    },
+    {
+      "id": "token-nonce",
+      "any": ["\\bnonce\\b"]
+    },
+    {
+      "id": "token-issuer",
+      "any": ["\\biss\\b", "\\bissuer\\b"]
+    },
+    {
+      "id": "token-audience",
+      "any": ["\\baud\\b", "\\baudience\\b"]
+    },
     {
       "id": "tenant-idp-mapping",
       "any": ["per-tenant", "per tenant", "tenant[^.\\n]*IdP", "IdP[^.\\n]*tenant"]
     },
-    { "id": "selfhosted-mode", "any": ["self-?hosted"] },
-    { "id": "api-keys-vs-sso", "any": ["API key"] },
-    { "id": "client-secret-encrypted", "any": ["encrypt"] }
+    {
+      "id": "selfhosted-mode",
+      "any": ["self-?hosted"]
+    },
+    {
+      "id": "api-keys-vs-sso",
+      "any": ["\\bAPI[- ]keys?\\b"]
+    },
+    {
+      "id": "client-secret-encrypted",
+      "any": ["\\bencrypt(s|ed|ion|ing)?\\b"]
+    }
   ],
   "forbidden": [
     {

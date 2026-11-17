@@ -30,7 +30,10 @@
     },
     {
       "id": "worker-payload-context",
-      "any": ["payload"]
+      "any": [
+        "\\b(job|worker|BullMQ)('s)?( own)?[- ]payloads?\\b",
+        "\\bfrom (the |its |their )?(own )?payloads?\\b"
+      ]
     },
     {
       "id": "bypass-retention",
@@ -42,7 +45,7 @@
     },
     {
       "id": "bypass-audited",
-      "any": ["audit"]
+      "any": ["\\baudit(s|ed|ing)?\\b"]
     },
     {
       "id": "with-check",
@@ -54,7 +57,8 @@
     },
     {
       "id": "fail-closed-malformed",
-      "any": ["malformed"]
+      "any": ["malformed"],
+      "prohibition": true
     },
     {
       "id": "selfhosted-backfill",
@@ -75,7 +79,14 @@
     },
     {
       "id": "per-slice-rollback",
-      "any": ["DISABLE ROW LEVEL SECURITY", "rollback"]
+      "any": [
+        "DISABLE ROW LEVEL SECURITY",
+        "\\bper-slice roll ?back\\b",
+        "\\broll(s|ed)?[ -]?back (a|one|each|any|that|the) slice\\b",
+        "\\bslices?\\b[^\\n]{0,60}\\b(roll(ed)?[ -]?back|rollback-able|revert(ed|ible)?|reversible)\\b",
+        "\\b(independently )?(rollback-able|revert(ed|ible)|reversible)\\b[^\\n]{0,30}\\bslice"
+      ],
+      "note": "each slice can be rolled back on its own (not COMMIT/ROLLBACK of a transaction)"
     }
   ],
   "forbidden": [
