@@ -11,7 +11,9 @@
 //
 // Limits: a textual parser, not SQL. It reads CREATE TABLE, ALTER TABLE ...
 // ADD and ALTER TABLE ... DROP CONSTRAINT (a foreign key, by its explicit name
-// or Postgres's default <table>_<column>_fkey). It does not track DROP TABLE,
+// or Postgres's default <table>_<column>_fkey: cut to 63 bytes, with a number
+// after "fkey" when the name is taken). Only foreign key names count as taken,
+// in the order they are written. It does not track DROP TABLE,
 // RENAME, DROP COLUMN, composite foreign keys, or "--" / "/*" inside string
 // literals; the current migrations use none of these in a way that changes the
 // result. A reviewer checks the generated appendix either way.
@@ -120,6 +122,44 @@ function parseItem(item) {
   };
 }
 
+// Postgres's makeObjectName (src/backend/commands/indexcmds.c):
+// <name1>_<name2>_<label> in NAMEDATALEN - 1 = 63 bytes, trimming the longer
+// name first, cut at a character boundary.
+function makeObjectName(name1, name2, label) {
+  let n1 = Buffer.byteLength(name1);
+  let n2 = Buffer.byteLength(name2);
+  const available = 63 - (label.length + 2);
+  while (n1 + n2 > available) {
+    if (n1 > n2) {
+      n1--;
+    } else {
+      n2--;
+    }
+  }
+  const clip = (name, bytes) => {
+    let out = '';
+    for (const ch of name) {
+      if (Buffer.byteLength(out + ch) > bytes) {
+        break;
+      }
+      out += ch;
+    }
+    return out;
+  };
+  return `${clip(name1, n1)}_${clip(name2, n2)}_${label}`;
+}
+
+// ChooseConstraintName (src/backend/catalog/pg_constraint.c): "fkey", then
+// "fkey1", "fkey2", ... until the name is not taken.
+function defaultFkName(table, column, taken) {
+  for (let pass = 0; ; pass++) {
+    const name = makeObjectName(table, column, pass ? `fkey${pass}` : 'fkey');
+    if (!taken(name)) {
+      return name;
+    }
+  }
+}
+
 function directScope(columns) {
   if (columns.includes('organization_id')) {
     return { kind: 'org-scoped', via: '' };
@@ -154,12 +194,17 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
     `\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?(${IDENT})\\s+([^;]*)`,
     'gi'
   );
-  const record = (row, item) => {
+  // `since`: the row's refs from earlier statements do not take a name when a
+  // CREATE TABLE re-reads the table (IF NOT EXISTS, or an untracked DROP TABLE).
+  const record = (row, item, since = 0) => {
     if (!item) {
       return;
     }
+    const taken = (name) =>
+      row.refs.slice(since).some((r) => r.constraint === name) ||
+      [...tables.values()].some((t) => t !== row && t.refs.some((r) => r.constraint === name));
     // The constraint name lets a later DROP CONSTRAINT remove the reference.
-    const fkName = (column) => item.constraint ?? `${row.table}_${column}_fkey`;
+    const fkName = (column) => item.constraint ?? defaultFkName(row.table, column, taken);
     if (item.fk) {
       row.refs.push({ ...item.fk, constraint: fkName(item.fk.column) });
       return;
@@ -182,8 +227,9 @@ export function tableInventory(migrationsDir = DEFAULT_MIGRATIONS_DIR) {
       const name = bareName(m[1]);
       const open = m.index + m[0].length - 1;
       const row = tables.get(name) ?? { table: name, columns: new Set(), refs: [], file };
+      const since = row.refs.length;
       for (const item of splitTopLevel(sql.slice(open + 1, closingParen(sql, open)))) {
-        record(row, parseItem(item));
+        record(row, parseItem(item), since);
       }
       tables.set(name, row);
     }

@@ -674,6 +674,52 @@ CREATE TABLE child (id UUID, rule_id UUID CONSTRAINT child_rule REFERENCES rules
   assert.equal(byName(tableInventory(dir)).child.scope.kind, 'global');
 });
 
+test('default foreign key names follow Postgres: cut to 63 bytes, numbered when taken', () => {
+  const parents = `
+CREATE TABLE projects (id UUID PRIMARY KEY, organization_id UUID);
+CREATE TABLE rules (id UUID PRIMARY KEY, project_id UUID REFERENCES projects(id));
+`;
+  const long = 'notification_throttle_windows_per_canonical_fingerprint';
+  const refsOf = (files, table) =>
+    byName(tableInventory(migrations({ '001.sql': parents, ...files })))[table].refs;
+
+  // makeObjectName trims the longer name: 56 + 14 chars -> 43 + 14 + "_" + "_fkey".
+  const name = 'notification_throttle_windows_per_canonical_owning_rule_id_fkey';
+  assert.equal(name.length, 63);
+  const created = {
+    '002.sql': `CREATE TABLE ${long} (id UUID, owning_rule_id UUID REFERENCES rules(id));`,
+  };
+  assert.equal(refsOf(created, long)[0].constraint, name);
+  assert.deepEqual(
+    refsOf({ ...created, '003.sql': `ALTER TABLE ${long} DROP CONSTRAINT ${name};` }, long),
+    []
+  );
+
+  // A second foreign key on the same column is t_rule_id_fkey1; each DROP removes only its own.
+  const twice = {
+    '002.sql':
+      'CREATE TABLE t (id UUID, rule_id UUID REFERENCES rules(id), FOREIGN KEY (rule_id) REFERENCES projects(id));',
+  };
+  assert.deepEqual(
+    refsOf(twice, 't').map((r) => r.constraint),
+    ['t_rule_id_fkey', 't_rule_id_fkey1']
+  );
+  assert.deepEqual(
+    refsOf({ ...twice, '003.sql': 'ALTER TABLE t DROP CONSTRAINT t_rule_id_fkey;' }, 't').map(
+      (r) => r.table
+    ),
+    ['projects']
+  );
+  // A table read again by CREATE TABLE IF NOT EXISTS does not number its own names.
+  const again = {
+    '003.sql': 'CREATE TABLE IF NOT EXISTS t (id UUID, rule_id UUID REFERENCES rules(id));',
+  };
+  assert.deepEqual(
+    refsOf({ ...twice, ...again }, 't').map((r) => r.constraint),
+    ['t_rule_id_fkey', 't_rule_id_fkey1', 't_rule_id_fkey']
+  );
+});
+
 test('an inventory heading inside an inventory section keeps the outer boundary', () => {
   const adr =
     '# ADR\n## Appendix: Table inventory\n### Table inventory\nX\n### Scoped tables\nLEAK\n## Next\nN';
