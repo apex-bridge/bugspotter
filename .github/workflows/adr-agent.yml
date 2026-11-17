@@ -35,7 +35,7 @@ jobs:
     name: Draft ADR
     if: github.event.label.name == 'needs-adr'
     runs-on: ubuntu-latest
-    # The "Generate ADR" step (ADR_STEP_TIMEOUT_MINUTES: default 12, at most
+    # The "Generate ADR" step (ADR_STEP_TIMEOUT_MINUTES: default and maximum
     # 20) plus ~9m for everything else (checkout, setup-node, the CLI install,
     # the linked-spec `gh` lookup, prettier, git push, two more `gh` calls).
     # The step needs room for a second, corrective LLM call when
@@ -73,18 +73,19 @@ jobs:
 
       # The step limit and the script's time budget come from this one checked
       # value. Whole minutes from 1 to 20: 20 plus ~9m of setup fits the job's
-      # 30. Anything else (unset, 0, "12m", 25) uses 12, with a warning when set.
+      # 30. Anything else (unset, 0, "12m", 25) uses 20, with a warning when set.
+      # 20 = two 540s calls (the first and a corrective retry) plus a 30s buffer.
       - name: Resolve step timeout
         id: budget
         env:
           RAW: ${{ vars.ADR_STEP_TIMEOUT_MINUTES }}
         run: |
-          MINUTES=12
+          MINUTES=20
           if [ -n "$RAW" ]; then
             if [[ "$RAW" =~ ^[0-9]+$ ]] && [ "$RAW" -ge 1 ] && [ "$RAW" -le 20 ]; then
               MINUTES=$((10#$RAW)) # "08" -> 8; fromJSON rejects a leading zero
             else
-              echo "::warning::Ignoring ADR_STEP_TIMEOUT_MINUTES=$RAW: must be a whole number of minutes from 1 to 20; using 12."
+              echo "::warning::Ignoring ADR_STEP_TIMEOUT_MINUTES=$RAW: must be a whole number of minutes from 1 to 20; using 20."
             fi
           fi
           echo "minutes=$MINUTES" >> "$GITHUB_OUTPUT"
