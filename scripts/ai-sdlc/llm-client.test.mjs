@@ -1337,3 +1337,19 @@ test('callViaApi reads an SSE body served with a non-SSE content type', async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+test('callViaApi reads a relabelled SSE body that starts with a comment line', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(`: keepalive\n\n${sse(STREAM_EVENTS)}`, {
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+  try {
+    const r = await callClaudeApi({ prompt: 'hi', maxTokens: 100, timeoutMs: 10000 });
+    assert.equal(r.text, '# ADR-0001: Title');
+    assert.equal(r.stopReason, 'end_turn');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

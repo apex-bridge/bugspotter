@@ -245,12 +245,13 @@ async function callViaApi({ prompt, maxTokens, timeoutMs, model, effort }) {
   let data;
   try {
     // A proxy or test double may answer with plain JSON instead of a stream,
-    // or relabel the stream: an SSE body is recognised by its first field.
+    // or relabel the stream: an SSE body is recognised by its first line,
+    // a comment (":") or a field name, neither of which can start JSON.
     if ((res.headers.get('content-type') ?? '').includes('text/event-stream')) {
       data = await readMessageStream(res.body);
     } else {
       const raw = await res.text();
-      data = /^(event|data):/.test(raw.trimStart())
+      data = /^(:|(event|data|id|retry):)/.test(raw.trimStart())
         ? await readMessageStream([new TextEncoder().encode(raw)])
         : JSON.parse(raw);
     }
