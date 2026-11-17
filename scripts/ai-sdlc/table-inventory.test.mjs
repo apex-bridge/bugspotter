@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url';
 import {
   tableInventory,
   inventoryMarkdown,
-  suggestedScope,
   scopeLabel,
   extractGlobalReasons,
   inventoryAppendix,
@@ -139,12 +138,20 @@ test('CLI prints the table and a count', () => {
   assert.match(out, /1 tables/);
 });
 
-test('suggested scope: organization first, then project paths, else global', () => {
-  assert.equal(suggestedScope(['organization_id', 'project_id']), 'org-scoped');
-  assert.equal(suggestedScope(['project_id']), 'project-scoped (via projects)');
-  assert.equal(suggestedScope(['bug_report_id']), 'project-scoped (via bug_reports)');
-  assert.equal(suggestedScope(['allowed_projects']), 'project-scoped (via allowed_projects)');
-  assert.equal(suggestedScope([]), 'global');
+test('scope from own columns: organization first, then project paths, else global', () => {
+  const dir = migrations({
+    '001.sql': `
+CREATE TABLE both_cols (organization_id UUID, project_id UUID);
+CREATE TABLE proj (project_id UUID);
+CREATE TABLE keys (allowed_projects UUID[]);
+CREATE TABLE plain (id UUID);
+`,
+  });
+  const t = byName(tableInventory(dir));
+  assert.equal(scopeLabel(t.both_cols.scope), 'org-scoped');
+  assert.equal(scopeLabel(t.proj.scope), 'project-scoped (via projects)');
+  assert.equal(scopeLabel(t.keys.scope), 'project-scoped (via allowed_projects)');
+  assert.equal(scopeLabel(t.plain.scope), 'global');
 });
 
 test('tenant_id counts as an organization scope (oidc_idp_config)', () => {
@@ -154,7 +161,7 @@ test('tenant_id counts as an organization scope (oidc_idp_config)', () => {
   });
   const [row] = tableInventory(dir);
   assert.deepEqual(row.columns, ['tenant_id']);
-  assert.equal(suggestedScope(row.columns), 'org-scoped (via tenant_id)');
+  assert.equal(scopeLabel(row.scope), 'org-scoped (via tenant_id)');
   const real = byName(tableInventory(join(REPO_ROOT, DEFAULT_MIGRATIONS_DIR)));
   assert.deepEqual(real.oidc_idp_config.columns, ['tenant_id'], 'real 027 migration');
 });
@@ -474,4 +481,100 @@ CREATE TABLE projects (id UUID PRIMARY KEY, organization_id UUID REFERENCES orga
   const t = byName(tableInventory(dir));
   assert.equal(t.organizations.scope.kind, 'global');
   assert.equal(t.projects.scope.kind, 'org-scoped');
+});
+
+test('a foreign key dropped later no longer gives a scope (notification_throttle, 023)', () => {
+  const dir = migrations({
+    '001.sql': `
+CREATE TABLE projects (id UUID PRIMARY KEY, organization_id UUID);
+CREATE TABLE rules (id UUID PRIMARY KEY, project_id UUID REFERENCES projects(id));
+CREATE TABLE throttle (id UUID, rule_id UUID REFERENCES rules(id));
+CREATE TABLE named (id UUID, rule_id UUID, CONSTRAINT named_rule FOREIGN KEY (rule_id) REFERENCES rules(id));
+CREATE TABLE kept (id UUID, rule_id UUID REFERENCES rules(id));
+`,
+    '002.sql': `
+ALTER TABLE throttle DROP CONSTRAINT IF EXISTS throttle_rule_id_fkey;
+ALTER TABLE named DROP CONSTRAINT named_rule;
+ALTER TABLE kept DROP CONSTRAINT kept_other_fkey;
+`,
+  });
+  const t = byName(tableInventory(dir));
+  assert.equal(t.throttle.scope.kind, 'global');
+  assert.equal(t.named.scope.kind, 'global');
+  assert.equal(t.kept.scope.kind, 'project-scoped', 'an unrelated constraint name keeps the ref');
+  const real = byName(tableInventory(join(REPO_ROOT, DEFAULT_MIGRATIONS_DIR)));
+  assert.equal(real.notification_throttle.scope.kind, 'global', 'real 023 migration');
+});
+
+test('with the table list, only bullets naming a global table are reasons', () => {
+  const adr = [
+    '## Global tables',
+    '- users: identity spans orgs',
+    '- Note: all of these stay readable by the runtime role.',
+    '  - Caveat: revisit in slice 6',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr, { tables: ['users', 'system_config'] });
+  assert.deepEqual([...reasons.keys()], ['users']);
+  assert.ok(text.includes('## Global tables'));
+  assert.ok(text.includes('- Note: all of these stay readable by the runtime role.'));
+  assert.ok(text.includes('  - Caveat: revisit in slice 6'));
+});
+
+test('a table inventory nested in Global tables keeps the prose before it', () => {
+  const adr = [
+    '## Global tables',
+    'These stay outside RLS because they hold no tenant data.',
+    '- users: x',
+    '### Table inventory',
+    '| users | global |',
+    '## Consequences',
+    'C',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr);
+  assert.equal(reasons.get('users').reason, 'x');
+  assert.ok(text.includes('## Global tables'));
+  assert.ok(text.includes('These stay outside RLS'));
+  assert.ok(!text.includes('| users | global |'));
+  assert.ok(text.includes('## Consequences'));
+});
+
+test('Global tables nested in a dropped inventory: reasons read, the rest still dropped', () => {
+  const adr = [
+    '## Decision',
+    'D',
+    '## Appendix: Table inventory',
+    '### Global tables',
+    '- users: x',
+    'stray prose inside the inventory',
+    '### Scoped tables',
+    '| projects | org-scoped |',
+    '## Consequences',
+    'C',
+  ].join('\n');
+  const { text, reasons } = extractGlobalReasons(adr);
+  assert.equal(reasons.get('users').reason, 'x');
+  for (const gone of [
+    'Table inventory',
+    'Global tables',
+    'stray prose',
+    'Scoped tables',
+    '| projects',
+  ]) {
+    assert.ok(!text.includes(gone), gone);
+  }
+  assert.ok(text.includes('## Decision') && text.includes('## Consequences'));
+});
+
+test('Global tables heading variants are recognised', () => {
+  for (const h of [
+    '## Global tables ##',
+    '## Global tables:',
+    '## **Global tables**',
+    '   ## Global tables',
+    '### Global Tables',
+  ]) {
+    const { text, reasons } = extractGlobalReasons(`# ADR\n${h}\n- users: x\n## Next\nN`);
+    assert.equal(reasons.get('users')?.reason, 'x', h);
+    assert.ok(!text.includes('- users: x'), h);
+  }
 });

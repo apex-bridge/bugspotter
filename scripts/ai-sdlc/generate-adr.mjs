@@ -335,7 +335,9 @@ if (narrationFinding) {
 }
 
 if (inventoryRows.length) {
-  const { text, reasons } = extractGlobalReasons(adrContent);
+  const { text, reasons } = extractGlobalReasons(adrContent, {
+    tables: inventoryRows.filter((r) => r.scope.kind === 'global').map((r) => r.table),
+  });
   const { markdown, missing, overridden } = inventoryAppendix(inventoryRows, reasons);
   if (overridden.length) {
     console.log(`Scope overridden by the ADR author: ${overridden.join(', ')}`);
