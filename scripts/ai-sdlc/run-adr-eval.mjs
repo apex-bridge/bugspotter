@@ -132,8 +132,17 @@ export function readSpec(work, def) {
   return readFileSync(path, 'utf8');
 }
 
+// The generator's time budget, as adr-agent.yml's "Generate ADR" step gives it
+// (ADR_STEP_TIMEOUT_MINUTES, default 20), and the runner's kill a minute later.
+// The generator caps each call at what is left of its budget, so the kill is
+// only a backstop; with a kill below the budget (it was 15 minutes against 20)
+// a slow first call plus the corrective retry was killed and scored "no ADR".
+export const GENERATOR_BUDGET_MINUTES = 20;
+export const GENERATOR_KILL_MS = (GENERATOR_BUDGET_MINUTES + 1) * 60_000;
+
 // SPEC_CONTENT is always set (empty for an issue-only case), so one exported
-// in the caller's shell cannot leak into the #265 case.
+// in the caller's shell cannot leak into the #265 case. The budget is set too,
+// so an inherited ADR_STEP_TIMEOUT_MINUTES cannot exceed the kill.
 export function generatorEnv(def, issue, spec, base = process.env) {
   return {
     ...base,
@@ -141,6 +150,7 @@ export function generatorEnv(def, issue, spec, base = process.env) {
     ISSUE_TITLE: issue.title,
     ISSUE_BODY: issue.body ?? '',
     SPEC_CONTENT: spec,
+    ADR_STEP_TIMEOUT_MINUTES: String(GENERATOR_BUDGET_MINUTES),
     GITHUB_OUTPUT: '',
   };
 }
@@ -176,7 +186,7 @@ function runCase(def, runs, outDir) {
         cwd: work,
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
-        timeout: 15 * 60_000,
+        timeout: GENERATOR_KILL_MS,
         env: generatorEnv(def, issue, spec),
       });
       const log = `${r.stdout ?? ''}\n${r.stderr ?? ''}`;

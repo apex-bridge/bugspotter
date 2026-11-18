@@ -172,7 +172,10 @@ const specForPrompt = specCut
 
 // The agent has no tools, so tenant-isolation issues get the computed table list.
 // Explicit signals only: words like "table" or "schema" appear in most specs.
-const dbRelated = /\b(table inventory|row[- ]level security|RLS|tenant isolation)\b/i.test(
+// Hyphenated forms count ("tenant-isolation", "row-level-security"). "Table
+// inventory" does not: on the real issues it only ever appears alone in tooling
+// issues about the inventory module ("table-inventory: ..." titles, #470).
+const dbRelated = /\b(row[- ]level[- ]security|RLS|tenant[- ]isolation)\b/i.test(
   `${ISSUE_TITLE}\n${ISSUE_BODY ?? ''}\n${specText}`
 );
 let inventory = '';

@@ -160,6 +160,9 @@ function runGenerateAdr(fakeResponses = {}) {
   }
   const env = { ...process.env };
   delete env.GITHUB_OUTPUT;
+  // A spec in the caller's environment would leak into every run (e.g.
+  // SPEC_CONTENT=RLS triggers the inventory); tests that need one set it.
+  delete env.SPEC_CONTENT;
   const result = spawnSync(process.execPath, [SCRIPT], {
     cwd: REPO,
     encoding: 'utf8',
@@ -720,6 +723,35 @@ describe('generate-adr.mjs review fixes (#459 last round)', () => {
       text: REAL_ADR_TEXT,
       files: MIGRATION_FILES,
       env: { ISSUE_TITLE: 'PostgreSQL upgrade', ISSUE_BODY: 'Move the database to 17.' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);
+  });
+
+  test('G7: hyphenated "tenant-isolation" and "row-level-security" trigger the inventory', () => {
+    for (const title of [
+      'Harden tenant-isolation in the worker',
+      'Row-level-security for exports',
+    ]) {
+      const r = runGenerateAdr({
+        text: REAL_ADR_TEXT,
+        files: MIGRATION_FILES,
+        env: { ISSUE_TITLE: title, ISSUE_BODY: 'Details.' },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.firstPrompt, /TABLE INVENTORY/, title);
+    }
+  });
+
+  test('G8: a tooling issue about the inventory module does not trigger it', () => {
+    // #470: "table-inventory: SQL shapes the parser misreads ..."
+    const r = runGenerateAdr({
+      text: REAL_ADR_TEXT,
+      files: MIGRATION_FILES,
+      env: {
+        ISSUE_TITLE: 'table-inventory: SQL shapes the parser misreads',
+        ISSUE_BODY: 'The table inventory misses some ALTER forms.',
+      },
     });
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.firstPrompt, /TABLE INVENTORY/);

@@ -611,6 +611,25 @@ describe('run-adr-eval.mjs helpers', () => {
     assert.equal(env.ISSUE_BODY, '');
   });
 
+  test('the generator budget is set and ends before the runner kills the generator', async () => {
+    const { generatorEnv, GENERATOR_BUDGET_MINUTES, GENERATOR_KILL_MS } =
+      await import('./run-adr-eval.mjs');
+    const env = generatorEnv({ issue: 451 }, { title: 'T', body: '' }, '', {
+      ADR_STEP_TIMEOUT_MINUTES: '45',
+    });
+    assert.equal(env.ADR_STEP_TIMEOUT_MINUTES, String(GENERATOR_BUDGET_MINUTES));
+    assert.ok(
+      GENERATOR_KILL_MS > Number(env.ADR_STEP_TIMEOUT_MINUTES) * 60_000,
+      'the kill must come after the budget'
+    );
+    // generate-adr.mjs's own default, so the eval measures what the workflow runs.
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'generate-adr.mjs'),
+      'utf8'
+    );
+    assert.match(src, new RegExp(`\\|\\|\\s*${GENERATOR_BUDGET_MINUTES} \\* 60_000`));
+  });
+
   test('readSpec throws on a missing spec path instead of running without one', async () => {
     const { readSpec } = await import('./run-adr-eval.mjs');
     const dir = repoWith({ 'docs/specs/a.md': 'spec text' });
