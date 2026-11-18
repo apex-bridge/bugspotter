@@ -268,6 +268,33 @@ test('file refs: trailing newline, deleted files, ambiguous and cited short name
   assert.deepEqual(checkFileRefs('See a/client.ts:1, then client.ts:3.', repo, files).bad, []);
 });
 
+test('file refs: a name the ADR marks "unverified" is not ambiguous; elsewhere it still is', () => {
+  const repo = repoWith({ 'a/client.ts': '1\n2\n3\n', 'b/client.ts': '1\n' });
+  const files = ['a/client.ts', 'b/client.ts'];
+  // The ADR prompt allows a bare or partial name when the full path is unknown,
+  // as long as the fact is marked unverified.
+  assert.deepEqual(
+    checkFileRefs('- The pool opens in client.ts:2 (unverified).', repo, files).bad,
+    []
+  );
+  assert.deepEqual(
+    checkFileRefs('| Pool | client.ts:2 | Unverified: path not given in the spec |', repo, files)
+      .bad,
+    [],
+    'a table row counts as the fact'
+  );
+  // Marked in one place but cited plainly in another: still ambiguous.
+  assert.deepEqual(
+    checkFileRefs('client.ts:2 (unverified)\n\nThe pool lives in client.ts:2.', repo, files).bad,
+    ['client.ts:2 (ambiguous)']
+  );
+  // "unverified" next to a different reference does not cover this one.
+  assert.deepEqual(
+    checkFileRefs('client.ts:2 is the pool. x.ts:1 is unverified.\n', repo, files).bad,
+    ['client.ts:2 (ambiguous)', 'x.ts:1']
+  );
+});
+
 test('runner metrics sum every model call, so a retry is counted', () => {
   const log = [
     'claude CLI: turns=1 wall=200s api=199s in=2 out=100 thinking=1000 cost=$0.2000',

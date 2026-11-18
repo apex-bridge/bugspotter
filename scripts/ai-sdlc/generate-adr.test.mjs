@@ -198,6 +198,35 @@ describe('generate-adr.mjs prompt', () => {
     assert.match(r.firstPrompt, /You have NO tools available/);
     assert.match(r.firstPrompt, /do not narrate one/);
   });
+
+  test('asks for file references as paths from the repository root', () => {
+    // #451 eval drafts cited "client.ts:603" and "authorization.ts:39"; the repo
+    // has four client.ts and two authorization.ts files.
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.firstPrompt, /every file reference as a path from the repository root/);
+    assert.match(r.firstPrompt, /never a bare file name/);
+    // The #451 spec itself cites bare names, and the model copied them.
+    assert.match(r.firstPrompt, /names copied from the spec or the issue/);
+    // No file tree in the prompt: without the full path, mark it instead of
+    // guessing; a partial directory ("src/db/client.ts") is not the full path.
+    assert.match(r.firstPrompt, /keep the name as given and mark the fact "unverified"/);
+    assert.match(r.firstPrompt, /only part of one/);
+    assert.match(r.firstPrompt, /instead of inferring the missing part/);
+  });
+
+  test('the prompt rule and docs/adr/TEMPLATE.md give the same path example', () => {
+    // The write-adr skill sees only the TEMPLATE, so the two must not drift apart.
+    const r = runGenerateAdr({ text: REAL_ADR_TEXT });
+    assert.equal(r.status, 0, r.stderr);
+    const example = r.firstPrompt.match(/repository root, such as "([^"]+)"/)?.[1];
+    assert.ok(example, 'the rule gives a path example');
+    const template = readFileSync(
+      join(dirname(SCRIPT), '..', '..', 'docs', 'adr', 'TEMPLATE.md'),
+      'utf8'
+    );
+    assert.ok(template.includes(example), `TEMPLATE.md does not contain ${example}`);
+  });
 });
 
 describe('generate-adr.mjs narration detection', () => {
