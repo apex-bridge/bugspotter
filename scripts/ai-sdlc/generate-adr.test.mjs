@@ -208,8 +208,11 @@ describe('generate-adr.mjs prompt', () => {
     assert.match(r.firstPrompt, /never a bare file name/);
     // The #451 spec itself cites bare names, and the model copied them.
     assert.match(r.firstPrompt, /names copied from the spec or the issue/);
-    // No file tree in the prompt: without a directory, mark it instead of guessing.
-    assert.match(r.firstPrompt, /keep the name and mark the fact "unverified"/);
+    // No file tree in the prompt: without the full path, mark it instead of
+    // guessing; a partial directory ("src/db/client.ts") is not the full path.
+    assert.match(r.firstPrompt, /keep the name as given and mark the fact "unverified"/);
+    assert.match(r.firstPrompt, /only part of one/);
+    assert.match(r.firstPrompt, /instead of inferring the missing part/);
   });
 
   test('the prompt rule and docs/adr/TEMPLATE.md give the same path example', () => {

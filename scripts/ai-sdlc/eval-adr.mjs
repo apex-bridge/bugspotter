@@ -191,9 +191,24 @@ function listRepoFiles(repoDir) {
 const lineCount = (text) =>
   text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 
+// True when every fact that carries `ref` also says "unverified": the ADR
+// prompt and TEMPLATE allow a bare or partial name when the inputs do not give
+// the full path, provided the fact is marked unverified. A fact is a sentence
+// within a line (a table row or bullet is usually one); a dot inside a file
+// name ("x.ts:1") does not end a sentence, only ". " does.
+function onlyInUnverified(text, ref) {
+  const at = new RegExp(`(?<![\\w./-])${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\d)`);
+  const facts = text
+    .split('\n')
+    .flatMap((l) => l.split(/(?<=[.!?])\s+/))
+    .filter((f) => at.test(f));
+  return facts.length > 0 && facts.every((f) => /\bunverified\b/i.test(f));
+}
+
 // path:line references that resolve (by path suffix) to exactly one tracked file
 // that exists and is long enough. A suffix matching several files cannot be
-// verified, so it counts as bad ("ambiguous").
+// verified, so it counts as bad ("ambiguous"), unless every mention of it sits
+// in a fact the ADR marks "unverified".
 export function checkFileRefs(text, repoDir, files = listRepoFiles(repoDir)) {
   const refs = [...new Set(text.match(/[\w./-]+\.(?:ts|tsx|sql|ya?ml|mjs|js|json|md):\d+/g) ?? [])];
   const bad = [];
@@ -221,7 +236,9 @@ export function checkFileRefs(text, repoDir, files = listRepoFiles(repoDir)) {
       }
     }
     if (hits.length > 1) {
-      bad.push(`${ref} (ambiguous)`);
+      if (!onlyInUnverified(text, ref)) {
+        bad.push(`${ref} (ambiguous)`);
+      }
       continue;
     }
     const file = hits[0] && join(repoDir, hits[0]);
