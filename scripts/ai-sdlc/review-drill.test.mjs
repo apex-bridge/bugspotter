@@ -232,7 +232,7 @@ describe('rows and reveal comment', () => {
     const row = outcomeRow({
       seed: seedRow,
       pr: { number: 9, additions: 50, deletions: 10, created_at: '2026-11-27T10:00:00Z' },
-      review: { submitted_at: '2026-11-27T10:30:00Z' },
+      review: { submitted_at: '2026-11-27T10:30:00Z', user: { login: 'alex' } },
       judgement: { outcome: 'missed', comments: 3 },
       now: new Date(0),
     });
@@ -243,6 +243,7 @@ describe('rows and reveal comment', () => {
       pr: 9,
       branch: 'drill/r1-pr5',
       source_pr: 5,
+      reviewer: 'alex',
       outcome: 'missed',
       inline_comments: 3,
       lines_changed: 60,

@@ -278,6 +278,7 @@ export function outcomeRow({ seed, pr, review, judgement, now = new Date() }) {
     pr: pr.number,
     branch: seed.branch,
     source_pr: seed.source_pr,
+    reviewer: review?.user?.login ?? null,
     outcome: judgement.outcome,
     inline_comments: judgement.comments,
     lines_changed: (pr.additions ?? 0) + (pr.deletions ?? 0),
