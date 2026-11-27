@@ -1,0 +1,81 @@
+name: PR Size
+
+# Advisory: warns when a PR changes more than PR_SIZE_WARN lines (repo
+# variable, default 400), not counting lock files and generated output. Keeps
+# one comment on the PR up to date instead of adding a new one per push.
+# Never fails the build - see scripts/check-pr-size.mjs for why it is not a
+# hard limit yet.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: pr-size-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pr-size:
+    name: PR Size
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test the size checker
+        run: node --test scripts/check-pr-size.test.mjs
+
+      - name: Fetch changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # --paginate applies --jq per page, so emit one object per line and
+          # slurp afterwards rather than aggregating inside --jq.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            --jq '.[] | {filename, additions, deletions}' \
+            | jq -s '.' > "$RUNNER_TEMP/pr-files.json"
+
+      - name: Measure
+        id: size
+        env:
+          PR_FILES_JSON: ${{ runner.temp }}/pr-files.json
+          PR_SIZE_WARN: ${{ vars.PR_SIZE_WARN }}
+        run: node scripts/check-pr-size.mjs
+
+      # Fork PRs get a read-only token, so the comment can fail there; the
+      # warning annotation above still stands.
+      - name: Update the size comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OVER: ${{ steps.size.outputs.over }}
+          BODY: ${{ steps.size.outputs.comment_body }}
+        run: |
+          set -euo pipefail
+          existing=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- pr-size -->"))) | .id' | head -n 1)
+          if [ -n "$existing" ]; then
+            # Keep the one comment current, including when the PR shrinks
+            # back under the guideline.
+            printf '%s' "$BODY" | jq -Rs '{body: .}' \
+              | gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input - > /dev/null
+          elif [ "$OVER" = "true" ]; then
+            printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file -
+          else
+            echo "Within the guideline; no comment needed."
+          fi
