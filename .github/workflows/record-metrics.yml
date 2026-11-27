@@ -51,14 +51,39 @@ jobs:
             --sha "$MERGE_SHA" \
             --repo "$REPO"
 
+      # Fills reverted_within_30d on earlier rows whose 30-day window has
+      # closed or that a later commit explicitly reverted
+      # (bugspotter-metrics scripts/backfill-reverts.mjs; definition in its
+      # criteria.md, 2026-11-27 addendum). Never blocks recording: the script
+      # changes nothing on an API error, and continue-on-error covers the
+      # rest. Skips cleanly until the script is on data/main.
+      - name: Backfill reverted_within_30d
+        id: backfill
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd metrics
+          if [ -f scripts/backfill-reverts.mjs ]; then
+            node scripts/backfill-reverts.mjs --repo "$REPO"
+          else
+            echo "scripts/backfill-reverts.mjs is not on data/main yet; skipping."
+          fi
+
       - name: Commit and push metrics row
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BACKFILL_CHANGED: ${{ steps.backfill.outputs.changed }}
         run: |
           cd metrics
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          MSG="[metrics] record PR #${PR_NUMBER}"
+          if [ -n "${BACKFILL_CHANGED:-}" ] && [ "$BACKFILL_CHANGED" != "0" ]; then
+            MSG="$(printf '%s\n\nbackfill: reverted_within_30d filled on %s row(s)' "$MSG" "$BACKFILL_CHANGED")"
+          fi
           git add data/prs.jsonl
           git diff --cached --quiet || \
-            { git commit -m "[metrics] record PR #${PR_NUMBER}" && \
+            { git commit -m "$MSG" && \
               git push; }
