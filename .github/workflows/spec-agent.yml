@@ -180,7 +180,7 @@ jobs:
           SPEC_FILE: ${{ steps.gen.outputs.spec_file }}
           MODEL: ${{ steps.gen.outputs.model }}
         run: |
-          PR_BODY="$(printf 'Agent-drafted spec for issue #%s.\n\nReview, fill gaps, and merge to advance this issue to `needs-adr` (if an ADR is warranted) or `agent-working` (if no ADR is needed).\n\nRefs #%s\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$ISSUE_NUMBER" "$MODEL")"
+          PR_BODY="$(printf 'Agent-drafted spec for issue #%s.\n\nBefore merging: check every item under `## Assumptions` against the code, tick it and append `— confirmed: <file:line or command>` or `— rejected: <what you changed>`. The `Check assumptions reviewed` step stays red until each one has a verdict.\n\nReview, fill gaps, and merge to advance this issue to `needs-adr` (if an ADR is warranted) or `agent-working` (if no ADR is needed).\n\nRefs #%s\n\nAssisted-by: %s (agent)' "$ISSUE_NUMBER" "$ISSUE_NUMBER" "$MODEL")"
 
           PR_URL=$(gh pr create \
             --title "spec(#${ISSUE_NUMBER}): ${ISSUE_TITLE}" \

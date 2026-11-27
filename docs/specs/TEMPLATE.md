@@ -24,6 +24,19 @@ ADR: pending / docs/adr/NNNN-slug.md / n/a
 
 1. <!-- constraint -->
 
+## Assumptions
+
+<!-- Facts this spec relies on but did not verify: behaviour of existing code, data shapes and
+     nullability, ordering/concurrency, error behaviour of an external service, who calls this
+     path. Every "ASSUMED, not verified" mark in the text belongs here too.
+     Author (agent or human): one item per assumption, box unticked, no verdict.
+     Gate 1 reviewer: check each one against the code, tick it and append a verdict:
+       — confirmed: <file:line or command you checked>
+       — rejected: <what you changed in this spec>
+     scripts/ai-sdlc/check-assumptions.mjs keeps the spec PR red until every item has one. -->
+
+- [ ] **A1** <!-- assumption --> — impact if wrong: <!-- what breaks -->
+
 ## Acceptance criteria
 
 <!-- Specific, testable, written from the caller's perspective.

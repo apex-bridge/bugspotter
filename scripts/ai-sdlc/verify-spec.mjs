@@ -95,6 +95,7 @@ Check for:
 Do NOT change:
 - The spec's intent, scope, or architectural decisions
 - Wording or style unless it contains a factual error
+- The checkboxes under "## Assumptions": never tick one and never add a "confirmed:" or "rejected:" verdict. Those are the Gate 1 reviewer's, and scripts/ai-sdlc/check-assumptions.mjs exists to make the reviewer write them. If a source file above shows an assumption is wrong, fix the spec text that depends on it and reword the assumption, but leave its box unticked
 - Anything not in the check list above
 
 If you find no factual errors, respond with exactly the word: NO_CHANGES_NEEDED
