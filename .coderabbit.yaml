@@ -9,3 +9,8 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    # Review-drill PRs carry a seeded defect for a human to find; an automatic
+    # review would give it away (scripts/ai-sdlc/review-drill.mjs). Their
+    # titles start with "Review drill:".
+    ignore_title_keywords:
+      - 'Review drill:'

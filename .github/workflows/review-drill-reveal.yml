@@ -1,0 +1,140 @@
+name: Review Drill Reveal
+
+# Second half of the review drill (review-drill.yml opens the training PR).
+#
+# reveal: on the first submitted human review of a drill/ PR, reads the answer
+#   key from bugspotter-metrics, checks whether the reviewer left an inline
+#   comment on or near the seeded line, records the outcome there, posts the
+#   reveal comment, closes the PR and deletes the branch.
+# guard: fails on any drill/ PR event, so a drill PR can never be merged by
+#   accident. Drill PRs are opened with the workflow token, which does not
+#   trigger pull_request workflows, so on them this check normally never
+#   reports at all; if "Review drill guard" is a required check, that pending
+#   status blocks merge just the same. On every other PR it passes at once.
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: review-drill-reveal-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  guard:
+    name: Review drill guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Block drill PRs from merging
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [[ "$HEAD_REF" == drill/* ]]; then
+            echo "::error::Training PR (review drill). It is never merged; submit a review to finish the drill."
+            exit 1
+          fi
+          echo "Not a drill PR."
+
+  reveal:
+    name: Reveal review drill
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      startsWith(github.event.pull_request.head.ref, 'drill/') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.review.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The judging code comes from the base branch, not the drill branch.
+      - name: Checkout drill tooling (base)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: tools
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Fetch the answer key
+        env:
+          METRICS_REPO_TOKEN: ${{ secrets.METRICS_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${METRICS_REPO_TOKEN:-}" ]; then
+            echo "::error::METRICS_REPO_TOKEN is not available; cannot read the drill's answer key."
+            exit 1
+          fi
+          git clone -q --depth 1 --branch data/main \
+            "https://x-access-token:${METRICS_REPO_TOKEN}@github.com/apex-bridge/bugspotter-metrics.git" \
+            "$RUNNER_TEMP/metrics"
+
+      - name: Collect the review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_JSON: ${{ toJSON(github.event.pull_request) }}
+          REVIEW_JSON: ${{ toJSON(github.event.review) }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PR_JSON" > "$RUNNER_TEMP/pr.json"
+          printf '%s' "$REVIEW_JSON" > "$RUNNER_TEMP/review.json"
+          # --paginate applies --jq per page: one object per line, slurp after.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[] | {path, line, start_line, original_line, side, user: {login: .user.login, type: .user.type}}' \
+            | jq -s '.' > "$RUNNER_TEMP/comments.json"
+
+      - name: Judge
+        id: judge
+        env:
+          DRILLS_FILE: ${{ runner.temp }}/metrics/data/drills.jsonl
+          OUTCOMES_FILE: ${{ runner.temp }}/metrics/data/drill-outcomes.jsonl
+          COMMENTS_JSON: ${{ runner.temp }}/comments.json
+          PR_JSON: ${{ runner.temp }}/pr.json
+          REVIEW_JSON: ${{ runner.temp }}/review.json
+          REPO: ${{ github.repository }}
+        run: node tools/scripts/ai-sdlc/review-drill.mjs reveal
+
+      - name: Record the outcome (private)
+        if: steps.judge.outputs.act == 'true'
+        env:
+          OUTCOME_ROW: ${{ steps.judge.outputs.outcome_row }}
+        run: |
+          set -uo pipefail
+          M="$RUNNER_TEMP/metrics"
+          write() {
+            git -C "$M" config user.name "github-actions[bot]"
+            git -C "$M" config user.email "github-actions[bot]@users.noreply.github.com"
+            printf '%s\n' "$OUTCOME_ROW" >> "$M/data/drill-outcomes.jsonl"
+            git -C "$M" add data/drill-outcomes.jsonl || return 1
+            git -C "$M" commit -q -m "[drills] record outcome" || return 1
+            for _ in 1 2 3; do
+              git -C "$M" push -q origin HEAD:data/main && return 0
+              git -C "$M" pull -q --rebase origin data/main || return 1
+            done
+            return 1
+          }
+          write || echo "::warning::Could not record the drill outcome in bugspotter-metrics; the reveal still goes ahead."
+
+      - name: Reveal, close and clean up
+        if: steps.judge.outputs.act == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          BODY: ${{ steps.judge.outputs.comment_body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file -
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -f state=closed > /dev/null
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" > /dev/null || \
+            echo "::warning::Could not delete ${BRANCH}; delete it by hand."

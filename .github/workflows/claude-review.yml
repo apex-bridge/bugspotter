@@ -89,8 +89,11 @@ jobs:
   claude-review:
     name: Claude Review
     runs-on: ubuntu-latest
+    # Review-drill PRs (drill/ branches) carry a seeded defect for a human to
+    # find; an automatic review would give it away (see
+    # scripts/ai-sdlc/review-drill.mjs). An explicit @claude mention still works.
     if: |
-      github.event_name == 'pull_request' ||
+      (github.event_name == 'pull_request' && !startsWith(github.event.pull_request.head.ref, 'drill/')) ||
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && github.event.issue.pull_request) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
     permissions:
