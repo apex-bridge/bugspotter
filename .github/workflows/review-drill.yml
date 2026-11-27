@@ -1,0 +1,185 @@
+name: Review Drill
+
+# Opens a training PR: an already merged PR re-created on top of the commit it
+# was based on, with exactly one seeded defect in the lines it added that the
+# unit suite does not catch. Never merged; review-drill-reveal.yml reveals the
+# seed after the first submitted human review, records the result and closes
+# the PR. See scripts/ai-sdlc/review-drill.mjs for the reasoning and limits.
+#
+# Run it from the Actions tab (optionally naming a source PR), or set the repo
+# variable REVIEW_DRILL_SCHEDULE=on for one drill a week.
+#
+# The seed's location is an answer key. It goes to the private
+# bugspotter-metrics repo before the PR opens and is not printed here; if it
+# cannot be recorded, no PR is opened.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_pr:
+        description: 'Merged PR to re-create (blank = a random recent one)'
+        required: false
+        default: ''
+  schedule:
+    # Tuesdays 04:17 UTC. Only runs when REVIEW_DRILL_SCHEDULE == 'on'.
+    - cron: '17 4 * * 2'
+
+concurrency:
+  group: review-drill
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  create:
+    name: Create review drill
+    if: github.event_name != 'schedule' || vars.REVIEW_DRILL_SCHEDULE == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HUSKY: '0'
+    steps:
+      - name: Checkout drill tooling (main)
+        uses: actions/checkout@v4
+        with:
+          path: tools
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Pick the source PR
+        id: pick
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SOURCE_PR: ${{ inputs.source_pr }}
+        run: node tools/scripts/ai-sdlc/review-drill.mjs pick
+
+      - name: Checkout the source PR's merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pick.outputs.merge_sha }}
+          fetch-depth: 2
+          path: work
+
+      # The drill branch starts at the commit the source PR was based on, and
+      # the PR's own change is staged on top, exactly as it was merged.
+      - name: Re-create the source change
+        id: prep
+        working-directory: work
+        env:
+          MERGE_SHA: ${{ steps.pick.outputs.merge_sha }}
+          SOURCE_PR: ${{ steps.pick.outputs.source_pr }}
+        run: |
+          set -euo pipefail
+          PARENT=$(git rev-parse "${MERGE_SHA}^")
+          BRANCH="drill/r${GITHUB_RUN_ID}-pr${SOURCE_PR}"
+          git checkout -q -b "$BRANCH" "$PARENT"
+          git cherry-pick --no-commit "$MERGE_SHA"
+          echo "parent=$PARENT" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      # Needed to run the unit suite against each candidate seed: only a
+      # defect the tests do not catch is kept.
+      - name: Install and build (at the source PR's base)
+        working-directory: work
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Seed one defect
+        working-directory: work
+        env:
+          PARENT: ${{ steps.prep.outputs.parent }}
+          DRILL_STATE: ${{ runner.temp }}/drill-state.json
+          # Backend unit suite plus the zero-dependency script suites, so a seed
+          # in scripts/ is checked against its own tests too.
+          SEED_TEST_CMD: pnpm test:unit && node --test scripts/*.test.mjs scripts/ai-sdlc/*.test.mjs
+          # Each try runs the suites once; well-tested code kills most candidates.
+          SEED_MAX_TRIES: '6'
+        run: |
+          set +e
+          node ../tools/scripts/ai-sdlc/review-drill.mjs seed
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::error::No defect in this PR survived the unit suite. Dispatch again (a random PR) or name another source_pr."
+          fi
+          exit "$code"
+
+      - name: Record the answer key (private)
+        env:
+          METRICS_REPO_TOKEN: ${{ secrets.METRICS_REPO_TOKEN }}
+          DRILL_STATE: ${{ runner.temp }}/drill-state.json
+          DRILL_BRANCH: ${{ steps.prep.outputs.branch }}
+          SOURCE_PR: ${{ steps.pick.outputs.source_pr }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ -z "${METRICS_REPO_TOKEN:-}" ]; then
+            echo "::error::METRICS_REPO_TOKEN is not available; without a recorded answer key the drill cannot be revealed, so no PR is opened."
+            exit 1
+          fi
+          M="$RUNNER_TEMP/metrics"
+          git clone -q --depth 1 --branch data/main \
+            "https://x-access-token:${METRICS_REPO_TOKEN}@github.com/apex-bridge/bugspotter-metrics.git" "$M"
+          git -C "$M" config user.name "github-actions[bot]"
+          git -C "$M" config user.email "github-actions[bot]@users.noreply.github.com"
+          DRILL_OUT="$M/data/drills.jsonl" node tools/scripts/ai-sdlc/review-drill.mjs record
+          git -C "$M" add data/drills.jsonl
+          git -C "$M" commit -q -m "[drills] answer key for ${DRILL_BRANCH}"
+          for _ in 1 2 3; do
+            if git -C "$M" push -q origin HEAD:data/main; then exit 0; fi
+            git -C "$M" pull -q --rebase origin data/main
+          done
+          echo "::error::Could not push the answer key; no PR is opened."
+          exit 1
+
+      - name: Commit and push the drill branch
+        working-directory: work
+        env:
+          BRANCH: ${{ steps.prep.outputs.branch }}
+          SOURCE_PR: ${{ steps.pick.outputs.source_pr }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -q -m "Review drill: re-creation of #${SOURCE_PR}"
+          git push -q origin "$BRANCH"
+
+      - name: Open the drill PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.prep.outputs.branch }}
+          SOURCE_PR: ${{ steps.pick.outputs.source_pr }}
+          SOURCE_TITLE: ${{ steps.pick.outputs.title }}
+        run: |
+          set -euo pipefail
+          gh label create review-drill --repo "$GITHUB_REPOSITORY" --color FBCA04 \
+            --description "Training PR with one seeded defect; never merged" 2>/dev/null || true
+          BODY=$(cat <<EOF
+          **Training PR, never merged.** It re-creates #${SOURCE_PR} on top of the commit that PR was based on, plus **exactly one seeded defect** in the lines #${SOURCE_PR} added. The unit tests do not catch it.
+
+          How it works:
+          1. Review it as you would a real PR. Leave an inline comment on every line you would flag, including the one you think is the seed.
+          2. Submit your review once, when you are done (any verdict). The first submitted review ends the drill: the seed is revealed here, the result is recorded, and this PR is closed.
+
+          Counted as caught when one of your inline comments is on the seeded line or within two lines of it. Please don't look at #${SOURCE_PR} or main while reviewing.
+
+          Refs #${SOURCE_PR}
+          EOF
+          )
+          printf '%s\n' "$BODY" > "$RUNNER_TEMP/body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "Review drill: #${SOURCE_PR} ${SOURCE_TITLE}" \
+            --label review-drill --body-file "$RUNNER_TEMP/body.md"
