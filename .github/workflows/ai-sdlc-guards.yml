@@ -79,12 +79,20 @@ jobs:
             exit 0
           fi
           echo "count=$(printf '%s\n' "$files" | wc -l)" >> "$GITHUB_OUTPUT"
+          # Specs this PR ADDS, as opposed to edits. check-assumptions.mjs
+          # requires an "## Assumptions" section only on these: specs written
+          # before that section existed must stay editable without a
+          # retroactive review.
+          added=$(git diff --name-only --diff-filter=A "$BASE_SHA" "$HEAD_SHA" -- 'docs/specs/*.md')
           # Multi-line value needs a heredoc delimiter, or the runner rejects
           # the whole step.
           {
             echo 'files<<SPECS_EOF'
             printf '%s\n' "$files"
             echo 'SPECS_EOF'
+            echo 'added<<ADDED_EOF'
+            printf '%s\n' "$added"
+            echo 'ADDED_EOF'
           } >> "$GITHUB_OUTPUT"
           printf '%s\n' "$files" | sed 's/^/  /'
 
@@ -166,6 +174,34 @@ jobs:
           done <<< "$SPECS"
           [ "$failed" -eq 0 ] || {
             echo "::error::Spec scope check failed. A spec is unreadable, has no parseable \"Files touched:\" line, or declares more files than generate-impl.mjs's own 6-file generation limit - see the group log above for which spec(s), which reason, and why this blocks merge rather than just warning."
+            exit 1
+          }
+
+      # Gate 1 forcing function. The spec agent writes every assumption with an
+      # unticked box, so its own PR is red here until the human reviewer edits
+      # the spec and gives each one a verdict ("confirmed: <evidence>" or
+      # "rejected: <what changed>"). Hard, on the PR, for the same reason as
+      # the scope check above: this is the content a human ratifies, whoever
+      # wrote it. See check-assumptions.mjs's header for why a written verdict
+      # per assumption and not a single approval.
+      - name: Check assumptions reviewed (hard)
+        if: ${{ !cancelled() && steps.specs.outputs.count != '0' }}
+        env:
+          SPECS: ${{ steps.specs.outputs.files }}
+          ADDED: ${{ steps.specs.outputs.added }}
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r spec; do
+            [ -n "$spec" ] || continue
+            is_new=false
+            if printf '%s\n' "$ADDED" | grep -Fxq -- "$spec"; then is_new=true; fi
+            echo "::group::check-assumptions $spec (new: $is_new)"
+            SPEC_FILE="$spec" SPEC_IS_NEW="$is_new" node scripts/ai-sdlc/check-assumptions.mjs || failed=1
+            echo "::endgroup::"
+          done <<< "$SPECS"
+          [ "$failed" -eq 0 ] || {
+            echo "::error::Assumptions not reviewed. Edit the spec: tick each item under \"## Assumptions\" and append \"— confirmed: <file:line or command you checked>\" or \"— rejected: <what you changed in the spec>\". See the group log above for which items."
             exit 1
           }
 
